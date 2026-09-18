@@ -1,45 +1,71 @@
 /*
- * Application Logic - UART Hello Skeleton
+ * Application Logic - 板级 bring-up：时钟自检 + RTT 心跳
  *
- * Copyright (c) 2024 HPMicro
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * NOTE: App 层禁止包含任何 hpm_* 头文件，只能使用 Interface 头与标准 C。
+ * 诊断目标：
+ *   1) 实测 CPU 频率（MCHTMR 独立时基），校验 PLL 是否真正生效
+ *   2) RTT 心跳：printf 耗时周期数 + delay 实际周期数
+ *   3) PB01 引脚回读（LED；注：HPM53M1 上 PB01 为模拟端口，无法驱动 LED）
+ * 说明：本文件为 bring-up 测试代码，后续由 FOC 应用替换。
  */
 
-#include <stdbool.h>
 #include <stdint.h>
-#include <string.h>
 
-#include "intf_uart.h"
+#include "app_debug_rtt.h"
+#include "app_gpio.h"
+#include "intf_clock.h"
+#include "intf_sys.h"
 
-#define APP_UART_PORT     (0U)
-#define APP_UART_BAUDRATE (115200U)
-#define APP_TX_TIMEOUT_MS (100U)
+#define APP_LED_BLINK_INTERVAL_MS (500U)
 
-static const char app_banner[] = "HPM5361 template: hello\r\n";
+void app_init(void) {
+    /*
+     * 0. 复位诊断：
+     *    - s_boot_seq 位于 NOLOAD 段（复位不清零）：若逐次递增 = 芯片在复位循环；
+     *      若恒定 = 非复位（上位机重读缓冲）。
+     *    - rst_status 为 PPOR.RESET_STATUS（只读）：bit0=欠压、bit4=调试复位、
+     *      bit16/17=看门狗、bit24=PMIC 看门狗、bit31=软件复位。
+     */
+    static volatile uint32_t s_boot_seq __attribute__((section(".noncacheable")));
+    uint32_t rst_status;
 
-static bool s_uart_ready;
+    s_boot_seq++;
+    rst_status = intf_sys_get_reset_status();
+    app_debug_printf(
+        "boot: seq=%u rst_status=0x%08x\r\n", (unsigned)s_boot_seq, (unsigned)rst_status);
 
-void app_init(void)
-{
-    intf_uart_cfg_t cfg = {
-        .baudrate = APP_UART_BAUDRATE,
-        .data_bits = 8,
-        .stop_bits = 1,
-        .parity = 0,
-        .flow_ctrl = false,
-    };
+    /* 1. 系统时钟（顺序与 SuperCap 一致：board_init -> intf_clock_init）
+     *    CPU 480MHz / AXI-AHB 160MHz / PLL0 960MHz / DCDC 1275mV */
+    intf_clock_init();
 
-    s_uart_ready = (intf_uart_init(APP_UART_PORT, &cfg) == 0);
+    /* 2. GPIO 驱动注册 + PA09（DRV_+12V_EN，默认输出低=关闭） */
+    app_gpio_init();
+
+    /* 3. 频率自检（寄存器读数；实测频率校验因 MCHTMR/cycle 异常暂缓） */
+    app_debug_printf(
+        "clock: cpu=%u Hz, ahb=%u Hz\r\n", (unsigned)intf_clock_get_cpu_freq(),
+        (unsigned)intf_clock_get_ahb_freq());
 }
 
-void app_run(void)
-{
-    if (!s_uart_ready) {
-        return;
-    }
+void app_run(void) {
+    static uint32_t heartbeat;
+    static uint32_t last_printf_cycles;
+    static uint32_t last_delay_cycles;
+    uint32_t c0, c1;
 
-    (void)intf_uart_transmit(
-        APP_UART_PORT, (const uint8_t *)app_banner, strlen(app_banner), APP_TX_TIMEOUT_MS);
+    heartbeat++;
+    app_gpio_toggle(PIN_LED_STATUS);
+
+    c0 = intf_clock_get_cycle();
+    app_debug_printf(
+        "hb=%u led=%u printf_cyc=%u delay_cyc=%u\r\n", (unsigned)heartbeat,
+        (unsigned)app_gpio_read(PIN_LED_STATUS), (unsigned)last_printf_cycles,
+        (unsigned)last_delay_cycles);
+    c1 = intf_clock_get_cycle();
+    last_printf_cycles = c1 - c0;
+
+    intf_clock_delay_ms(APP_LED_BLINK_INTERVAL_MS);
+    last_delay_cycles = intf_clock_get_cycle() - c1;
 }

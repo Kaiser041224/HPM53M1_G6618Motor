@@ -3,6 +3,7 @@
 #include "hpm_pllctlv2_drv.h"
 #include "hpm_sysctl_drv.h"
 #include "hpm_pcfg_drv.h"
+#include "hpm_csr_drv.h"
 
 void intf_clock_init(void)
 {
@@ -29,6 +30,9 @@ void intf_clock_init(void)
     clock_add_to_group(clock_adc1, 0);
     clock_add_to_group(clock_can0, 0);
     clock_set_source_divider(clock_can0, clk_src_pll1_clk0, 10);
+    /* 板级使用 MCAN3（PA14/PA15） */
+    clock_add_to_group(clock_can3, 0);
+    clock_set_source_divider(clock_can3, clk_src_pll1_clk0, 10);
 
     clock_connect_group_to_cpu(0, 0);
 
@@ -47,6 +51,16 @@ void intf_clock_init(void)
     clock_update_core_clock();
 
     clock_set_source_divider(clock_mchtmr0, clk_src_osc24m, 1);
+}
+
+/*
+ * 说明：计时统一使用 mcycle (CSR 0xB00, M-mode)，不使用 cycle (0xC00) 与 MCHTMR。
+ * 0xC00 (rdcycle) 与 MCHTMR 在本板实测存在异常（进入后跑飞），已由最小化验证移除。
+ * mcycle 与 SuperCap 工程 / IrqProfiler 的用法一致。
+ */
+static inline uint64_t drv_clock_mcycle(void)
+{
+    return hpm_csr_get_core_mcycle();
 }
 
 uint32_t intf_clock_get_cpu_freq(void)
@@ -68,10 +82,18 @@ uint32_t intf_clock_get_cycle(void)
 
 void intf_clock_delay_ms(uint32_t ms)
 {
-    clock_cpu_delay_ms(ms);
+    uint64_t start = drv_clock_mcycle();
+    uint64_t ticks = (uint64_t)(hpm_core_clock / 1000U) * (uint64_t)ms;
+
+    while ((drv_clock_mcycle() - start) < ticks) {
+    }
 }
 
 void intf_clock_delay_us(uint32_t us)
 {
-    clock_cpu_delay_us(us);
+    uint64_t start = drv_clock_mcycle();
+    uint64_t ticks = (uint64_t)(hpm_core_clock / 1000000U) * (uint64_t)us;
+
+    while ((drv_clock_mcycle() - start) < ticks) {
+    }
 }

@@ -21,7 +21,8 @@ static inline void can_critical_exit(uint32_t state)
     __asm__ volatile("csrw mstatus, %0" :: "r"(state));
 }
 
-#define APP_CAN_INST      (0U)
+/* MCAN3: PA15(MCAN3_TXD) / PA14(MCAN3_RXD)，与板级 pinmux 对应 */
+#define APP_CAN_INST      (3U)
 #define APP_CAN_BAUDRATE  (1000000U)
 #define APP_CAN_INT_MASK  (INTF_CAN_EVENT_RX_FIFO0_NEW_MSG   \
                            | INTF_CAN_EVENT_RX_FIFO0_FULL     \

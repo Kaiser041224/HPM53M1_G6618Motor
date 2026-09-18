@@ -4,7 +4,6 @@
 #include "intf_trgm.h"
 #include "intf_uart.h"
 #include "intf_gpio.h"
-#include "intf_ws2812.h"
 #include "intf_can.h"
 #include "intf_synt.h"
 
@@ -451,60 +450,6 @@ int intf_gpio_toggle(intf_gpio_pin_t pin)
 {
     if (gpio_ops && gpio_ops->toggle) return gpio_ops->toggle(pin);
     return -1;
-}
-
-/* ============================================================================
- * WS2812 Interface
- * ============================================================================ */
-
-static const intf_ws2812_ops_t *ws2812_ops = NULL;
-
-int intf_ws2812_register(const intf_ws2812_ops_t *ops)
-{
-    if (ops == NULL) return -1;
-    ws2812_ops = ops;
-    return 0;
-}
-
-int intf_ws2812_init(const intf_ws2812_cfg_t *cfg)
-{
-    if (ws2812_ops && ws2812_ops->init) return ws2812_ops->init(cfg);
-    return -1;
-}
-
-int intf_ws2812_set_pixel(intf_ws2812_pixel_t index, intf_ws2812_rgb_t color)
-{
-    if (ws2812_ops && ws2812_ops->set_pixel) return ws2812_ops->set_pixel(index, color);
-    return -1;
-}
-
-int intf_ws2812_set_pixels(const intf_ws2812_rgb_t *colors, uint32_t count)
-{
-    if (ws2812_ops && ws2812_ops->set_pixels) return ws2812_ops->set_pixels(colors, count);
-    return -1;
-}
-
-int intf_ws2812_update(bool blocking)
-{
-    if (ws2812_ops && ws2812_ops->update) return ws2812_ops->update(blocking);
-    return -1;
-}
-
-int intf_ws2812_clear(void)
-{
-    if (ws2812_ops && ws2812_ops->clear) return ws2812_ops->clear();
-    return -1;
-}
-
-bool intf_ws2812_is_busy(void)
-{
-    if (ws2812_ops && ws2812_ops->is_busy) return ws2812_ops->is_busy();
-    return false;
-}
-
-void intf_ws2812_deinit(void)
-{
-    if (ws2812_ops && ws2812_ops->deinit) ws2812_ops->deinit();
 }
 
 /* ============================================================================

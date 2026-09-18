@@ -21,6 +21,16 @@ SDK_DIR := $(if $(HPM_SDK_BASE),$(HPM_SDK_BASE),$(WORKSPACE_ROOT)/sdk/hpm_sdk)
 export HPM_SDK_BASE := $(SDK_DIR)
 
 # ============================================================================
+# Host Path Configuration (for debug on Windows host / outside container)
+# ============================================================================
+HOST_WORKSPACE_DIR ?= $(if $(HPMDEV_HOST_WORKSPACE),$(HPMDEV_HOST_WORKSPACE),$(abspath $(WORKSPACE_ROOT)))
+
+# Debug source path mode:
+#   host      - default, remap debug info to HOST_WORKSPACE_DIR for host-side debuggers (Ozone/GDB on Windows)
+#   container - keep debug info as container paths for VS Code Remote/Dev Container F5 debug
+DEBUG_PATH_MODE ?= host
+
+# ============================================================================
 # Board Selection
 # ============================================================================
 # Default board (can be overridden: make BOARD=user_board)
@@ -40,6 +50,13 @@ HPM_BUILD_TYPE ?= flash_xip
 GENERATOR ?= Ninja
 LAST_BUILD_LOG := $(BUILD_DIR)/last_build.log
 
+# Optimization level (separate Debug/Release)
+# Usage: make build OPT_LEVEL_DBG=-Og OPT_LEVEL_REL=-Ofast
+# Debug:  -O0 (default, best debugging experience)
+# Release: -O3 (default, maximum speed)
+OPT_LEVEL_DBG ?= -O0
+OPT_LEVEL_REL ?= -O3
+
 # ============================================================================
 # Flash Configuration
 # ============================================================================
@@ -52,6 +69,10 @@ BOARD_CFG ?= $(if $(wildcard $(BOARD_DIR)/$(BOARD).cfg),$(BOARD_DIR)/$(BOARD).cf
 JLINK_DEVICE ?= HPM5361xEGx
 JLINK_IF ?= JTAG
 JLINK_SPEED ?= 1000
+# 镜像最低加载地址 = .nor_cfg_option 的 LMA（= flash base + 0x400）。
+# 修改 linker script 的 flash 布局后需同步更新（可用
+# `riscv32-unknown-elf-objdump -h build/output/demo.elf | sort` 复核）。
+JLINK_FLASH_ADDR ?= 0x8000400
 
 # ============================================================================
 # Scripts (relative paths)
@@ -62,6 +83,17 @@ FLASH_SCRIPT := $(HPMDEV_TOOLS_DIR)/scripts/flash_target.sh
 # ============================================================================
 # CMake Arguments
 # ============================================================================
+# Debug source path remap (see HOST_WORKSPACE_DIR / DEBUG_PATH_MODE above).
+# Applied to all targets (app + SDK lib) through the SDK's EXTRA_C_FLAGS hook.
+ifeq ($(DEBUG_PATH_MODE),container)
+  DEBUG_PREFIX_MAP := -fdebug-prefix-map=$(ROOT_DIR)=$(ROOT_DIR) -fdebug-prefix-map=$(SDK_DIR)=$(SDK_DIR)
+else
+  DEBUG_PREFIX_MAP := -fdebug-prefix-map=$(ROOT_DIR)=$(HOST_WORKSPACE_DIR)/projects/$(PROJECT_NAME) -fdebug-prefix-map=$(SDK_DIR)=$(HOST_WORKSPACE_DIR)/sdk/hpm_sdk
+endif
+
+# Optimization level flags for Debug/Release builds
+OPT_CMAKE_ARGS := -DCMAKE_C_FLAGS_DEBUG="$(OPT_LEVEL_DBG) -g" -DCMAKE_C_FLAGS_RELEASE="$(OPT_LEVEL_REL) -DNDEBUG"
+
 CMAKE_ARGS := \
 	-G$(GENERATOR) \
 	-DBOARD=$(BOARD) \
@@ -69,7 +101,9 @@ CMAKE_ARGS := \
 	-DRV_ARCH=$(RV_ARCH) \
 	-DRV_ABI=$(RV_ABI) \
 	-DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) \
-	-DHPM_BUILD_TYPE=$(HPM_BUILD_TYPE)
+	-DHPM_BUILD_TYPE=$(HPM_BUILD_TYPE) \
+	-DEXTRA_C_FLAGS="$(DEBUG_PREFIX_MAP)" \
+	$(OPT_CMAKE_ARGS)
 
 # ============================================================================
 # Phony Targets
@@ -149,7 +183,7 @@ flash-jlink:
 	@echo "device $(JLINK_DEVICE)" > /tmp/jlink_flash.jlink
 	@echo "if $(JLINK_IF)" >> /tmp/jlink_flash.jlink
 	@echo "speed $(JLINK_SPEED)" >> /tmp/jlink_flash.jlink
-	@echo "loadfile $(OUTPUT_DIR)/$(PROJECT_NAME).bin 0x8003000" >> /tmp/jlink_flash.jlink
+	@echo "loadfile $(OUTPUT_DIR)/$(PROJECT_NAME).bin $(JLINK_FLASH_ADDR)" >> /tmp/jlink_flash.jlink
 	@echo "r" >> /tmp/jlink_flash.jlink
 	@echo "q" >> /tmp/jlink_flash.jlink
 	JLinkExe /tmp/jlink_flash.jlink

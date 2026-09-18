@@ -9,15 +9,15 @@ extern void hpm_gpio_driver_register(void);
 void app_gpio_init(void) {
     hpm_gpio_driver_register();
 
-    intf_gpio_cfg_t drvpwr_cfg = {
-        .pin = PIN_DRVPWR,
+    intf_gpio_cfg_t gdrv_en_cfg = {
+        .pin = PIN_GDRV_12V_EN,
         .dir = INTF_GPIO_DIR_OUTPUT,
         .pull = INTF_GPIO_PULL_DOWN,
         .init_level = INTF_GPIO_LEVEL_LOW,
         .irq_mode = INTF_GPIO_IRQ_NONE,
         .irq_cb = NULL,
     };
-    intf_gpio_init(&drvpwr_cfg);
+    intf_gpio_init(&gdrv_en_cfg);
 }
 
 void app_gpio_set(uint16_t pin, uint8_t on) {

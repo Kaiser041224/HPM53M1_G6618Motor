@@ -7,9 +7,6 @@ cmake_minimum_required(VERSION 3.13)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Enable DMA manager component (required by WS2812 driver)
-set(CONFIG_DMA_MGR 1)
-
 # Linker scripts
 set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/gcc/user_linker.ld)
 set(CUSTOM_SES_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/segger/user_linker.icf)
@@ -41,7 +38,6 @@ sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Platform/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Debug/Inc)
 
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/hpm_impl)
-sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/WS2812)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/IrqProfiler)
 
 # Optional shared code, provided by the environment (HPMDEV_SHARED_DIR).
@@ -55,6 +51,7 @@ endif()
 # ============================================================================
 
 sdk_app_src(Driver/hpm_impl/drv_clock.c)
+sdk_app_src(Driver/hpm_impl/drv_sys.c)
 sdk_app_src(Driver/hpm_impl/drv_gpio.c)
 sdk_app_src(Driver/hpm_impl/drv_hrpwm.c)
 sdk_app_src(Driver/hpm_impl/drv_gptmr.c)
@@ -62,9 +59,6 @@ sdk_app_src(Driver/hpm_impl/drv_adc.c)
 sdk_app_src(Driver/hpm_impl/drv_trgm.c)
 sdk_app_src(Driver/hpm_impl/drv_synt.c)
 sdk_app_src(Driver/hpm_impl/drv_mcan.c)
-sdk_app_src(Driver/hpm_impl/drv_ws2812.c)
-sdk_app_src(Driver/hpm_impl/drv_uart.c)
-sdk_app_src(Driver/WS2812/WS2812.c)
 sdk_app_src(Driver/IrqProfiler/irq_profiler.c)
 
 # ============================================================================
@@ -90,8 +84,6 @@ sdk_app_src(App/Algorithm/Src/algo_rms.c)
 # ============================================================================
 
 sdk_app_src(App/Platform/Src/app_gpio.c)
-sdk_app_src(App/Platform/Src/app_buzzer.c)
-sdk_app_src(App/Platform/Src/app_ws2812.c)
 sdk_app_src(App/Platform/Src/app_hrpwm.c)
 sdk_app_src(App/Platform/Src/app_gptmr.c)
 sdk_app_src(App/Platform/Src/app_adc.c)
@@ -108,7 +100,6 @@ sdk_app_src(App/Debug/Src/app_debug_can.c)
 sdk_app_src(App/Debug/Src/app_debug_hrpwm.c)
 sdk_app_src(App/Debug/Src/app_debug_profiler.c)
 sdk_app_src(App/Debug/Src/app_debug_rtt.c)
-sdk_app_src(App/Debug/Src/app_debug_trap.c)
 
 # ============================================================================
 # Application

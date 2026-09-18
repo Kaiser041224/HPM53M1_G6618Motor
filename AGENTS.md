@@ -177,3 +177,21 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 ## 项目附加约定
 
 <!-- 各项目在此追加本地约定，sync-config 不会覆盖本小节。 -->
+
+### 硬件选型教训（2026-09-18）
+
+- **HPM53M1 的 GPIO 仅存在于 PA 组**：PA00~PA15、PA26~PA29（共 20 个）。
+- **PB/ADCIN 引脚（PB00/PB01、PB08~PB14 = ADCIN1~6/11/14/15）为纯模拟端口，无数字功能**：
+  - 禁止将 LED、使能、片选、PWM 等数字信号分配到这些引脚；
+  - 本板状态 LED 接在 PB01（ADCIN14）上，即因此无法由固件控制（需改板）；
+  - PB00（CANID）作为 ADC 输入使用不受影响。
+- 新增外设或改板时，先对照 HPM53M1 datasheet §2.2（引脚表）与 §2.5（"GPIO 都分配在 PA 组"）核对引脚能力，不要沿用 HPM5361 的引脚分配（HPM5361 上 PB 为 GPIO，HPM53M1 上不是）。
+- 数字外设（UART/SPI/CAN/PWM）的引脚分配必须来自 PA 组，且优先核对 datasheet §2.2 中的 ALT 功能。
+
+### 供电与调试纪律（2026-09-18）
+
+- **本板必须使用外部电源供电（XT30/VIN），禁止依赖调试器供电**：
+  - 调试器供电电流不足，480MHz 运行时 +3.3V 轨跌落至 VPMC 欠压复位阈值（典型 2.6V）以下，导致芯片反复复位；
+  - 现象：RTT 高频重复输出、启动计数恒为 1、程序疑似"跑飞"（实为欠压复位循环）；
+  - 排查记录：`docs/superpowers/specs/2026-09-18-m1-board-bringup-design.md` §13。
+- 类似"程序反复重启/跑飞"的问题，**先确认供电（外部电源 + 测量 +3.3V/+5V）**，再查代码。
