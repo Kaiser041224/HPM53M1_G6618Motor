@@ -14,6 +14,7 @@
  */
 
 #include "intf_can.h"
+#include "intf_clock.h"
 #include "board.h"
 
 #include "hpm_mcan_drv.h"
@@ -98,6 +99,28 @@ static uint32_t drv_can_enter_critical(void)
 static void drv_can_exit_critical(uint32_t irq_state)
 {
     write_csr(CSR_MSTATUS, irq_state);
+}
+
+/*
+ * timeout_ms 语义（send / receive 通用，与 drv_uart 一致）：
+ *   0          = 不等待（单次尝试）
+ *   UINT32_MAX = 无限等待
+ *   其他       = 毫秒级超时
+ */
+static uint32_t mcan_ms_to_cycles(uint32_t ms)
+{
+    return (uint32_t)((uint64_t) ms * (intf_clock_get_cpu_freq() / 1000U));
+}
+
+static bool mcan_timeout_elapsed(uint32_t start, uint32_t timeout_cycles, uint32_t timeout_ms)
+{
+    if (timeout_ms == 0U) {
+        return true; /* 不等待 */
+    }
+    if (timeout_ms == UINT32_MAX) {
+        return false; /* 无限等待 */
+    }
+    return (uint32_t)(intf_clock_get_cycle() - start) >= timeout_cycles;
 }
 
 static bool mcan_frame_id_is_valid(const intf_can_frame_t *frame)
@@ -406,6 +429,14 @@ static int mcan_init_impl(uint8_t inst_id, const intf_can_cfg_t *cfg)
 
     sdk_cfg.interrupt_mask = mcan_event_to_sdk_mask(cfg->interrupt_mask);
 
+    /* IR.TC（发送完成）需 TXBTIE 使能，否则 TC 中断不会产生（默认 0） */
+    if ((cfg->interrupt_mask & INTF_CAN_EVENT_TX_COMPLETED) != 0U) {
+        sdk_cfg.txbuf_trans_interrupt_mask = ~0UL;
+    }
+
+    /* 自管时钟：确保外设时钟已加入组 0（幂等）。源/分频为板级策略，见 drv_clock。 */
+    clock_add_to_group(inst->clock_name, 0);
+
     uint32_t clk_freq = clock_get_frequency(inst->clock_name);
     st = mcan_init(inst->base, &sdk_cfg, clk_freq);
     if (st != status_success) {
@@ -472,9 +503,25 @@ static int mcan_send_impl(uint8_t inst_id, const intf_can_frame_t *frame,
     mcan_tx_frame_t tx;
     frame_to_sdk_tx(frame, &tx);
 
-    (void)timeout_ms;
-    hpm_stat_t st = mcan_transmit_blocking(base, &tx);
-    return (st == status_success) ? 0 : -1;
+    uint32_t start = intf_clock_get_cycle();
+    uint32_t timeout_cycles = mcan_ms_to_cycles(timeout_ms);
+
+    /*
+     * 写入 TX FIFO；FIFO 满时按 timeout_ms 等待空位，成功入队即返回。
+     * 返回 0 表示帧已进入发送队列（不代表已上总线）；
+     * 发送完成事件见 INTF_CAN_EVENT_TX_COMPLETED。
+     */
+    for (;;) {
+        uint32_t put_index = 0;
+        hpm_stat_t st = mcan_transmit_via_txfifo_nonblocking(base, &tx, &put_index);
+
+        if (st == status_success) {
+            return 0;
+        }
+        if (mcan_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
+            return -1;
+        }
+    }
 }
 
 /* ============================================================================
@@ -528,16 +575,24 @@ static int mcan_receive_impl(uint8_t inst_id, intf_can_frame_t *frame,
         return -1;
     }
 
-    mcan_rx_message_t rx;
-    memset(&rx, 0, sizeof(rx));
+    uint32_t start = intf_clock_get_cycle();
+    uint32_t timeout_cycles = mcan_ms_to_cycles(timeout_ms);
 
-    (void)timeout_ms;
-    hpm_stat_t st = mcan_receive_from_fifo_blocking(base, 0U, &rx);
-    if (st != status_success) {
-        return -1;
+    /* 轮询 RXFIFO0；无数据时按 timeout_ms 等待 */
+    for (;;) {
+        if (mcan_get_rxfifo_fill_level(base, 0U) > 0U) {
+            mcan_rx_message_t rx;
+            memset(&rx, 0, sizeof(rx));
+            if (mcan_read_rxfifo(base, 0U, &rx) != status_success) {
+                return -1;
+            }
+            sdk_rx_to_frame(&rx, frame);
+            return 0;
+        }
+        if (mcan_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
+            return -1;
+        }
     }
-    sdk_rx_to_frame(&rx, frame);
-    return 0;
 }
 
 /* ============================================================================
@@ -597,7 +652,36 @@ static int mcan_config_filter_impl(uint8_t inst_id, uint32_t index,
     mcan_filter_elem_t sdk_elem;
     filter_to_sdk(elem, &sdk_elem);
 
+    /*
+     * mcan_set_filter_element() 要求配置模式（CCCR.INIT=1 且 CCE=1）。
+     * 控制器运行中调用时临时进入配置模式，配置完成后恢复。
+     * 注意：进入 INIT 会中止当前总线参与（未完成发送被取消），
+     *       建议在启动阶段完成过滤器配置。
+     */
+    bool need_restore = ((base->CCCR & (MCAN_CCCR_INIT_MASK | MCAN_CCCR_CCE_MASK)) !=
+                         (MCAN_CCCR_INIT_MASK | MCAN_CCCR_CCE_MASK));
+
+    if (need_restore) {
+        uint32_t retry = 0U;
+
+        base->CCCR |= MCAN_CCCR_INIT_MASK;
+        /* INIT 位跨时钟域同步，需回读确认生效 */
+        while (((base->CCCR & MCAN_CCCR_INIT_MASK) == 0U) && (retry < 100000U)) {
+            retry++;
+        }
+        if ((base->CCCR & MCAN_CCCR_INIT_MASK) == 0U) {
+            return -1;
+        }
+        base->CCCR |= MCAN_CCCR_CCE_MASK;
+    }
+
     hpm_stat_t st = mcan_set_filter_element(base, &sdk_elem, index);
+
+    if (need_restore) {
+        base->CCCR &= ~MCAN_CCCR_CCE_MASK;
+        base->CCCR &= ~MCAN_CCCR_INIT_MASK;
+    }
+
     return (st == status_success) ? 0 : -1;
 }
 
@@ -986,4 +1070,19 @@ void hpm_can_driver_register(void)
 #if defined(HPM_MCAN3)
     intf_can_register(&mcan3_ops);
 #endif
+}
+
+/*
+ * 诊断接口：返回实例当前的外设时钟频率（Hz），0 = 实例不存在。
+ * 供上层自检打印使用（不依赖 hpm_* 头文件）。
+ */
+uint32_t hpm_can_get_clock_freq(uint8_t inst_id)
+{
+    if (inst_id >= DRV_MCAN_INSTANCE_COUNT) {
+        return 0U;
+    }
+    if (mcan_instances[inst_id].base == NULL) {
+        return 0U;
+    }
+    return clock_get_frequency(mcan_instances[inst_id].clock_name);
 }

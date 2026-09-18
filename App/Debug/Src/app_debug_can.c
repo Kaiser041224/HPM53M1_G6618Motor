@@ -1,3 +1,16 @@
+/*
+ * CAN 自检（MCAN3，经典 CAN）
+ *
+ * 测试内容：
+ *   1) 内部环回自检：临时切到 LOOPBACK_INTERNAL，发 0x114 并校验回环数据
+ *   2) 正常模式：每秒发送一帧 0x114（8 字节，首字节递增计数）
+ *   3) 接收：全接收过滤器 + RX 回调，收到帧即打印到 RTT
+ *   4) 状态：每秒打印错误计数 / bus off / 收发统计
+ *
+ * 硬件：MCAN3（PA15=TXD / PA14=RXD）→ TPT1044VQ，120Ω 端接由 DIP RES_CTL 控制。
+ * 说明：无外部节点时正常模式发送将因无 ACK 而报错并最终 bus off，属预期现象。
+ */
+
 #include "app_debug_can.h"
 
 #include "app_can.h"
@@ -9,224 +22,195 @@
 #include <stdint.h>
 #include <string.h>
 
+/* 驱动注册（App 层不得包含 hpm_* 头文件，沿用既有 extern 约定） */
 extern void hpm_can_driver_register(void);
 
-static void can_test_rx_callback(const app_can_msg_t *msg)
+#define CAN_TEST_INST         (3U)        /* MCAN3 */
+#define CAN_TEST_BAUDRATE     (1000000U)
+#define CAN_TEST_ID           (0x114U)
+#define CAN_TEST_DLC          (8U)
+#define CAN_TEST_TX_PERIOD_MS (1000U)
+#define CAN_TEST_LB_WAIT_MS   (100U)
+
+static uint32_t s_tick;
+static uint32_t s_tx_seq;
+static uint32_t s_rx_total;
+static uint32_t s_last_tx_cycle;
+
+static void can_dump_frame(const char *tag, const app_can_msg_t *msg)
 {
-    app_debug_printf("[CAN] RX ID=0x%03lX DLC=%u data=", (unsigned long) msg->id, msg->dlc);
-    for (uint8_t i = 0U; i < msg->dlc; i++) {
+    app_debug_printf("[CAN] %s ID=0x%03lX DLC=%u data=", tag, (unsigned long) msg->id, msg->dlc);
+    for (uint8_t i = 0U; (i < msg->dlc) && (i < 8U); i++) {
         app_debug_printf("%02X ", msg->data[i]);
     }
     app_debug_printf("\r\n");
 }
 
-static void app_debug_can_dump_status_and_stats(void)
+static void can_rx_callback(const app_can_msg_t *msg)
 {
-    intf_can_status_t status;
-    app_can_stats_t stats;
+    int echo_ret;
 
-    if (app_can_get_status(&status) == 0) {
-        app_debug_printf("[CAN] STS tx_err=%u rx_err=%u bus_off=%d warn=%d passive=%d lec=%u\r\n",
-                         status.tx_error_count, status.rx_error_count, status.bus_off,
-                         status.error_warning, status.error_passive, status.last_error_code);
+    s_rx_total++;
+    can_dump_frame("rx", msg);
+
+    /*
+     * 回显：把收到的帧原样发回总线（对应 UART 自检的回显验证）。
+     * 上位机应能收到同 ID / 同数据的帧；失败时打印错误。
+     */
+    if (msg->is_ext_id) {
+        echo_ret = app_can_send_ext(msg->id, msg->data, msg->dlc);
     } else {
-        app_debug_printf("[CAN] STS read FAILED\r\n");
+        echo_ret = app_can_send_std((uint16_t) msg->id, msg->data, msg->dlc);
     }
-
-    if (app_can_get_stats(&stats) == 0) {
-        app_debug_printf("[CAN] STAT rx=%lu irq=%lu drop=%lu ovf=%lu fifo_full=%lu fifo_lost=%lu tx_enq=%lu tx_ok=%lu tx_fail=%lu pending=%u evt=0x%08lX\r\n",
-                         (unsigned long) stats.rx_count, (unsigned long) stats.rx_irq_count,
-                         (unsigned long) stats.rx_drop_count,
-                         (unsigned long) stats.rx_overflow_count,
-                         (unsigned long) stats.rx_fifo_full_count,
-                         (unsigned long) stats.rx_fifo_lost_count,
-                         (unsigned long) stats.tx_enqueue_ok_count,
-                         (unsigned long) stats.tx_ok_count,
-                         (unsigned long) stats.tx_fail_count, stats.rx_pending_count,
-                         (unsigned long) stats.last_event_flags);
-        app_debug_printf("[CAN] ERR bus_off=%lu warn=%lu passive=%lu proto=%lu ram=%lu last_tx_ret=%d last_rx_id=0x%03lX last_rx_dlc=%u\r\n",
-                         (unsigned long) stats.bus_off_count,
-                         (unsigned long) stats.error_warning_count,
-                         (unsigned long) stats.error_passive_count,
-                         (unsigned long) stats.protocol_error_count,
-                         (unsigned long) stats.ram_access_fail_count, stats.last_tx_ret,
-                         (unsigned long) stats.last_rx_id, stats.last_rx_dlc);
-    } else {
-        app_debug_printf("[CAN] STAT read FAILED\r\n");
+    if (echo_ret != 0) {
+        app_debug_printf("[CAN] echo FAILED ret=%d\r\n", echo_ret);
     }
 }
 
-void app_debug_can_run_tests(void)
+/* ============================================================================
+ * 内部环回自检（不经外部收发器，不依赖总线对端）
+ * ============================================================================ */
+
+static volatile bool     s_lb_done;
+static intf_can_frame_t  s_lb_frame;
+
+static void can_lb_irq_cb(intf_can_inst_t inst, uint32_t events, void *user_data)
 {
-    static bool initialized = false;
-    static uint32_t tx_count = 0U;
-    int ret;
-    int filter_ret;
+    (void) inst;
+    (void) user_data;
 
-    if (!initialized) {
-        intf_can_status_t tmp;
-        app_debug_printf("\r\n[CAN] === CAN Test ===\r\n");
-
-        if (app_can_get_status(&tmp) == 0) {
-            app_debug_printf("[CAN] init OK\r\n");
-        } else {
-            app_debug_printf("[CAN] init FAILED\r\n");
-            return;
-        }
-
-        app_can_set_rx_callback(can_test_rx_callback);
-        app_can_clear_stats();
-
-        filter_ret = app_can_add_std_filter(0x114U, 0x7FFU);
-        if (filter_ret != 0) {
-            app_debug_printf("[CAN] add std filter FAILED\r\n");
-            return;
-        }
-        filter_ret = app_can_add_std_filter(0x000U, 0x000U);
-        if (filter_ret != 0) {
-            app_debug_printf("[CAN] add catch-all filter FAILED\r\n");
-            return;
-        }
-
-        initialized = true;
-        app_debug_can_dump_status_and_stats();
-    }
-
-    uint8_t tx_data[8];
-    for (uint8_t i = 0U; i < 8U; i++) {
-        tx_data[i] = (uint8_t) ((tx_count >> (i * 4U)) & 0x0FU) | (uint8_t) (i << 4U);
-    }
-
-    ret = app_can_send_std(0x114U, tx_data, 8U);
-    app_debug_printf("[CAN] TX seq=%lu ret=%d\r\n", (unsigned long) tx_count, ret);
-    tx_count++;
-
-    intf_clock_delay_ms(100);
-    app_can_poll();
-    app_debug_can_dump_status_and_stats();
-}
-
-static volatile bool lb_rx_done;
-static volatile app_can_msg_t lb_rx_msg;
-
-static void lb_irq_handler(intf_can_inst_t inst, uint32_t events, void *user_data)
-{
-    (void)inst;
-    (void)events;
-    (void)user_data;
     if ((events & INTF_CAN_EVENT_RX_FIFO0_NEW_MSG) != 0U) {
-        intf_can_frame_t f;
-        memset(&f, 0, sizeof(f));
-        if (intf_can_receive_nonblocking(0, &f) == 0) {
-            lb_rx_msg.id = f.id;
-            lb_rx_msg.is_ext_id = f.is_ext_id;
-            lb_rx_msg.dlc = f.dlc;
-            if (f.dlc != 0U) {
-                memcpy((void *) lb_rx_msg.data, f.data, f.dlc);
-            }
-            lb_rx_done = true;
+        intf_can_frame_t frame;
+        memset(&frame, 0, sizeof(frame));
+        if (intf_can_receive_nonblocking(CAN_TEST_INST, &frame) == 0) {
+            s_lb_frame = frame;
+            s_lb_done = true;
         }
     }
 }
 
-void app_debug_can_loopback_test(void)
+static bool can_loopback_selfcheck(void)
 {
-    int ret;
-    uint32_t wait_ms;
-
-    app_debug_printf("\r\n[CAN] === CAN Internal Loopback Test ===\r\n");
-
-    app_can_deinit();
-    hpm_can_driver_register();
-    memset((void *) &lb_rx_msg, 0, sizeof(lb_rx_msg));
-
     intf_can_cfg_t cfg = {
-        .baudrate = 1000000U,
+        .baudrate = CAN_TEST_BAUDRATE,
         .mode = INTF_CAN_MODE_LOOPBACK_INTERNAL,
         .enable_canfd = false,
-        .interrupt_mask = INTF_CAN_EVENT_RX_FIFO0_NEW_MSG | INTF_CAN_EVENT_RX_FIFO0_FULL |
-                          INTF_CAN_EVENT_RX_FIFO0_MSG_LOST,
-        .ram = {
-            .std_filter_count = APP_CAN_FILTER_COUNT,
-            .ext_filter_count = APP_CAN_FILTER_COUNT,
-        },
+        .interrupt_mask = INTF_CAN_EVENT_RX_FIFO0_NEW_MSG,
     };
-
-    ret = intf_can_init(0, &cfg);
-    if (ret != 0) {
-        app_debug_printf("[CAN] LB init FAILED\r\n");
-        return;
-    }
-    app_debug_printf("[CAN] LB init OK (internal loopback mode)\r\n");
-
-    ret = intf_can_config_irq_callback(0, lb_irq_handler, NULL);
-    if (ret != 0) {
-        app_debug_printf("[CAN] LB IRQ callback config FAILED\r\n");
-        intf_can_deinit(0);
-        return;
-    }
-
     intf_can_filter_elem_t filter = {
         .type = INTF_CAN_FILTER_CLASSIC,
         .target_fifo = INTF_CAN_FILTER_FIFO0,
         .id = 0U,
         .mask = 0U,
     };
-    ret = intf_can_config_filter(0, 0, &filter);
-    if (ret != 0) {
-        app_debug_printf("[CAN] LB filter config FAILED\r\n");
-        intf_can_config_irq_callback(0, NULL, NULL);
-        intf_can_deinit(0);
+    intf_can_frame_t tx;
+    bool ok = false;
+
+    if (intf_can_init(CAN_TEST_INST, &cfg) != 0) {
+        return false;
+    }
+    if (intf_can_config_irq_callback(CAN_TEST_INST, can_lb_irq_cb, NULL) != 0) {
+        intf_can_deinit(CAN_TEST_INST);
+        return false;
+    }
+    if (intf_can_config_filter(CAN_TEST_INST, 0U, &filter) != 0) {
+        intf_can_config_irq_callback(CAN_TEST_INST, NULL, NULL);
+        intf_can_deinit(CAN_TEST_INST);
+        return false;
+    }
+
+    memset(&tx, 0, sizeof(tx));
+    tx.id = CAN_TEST_ID;
+    tx.frame_type = INTF_CAN_FRAME_CLASSIC;
+    tx.dlc = CAN_TEST_DLC;
+    for (uint8_t i = 0U; i < CAN_TEST_DLC; i++) {
+        tx.data[i] = (uint8_t) (0x10U + i);
+    }
+
+    s_lb_done = false;
+    memset((void *) &s_lb_frame, 0, sizeof(s_lb_frame));
+
+    if (intf_can_send(CAN_TEST_INST, &tx, 100U) == 0) {
+        uint32_t waited;
+
+        for (waited = 0U; (waited < CAN_TEST_LB_WAIT_MS) && !s_lb_done; waited++) {
+            intf_clock_delay_ms(1U);
+        }
+        ok = s_lb_done && (s_lb_frame.id == CAN_TEST_ID) && (s_lb_frame.dlc == CAN_TEST_DLC) &&
+             (memcmp(s_lb_frame.data, tx.data, CAN_TEST_DLC) == 0);
+    }
+
+    intf_can_config_irq_callback(CAN_TEST_INST, NULL, NULL);
+    intf_can_deinit(CAN_TEST_INST);
+    return ok;
+}
+
+/* ============================================================================
+ * 自检入口
+ * ============================================================================ */
+
+void app_debug_can_init(void)
+{
+    bool lb_ok;
+
+    /* 先注册驱动：环回自检经 Interface 调用，需要 ops 已就绪（幂等） */
+    hpm_can_driver_register();
+
+    app_debug_printf("\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, TX ID=0x%03X\r\n",
+                     (unsigned) CAN_TEST_BAUDRATE, (unsigned) CAN_TEST_ID);
+
+    lb_ok = can_loopback_selfcheck();
+    app_debug_printf("[CAN] loopback self-check: %s\r\n", lb_ok ? "OK" : "FAILED");
+
+    if (app_can_init() != 0) {
+        app_debug_printf("[CAN] init FAILED\r\n");
         return;
     }
+    app_debug_printf("[CAN] init OK, clk=%u Hz\r\n", (unsigned) app_can_get_clock_hz());
 
-    uint8_t data[8] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11};
-    intf_can_frame_t tx_frame = {
-        .id = 0x114U,
-        .dlc = 8U,
-        .frame_type = INTF_CAN_FRAME_CLASSIC,
-    };
-    memcpy(tx_frame.data, data, 8);
+    app_can_set_rx_callback(can_rx_callback);
+    app_can_clear_stats();
 
-    lb_rx_done = false;
-    ret = intf_can_send_nonblocking(0, &tx_frame, NULL);
-    app_debug_printf("[CAN] LB TX nonblocking ret=%d\r\n", ret);
-    if (ret != 0) {
-        intf_can_config_irq_callback(0, NULL, NULL);
-        intf_can_deinit(0);
-        return;
+    if (app_can_add_std_filter(0x000U, 0x000U) != 0) {
+        app_debug_printf("[CAN] std filter config FAILED\r\n");
     }
-
-    for (wait_ms = 0U; wait_ms < 100U && !lb_rx_done; wait_ms++) {
-        intf_clock_delay_ms(1U);
+    if (app_can_add_ext_filter(0x00000000U, 0x00000000U) != 0) {
+        app_debug_printf("[CAN] ext filter config FAILED\r\n");
     }
+}
 
-    if (lb_rx_done) {
-        app_debug_printf("[CAN] LB RX OK: ID=0x%03lX DLC=%u data=", (unsigned long) lb_rx_msg.id,
-                         lb_rx_msg.dlc);
-        for (uint8_t i = 0U; i < lb_rx_msg.dlc; i++) {
-            app_debug_printf("%02X ", lb_rx_msg.data[i]);
-        }
-        app_debug_printf("\r\n");
+void app_debug_can_run_once(void)
+{
+    uint32_t now = intf_clock_get_cycle();
+    uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * CAN_TEST_TX_PERIOD_MS;
 
-        bool match = true;
-        for (uint8_t i = 0U; i < 8U; i++) {
-            if (lb_rx_msg.data[i] != data[i]) {
-                match = false;
-                break;
-            }
-        }
-        app_debug_printf("[CAN] LB data match: %s\r\n", match ? "YES" : "NO");
-    } else {
-        app_debug_printf("[CAN] LB RX TIMEOUT after %lu ms — MCAN internal loopback FAILED\r\n",
-                         (unsigned long) wait_ms);
+    /* 1) 分发接收回调（主循环上下文） */
+    app_can_poll();
+
+    /* 2) 每秒发送一帧 + 状态行 */
+    if ((uint32_t) (now - s_last_tx_cycle) >= period_cycles) {
+        uint8_t data[CAN_TEST_DLC];
         intf_can_status_t st;
-        intf_can_get_status(0, &st);
-        app_debug_printf("[CAN] LB status: tx_err=%u rx_err=%u bus_off=%d\r\n",
-                         st.tx_error_count, st.rx_error_count, st.bus_off);
-    }
+        app_can_stats_t stats;
+        int ret;
 
-    intf_can_config_irq_callback(0, NULL, NULL);
-    intf_can_deinit(0);
-    app_can_init();
+        s_last_tx_cycle = now;
+        s_tick++;
+
+        data[0] = (uint8_t) s_tx_seq;
+        for (uint8_t i = 1U; i < CAN_TEST_DLC; i++) {
+            data[i] = (uint8_t) (0x10U + i);
+        }
+
+        ret = app_can_send_std(CAN_TEST_ID, data, CAN_TEST_DLC);
+        s_tx_seq++;
+
+        if ((app_can_get_status(&st) == 0) && (app_can_get_stats(&stats) == 0)) {
+            app_debug_printf(
+                "[CAN] tx tick=%u seq=%u ret=%d rx_total=%u | tx_err=%u rx_err=%u bus_off=%d | tx_ok=%u rx=%u drop=%u\r\n",
+                (unsigned) s_tick, (unsigned) data[0], ret, (unsigned) s_rx_total,
+                st.tx_error_count, st.rx_error_count, st.bus_off, (unsigned) stats.tx_ok_count,
+                (unsigned) stats.rx_count, (unsigned) stats.rx_drop_count);
+        }
+    }
 }

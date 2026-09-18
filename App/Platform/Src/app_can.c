@@ -47,21 +47,12 @@ static struct {
 static app_can_stats_t s_stats;
 static uint32_t s_filter_index;
 
-static void app_can_driver_register_once(void)
-{
-    static bool registered = false;
-
-    if (registered) {
-        return;
-    }
-    registered = true;
-}
-
 extern void hpm_can_driver_register(void);
+extern uint32_t hpm_can_get_clock_freq(uint8_t inst_id);
+
 void app_can_register_driver(void)
 {
     hpm_can_driver_register();
-    app_can_driver_register_once();
 }
 
 static bool app_can_is_std_id_valid(uint32_t id)
@@ -278,7 +269,8 @@ int app_can_init(void)
 {
     int ret;
 
-    app_can_driver_register_once();
+    /* 注册驱动（幂等），确保可单独调用 */
+    hpm_can_driver_register();
 
     if (s_initialized) {
         app_can_deinit();
@@ -453,4 +445,9 @@ bool app_can_is_bus_off(void)
         return true;
     }
     return status.bus_off;
+}
+
+uint32_t app_can_get_clock_hz(void)
+{
+    return hpm_can_get_clock_freq(APP_CAN_INST);
 }

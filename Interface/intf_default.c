@@ -3,6 +3,7 @@
 #include "intf_adc.h"
 #include "intf_trgm.h"
 #include "intf_uart.h"
+#include "intf_usb_cdc.h"
 #include "intf_gpio.h"
 #include "intf_can.h"
 #include "intf_synt.h"
@@ -627,4 +628,49 @@ uint32_t intf_synt_get_count(void)
 {
     if (synt_ops && synt_ops->get_count) return synt_ops->get_count();
     return 0;
+}
+
+/* ============================================================================
+ * USB CDC Interface
+ * ============================================================================ */
+
+static const intf_usb_cdc_ops_t *usb_cdc_ops = NULL;
+
+int intf_usb_cdc_register(const intf_usb_cdc_ops_t *ops)
+{
+    if (ops == NULL) return -1;
+    usb_cdc_ops = ops;
+    return 0;
+}
+
+int intf_usb_cdc_init(void)
+{
+    if (usb_cdc_ops && usb_cdc_ops->init) return usb_cdc_ops->init();
+    return -1;
+}
+
+int intf_usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{
+    if (usb_cdc_ops && usb_cdc_ops->write) return usb_cdc_ops->write(data, len, timeout_ms);
+    return -1;
+}
+
+int intf_usb_cdc_read(uint8_t *data, size_t len)
+{
+    if (usb_cdc_ops && usb_cdc_ops->read) return usb_cdc_ops->read(data, len);
+    return -1;
+}
+
+int intf_usb_cdc_register_rx_callback(intf_usb_cdc_rx_cb_t cb)
+{
+    if (usb_cdc_ops && usb_cdc_ops->register_rx_callback) {
+        return usb_cdc_ops->register_rx_callback(cb);
+    }
+    return -1;
+}
+
+bool intf_usb_cdc_is_dtr(void)
+{
+    if (usb_cdc_ops && usb_cdc_ops->is_dtr) return usb_cdc_ops->is_dtr();
+    return false;
 }

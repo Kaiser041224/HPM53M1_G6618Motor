@@ -25,6 +25,7 @@ extern "C" {
 #endif /* __cplusplus */
 
 void board_init(void);
+void board_init_usb(void);
 void board_init_core1(void);
 
 #if defined(__cplusplus)

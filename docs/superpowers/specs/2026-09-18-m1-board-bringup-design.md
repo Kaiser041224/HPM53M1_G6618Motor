@@ -260,3 +260,95 @@ hb=81 printf_cyc=5105  delay_cyc=240000197
 - 循环 ≈2Hz 稳定，无复位。
 
 **由此复核**：§12 记录的 `rdcycle`/MCHTMR"异常"很可能是欠压复位循环的表现，而非 CSR 本身问题（当前实现使用 `mcycle`，工作正常，暂不回溯）。
+
+## 14. CAN（MCAN3）驱动与首次总线测试（2026-09-18）
+
+### 14.1 实现
+
+- 驱动：`drv_mcan.c`（SDK 现代 API：`mcan_get_default_config` / `mcan_get_default_ram_config` / `mcan_set_filter_element` / `mcan_get_protocol_status` / TX FIFO 非阻塞发送 / TX Event FIFO）。
+- 本次修正：
+  1. `app_can_init()` 自行注册驱动（原实现依赖外部先注册，单独调用必失败）；
+  2. `send/receive` 实现真实 `timeout_ms`（mcycle；0=不等待、`UINT32_MAX`=无限、其他=毫秒）；
+  3. 驱动自管时钟使能（`clock_add_to_group`，幂等）；时钟源/分频仍归板级（`drv_clock`）；
+  4. 新增 `hpm_can_get_clock_freq()` / `app_can_get_clock_hz()` 诊断接口。
+- 自检：`app_debug_can.c` —— 内部环回自检（无需外部节点）+ 正常模式 1Hz 发送 0x114 + RX 打印 + 状态行。
+- 消息 RAM：`mcan3_msg_buf` 位于 AHB SRAM `0xF0401E00`（MCAN 硬性要求）。
+
+### 14.2 首次硬件测试结果（外部供电）
+
+- ✅ **总线收发正常**：`ret=0`、`tx_err=0`、`rx_err=0`、`bus_off=0`；收到外部帧（ID=0x7FF，来自上位机 CAN 工具）。
+- ✅ **CAN 时钟实测 `clk=80000000 Hz`**：PLL1 = 800MHz / 10 = 80MHz，与 EVK 参考配置一致；SDK 据此计算 1Mbps 时序，总线验证正确。
+- ⚠️ 环回自检 FAILED；std/ext 过滤器配置 FAILED；`tx_ok=0`。
+
+### 14.3 根因与修复（已定位，待应用）
+
+1. **过滤器配置失败**：`mcan_set_filter_element` 内部要求配置模式（`mcan_require_config_mode`：CCCR.INIT=1 且 CCE=1），控制器运行中调用必然失败。SDK demo 的做法是把过滤器放入 `mcan_init` 的 `all_filters_config`（初始化期内配置）。
+   - 修复方案：驱动 `config_filter` 临时进入 INIT+CCE → 配置 → 退出（期间短暂停止总线参与，建议在启动阶段完成过滤器配置）。
+   - 附注：过滤器失效时 RX 仍工作，是因为 GFC.ANFS 默认 0（不匹配帧也接收进 RXFIFO0）。
+2. **`tx_ok=0`**：`IR.TC`（Transmission Completed）需要 `txbuf_trans_interrupt_mask`（TXBTIE）使能，默认 0 → 无 TC 中断。SDK demo 均设 `~0UL`。
+   - 修复方案：init 时若请求 `INTF_CAN_EVENT_TX_COMPLETED`，设置 `sdk_cfg.txbuf_trans_interrupt_mask = ~0UL`。
+3. **环回自检 FAILED**：直接原因为第 1 项（自检在过滤器步骤即返回失败）；修复后需复测确认环回收发。
+
+### 14.4 修复验证（复测通过）
+
+- ✅ 环回自检 `OK`（原 FAILED）
+- ✅ 过滤器配置成功（不再出现 FAILED）
+- ✅ `tx_ok` 逐帧递增（滞后一帧显示属正常：状态行在入队后立即打印，TC 中断在帧完成时才到）
+- ✅ 总线持续健康：`tx_err=0 rx_err=0 bus_off=0`，外部帧接收正常（ID=0x7FF）
+- 追加：RX 回调增加**原样回显**（对应 UART 自检的回显验证）——上位机发送任意帧应收到同 ID / 同数据的回发帧；回显失败会打印 `[CAN] echo FAILED`。
+
+## 15. USB CDC 虚拟串口（2026-09-18）
+
+### 15.1 硬件事实（datasheet + 原理图核对）
+
+- **HPM53M1 的 USB_DP/USB_DM 为专用引脚**（封装 pin48/49，类型 USB，供电组 VUSB），
+  **无 IOMUX/ALT 功能**——不需要、也不能为其配置 pinmux（原 pinmux 工具输出无 USB 项是正确的）。
+  这是与 HPM5361（USB 复用 PA24/PA25）的关键差异。
+- 原理图：D+/D- → U12（PRTR5V0U2X ESD）→ L5（DLW21SN900SQ2L 共模电感）→ J10（3-pin：GND/D+/D-）。
+  **连接器无 VBUS**（板卡外部供电，USB 仅数据）。
+- **QFN80 无 USB0_VBUS 检测引脚**（数据手册引脚表无此项，原理图亦未引出）→ PHY 必须使用
+  **内部 VBUS**（`usb_phy_using_internal_vbus()`）。
+- DP/DM 45Ω 下拉在 `board_init()` 中关闭（`board_disable_usb_phy_dp_dm_pulldown()`），
+  `board_init_usb()` 中时钟就绪后再确认一次。
+
+### 15.2 实现（复用 SDK CherryUSB，不重复造轮子）
+
+| 层 | 文件 | 说明 |
+|---|---|---|
+| 配置 | `config/usb_config.h` | 以 SDK 样例 `samples/cherryusb/config/usb_config.h` 为基线（保持完整 device/host 宏，`usbotg_core.c` 两者都包含）；日志改走 SEGGER RTT；HS 默认，可切 FS |
+| Interface | `Interface/intf_usb_cdc.h` + `intf_default.c` | 契约：init / write(超时) / read(非阻塞) / rx_callback / is_dtr；语义对齐 `intf_uart` |
+| Driver | `Driver/hpm_impl/drv_usb_cdc.c` | CherryUSB 设备栈 + CDC ACM 类 + HPM 端口；描述符；OUT 端点 ISR → SPSC 环形缓冲；TX 非缓存缓冲 + ZLP 处理；DTR 弱符号覆盖 |
+| Board | `board.c` / `board.h` | `board_init_usb()`：USB0 时钟 + PHY（内部 VBUS + 下拉关闭） |
+| Platform | `App/Platform/{Inc,Src}/app_usb.*` | 注册驱动 + 初始化 + write/write_str |
+| Debug | `App/Debug/{Inc,Src}/app_debug_usb.*` | 自检：DTR 上报 + RX 回显 + 1Hz 状态行 |
+| 构建 | `CMakeLists.txt` | `CONFIG_CHERRYUSB/USB_DEVICE/USB_DEVICE_CDC_ACM`；`sdk_inc(config)`；RTT 头文件经 `sdk_inc` 全局可见 |
+
+约束与说明：
+- 单次 `write` ≤ 512B；USB 缓冲位于 `.noncacheable.non_init`（D-Cache 已使能，DMA 需非缓存内存）。
+- 描述符 VID/PID 暂用 HPMicro（0x34B7/0xFFFF），量产前替换为自有 ID。
+- 资源占用：FLASH 105,552 B（10.07%）。
+
+### 15.3 测试方法
+
+1. 烧录后 RTT 应出现 `[USB] self-test: USB0 CDC ACM (J10 D+/D-), HS` 及 USB 栈枚举日志。
+2. J10（GND/D+/D-）接 PC USB（板卡仍需外部供电；注意 D+/D- 极性）。
+3. PC 出现虚拟串口（产品名 `HPM53M1 VCOM`）；打开后 RTT 打印 `[USB] host port OPENED (DTR=1)`。
+4. 终端输入字符 → 原样回显 + RTT `[USB] rx ...`；打开端口后每秒收到 `usb: tick=N rx_total=M`。
+5. 若枚举失败：查看 RTT 的 USB 栈日志；可切换全速模式（`config/usb_config.h` 中
+   `#define CONFIG_USB_DEVICE_FORCE_FULL_SPEED`）重建复测。
+
+### 15.4 首次硬件测试结果与修正（2026-09-18）
+
+**结果**：
+- ✅ **枚举成功，回显正常**（终端输入 `asdfghjkl` 原样返回；RTT `[USB] rx n=9 total=9 last=0x6C ('l')`）——RX/TX 通路均验证通过。
+- ⚠️ `[E/usbd_core] descriptor <type:F,index:0> not found!`（`wValue 0x0F00` = **BOS 描述符**请求）：
+  CherryUSB 在未提供 `bos_descriptor` 时对 BOS 请求回 STALL——这是 **USB 2.0 设备的标准行为**，
+  主机随后正常继续枚举（实测不影响功能）。如需消除日志可后续补充 BOS 描述符（须同时评估 LPM 能力声明，暂缓）。
+- ⚠️ 上位机串口工具默认**不置 DTR** → 原实现（banner/周期行以 DTR 为门控）不输出。
+  **修正**：banner 改为"写成功前持续重试"，周期状态行不依赖 DTR（写失败静默）；DTR 仅作信息上报。
+- `boot: seq=5`：上电以来第 5 次启动（含烧录/复位），`rst_status=0` 无异常复位；
+  MCU 复位瞬间虚拟串口掉线属正常 USB 重新枚举行为。
+
+**修改**：
+- 设备名（iProduct）→ `HPM53M1_G6618Motor`（与工程同名）
+- 序列号 `0001` → `0002`（使 Windows 刷新设备名缓存，否则可能仍显示旧名）

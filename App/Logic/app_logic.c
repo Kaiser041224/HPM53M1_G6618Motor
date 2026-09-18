@@ -13,7 +13,10 @@
 
 #include <stdint.h>
 
+#include "app_debug_can.h"
 #include "app_debug_rtt.h"
+#include "app_debug_uart.h"
+#include "app_debug_usb.h"
 #include "app_gpio.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
@@ -47,6 +50,15 @@ void app_init(void) {
     app_debug_printf(
         "clock: cpu=%u Hz, ahb=%u Hz\r\n", (unsigned)intf_clock_get_cpu_freq(),
         (unsigned)intf_clock_get_ahb_freq());
+
+    /* 4. UART0 自检（PA00/PA01，115200 8N1）：TX 周期输出 + RX 回显 */
+    app_debug_uart_init();
+
+    /* 5. CAN 自检（MCAN3，经典 CAN @1Mbps，TX ID=0x114） */
+    app_debug_can_init();
+
+    /* 6. USB 自检（USB0 CDC 虚拟串口，J10） */
+    app_debug_usb_init();
 }
 
 void app_run(void) {
@@ -65,6 +77,15 @@ void app_run(void) {
         (unsigned)last_delay_cycles);
     c1 = intf_clock_get_cycle();
     last_printf_cycles = c1 - c0;
+
+    /* UART 自检：RX 回显 + 周期 TX（UART0，115200） */
+    app_debug_uart_run_once();
+
+    /* CAN 自检：周期 TX（0x114）+ RX 分发 + 状态 */
+    app_debug_can_run_once();
+
+    /* USB 自检：RX 回显 + 周期 TX + DTR 上报 */
+    app_debug_usb_run_once();
 
     intf_clock_delay_ms(APP_LED_BLINK_INTERVAL_MS);
     last_delay_cycles = intf_clock_get_cycle() - c1;

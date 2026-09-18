@@ -7,6 +7,15 @@ cmake_minimum_required(VERSION 3.13)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# ============================================================================
+# CherryUSB middleware (USB Device + CDC ACM)
+# 必须在 find_package(hpm-sdk) 之前设置，供 middleware/CMakeLists.txt 判定
+# ============================================================================
+
+set(CONFIG_CHERRYUSB 1)
+set(CONFIG_USB_DEVICE 1)
+set(CONFIG_USB_DEVICE_CDC_ACM 1)
+
 # Linker scripts
 set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/gcc/user_linker.ld)
 set(CUSTOM_SES_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/segger/user_linker.icf)
@@ -25,6 +34,15 @@ sdk_app_inc(${RTT_DIR}/Config)
 sdk_app_inc(${RTT_DIR}/RTT)
 sdk_app_src(${RTT_DIR}/RTT/SEGGER_RTT.c)
 sdk_app_src(${RTT_DIR}/RTT/SEGGER_RTT_printf.c)
+# 中间件（CherryUSB）经 usb_config.h 使用 RTT 日志，需全局可见
+sdk_inc(${RTT_DIR}/Config)
+sdk_inc(${RTT_DIR}/RTT)
+
+# ============================================================================
+# CherryUSB 配置（usb_config.h，middleware 源文件也需要该路径）
+# ============================================================================
+
+sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/config)
 
 # ============================================================================
 # Include Paths
@@ -52,6 +70,8 @@ endif()
 
 sdk_app_src(Driver/hpm_impl/drv_clock.c)
 sdk_app_src(Driver/hpm_impl/drv_sys.c)
+sdk_app_src(Driver/hpm_impl/drv_uart.c)
+sdk_app_src(Driver/hpm_impl/drv_usb_cdc.c)
 sdk_app_src(Driver/hpm_impl/drv_gpio.c)
 sdk_app_src(Driver/hpm_impl/drv_hrpwm.c)
 sdk_app_src(Driver/hpm_impl/drv_gptmr.c)
@@ -84,6 +104,8 @@ sdk_app_src(App/Algorithm/Src/algo_rms.c)
 # ============================================================================
 
 sdk_app_src(App/Platform/Src/app_gpio.c)
+sdk_app_src(App/Platform/Src/app_uart.c)
+sdk_app_src(App/Platform/Src/app_usb.c)
 sdk_app_src(App/Platform/Src/app_hrpwm.c)
 sdk_app_src(App/Platform/Src/app_gptmr.c)
 sdk_app_src(App/Platform/Src/app_adc.c)
@@ -95,8 +117,10 @@ sdk_app_src(App/Platform/Src/app_can.c)
 # ============================================================================
 
 sdk_app_src(App/Debug/Src/app_debug.c)
-sdk_app_src(App/Debug/Src/app_debug_adc.c)
+sdk_app_src(App/Debug/Src/app_debug_uart.c)
+sdk_app_src(App/Debug/Src/app_debug_usb.c)
 sdk_app_src(App/Debug/Src/app_debug_can.c)
+sdk_app_src(App/Debug/Src/app_debug_adc.c)
 sdk_app_src(App/Debug/Src/app_debug_hrpwm.c)
 sdk_app_src(App/Debug/Src/app_debug_profiler.c)
 sdk_app_src(App/Debug/Src/app_debug_rtt.c)

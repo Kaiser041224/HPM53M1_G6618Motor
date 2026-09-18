@@ -63,6 +63,9 @@ int  app_can_get_stats(app_can_stats_t *stats);
 void app_can_clear_stats(void);
 bool app_can_is_bus_off(void);
 
+/* 诊断：当前 CAN 外设时钟频率（Hz），0 = 未注册/不存在 */
+uint32_t app_can_get_clock_hz(void);
+
 #ifdef __cplusplus
 }
 #endif
