@@ -1,7 +1,7 @@
 /*
- * UART Interface - C11 Abstract Interface
+ * UART Interface - C17 抽象接口（设备对象 + 匿名结构体）
  *
- * Copyright (c) 2024 HPMicro
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -16,10 +16,6 @@
 extern "C" {
 #endif
 
-/* ============================================================================
- * Types
- * ============================================================================ */
-
 typedef uint8_t intf_uart_port_t;
 
 typedef struct {
@@ -32,23 +28,23 @@ typedef struct {
 
 typedef void (*intf_uart_rx_cb_t)(uint8_t *data, size_t len);
 
+/*
+ * UART 设备对象（风格 A：instance_id + 匿名结构体方法）
+ * 用法：const intf_uart_t *uart = intf_uart_get(port); uart->transmit(...);
+ */
 typedef struct {
-    int  (*init)(intf_uart_port_t port, const intf_uart_cfg_t *cfg);
-    int  (*transmit)(intf_uart_port_t port, const uint8_t *data, size_t len, uint32_t timeout_ms);
-    int  (*receive)(intf_uart_port_t port, uint8_t *data, size_t len, uint32_t timeout_ms);
-    int  (*register_rx_callback)(intf_uart_port_t port, intf_uart_rx_cb_t cb);
-    void (*deinit)(intf_uart_port_t port);
-} intf_uart_ops_t;
+    uint8_t instance_id; /* 端口实例：0..3 -> UART0..UART3 */
+    struct {
+        int  (*init)(const intf_uart_cfg_t *cfg);
+        int  (*transmit)(const uint8_t *data, size_t len, uint32_t timeout_ms);
+        int  (*receive)(uint8_t *data, size_t len, uint32_t timeout_ms);
+        int  (*register_rx_callback)(intf_uart_rx_cb_t cb);
+        void (*deinit)(void);
+    };
+} intf_uart_t;
 
-/* ============================================================================
- * API
- * ============================================================================ */
-
-int intf_uart_register(const intf_uart_ops_t *ops);
-int intf_uart_init(intf_uart_port_t port, const intf_uart_cfg_t *cfg);
-int intf_uart_transmit(intf_uart_port_t port, const uint8_t *data, size_t len, uint32_t timeout_ms);
-int intf_uart_receive(intf_uart_port_t port, uint8_t *data, size_t len, uint32_t timeout_ms);
-int intf_uart_register_rx_callback(intf_uart_port_t port, intf_uart_rx_cb_t cb);
+int intf_uart_register(const intf_uart_t *dev);
+const intf_uart_t *intf_uart_get(intf_uart_port_t port);
 
 #ifdef __cplusplus
 }

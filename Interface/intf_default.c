@@ -382,40 +382,24 @@ void intf_adc_reset_diag_max(void)
 }
 
 /* ============================================================================
- * UART Interface
+ * UART Interface（设备对象注册表，风格 A）
  * ============================================================================ */
 
-static const intf_uart_ops_t *uart_ops = NULL;
+#define UART_INSTANCE_COUNT (4U)
 
-int intf_uart_register(const intf_uart_ops_t *ops)
+static const intf_uart_t *uart_devs[UART_INSTANCE_COUNT] = { NULL };
+
+int intf_uart_register(const intf_uart_t *dev)
 {
-    if (ops == NULL) return -1;
-    uart_ops = ops;
+    if ((dev == NULL) || (dev->instance_id >= UART_INSTANCE_COUNT)) return -1;
+    uart_devs[dev->instance_id] = dev;
     return 0;
 }
 
-int intf_uart_init(intf_uart_port_t port, const intf_uart_cfg_t *cfg)
+const intf_uart_t *intf_uart_get(intf_uart_port_t port)
 {
-    if (uart_ops && uart_ops->init) return uart_ops->init(port, cfg);
-    return -1;
-}
-
-int intf_uart_transmit(intf_uart_port_t port, const uint8_t *data, size_t len, uint32_t timeout_ms)
-{
-    if (uart_ops && uart_ops->transmit) return uart_ops->transmit(port, data, len, timeout_ms);
-    return -1;
-}
-
-int intf_uart_receive(intf_uart_port_t port, uint8_t *data, size_t len, uint32_t timeout_ms)
-{
-    if (uart_ops && uart_ops->receive) return uart_ops->receive(port, data, len, timeout_ms);
-    return -1;
-}
-
-int intf_uart_register_rx_callback(intf_uart_port_t port, intf_uart_rx_cb_t cb)
-{
-    if (uart_ops && uart_ops->register_rx_callback) return uart_ops->register_rx_callback(port, cb);
-    return -1;
+    if (port >= UART_INSTANCE_COUNT) return NULL;
+    return uart_devs[port];
 }
 
 /* ============================================================================
@@ -633,48 +617,21 @@ uint32_t intf_synt_get_count(void)
 }
 
 /* ============================================================================
- * USB CDC Interface
+ * USB CDC Interface（单实例设备对象，风格 A）
  * ============================================================================ */
 
-static const intf_usb_cdc_ops_t *usb_cdc_ops = NULL;
+static const intf_usb_cdc_t *usb_cdc_reg = NULL;
 
-int intf_usb_cdc_register(const intf_usb_cdc_ops_t *ops)
+int intf_usb_cdc_register(const intf_usb_cdc_t *dev)
 {
-    if (ops == NULL) return -1;
-    usb_cdc_ops = ops;
+    if (dev == NULL) return -1;
+    usb_cdc_reg = dev;
     return 0;
 }
 
-int intf_usb_cdc_init(void)
+const intf_usb_cdc_t *intf_usb_cdc_get(void)
 {
-    if (usb_cdc_ops && usb_cdc_ops->init) return usb_cdc_ops->init();
-    return -1;
-}
-
-int intf_usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_ms)
-{
-    if (usb_cdc_ops && usb_cdc_ops->write) return usb_cdc_ops->write(data, len, timeout_ms);
-    return -1;
-}
-
-int intf_usb_cdc_read(uint8_t *data, size_t len)
-{
-    if (usb_cdc_ops && usb_cdc_ops->read) return usb_cdc_ops->read(data, len);
-    return -1;
-}
-
-int intf_usb_cdc_register_rx_callback(intf_usb_cdc_rx_cb_t cb)
-{
-    if (usb_cdc_ops && usb_cdc_ops->register_rx_callback) {
-        return usb_cdc_ops->register_rx_callback(cb);
-    }
-    return -1;
-}
-
-bool intf_usb_cdc_is_dtr(void)
-{
-    if (usb_cdc_ops && usb_cdc_ops->is_dtr) return usb_cdc_ops->is_dtr();
-    return false;
+    return usb_cdc_reg;
 }
 
 /* ============================================================================

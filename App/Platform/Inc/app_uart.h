@@ -8,13 +8,14 @@
 extern "C" {
 #endif
 
-/* UART0：PA00=TXD / PA01=RXD（J10），上位机调参 + ISP */
+/* UART0：PA00=TXD / PA01=RXD（J4：pin1=RX / pin2=TX / pin3=GND），上位机调参 + ISP */
 #define APP_UART_PORT_CONSOLE (0U)
 
 /**
  * @brief 注册 UART 驱动并初始化控制台端口（115200 8N1，中断 RX）。
+ * @return 0 = 成功；-1 = 设备未注册或初始化失败
  */
-void app_uart_init(void);
+int app_uart_init(void);
 
 /**
  * @brief 阻塞发送（100ms 超时）。
@@ -27,6 +28,12 @@ int app_uart_write(const uint8_t *data, size_t len);
  * @return 0 成功，-1 失败
  */
 int app_uart_write_str(const char *str);
+
+/**
+ * @brief 读取接收数据（timeout_ms 语义同驱动：0=不等待、UINT32_MAX=无限、其他=毫秒）。
+ * @return 实际读到的字节数（≥0），-1 = 参数/状态错误
+ */
+int app_uart_read(uint8_t *data, size_t len, uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

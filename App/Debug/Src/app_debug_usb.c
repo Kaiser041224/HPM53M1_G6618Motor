@@ -15,11 +15,11 @@
 #include "app_debug_rtt.h"
 #include "app_usb.h"
 #include "intf_clock.h"
-#include "intf_usb_cdc.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define USB_TEST_TX_PERIOD_MS (1000U)
 #define USB_TEST_RX_BUF_SIZE  (128U)
@@ -43,7 +43,7 @@ void app_debug_usb_run_once(void)
     uint8_t buf[USB_TEST_RX_BUF_SIZE];
     uint32_t now = intf_clock_get_cycle();
     uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * USB_TEST_TX_PERIOD_MS;
-    bool dtr = intf_usb_cdc_is_dtr();
+    bool dtr = app_usb_is_dtr();
     int n;
 
     /* 1) 主机 DTR 变化上报（信息性；部分串口工具默认不置 DTR） */
@@ -52,21 +52,24 @@ void app_debug_usb_run_once(void)
         s_last_dtr = dtr;
     }
 
-    /* 2) 启动 banner：写入成功前持续重试（不依赖 DTR，兼容不置 DTR 的终端） */
+    /* 2) 启动 banner：非阻塞写入（0 超时），成功入队即止。
+       主机未打开端口时不会阻塞控制环（曾导致 25kHz 掉到 9Hz）。 */
     if (!s_banner_sent) {
-        if (app_usb_write_str("[USB] self-test start\r\n") == 0) {
+        const char *banner = "[USB] self-test start\r\n";
+
+        if (app_usb_write_timeout((const uint8_t *) banner, strlen(banner), 0U) == 0) {
             s_banner_sent = true;
         }
     }
 
     /* 3) RX：排空环形缓冲 -> 原样回显 + RTT 记录 */
-    n = intf_usb_cdc_read(buf, sizeof(buf));
+    n = app_usb_read(buf, sizeof(buf));
     if (n > 0) {
         uint8_t last = buf[n - 1];
         char printable = ((last >= 0x20U) && (last < 0x7FU)) ? (char) last : '.';
 
         s_rx_total += (uint32_t) n;
-        (void) intf_usb_cdc_write(buf, (size_t) n, 100U);
+        (void) app_usb_write(buf, (size_t) n);
         app_debug_printf("[USB] rx n=%d total=%u last=0x%02X ('%c')\r\n", n, (unsigned) s_rx_total,
                          (unsigned) last, printable);
     }
@@ -81,7 +84,8 @@ void app_debug_usb_run_once(void)
         len = snprintf(line, sizeof(line), "usb: tick=%u rx_total=%u\r\n", (unsigned) s_tick,
                        (unsigned) s_rx_total);
         if (len > 0) {
-            (void) intf_usb_cdc_write((const uint8_t *) line, (size_t) len, 100U);
+            /* 非阻塞：主机未打开端口/端点忙时直接跳过，不阻塞控制环 */
+            (void) app_usb_write_timeout((const uint8_t *) line, (size_t) len, 0U);
         }
     }
 }

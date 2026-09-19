@@ -49,7 +49,7 @@
 
 | 功能 | Pad | 配置 | 备注 |
 |---|---|---|---|
-| UART0_TX / RX | PA00 / PA01 | UART0 | J10，33R/12R 串阻 |
+| UART0_TX / RX | PA00 / PA01 | UART0 | J4（pin1=RX / pin2=TX / pin3=GND），33R/12R 串阻 |
 | BOOT0 / BOOT1 | PA02 / PA03 | 输入（strap） | R5/R6 10K |
 | JTAG TDO/TDI/TCK/TMS/TRST | PA04–PA08 | JTAG | J8 |
 | DRV_+12V_EN | PA09 | GPIO 输出，**开漏**（当前） | 测试板 15K 上拉：0=关，1=释放；定稿 15K 下拉后改推挽 |

@@ -92,8 +92,8 @@ const intf_encoder_t *intf_encoder_get(intf_encoder_id_t id);
 - `read_raw`：阻塞、无打印、无动态分配、固定内部超时（1ms）+ 错误计数。
 
 > 风格说明（2026-09-18）：本模块按 `AGENTS.md §3.1` 采用"设备对象 + 匿名结构体"
-> （与 `intf_can` / `intf_hrpwm` 一致）；`uart` / `usb` / 既有 `mcan` 的功能式 API
-> 将在后续按同一模式对齐。
+> （与 `intf_can` / `intf_hrpwm` 一致）；`uart` / `usb` 已完成同风格对齐（2026-09-19），
+> 其余设备契约均已为对象风格。
 
 ## 4. KTH7823 协议实现（依据数据手册，图 9 已核实）
 

@@ -7,7 +7,7 @@
  * 实现策略：
  *   - TX：轮询（LSR.THRE），带毫秒级超时（基于 mcycle，见 intf_clock）
  *   - RX：中断接收；ISR 将字节写入每端口 SPSC 环形缓冲，
- *         可选回调（intf_uart_register_rx_callback）在中断上下文执行
+ *         可选回调（intf_uart_t::register_rx_callback）在中断上下文执行
  *   - 端口映射：port 0..3 -> HPM_UART0..UART3（本板 UART0 = PA00/PA01）
  *
  * intf_uart_cfg_t 字段约定（Interface 未定义枚举，此处固定语义）：
@@ -136,7 +136,7 @@ void isr_uart3(void) { uart_port_isr(3U); }
  * 实现
  * ============================================================================ */
 
-static int hpm_uart_init(intf_uart_port_t port, const intf_uart_cfg_t *cfg)
+static int uart_init_impl(uint8_t port, const intf_uart_cfg_t *cfg)
 {
     uart_config_t ucfg = {0};
 
@@ -188,8 +188,8 @@ static int hpm_uart_init(intf_uart_port_t port, const intf_uart_cfg_t *cfg)
     return 0;
 }
 
-static int hpm_uart_transmit(intf_uart_port_t port, const uint8_t *data, size_t len,
-                             uint32_t timeout_ms)
+static int uart_transmit_impl(uint8_t port, const uint8_t *data, size_t len,
+                               uint32_t timeout_ms)
 {
     if ((port >= UART_INSTANCE_COUNT) || (data == NULL)) {
         return -1;
@@ -218,8 +218,8 @@ static int hpm_uart_transmit(intf_uart_port_t port, const uint8_t *data, size_t 
     return 0;
 }
 
-static int hpm_uart_receive(intf_uart_port_t port, uint8_t *data, size_t len,
-                            uint32_t timeout_ms)
+static int uart_receive_impl(uint8_t port, uint8_t *data, size_t len,
+                              uint32_t timeout_ms)
 {
     if ((port >= UART_INSTANCE_COUNT) || (data == NULL) || (len == 0U)) {
         return -1;
@@ -255,7 +255,7 @@ static int hpm_uart_receive(intf_uart_port_t port, uint8_t *data, size_t len,
     return (int) n;
 }
 
-static int hpm_uart_register_rx_callback(intf_uart_port_t port, intf_uart_rx_cb_t cb)
+static int uart_register_rx_callback_impl(uint8_t port, intf_uart_rx_cb_t cb)
 {
     if (port >= UART_INSTANCE_COUNT) {
         return -1;
@@ -264,7 +264,7 @@ static int hpm_uart_register_rx_callback(intf_uart_port_t port, intf_uart_rx_cb_
     return 0;
 }
 
-static void hpm_uart_deinit(intf_uart_port_t port)
+static void uart_deinit_impl(uint8_t port)
 {
     if (port >= UART_INSTANCE_COUNT) {
         return;
@@ -282,18 +282,85 @@ static void hpm_uart_deinit(intf_uart_port_t port)
 }
 
 /* ============================================================================
- * 注册
+ * 每实例设备对象（风格 A）
  * ============================================================================ */
 
-static const intf_uart_ops_t hpm_uart_ops = {
-    .init = hpm_uart_init,
-    .transmit = hpm_uart_transmit,
-    .receive = hpm_uart_receive,
-    .register_rx_callback = hpm_uart_register_rx_callback,
-    .deinit = hpm_uart_deinit,
+static int uart0_init(const intf_uart_cfg_t *cfg) { return uart_init_impl(0U, cfg); }
+static int uart0_transmit(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_transmit_impl(0U, data, len, timeout_ms); }
+static int uart0_receive(uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_receive_impl(0U, data, len, timeout_ms); }
+static int uart0_register_rx_callback(intf_uart_rx_cb_t cb)
+{ return uart_register_rx_callback_impl(0U, cb); }
+static void uart0_deinit(void) { uart_deinit_impl(0U); }
+
+static int uart1_init(const intf_uart_cfg_t *cfg) { return uart_init_impl(1U, cfg); }
+static int uart1_transmit(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_transmit_impl(1U, data, len, timeout_ms); }
+static int uart1_receive(uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_receive_impl(1U, data, len, timeout_ms); }
+static int uart1_register_rx_callback(intf_uart_rx_cb_t cb)
+{ return uart_register_rx_callback_impl(1U, cb); }
+static void uart1_deinit(void) { uart_deinit_impl(1U); }
+
+static int uart2_init(const intf_uart_cfg_t *cfg) { return uart_init_impl(2U, cfg); }
+static int uart2_transmit(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_transmit_impl(2U, data, len, timeout_ms); }
+static int uart2_receive(uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_receive_impl(2U, data, len, timeout_ms); }
+static int uart2_register_rx_callback(intf_uart_rx_cb_t cb)
+{ return uart_register_rx_callback_impl(2U, cb); }
+static void uart2_deinit(void) { uart_deinit_impl(2U); }
+
+static int uart3_init(const intf_uart_cfg_t *cfg) { return uart_init_impl(3U, cfg); }
+static int uart3_transmit(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_transmit_impl(3U, data, len, timeout_ms); }
+static int uart3_receive(uint8_t *data, size_t len, uint32_t timeout_ms)
+{ return uart_receive_impl(3U, data, len, timeout_ms); }
+static int uart3_register_rx_callback(intf_uart_rx_cb_t cb)
+{ return uart_register_rx_callback_impl(3U, cb); }
+static void uart3_deinit(void) { uart_deinit_impl(3U); }
+
+static const intf_uart_t uart0_dev = {
+    .instance_id = 0U,
+    .init = uart0_init,
+    .transmit = uart0_transmit,
+    .receive = uart0_receive,
+    .register_rx_callback = uart0_register_rx_callback,
+    .deinit = uart0_deinit,
+};
+
+static const intf_uart_t uart1_dev = {
+    .instance_id = 1U,
+    .init = uart1_init,
+    .transmit = uart1_transmit,
+    .receive = uart1_receive,
+    .register_rx_callback = uart1_register_rx_callback,
+    .deinit = uart1_deinit,
+};
+
+static const intf_uart_t uart2_dev = {
+    .instance_id = 2U,
+    .init = uart2_init,
+    .transmit = uart2_transmit,
+    .receive = uart2_receive,
+    .register_rx_callback = uart2_register_rx_callback,
+    .deinit = uart2_deinit,
+};
+
+static const intf_uart_t uart3_dev = {
+    .instance_id = 3U,
+    .init = uart3_init,
+    .transmit = uart3_transmit,
+    .receive = uart3_receive,
+    .register_rx_callback = uart3_register_rx_callback,
+    .deinit = uart3_deinit,
 };
 
 void hpm_uart_driver_register(void)
 {
-    intf_uart_register(&hpm_uart_ops);
+    intf_uart_register(&uart0_dev);
+    intf_uart_register(&uart1_dev);
+    intf_uart_register(&uart2_dev);
+    intf_uart_register(&uart3_dev);
 }

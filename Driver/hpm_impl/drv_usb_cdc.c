@@ -10,7 +10,7 @@
  *   - TX：拷贝至非缓存缓冲 → usbd_ep_start_write → 等待完成（mcycle 超时）
  *   - 板级：USB0 时钟与 PHY（内部 VBUS）由 board_init_usb() 完成；
  *     HPM53M1 的 USB_DP/USB_DM 为专用引脚（pin48/49），无 IOMUX 配置
- *   - DTR：上位机打开虚拟串口后置位，可经 intf_usb_cdc_is_dtr() 查询
+ *   - DTR：上位机打开虚拟串口后置位，可经 intf_usb_cdc_t::is_dtr() 查询
  *
  * 约束：单次 write ≤ USB_CDC_TX_BUF_SIZE（512B）
  * timeout_ms 语义（write）：0 = 不等待、UINT32_MAX = 无限、其他 = 毫秒
@@ -361,10 +361,11 @@ static void hpm_usb_cdc_deinit(void)
 }
 
 /* ============================================================================
- * 注册
+ * 单实例设备对象（风格 A）
  * ============================================================================ */
 
-static const intf_usb_cdc_ops_t hpm_usb_cdc_ops = {
+static const intf_usb_cdc_t usb_cdc_dev = {
+    .instance_id = 0U,
     .init = hpm_usb_cdc_init,
     .write = hpm_usb_cdc_write,
     .read = hpm_usb_cdc_read,
@@ -375,5 +376,5 @@ static const intf_usb_cdc_ops_t hpm_usb_cdc_ops = {
 
 void hpm_usb_cdc_driver_register(void)
 {
-    intf_usb_cdc_register(&hpm_usb_cdc_ops);
+    intf_usb_cdc_register(&usb_cdc_dev);
 }
