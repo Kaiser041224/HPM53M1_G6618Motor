@@ -205,6 +205,7 @@ void app_debug_can_run_once(void)
         ret = app_can_send_std(CAN_TEST_ID, data, CAN_TEST_DLC);
         s_tx_seq++;
 
+#if APP_DEBUG_PERIODIC_PRINT
         if ((app_can_get_status(&st) == 0) && (app_can_get_stats(&stats) == 0)) {
             app_debug_printf(
                 "[CAN] tx tick=%u seq=%u ret=%d rx_total=%u | tx_err=%u rx_err=%u bus_off=%d | tx_ok=%u rx=%u drop=%u\r\n",
@@ -212,5 +213,10 @@ void app_debug_can_run_once(void)
                 st.tx_error_count, st.rx_error_count, st.bus_off, (unsigned) stats.tx_ok_count,
                 (unsigned) stats.rx_count, (unsigned) stats.rx_drop_count);
         }
+#else
+        (void) ret;
+        (void) st;
+        (void) stats;
+#endif
     }
 }

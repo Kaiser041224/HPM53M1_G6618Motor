@@ -1,454 +1,270 @@
 /*
- * ADC App Layer - Full PMT Initialization
+ * App ADC - M1 采样链实现
  *
  * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "app_adc.h"
-#include "app_analog_signal.h"
-#include "app_hrpwm.h"
-#include "irq_profiler.h"
 
-#include "hpm_common.h"
-#include "intf_adc.h"
+#include "app_hrpwm.h"
+#include "intf_gptmr.h"
 #include "intf_hrpwm.h"
 #include "intf_trgm.h"
 
 #include <stddef.h>
 #include <string.h>
 
-static irq_prof_id_t g_prof_adc0;
-static irq_prof_id_t g_prof_adc1;
+extern void hpm_adc_driver_register(void);
+extern void hpm_trgm_driver_register(void);
+extern void hpm_hrpwm_driver_register(void);
+extern void hpm_gptmr_driver_register(void);
 
 /* ============================================================================
- * Channel Mapping
+ * 通道映射（板级，与 pinmux.c 一致）
  * ============================================================================ */
 
 typedef struct {
-    uint8_t inst;
-    uint8_t hw_ch;
+    uint8_t inst;  /* ADC 实例 */
+    uint8_t hw_ch; /* 物理通道 */
 } app_adc_map_t;
 
-/*
- * ADC0 (PWM0 触发): V_IN + I_OUT + I_AUX
- * ADC1 (PWM1 触发): V_OUT + I_L + I_IN
- */
-static const app_adc_map_t adc_map[ADC_CH_COUNT] = {
-    [ADC_CH_V_IN] = {.inst = APP_ADC_INST_0,  .hw_ch = 6},
-    [ADC_CH_I_IN] = {.inst = APP_ADC_INST_1, .hw_ch = 11},
-    [ADC_CH_I_L] = {.inst = APP_ADC_INST_1,  .hw_ch = 2},
-    [ADC_CH_V_OUT] = {.inst = APP_ADC_INST_1,  .hw_ch = 3},
-    [ADC_CH_I_OUT] = {.inst = APP_ADC_INST_0,  .hw_ch = 4},
-    [ADC_CH_I_AUX] = {.inst = APP_ADC_INST_0,  .hw_ch = 5},
+static const app_adc_map_t s_map[ADC_CH_COUNT] = {
+    [ADC_CH_I_U] = {.inst = 0U, .hw_ch = 3U},    /* PB11 */
+    [ADC_CH_I_V] = {.inst = 0U, .hw_ch = 4U},    /* PB12 */
+    [ADC_CH_I_W] = {.inst = 0U, .hw_ch = 2U},    /* PB10 */
+    [ADC_CH_V_VBUS] = {.inst = 1U, .hw_ch = 6U},  /* PB14 */
+    [ADC_CH_NTC0] = {.inst = 1U, .hw_ch = 11U},   /* PB08（更正后原理图：PB08 = NTC0） */
+    [ADC_CH_NTC1] = {.inst = 1U, .hw_ch = 1U},    /* PB09（更正后原理图：PB09 = NTC1） */
+    [ADC_CH_V_CANID] = {.inst = 1U, .hw_ch = 15U}, /* PB00（ADC1 序列转换） */
+};
+
+/* PMT 队列：ADC0 = 三路电流（顺序转换，首槽 = 队尾副本） */
+#define APP_ADC_CURRENT_COUNT (3U)
+#define APP_ADC_PMT_TRIG_CH   (0U) /* ADC16_CONFIG_TRG0A（PWM1 CMP10 触发，仅 ADC0） */
+
+/* 慢速通道（ADC1 序列转换 @1kHz：GPTMR0 CH2 → TRGM → ADC1_STRGI，硬件自主、无 ISR）：
+ * 序列 [CANID, V_VBUS, NTC0, NTC1, CANID]——首项为队尾副本（首转换 S/H 残留自吸收），
+ * 真实数据取 seq1..4；结果由硬件同步到 PRD_RESULTx，1kHz 慢任务纯寄存器读取。 */
+#define APP_ADC_SLOW_CH_COUNT      (4U)
+#define APP_ADC_SLOW_RATE_HZ       (1000U)
+#define APP_ADC_SLOW_SEQ_COUNT     (5U)
+#define APP_ADC_SLOW_TRIG_GPTMR_CH (2U) /* GPTMR0 CH2 → TRGM 输入 GPTMR0_OUT2 */
+static const adc_channel_t s_slow_channels[APP_ADC_SLOW_CH_COUNT] = {
+    ADC_CH_V_VBUS, ADC_CH_NTC0, ADC_CH_NTC1, ADC_CH_V_CANID,
 };
 
 /* ============================================================================
- * Calibration State
+ * PMT 队列首槽行为与"双份队尾"方案（2026-09-19 实测确认）
+ *
+ *   硬件行为：PMT 队列的【首槽】会得到"上一帧最后一个通道"的采样值
+ *             （首个转换的 S/H 尚未切到新通道），且该槽元数据仍为首通道号。
+ *             为竞态：偶尔也出现首槽正确的情况。
+ *   实测证据（交叉验证）：
+ *     - 3 槽 [ch3,ch4,ch2]：slot0 读到 ch2 的值 → app 的 I_U 实为 I_W
+ *       → "U/W 电流波形重合"
+ *     - 3 槽 [ch6,ch1,ch11]：slot0 读到 ch11 的值（3.29V）
+ *       → "V_VBUS 读数 73V（满量程）"
+ *     - 4 槽 [ch3,ch4,ch2,ch6]：slot0 读到 ch6 的值（1.07V）
+ *     - 4 槽 [ch6,ch1,ch11,ch3]：四槽全对（竞态的另一侧）
+ *
+ *   方案（不浪费通道）：把"会被污染的首槽"安排成【队尾通道的副本】——
+ *     队列 = [D, A, B, D]，其中 D 同时位于首槽与队尾：
+ *       - 若发生污染：slot0 = D 的上一帧值（元数据 D，自洽，仍有效）
+ *       - 若未污染：  slot0 = D 的本帧值
+ *       - slot3 = D 的本帧新鲜值（主用）
+ *     真实数据一律取 slot1..3（本帧新鲜）；slot0 作为高调制时的备用副本
+ *     （其采样点最早，始终落在低侧导通窗口内）。
+ *   依据：手册 §53 的 PMT 数据格式（bit31 恒 1、bit30:29 转换序号、
+ *         bit24:20 通道号）与本行为一致；该行为未收录于用户手册/勘误表。
  * ============================================================================ */
+#define APP_ADC_SLOT_COUNT    (4U)  /* 3 真实通道 + 1 队尾副本（首槽） */
 
-static app_adc_calibration_t adc_calibration[ADC_CH_COUNT] = {
-    [ADC_CH_V_IN] =
-        {.sense_gain = 1.0f,
-                       .sense_offset_mv = 0.0f,
-                       .physical_gain = 1.0f,
-                       .physical_offset = 0.0f},
-    [ADC_CH_I_IN] =
-        {.sense_gain = 1.0f,
-                       .sense_offset_mv = 0.0f,
-                       .physical_gain = 1.0f,
-                       .physical_offset = 0.0f},
-    [ADC_CH_I_L] =
-        {.sense_gain = 1.0f,
-                       .sense_offset_mv = 0.0f,
-                       .physical_gain = 1.0f,
-                       .physical_offset = 0.0f},
-    [ADC_CH_V_OUT] =
-        {.sense_gain = 1.0f,
-                       .sense_offset_mv = 0.0f,
-                       .physical_gain = 1.0f,
-                       .physical_offset = 0.0f},
-    [ADC_CH_I_OUT] =
-        {.sense_gain = 1.0f,
-                       .sense_offset_mv = 0.0f,
-                       .physical_gain = 1.0f,
-                       .physical_offset = 0.0f},
-    [ADC_CH_I_AUX] =
-        {.sense_gain = 1.0f,
-                       .sense_offset_mv = 0.0f,
-                       .physical_gain = 1.0f,
-                       .physical_offset = 0.0f},
-};
+/* 实时链有效性掩码：仅三路相电流（PMT）。
+ * 慢速通道（VBUS/NTC/CANID）按自己的节拍更新，不参与实时有效性判定。 */
+#define APP_ADC_PMT_MASK ((1UL << APP_ADC_CURRENT_COUNT) - 1UL)
 
 /* ============================================================================
- * Helpers
+ * State
  * ============================================================================ */
 
-static bool app_adc_channel_is_valid(adc_channel_t ch) { return ch < ADC_CH_COUNT; }
+static volatile uint16_t s_raw[ADC_CH_COUNT];
+static volatile uint32_t s_valid_mask;
+static volatile uint32_t s_sequence;
+static bool s_initialized;
+static uint16_t s_full_scale_code = 65535U;
+static app_adc_cfg_t s_cfg;
 
-static intf_adc_ch_t app_adc_encoded_channel(adc_channel_t ch) {
-    return INTF_ADC_CH(adc_map[ch].inst, adc_map[ch].hw_ch);
-}
+/* ============================================================================
+ * ISR 回调（PMT 完成，队列顺序 = 通道枚举顺序）
+ * ============================================================================ */
 
-ATTR_RAMFUNC
-int app_adc_set_pmt_trigger_position(app_adc_inst_t inst, float position_ratio) {
-    if (inst >= APP_ADC_INST_COUNT || position_ratio < 0.0f || position_ratio > 1.0f
-        || position_ratio != position_ratio) {
-        return -1;
+static void adc_current_pmt_cb(
+    intf_adc_ch_t trig_ch, const uint16_t *values, uint8_t count, void *user_data) {
+    (void) trig_ch;
+    (void) user_data;
+
+    /* 首槽为队尾副本（见上方双份队尾说明），真实数据从 values[1] 起 */
+    for (uint8_t i = 0U; (i < APP_ADC_CURRENT_COUNT) && ((i + 1U) < count); i++) {
+        uint8_t ch = (uint8_t) (ADC_CH_I_U + i);
+
+        s_raw[ch] = values[i + 1U];
+        s_valid_mask |= (1UL << ch);
     }
-
-    if (inst == APP_ADC_INST_0) {
-        return intf_hrpwm_set_trigger_cmp_position(
-            HRPWM_INST_0, APP_ADC_PMT_TRIGGER_CMP_INDEX_PWM0, position_ratio);
-    }
-
-    return intf_hrpwm_set_trigger_cmp_position(
-        HRPWM_INST_1, APP_ADC_PMT_TRIGGER_CMP_INDEX_PWM1, position_ratio);
+    s_sequence++;
 }
 
 /* ============================================================================
- * PMT Raw Cache (written by ISR callbacks, read by debug / control)
+ * Public API
  * ============================================================================ */
 
-ATTR_PLACE_AT_FAST_RAM_BSS static volatile uint16_t pmt_raw_cache[ADC_CH_COUNT];
-ATTR_PLACE_AT_FAST_RAM_BSS static volatile bool pmt_raw_cache_valid[ADC_CH_COUNT];
+void app_adc_init(const app_adc_cfg_t *cfg) {
+    intf_adc_cfg_t a0;
+    intf_adc_cfg_t a1;
+    int rc0;
+    int rc1 = 0;
 
-static float s_adc_vref_mv[APP_ADC_INST_COUNT] = {
-    [APP_ADC_INST_0] = INTF_ADC_DEFAULT_VREF_MV,
-    [APP_ADC_INST_1] = INTF_ADC_DEFAULT_VREF_MV,
-};
-
-ATTR_PLACE_AT_FAST_RAM_BSS static app_adc_pmt_callback_t s_pmt_callback[APP_ADC_INST_COUNT];
-
-int app_adc_register_pmt_callback(app_adc_inst_t inst, app_adc_pmt_callback_t cb) {
-    if (inst >= APP_ADC_INST_COUNT)
-        return -1;
-    s_pmt_callback[inst] = cb;
-    return 0;
-}
-
-ATTR_RAMFUNC
-int app_adc_get_pmt_raw(adc_channel_t ch, uint16_t* raw) {
-    if (!app_adc_channel_is_valid(ch) || raw == NULL)
-        return -1;
-    if (!pmt_raw_cache_valid[ch])
-        return -2;
-    *raw = pmt_raw_cache[ch];
-    return 0;
-}
-
-/* ============================================================================
- * PMT DMA Buffers (non-cacheable, 4-byte aligned)
- * ============================================================================ */
-
-ATTR_PLACE_AT_FAST_RAM_BSS static uint32_t pmt_dma0[APP_ADC_PMT_DMA_BUFF_LEN]
-    __attribute__((aligned(4)));
-ATTR_PLACE_AT_FAST_RAM_BSS static uint32_t pmt_dma1[APP_ADC_PMT_DMA_BUFF_LEN]
-    __attribute__((aligned(4)));
-
-/* ============================================================================
- * PMT Callbacks → write to pmt_raw_cache
- * ============================================================================ */
-
-ATTR_RAMFUNC
-static void app_adc_pmt_cb_adc0(
-    intf_adc_ch_t trig, const uint16_t* values, uint8_t count, void* user_data) {
-    IRQ_PROF_ENTER(g_prof_adc0);
-
-    (void)trig;
-    (void)user_data;
-
-    static const adc_channel_t slot_to_logic[4] = {
-        [0] = ADC_CH_COUNT,
-        [1] = ADC_CH_I_AUX,
-        [2] = ADC_CH_I_OUT,
-        [3] = ADC_CH_I_IN,
+    s_cfg = (app_adc_cfg_t) {
+        .trigger_delay_ns = APP_ADC_TRIGGER_DELAY_NS_DEFAULT,
+        .sample_cycle = APP_ADC_SAMPLE_CYCLE_DEFAULT,
+        .resolution = (uint8_t) INTF_ADC_RES_DEFAULT,
     };
-
-    for (uint8_t i = 1; i < count && i < 4U; i++) {
-        if (slot_to_logic[i] < ADC_CH_COUNT) {
-            pmt_raw_cache[slot_to_logic[i]] = values[i];
-            pmt_raw_cache_valid[slot_to_logic[i]] = true;
+    if (cfg != NULL) {
+        s_cfg = *cfg;
+        if (s_cfg.sample_cycle == 0U) {
+            s_cfg.sample_cycle = APP_ADC_SAMPLE_CYCLE_DEFAULT;
+        }
+        if (s_cfg.resolution == 0U) {
+            s_cfg.resolution = (uint8_t) INTF_ADC_RES_DEFAULT;
         }
     }
 
-    if (s_pmt_callback[APP_ADC_INST_0] != NULL) {
-        s_pmt_callback[APP_ADC_INST_0]();
-    }
-
-    IRQ_PROF_EXIT(g_prof_adc0);
-}
-
-ATTR_RAMFUNC
-static void app_adc_pmt_cb_adc1(
-    intf_adc_ch_t trig, const uint16_t* values, uint8_t count, void* user_data) {
-    IRQ_PROF_ENTER(g_prof_adc1);
-
-    (void)trig;
-    (void)user_data;
-
-    static const adc_channel_t slot_to_logic[4] = {
-        [0] = ADC_CH_COUNT,
-        [1] = ADC_CH_I_L,
-        [2] = ADC_CH_V_OUT,
-        [3] = ADC_CH_V_IN,
-    };
-
-    for (uint8_t i = 1; i < count && i < 4U; i++) {
-        if (slot_to_logic[i] < ADC_CH_COUNT) {
-            pmt_raw_cache[slot_to_logic[i]] = values[i];
-            pmt_raw_cache_valid[slot_to_logic[i]] = true;
-        }
-    }
-
-    if (s_pmt_callback[APP_ADC_INST_1] != NULL) {
-        s_pmt_callback[APP_ADC_INST_1]();
-    }
-
-    IRQ_PROF_EXIT(g_prof_adc1);
-}
-
-/* ============================================================================
- * Public API: app_adc_init (Full PMT with TRGM + HRPWM trigger chain)
- * ============================================================================ */
-
-extern void hpm_adc_driver_register(void);
-extern void hpm_trgm_driver_register(void);
-
-void app_adc_init(void) {
-    g_prof_adc0 = irq_prof_register("ADC0_PMT");
-    g_prof_adc1 = irq_prof_register("ADC1_PMT");
-    irq_prof_measure_overhead();
+    s_full_scale_code = (uint16_t) ((1UL << s_cfg.resolution) - 1UL);
 
     hpm_adc_driver_register();
     hpm_trgm_driver_register();
+    hpm_hrpwm_driver_register(); /* 触发比较器依赖 PWM 实例信息（幂等） */
+    hpm_gptmr_driver_register(); /* 慢速触发源（幂等） */
 
-    /* ================================================================
-     * Steps 1-2: ADC0 + ADC1 full init (calibration, channels, PMT,
-     *            DMA, interrupts) — must complete before any trigger
-     *            signal reaches the ADC inputs.
-     * ================================================================ */
+    /* ---- ADC0：三路相电流（PMT 顺序转换） ---- */
+    memset(&a0, 0, sizeof(a0));
+    a0.resolution = (intf_adc_resolution_t) s_cfg.resolution;
+    a0.mode = INTF_ADC_MODE_PMT;
+    a0.sample_cycle = s_cfg.sample_cycle;
+    a0.clock_div = INTF_ADC_DEFAULT_CLOCK_DIV;
+    a0.vref_mv = INTF_ADC_DEFAULT_VREF_MV;
+    a0.dma_en = true; /* DMA 缓冲由驱动内部分配（fast RAM） */
+    a0.pmt_trig_ch = APP_ADC_PMT_TRIG_CH;
+    a0.pmt_ch_count = APP_ADC_SLOT_COUNT;
+    a0.pmt_cb = adc_current_pmt_cb;
+    /* [I_W(副本), I_U, I_V, I_W]：首槽 = 队尾通道副本（见上方说明） */
+    a0.pmt_ch_list[0] = s_map[ADC_CH_I_W].hw_ch;
+    for (uint8_t i = 0U; i < APP_ADC_CURRENT_COUNT; i++) {
+        a0.pmt_ch_list[i + 1U] = s_map[ADC_CH_I_U + i].hw_ch;
+    }
+    rc0 = intf_adc_init(INTF_ADC_CH(s_map[ADC_CH_I_U].inst, 0U), &a0);
 
-    /* ADC0 PMT — 4 slots (dummy, I_AUX, I_OUT, I_IN) on trig_ch=0 */
+    /* ---- ADC1：慢速通道 —— 序列转换 @1kHz（GPTMR0 CH2 → TRGM → ADC1_STRGI） ----
+     * 与 25kHz PWM 触发完全解耦（不再占用 PTRGI0A/抢占队列），硬件自主、无 ISR。
+     * 序列 [CANID, V_VBUS, NTC0, NTC1, CANID]：首项 = 队尾副本（首转换 S/H 残留
+     * 自吸收），真实数据取 seq1..4；结果由硬件同步到 PRD_RESULTx（实测任意转换
+     * 模式都会更新该寄存器 —— 手册 §53.2.4），1kHz 慢任务纯寄存器读取。 */
+    memset(&a1, 0, sizeof(a1));
+    a1.resolution = (intf_adc_resolution_t) s_cfg.resolution;
+    a1.mode = INTF_ADC_MODE_SEQ;
+    a1.sample_cycle = s_cfg.sample_cycle;
+    a1.clock_div = INTF_ADC_DEFAULT_CLOCK_DIV;
+    a1.vref_mv = INTF_ADC_DEFAULT_VREF_MV;
+    a1.seq_hw_trig = true;
+    a1.seq_ch_count = APP_ADC_SLOW_SEQ_COUNT;
+    a1.seq_ch_list[0] = s_map[ADC_CH_V_CANID].hw_ch;
+    a1.seq_ch_list[1] = s_map[ADC_CH_V_VBUS].hw_ch;
+    a1.seq_ch_list[2] = s_map[ADC_CH_NTC0].hw_ch;
+    a1.seq_ch_list[3] = s_map[ADC_CH_NTC1].hw_ch;
+    a1.seq_ch_list[4] = s_map[ADC_CH_V_CANID].hw_ch;
+    a1.seq_cb = NULL;
+    rc1 = intf_adc_init(INTF_ADC_CH(1U, 0U), &a1);
+
+    /* ---- 慢速触发链：GPTMR0 CH2（1kHz 方波，50%）→ TRGM0 → ADC1_STRGI ---- */
     {
-        memset(pmt_dma0, 0, sizeof(pmt_dma0));
-        intf_adc_cfg_t cfg = {
-            .resolution = INTF_ADC_RES_DEFAULT,
-            .mode = INTF_ADC_MODE_PMT,
-            .sample_cycle = INTF_ADC_DEFAULT_SAMPLE_CYCLE,
-            .clock_div = INTF_ADC_DEFAULT_CLOCK_DIV,
-            .vref_mv = INTF_ADC_DEFAULT_VREF_MV,
-            .dma_en = true,
-            .dma_buff = pmt_dma0,
-            .dma_buff_len = APP_ADC_PMT_DMA_BUFF_LEN,
-            .pmt_trig_ch = APP_ADC_PMT_ADC0_TRIG_CH,
-            .pmt_ch_count = APP_ADC_PMT_ADC0_CH_COUNT,
-            .pmt_cb = app_adc_pmt_cb_adc0,
-            .pmt_cb_user_data = NULL,
-        };
-        cfg.pmt_ch_list[0] = 15U; /* dummy warmup slot (discarded) */
-        cfg.pmt_ch_list[1] = 5U;  /* I_AUX  (PB13 / ADC0.5)  */
-        cfg.pmt_ch_list[2] = 4U;  /* I_OUT  (PB12 / ADC0.4)  */
-        cfg.pmt_ch_list[3] = 11U; /* I_IN   (PB08 / ADC0.11) */
-        (void)intf_adc_init(INTF_ADC_CH(APP_ADC_INST_0, 0), &cfg);
+        intf_gptmr_cfg_t slow_trig;
+
+        memset(&slow_trig, 0, sizeof(slow_trig));
+        slow_trig.mode = INTF_GPTMR_MODE_PWM;
+        slow_trig.frequency_hz = APP_ADC_SLOW_RATE_HZ;
+        slow_trig.duty = 0.5f;
+        rc1 |= intf_gptmr_init(APP_ADC_SLOW_TRIG_GPTMR_CH, &slow_trig);
+        rc1 |= intf_gptmr_start(APP_ADC_SLOW_TRIG_GPTMR_CH);
     }
+    (void) intf_trgm_connect(INTF_TRGM_SRC_GPTMR0_OUT2, INTF_TRGM_DST_ADC1_STRGI);
 
-    /* ADC1 PMT — 4 slots (dummy, I_L, V_OUT, V_IN) on trig_ch=3. */
-    {
-        memset(pmt_dma1, 0, sizeof(pmt_dma1));
-        intf_adc_cfg_t cfg = {
-            .resolution = INTF_ADC_RES_DEFAULT,
-            .mode = INTF_ADC_MODE_PMT,
-            .sample_cycle = INTF_ADC_DEFAULT_SAMPLE_CYCLE,
-            .clock_div = INTF_ADC_DEFAULT_CLOCK_DIV,
-            .vref_mv = INTF_ADC_DEFAULT_VREF_MV,
-            .dma_en = true,
-            .dma_buff = pmt_dma1,
-            .dma_buff_len = APP_ADC_PMT_DMA_BUFF_LEN,
-            .pmt_trig_ch = APP_ADC_PMT_ADC1_TRIG_CH,
-            .pmt_ch_count = APP_ADC_PMT_ADC1_CH_COUNT,
-            .pmt_cb = app_adc_pmt_cb_adc1,
-            .pmt_cb_user_data = NULL,
-        };
-        cfg.pmt_ch_list[0] = 15U; /* dummy warmup slot (discarded) */
-        cfg.pmt_ch_list[1] = 2U;  /* I_L    (PB10 / ADC1.2) */
-        cfg.pmt_ch_list[2] = 3U;  /* V_OUT  (PB11 / ADC1.3) */
-        cfg.pmt_ch_list[3] = 6U;  /* V_IN   (PB14 / ADC1.6) */
-        (void)intf_adc_init(INTF_ADC_CH(APP_ADC_INST_1, 0), &cfg);
-    }
+    /* ---- ADC0 触发链：PWM1 CMP10 → CH10REF → TRGM PTRGI0A ---- */
+    (void) intf_trgm_connect(INTF_TRGM_SRC_PWM1_CH10REF, INTF_TRGM_DST_ADC_PTRGI0A);
+    (void) intf_hrpwm_config_trigger_cmp(
+        HRPWM_INST_1, APP_ADC_TRIGGER_CMP_INDEX, s_cfg.trigger_delay_ns);
 
-    /* ================================================================
-     * Step 3: TRGM routing — connects PWM compare outputs to ADC
-     *         preemption trigger inputs. PWM counters are NOT yet
-     *         running, so no signal flows.
-     *
-     * PWM0 uses CMP8,  PWM1 uses CMP10 (avoid conflict with PAIR2
-     * which occupies CMP8/CMP9 on PWM1).
-     * ================================================================ */
-    (void)intf_trgm_connect(INTF_TRGM_SRC_PWM0_CH8REF, INTF_TRGM_DST_ADC_PTRGI0A);
-    (void)intf_trgm_connect(INTF_TRGM_SRC_PWM1_CH10REF, INTF_TRGM_DST_ADC_PTRGI1A);
+    /* 启动 PWM1 计数器（仅计数，输出保持关闭）：PMT 触发依赖计数器运行，
+     * 使采样链独立于逆变桥使能状态。 */
+    (void) intf_hrpwm_start_counter_only(HRPWM_INST_1);
 
-    /* ================================================================
-     * Step 4: HRPWM trigger compare — configures CMP shadow registers.
-     *         PWM counters are NOT running; CMP takes effect on first
-     *         counter start (app_hrpwm_start_all).
-     * ================================================================ */
-    (void)intf_hrpwm_config_trigger_cmp(
-        HRPWM_INST_0, APP_ADC_PMT_TRIGGER_CMP_INDEX_PWM0, APP_ADC_PMT_POSITION_RATIO_ADC0);
-    (void)intf_hrpwm_config_trigger_cmp(
-        HRPWM_INST_1, APP_ADC_PMT_TRIGGER_CMP_INDEX_PWM1, APP_ADC_PMT_POSITION_RATIO_ADC1);
+    s_initialized = (rc0 == 0) && (rc1 == 0);
 }
 
-/* ============================================================================
- * Latest Read API
- * ============================================================================ */
+const app_adc_cfg_t *app_adc_get_config(void) {
+    return &s_cfg;
+}
 
-static int app_adc_read_latest_raw(adc_channel_t ch, uint16_t* raw) {
-    if (!app_adc_channel_is_valid(ch) || raw == NULL)
-        return -1;
-
-    if (pmt_raw_cache_valid[ch]) {
-        *raw = pmt_raw_cache[ch];
-        return 0;
+bool app_adc_get_raw(adc_channel_t ch, uint16_t *raw) {
+    if ((ch >= ADC_CH_COUNT) || (raw == NULL) || !s_initialized) {
+        return false;
+    }
+    if ((s_valid_mask & (1UL << ch)) == 0U) {
+        return false;
     }
 
-    return intf_adc_read(app_adc_encoded_channel(ch), raw);
+    *raw = s_raw[ch];
+    return true;
 }
 
-uint16_t app_adc_read_raw(adc_channel_t ch) {
-    uint16_t raw = 0;
-    (void)app_adc_read_latest_raw(ch, &raw);
-    return raw;
+uint32_t app_adc_get_sequence(void) {
+    return s_sequence;
 }
 
-void app_adc_read_all(uint16_t values[ADC_CH_COUNT]) {
-    if (values == NULL)
+bool app_adc_is_valid(void) {
+    /* 仅三路电流参与实时有效性判定（慢速通道按自己的节拍更新） */
+    return s_initialized && ((s_valid_mask & APP_ADC_PMT_MASK) == APP_ADC_PMT_MASK);
+}
+
+float app_adc_code_to_volts(uint16_t code) {
+    return ((float) code * (INTF_ADC_DEFAULT_VREF_MV / 1000.0f)) / (float) s_full_scale_code;
+}
+
+void app_adc_slow_process(void) {
+    if (!s_initialized) {
         return;
-    for (adc_channel_t ch = ADC_CH_V_IN; ch < ADC_CH_COUNT; ch++) {
-        values[ch] = app_adc_read_raw(ch);
+    }
+
+    /* ADC1 序列转换每 1ms 触发一轮（5 项），结果由硬件同步到 PRD_RESULTx；
+     * 此处纯寄存器读取——无触发副作用、无读冲突。 */
+    for (uint8_t i = 0U; i < APP_ADC_SLOW_CH_COUNT; i++) {
+        adc_channel_t ch = s_slow_channels[i];
+        intf_adc_ch_t enc = INTF_ADC_CH(s_map[ch].inst, s_map[ch].hw_ch);
+        uint16_t raw = 0U;
+
+        if (intf_adc_read(enc, &raw) != 0) {
+            continue;
+        }
+        s_raw[ch] = raw;
+        s_valid_mask |= (1UL << ch);
     }
 }
 
-int app_adc_read_adc_voltage_mv(adc_channel_t ch, float* voltage_mv) {
-    if (!app_adc_channel_is_valid(ch) || voltage_mv == NULL)
-        return -1;
+int app_adc_set_trigger_delay_ns(uint32_t delay_ns) {
+    int rc = intf_hrpwm_set_trigger_cmp_delay(
+        HRPWM_INST_1, APP_ADC_TRIGGER_CMP_INDEX, delay_ns);
 
-    uint16_t raw = 0;
-    if (app_adc_read_latest_raw(ch, &raw) != 0)
-        return -1;
-
-    app_adc_inst_t inst = (app_adc_inst_t)adc_map[ch].inst;
-    *voltage_mv = (float)raw * s_adc_vref_mv[inst] / 65535.0f;
-    return 0;
-}
-
-int app_adc_read_sense_voltage_mv(adc_channel_t ch, float* voltage_mv) {
-    float adc_voltage_mv;
-
-    if (!app_adc_channel_is_valid(ch) || voltage_mv == NULL)
-        return -1;
-    if (app_adc_read_adc_voltage_mv(ch, &adc_voltage_mv) != 0)
-        return -1;
-
-    *voltage_mv =
-        adc_voltage_mv * adc_calibration[ch].sense_gain + adc_calibration[ch].sense_offset_mv;
-    return 0;
-}
-
-int app_adc_read_physical(adc_channel_t ch, float* value) {
-    float sense_voltage_mv;
-
-    if (!app_adc_channel_is_valid(ch) || value == NULL)
-        return -1;
-    if (app_adc_read_sense_voltage_mv(ch, &sense_voltage_mv) != 0)
-        return -1;
-
-    *value =
-        sense_voltage_mv * adc_calibration[ch].physical_gain + adc_calibration[ch].physical_offset;
-    return 0;
-}
-
-/* ============================================================================
- * Calibration API
- * ============================================================================ */
-
-void app_adc_set_calibration(adc_channel_t ch, const app_adc_calibration_t* cal) {
-    if (!app_adc_channel_is_valid(ch) || cal == NULL)
-        return;
-    adc_calibration[ch] = *cal;
-}
-
-int app_adc_get_calibration(adc_channel_t ch, app_adc_calibration_t* cal) {
-    if (!app_adc_channel_is_valid(ch) || cal == NULL)
-        return -1;
-    *cal = adc_calibration[ch];
-    return 0;
-}
-
-void app_adc_set_vref_inst(app_adc_inst_t inst, float mv) {
-    if (inst >= APP_ADC_INST_COUNT)
-        return;
-    s_adc_vref_mv[inst] = mv;
-    intf_adc_set_vref(INTF_ADC_CH(inst, 0), mv);
-}
-
-void app_adc_set_vref_all(float mv) {
-    for (app_adc_inst_t inst = APP_ADC_INST_0; inst < APP_ADC_INST_COUNT; inst++) {
-        app_adc_set_vref_inst(inst, mv);
+    if (rc == 0) {
+        s_cfg.trigger_delay_ns = delay_ns;
     }
-}
-
-void app_adc_calibrate(void) {
-    intf_adc_calibrate(INTF_ADC_CH(0, 0));
-    intf_adc_calibrate(INTF_ADC_CH(1, 0));
-}
-
-/* ============================================================================
- * PMT Control API
- * ============================================================================ */
-
-void app_adc_pmt_start_inst(app_adc_inst_t inst) {
-    if (inst >= APP_ADC_INST_COUNT)
-        return;
-    (void)intf_adc_start(INTF_ADC_CH(inst, 0));
-}
-
-void app_adc_pmt_stop_inst(app_adc_inst_t inst) {
-    if (inst >= APP_ADC_INST_COUNT)
-        return;
-    (void)intf_adc_stop(INTF_ADC_CH(inst, 0));
-}
-
-/* ============================================================================
- * Watchdog API
- * ============================================================================ */
-
-void app_adc_wdog_init(
-    adc_channel_t ch, uint16_t thshd_high, uint16_t thshd_low, intf_adc_wdog_cb_t cb,
-    void* user_data) {
-    if (!app_adc_channel_is_valid(ch))
-        return;
-
-    intf_adc_cfg_t cfg = {
-        .resolution = INTF_ADC_RES_DEFAULT,
-        .mode = INTF_ADC_MODE_ONESHOT,
-        .sample_cycle = INTF_ADC_DEFAULT_SAMPLE_CYCLE,
-        .clock_div = INTF_ADC_DEFAULT_CLOCK_DIV,
-        .vref_mv = INTF_ADC_DEFAULT_VREF_MV,
-        .wdog_en = true,
-        .wdog_thshd_high = thshd_high,
-        .wdog_thshd_low = thshd_low,
-        .wdog_cb = cb,
-        .wdog_cb_user_data = user_data,
-    };
-
-    pmt_raw_cache_valid[ch] = false;
-    pmt_raw_cache[ch] = 0U;
-    (void)intf_adc_init(app_adc_encoded_channel(ch), &cfg);
-}
-
-void app_adc_wdog_reenable(adc_channel_t ch) {
-    if (!app_adc_channel_is_valid(ch))
-        return;
-    intf_adc_wdog_reenable(app_adc_encoded_channel(ch));
+    return rc;
 }

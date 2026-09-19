@@ -23,6 +23,8 @@ static int trgm_connect_impl(intf_trgm_src_t src, intf_trgm_dst_t dst) {
         [INTF_TRGM_SRC_SYNT_CH1]    = HPM_TRGM0_INPUT_SRC_SYNT0_CH1,
         [INTF_TRGM_SRC_SYNT_CH2]    = HPM_TRGM0_INPUT_SRC_SYNT0_CH2,
         [INTF_TRGM_SRC_SYNT_CH3]    = HPM_TRGM0_INPUT_SRC_SYNT0_CH3,
+        [INTF_TRGM_SRC_GPTMR0_OUT2] = HPM_TRGM0_INPUT_SRC_GPTMR0_OUT2,
+        [INTF_TRGM_SRC_GPTMR0_OUT3] = HPM_TRGM0_INPUT_SRC_GPTMR0_OUT3,
     };
 
     static const uint32_t dst_map[] = {
@@ -36,6 +38,8 @@ static int trgm_connect_impl(intf_trgm_src_t src, intf_trgm_dst_t dst) {
         [INTF_TRGM_DST_GPTMR1_SYNCI] = HPM_TRGM0_OUTPUT_SRC_GPTMR1_SYNCI,
         [INTF_TRGM_DST_GPTMR2_SYNCI] = HPM_TRGM0_OUTPUT_SRC_GPTMR2_SYNCI,
         [INTF_TRGM_DST_GPTMR3_SYNCI] = HPM_TRGM0_OUTPUT_SRC_GPTMR3_SYNCI,
+        [INTF_TRGM_DST_ADC0_STRGI]   = HPM_TRGM0_OUTPUT_SRC_ADC0_STRGI,
+        [INTF_TRGM_DST_ADC1_STRGI]   = HPM_TRGM0_OUTPUT_SRC_ADC1_STRGI,
     };
 
     if (src >= sizeof(src_map) / sizeof(src_map[0]) || dst >= sizeof(dst_map) / sizeof(dst_map[0]))

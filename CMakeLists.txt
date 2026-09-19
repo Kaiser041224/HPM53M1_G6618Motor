@@ -125,7 +125,6 @@ sdk_app_src(App/Platform/Src/app_can.c)
 # Debug Layer
 # ============================================================================
 
-sdk_app_src(App/Debug/Src/app_debug.c)
 sdk_app_src(App/Debug/Src/app_debug_uart.c)
 sdk_app_src(App/Debug/Src/app_debug_usb.c)
 sdk_app_src(App/Debug/Src/app_debug_encoder.c)

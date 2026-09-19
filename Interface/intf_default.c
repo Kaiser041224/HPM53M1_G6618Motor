@@ -174,18 +174,18 @@ int intf_hrpwm_config_phase_limit(intf_hrpwm_inst_t inst, const intf_hrpwm_phase
     return -1;
 }
 
-int intf_hrpwm_config_trigger_cmp(intf_hrpwm_inst_t inst, uint8_t cmp_index, float position_ratio)
+int intf_hrpwm_config_trigger_cmp(intf_hrpwm_inst_t inst, uint8_t cmp_index, uint32_t delay_ns)
 {
     if (inst >= HRPWM_INSTANCE_COUNT || hrpwm_ops[inst] == NULL) return -1;
-    if (hrpwm_ops[inst]->config_trigger_cmp) return hrpwm_ops[inst]->config_trigger_cmp(cmp_index, position_ratio);
+    if (hrpwm_ops[inst]->config_trigger_cmp) return hrpwm_ops[inst]->config_trigger_cmp(cmp_index, delay_ns);
     return -1;
 }
 
 ATTR_RAMFUNC
-int intf_hrpwm_set_trigger_cmp_position(intf_hrpwm_inst_t inst, uint8_t cmp_index, float position_ratio)
+int intf_hrpwm_set_trigger_cmp_delay(intf_hrpwm_inst_t inst, uint8_t cmp_index, uint32_t delay_ns)
 {
     if (inst >= HRPWM_INSTANCE_COUNT || hrpwm_ops[inst] == NULL) return -1;
-    if (hrpwm_ops[inst]->set_trigger_cmp_position) return hrpwm_ops[inst]->set_trigger_cmp_position(cmp_index, position_ratio);
+    if (hrpwm_ops[inst]->set_trigger_cmp_delay) return hrpwm_ops[inst]->set_trigger_cmp_delay(cmp_index, delay_ns);
     return -1;
 }
 
@@ -341,12 +341,6 @@ int intf_adc_stop(intf_adc_ch_t ch)
     return -1;
 }
 
-void intf_adc_set_vref(intf_adc_ch_t ch, float vref_mv)
-{
-    const intf_adc_t *ops = adc_get_ops_by_ch(ch);
-    if (ops && ops->set_vref) ops->set_vref(vref_mv);
-}
-
 extern void adc_wdog_reenable(uint8_t inst, uint8_t ch);
 
 void intf_adc_wdog_reenable(intf_adc_ch_t ch)
@@ -356,13 +350,6 @@ void intf_adc_wdog_reenable(intf_adc_ch_t ch)
     if (inst < INTF_ADC_INSTANCE_COUNT) {
         adc_wdog_reenable(inst, ch_idx);
     }
-}
-
-int intf_adc_calibrate(intf_adc_ch_t ch)
-{
-    const intf_adc_t *ops = adc_get_ops_by_ch(ch);
-    if (ops && ops->calibrate) return ops->calibrate();
-    return -1;
 }
 
 __attribute__((weak)) int adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapshot)

@@ -14,8 +14,12 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include "app_adc.h"
+#include "app_analog_signal.h"
+#include "app_debug_adc.h"
 #include "app_debug_inverter.h"
 #include "app_debug_can.h"
 #include "app_debug_encoder.h"
@@ -78,7 +82,20 @@ void app_init(void) {
     /* 9. 三相半桥输出自检（PWM1：U/V/W 25kHz / 50% 持续输出） */
     app_debug_inverter_init();
 
-    /* 10. 开环旋转自检（V/F，命令 r 启动） */
+    /* 10. ADC 采样链（PWM1 CMP10 触发 → TRGM → 双 ADC PMT：三相电流 + 母线/NTC）
+     *     内部启动 PWM1 计数（仅计数、输出仍由逆变桥控制） */
+    app_adc_init(NULL);
+    app_analog_signal_init();
+    app_debug_adc_init();
+
+    /* 11. 电流零点标定（须在无电流状态：桥臂零矢量且未旋转） */
+    if (app_analog_signal_calibrate_offsets() == 0) {
+        app_debug_printf("[ADC] zero calibration: OK\r\n");
+    } else {
+        app_debug_printf("[ADC] zero calibration: FAILED (default 1.65V in use)\r\n");
+    }
+
+    /* 12. 开环旋转自检（V/F，命令 r 启动） */
     app_debug_motor_init();
 }
 
@@ -100,6 +117,10 @@ void app_run(void) {
         /* 1) 核心：编码器双路采样（25kHz，模拟 FOC 开关频率） */
         app_debug_encoder_sample();
 
+        /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（25kHz）+ Ozone 观测变量 */
+        app_analog_signal_process();
+        app_debug_adc_update();
+
         /* 1b) 开环旋转（V/F）：25kHz 节拍更新三相占空比（未启动时为空操作） */
         app_debug_motor_run_once();
 
@@ -108,6 +129,7 @@ void app_run(void) {
         /* 2) 低速调试任务（1ms 分频；各自内部有 1Hz 打印门限） */
         if ((uint32_t) (now - last_slow) >= slow_cycles) {
             last_slow = now;
+            app_adc_slow_process(); /* ADC1 慢速通道（VBUS/NTC/CANID）@1kHz */
             app_debug_uart_run_once();
             app_debug_can_run_once();
             app_debug_usb_run_once();
@@ -115,21 +137,24 @@ void app_run(void) {
 
         /* 3) 心跳 + 编码器统计汇总（1s） */
         if ((uint32_t) (now - last_hb) >= hb_cycles) {
-            uint32_t c0, c1;
-
             last_hb = now;
             did_heartbeat = true;
             heartbeat++;
             app_gpio_toggle(PIN_LED_STATUS);
 
-            c0 = intf_clock_get_cycle();
-            app_debug_printf("hb=%u led=%u printf_cyc=%u\r\n", (unsigned) heartbeat,
-                             (unsigned) app_gpio_read(PIN_LED_STATUS),
-                             (unsigned) last_printf_cycles);
-            c1 = intf_clock_get_cycle();
-            last_printf_cycles = c1 - c0;
-
+#if APP_DEBUG_PERIODIC_PRINT
+            {
+                uint32_t c0 = intf_clock_get_cycle();
+                app_debug_printf("hb=%u led=%u printf_cyc=%u\r\n", (unsigned) heartbeat,
+                                 (unsigned) app_gpio_read(PIN_LED_STATUS),
+                                 (unsigned) last_printf_cycles);
+                last_printf_cycles = intf_clock_get_cycle() - c0;
+            }
             app_debug_encoder_print_stats();
+#else
+            (void) last_printf_cycles;
+            (void) heartbeat;
+#endif
         }
 
         /* 4) 25kHz 节拍：迟到计数并重同步（心跳轮次不计数） */

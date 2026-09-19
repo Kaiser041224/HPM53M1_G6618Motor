@@ -50,7 +50,7 @@ typedef enum {
 
 /* Configurable defaults (0 in cfg = use these values) */
 #define INTF_ADC_DEFAULT_SAMPLE_CYCLE (25U)
-#define INTF_ADC_DEFAULT_CLOCK_DIV    (2U) /* 120/3 = 40 MHz ≤ 50 MHz */
+#define INTF_ADC_DEFAULT_CLOCK_DIV    (4U) /* AHB 160 MHz / 4 = 40 MHz ≤ 50 MHz */
 #define INTF_ADC_DEFAULT_VREF_MV      (3300.0f)
 
 /** @brief ADC conversion mode */
@@ -81,8 +81,17 @@ typedef struct {
     uint32_t pmt_invalid_cycle[INTF_ADC_INSTANCE_COUNT];
     uint32_t pmt_invalid_trig[INTF_ADC_INSTANCE_COUNT];
     uint32_t pmt_invalid_channel[INTF_ADC_INSTANCE_COUNT];
-    uint32_t adc1_handled_in_adc0_irq;
     uint32_t isr_cycles_max[INTF_ADC_INSTANCE_COUNT];
+    uint64_t isr_total_cycles[INTF_ADC_INSTANCE_COUNT]; /* 累计 ISR 周期（算占用率；64 位防截断） */
+    uint32_t pmt_last[INTF_ADC_INSTANCE_COUNT][4];      /* 最近一帧 PMT 原始字（取证用） */
+    uint32_t pmt_cycle_fallback[INTF_ADC_INSTANCE_COUNT]; /* cycle-bit 协议回退次数 */
+    uint32_t reg_conv_cfg1[INTF_ADC_INSTANCE_COUNT];      /* 诊断：CONV_CFG1 */
+    uint32_t reg_adc_cfg0[INTF_ADC_INSTANCE_COUNT];       /* 诊断：ADC_CFG0 */
+    uint32_t reg_buf_cfg0[INTF_ADC_INSTANCE_COUNT];       /* 诊断：BUF_CFG0 */
+    uint32_t reg_config0[INTF_ADC_INSTANCE_COUNT];        /* 诊断：CONFIG[TRG0A] */
+    uint32_t reg_int_sts[INTF_ADC_INSTANCE_COUNT];        /* 诊断：INT_STS */
+    uint32_t reg_seq_cfg0[INTF_ADC_INSTANCE_COUNT];       /* 诊断：SEQ_CFG0 */
+    uint32_t reg_prd_result[INTF_ADC_INSTANCE_COUNT][16]; /* 诊断：PRD_RESULT[0..15]（所有模式结果同步寄存器） */
 } intf_adc_diag_snapshot_t;
 
 /** @brief Per-instance ADC configuration */
@@ -90,7 +99,7 @@ typedef struct {
     intf_adc_resolution_t resolution;
     intf_adc_mode_t mode;
     uint32_t sample_rate_hz; /**< target sample rate (Period mode), or 0 for default */
-    uint32_t sample_cycle;   /**< ADC sample cycles per channel (0 = default 20) */
+    uint32_t sample_cycle;   /**< ADC sample cycles per channel (0 = INTF_ADC_DEFAULT_SAMPLE_CYCLE) */
     uint32_t clock_div;      /**< ADC clock divider 1–16 (0 = auto from sample_rate_hz) */
     float vref_mv;
     /* DMA (applicable to PMT and Sequence modes) */
@@ -129,9 +138,6 @@ typedef struct {
         int (*read_voltage)(intf_adc_ch_t ch, float* voltage_mv);
         int (*start)(intf_adc_ch_t ch);
         int (*stop)(intf_adc_ch_t ch);
-        void (*set_vref)(float vref_mv);
-        int (*calibrate)(void);
-        void (*deinit)(intf_adc_ch_t ch);
     };
 } intf_adc_t;
 
@@ -150,8 +156,6 @@ int intf_adc_read(intf_adc_ch_t ch, uint16_t* value);
 int intf_adc_read_voltage(intf_adc_ch_t ch, float* voltage_mv);
 int intf_adc_start(intf_adc_ch_t ch);
 int intf_adc_stop(intf_adc_ch_t ch);
-void intf_adc_set_vref(intf_adc_ch_t ch, float vref_mv);
-int intf_adc_calibrate(intf_adc_ch_t ch); /* re-trigger ADC offset calibration */
 int intf_adc_get_diag_snapshot(intf_adc_diag_snapshot_t* snapshot);
 void intf_adc_reset_diag_max(void);
 

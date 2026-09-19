@@ -232,8 +232,9 @@ static hrpwm_cmp_pair_t hrpwm_calc_center_aligned_cmp(uint32_t reload, float dut
 
     /* 100% duty cycle: output stays high permanently.
      * Set both CMP values beyond reload so Counter never matches.
-     * In center-aligned mode, Counter counts 0 -> reload -> 0.
-     * CMP = reload + 1 will never be reached. */
+     * 注意：HPM5300 PWM 为单向递增计数器（0 → reload → 回卷），
+     * 所谓“中心对齐”由 cmp_begin/cmp_end 围绕 reload/2 对称摆放合成，
+     * 周期 = (reload+1) 个 PWM 时钟。CMP = reload + 1 永不匹配。 */
     if (duty >= 1.0f) {
         cmp.cmp_begin = reload + 1U;
         cmp.cmp_end = reload + 1U;
@@ -1205,26 +1206,44 @@ static int hrpwm_config_phase_limit(const intf_hrpwm_phase_limit_t* limit) {
     return 0;
 }
 
-static int hrpwm_config_trigger_cmp_impl(uint8_t inst, uint8_t cmp_index, float position_ratio) {
-    if (position_ratio < 0.0f || position_ratio > 1.0f || cmp_index >= PWM_SOC_CMP_MAX_COUNT)
-        return -1;
+/* 触发比较器：比较值 = 计数谷底（回卷点）+ delay_ns。
+ * tick = f_pwm_clk × delay_ns / 1e9 —— 只依赖时钟，与 PWM 频率解耦。 */
+static uint32_t hrpwm_delay_ns_to_ticks(uint8_t inst, uint32_t delay_ns) {
+    uint32_t clock_hz = clock_get_frequency(hrpwm_instances[inst].clock_name);
 
-    PWM_Type* base = hrpwm_get_base(inst);
-    if (base == NULL)
-        return -1;
+    return (uint32_t)(((uint64_t) clock_hz * (uint64_t) delay_ns) / 1000000000ULL);
+}
 
-    uint32_t reload = hrpwm_get_full_reload(inst);
-    uint32_t cmp_val = (uint32_t)((float)reload * position_ratio);
-
+static int hrpwm_config_trigger_cmp_impl(uint8_t inst, uint8_t cmp_index, uint32_t delay_ns) {
+    PWM_Type* base;
+    uint32_t ticks;
+    uint32_t reload;
     pwm_cmp_config_t cmp_cfg;
+    pwm_output_channel_t out_cfg;
+
+    if (cmp_index >= PWM_SOC_CMP_MAX_COUNT) {
+        return -1;
+    }
+
+    base = hrpwm_get_base(inst);
+    if (base == NULL) {
+        return -1;
+    }
+
+    ticks = hrpwm_delay_ns_to_ticks(inst, delay_ns);
+    reload = hrpwm_get_full_reload(inst);
+    if ((reload != 0U) && (ticks >= reload)) {
+        return -1; /* 触发点必须落在周期内（reload 尚未配置时跳过校验） */
+    }
+
     memset(&cmp_cfg, 0, sizeof(cmp_cfg));
     cmp_cfg.enable_ex_cmp = false;
     cmp_cfg.mode = pwm_cmp_mode_output_compare;
     cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
-    cmp_cfg.cmp = cmp_val;
+    cmp_cfg.cmp = ticks;
     pwm_config_cmp(base, cmp_index, &cmp_cfg);
 
-    pwm_output_channel_t out_cfg;
+    /* 输出通道 start==end==cmp_index：匹配处产生窄脉冲（CHxREF → TRGM） */
     out_cfg.cmp_start_index = cmp_index;
     out_cfg.cmp_end_index = cmp_index;
     out_cfg.invert_output = false;
@@ -1235,48 +1254,43 @@ static int hrpwm_config_trigger_cmp_impl(uint8_t inst, uint8_t cmp_index, float 
 }
 
 ATTR_RAMFUNC
-static int hrpwm_set_trigger_cmp_position_impl(uint8_t inst, uint8_t cmp_index, float position_ratio) {
-    if (position_ratio < 0.0f || position_ratio > 1.0f || cmp_index >= PWM_SOC_CMP_MAX_COUNT) {
+static int hrpwm_set_trigger_cmp_delay_impl(uint8_t inst, uint8_t cmp_index, uint32_t delay_ns) {
+    PWM_Type* base;
+    uint32_t ticks;
+
+    if (cmp_index >= PWM_SOC_CMP_MAX_COUNT) {
         return -1;
     }
 
-    PWM_Type* base = hrpwm_get_base(inst);
+    base = hrpwm_get_base(inst);
     if (base == NULL) {
         return -1;
     }
 
-    uint32_t reload = hrpwm_get_full_reload(inst);
-    uint32_t cmp_val = (uint32_t)((float)reload * position_ratio);
+    ticks = hrpwm_delay_ns_to_ticks(inst, delay_ns);
 
-    /*
-     * Direct write to CMP active register — no shadow lock protocol.
-     *
-     * The trigger CMP is configured with update_trigger=on_modify during
-     * hrpwm_config_trigger_cmp_impl, so writes take effect immediately
-     * without an explicit SHLK event.  Bypassing the shadow-register
-     * UNLK/SHLK handshake turns this into a single store, critical for
-     * the 148 kHz ADC0 ISR hot path.
-     */
-    base->CMP[cmp_index] = PWM_CMP_CMP_SET(cmp_val & 0xFFFFFFu);
+    /* 直接写 CMP 工作寄存器（update_trigger=on_modify，无需 SHLK 握手），
+     * 单次存储，供调试期扫描触发点使用。 */
+    base->CMP[cmp_index] = PWM_CMP_CMP_SET(ticks & 0xFFFFFFu);
     return 0;
 }
 
-static int hrpwm_config_trigger_cmp_pwm0(uint8_t cmp_index, float position_ratio) {
-    return hrpwm_config_trigger_cmp_impl(0, cmp_index, position_ratio);
+static int hrpwm_config_trigger_cmp_pwm0(uint8_t cmp_index, uint32_t delay_ns) {
+    return hrpwm_config_trigger_cmp_impl(0, cmp_index, delay_ns);
 }
 
-static int hrpwm_config_trigger_cmp_pwm1(uint8_t cmp_index, float position_ratio) {
-    return hrpwm_config_trigger_cmp_impl(1, cmp_index, position_ratio);
-}
-
-ATTR_RAMFUNC
-static int hrpwm_set_trigger_cmp_position_pwm0(uint8_t cmp_index, float position_ratio) {
-    return hrpwm_set_trigger_cmp_position_impl(0, cmp_index, position_ratio);
+static int hrpwm_config_trigger_cmp_pwm1(uint8_t cmp_index, uint32_t delay_ns) {
+    return hrpwm_config_trigger_cmp_impl(1, cmp_index, delay_ns);
 }
 
 ATTR_RAMFUNC
-static int hrpwm_set_trigger_cmp_position_pwm1(uint8_t cmp_index, float position_ratio) {
-    return hrpwm_set_trigger_cmp_position_impl(1, cmp_index, position_ratio);
+static int hrpwm_set_trigger_cmp_delay_pwm0(uint8_t cmp_index, uint32_t delay_ns) {
+    return hrpwm_set_trigger_cmp_delay_impl(0, cmp_index, delay_ns);
+}
+
+ATTR_RAMFUNC
+static int hrpwm_set_trigger_cmp_delay_pwm1(uint8_t cmp_index, uint32_t delay_ns) {
+    return hrpwm_set_trigger_cmp_delay_impl(1, cmp_index, delay_ns);
 }
 
 static const intf_hrpwm_t hrpwm_ops_pwm0 = {
@@ -1299,7 +1313,7 @@ static const intf_hrpwm_t hrpwm_ops_pwm0 = {
     .set_phase = hrpwm_set_phase,
     .config_phase_limit = hrpwm_config_phase_limit,
     .config_trigger_cmp = hrpwm_config_trigger_cmp_pwm0,
-    .set_trigger_cmp_position = hrpwm_set_trigger_cmp_position_pwm0,
+    .set_trigger_cmp_delay = hrpwm_set_trigger_cmp_delay_pwm0,
     .start_counter_only = hrpwm_start_counter_only_pwm0,
 };
 
@@ -1323,7 +1337,7 @@ static const intf_hrpwm_t hrpwm_ops_pwm1 = {
     .set_phase = hrpwm_set_phase,
     .config_phase_limit = hrpwm_config_phase_limit,
     .config_trigger_cmp = hrpwm_config_trigger_cmp_pwm1,
-    .set_trigger_cmp_position = hrpwm_set_trigger_cmp_position_pwm1,
+    .set_trigger_cmp_delay = hrpwm_set_trigger_cmp_delay_pwm1,
     .start_counter_only = hrpwm_start_counter_only_pwm1,
 };
 

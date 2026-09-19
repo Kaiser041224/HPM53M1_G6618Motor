@@ -12,12 +12,17 @@
  *   1/2/3 = 仅驱动三相半桥的 U/V/W 相（25kHz/50%，用于故障定位）
  *   a = 三相全开；0 = 三相全关（含 12V）
  *   r = 开环旋转启停（V/F）；+/- = 电频率 ±0.5Hz；m/M = 调制比 ∓/±1%
+ *   d = ADC 全通道表（raw / mV / 物理量）；p = ADC 诊断（PMT 完成率等）
+ *   k = 触发延时预设循环（100/250/500/1000/2000 ns）；n = 电流零点标定
  *
  * 说明：零点为软件方案（app_param），不消耗编码器 MTP。
  */
 
 #include "app_debug_cmd.h"
 
+#include "app_adc.h"
+#include "app_analog_signal.h"
+#include "app_debug_adc.h"
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
 #include "app_debug_rtt.h"
@@ -98,6 +103,35 @@ void app_debug_cmd_handle(const uint8_t *data, size_t len)
         case '0':
             app_debug_motor_stop();              /* 安全：先停旋转（含归零矢量） */
             app_debug_inverter_set_output(0x0U); /* 全关（含 12V） */
+            break;
+
+        /* ADC 采样链 */
+        case 'd':
+            app_debug_adc_dump_channels();
+            break;
+        case 'p':
+            app_debug_adc_dump_diag();
+            break;
+        case 'k': {
+            /* 触发延时预设循环：验证采样点是否落在低侧导通窗口内 */
+            static const uint32_t presets[] = {100U, 250U, 500U, 1000U, 2000U};
+            static uint8_t idx;
+            uint32_t delay_ns = presets[idx];
+
+            idx = (uint8_t) ((idx + 1U) % (sizeof(presets) / sizeof(presets[0])));
+            if (app_adc_set_trigger_delay_ns(delay_ns) == 0) {
+                app_debug_printf("[CMD] ADC trigger delay = %u ns\r\n", (unsigned) delay_ns);
+            } else {
+                app_debug_printf("[CMD] ADC trigger delay set FAILED\r\n");
+            }
+            break;
+        }
+        case 'n':
+            if (app_analog_signal_calibrate_offsets() == 0) {
+                app_debug_printf("[CMD] ADC zero calibration: OK\r\n");
+            } else {
+                app_debug_printf("[CMD] ADC zero calibration: FAILED (no current required)\r\n");
+            }
             break;
 
         /* 开环旋转自检（V/F） */

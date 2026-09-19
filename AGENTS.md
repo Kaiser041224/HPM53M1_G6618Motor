@@ -205,3 +205,14 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   各模块在 `app_param.h` 登记 key 并自定义数据布局；`store` = 整扇区读-改-写 + 回读校验）
 - flash 布局：末尾 8KB 由链接脚本预留（倒数第 2 扇区 = 参数区，最后 1 扇区 = 自检用）
 - 编码器零点用**软件方案**（存 flash），不消耗编码器 MTP（Z 寄存器寿命仅 1000 次）
+
+### 驱动缺陷修复（2026-09-19）
+
+- `drv_gptmr.c` 的 `gptmr_drv_init()` 曾存在 **reload 赋值顺序缺陷**：
+  `gptmr_apply_duty()` 先于 `gptmr_state[ch].reload = reload` 执行 → PWM 初始化时
+  `reload == 0` → `CMP0 = CMP1 = 0` → 按手册 §43.2.2"**CMP0 与 CMP1 相等时输出无变化**"，
+  通道输出恒定不翻转（触发链静默失效）。已修复（赋值移至 `switch` 之前）。
+- **该缺陷影响模板驱动的所有 PWM/PWM_TIMER 用法，需同步回环境仓库模板**
+  （`templates/hpm5361-4layer`）。
+- 排查提示：GPTMR 输出异常时优先核对 `CMP0/CMP1/RLD`（注意 CMP 值位于寄存器
+  bit[27:4]，即"值 << 4"）与 `CNT` 是否推进。

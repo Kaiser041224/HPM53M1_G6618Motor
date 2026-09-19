@@ -1,197 +1,62 @@
 /*
- * Analog Signal Conditioning Module
+ * App Analog Signal - 物理量换算（标定 + 滤波）
  *
- * Converts ADC readings into physical measurements for controllers,
- * protection logic, and communication services.
+ * Copyright (c) 2026 HPMicro
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * 换算（2026-09-19，依据原理图 Analog Signal Processing）：
+ *   电流   I [A]     = (V_adc − V_zero) × 66.6667      （TPA6584Q ×7.5，Rshunt 2mΩ）
+ *   母线   V_bus [V] = V_adc × 22.2121                  （73.3K/3.3K 分压 + 内部运放 B 缓冲）
+ *   NTC    R [Ω]     = 10000 × V_adc / (3.3 − V_adc)    （10K 上拉；温度换算待型号确定）
+ *
+ * 电流链路为比例式：1.65V 偏置与 ADC 基准同源，3.3V 电源漂移不影响精度。
  */
 
 #ifndef APP_ANALOG_SIGNAL_H
 #define APP_ANALOG_SIGNAL_H
 
 #include "app_adc.h"
-#include "algo_filter.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef enum {
-    APP_ANALOG_SIGNAL_ITEM_V_IN = 0,
-    APP_ANALOG_SIGNAL_ITEM_I_IN,
-    APP_ANALOG_SIGNAL_ITEM_I_L,
-    APP_ANALOG_SIGNAL_ITEM_V_OUT,
-    APP_ANALOG_SIGNAL_ITEM_I_OUT,
-    APP_ANALOG_SIGNAL_ITEM_I_AUX,
-    APP_ANALOG_SIGNAL_ITEM_COUNT,
-} app_analog_signal_item_t;
-
-/* 内部符号声明，仅供 inline 函数访问，不作为公共 API */
-extern algo_lpf_t s_lpf_filters[];
-extern algo_ma_t s_ma_filters[];
-extern const app_analog_signal_item_t s_channel_to_item[];
-
-/**
- * @brief 读取结果模式。
- *
- * - `APP_ANALOG_SIGNAL_VALUE_RAW`：返回未经滤波的真实物理量。
- * - `APP_ANALOG_SIGNAL_VALUE_FILTERED`：返回经过当前配置滤波器处理后的物理量。
- */
-typedef enum {
-    APP_ANALOG_SIGNAL_VALUE_RAW = 0,
-    APP_ANALOG_SIGNAL_VALUE_FILTERED = 1,
-} app_analog_signal_value_mode_t;
-
-/**
- * @brief 全量模拟量读取结果。
- *
- * 所有字段均为已经完成 ADC 换算后的真实物理量；
- * 是否经过滤波，由 `app_analog_signal_get_measurements()` 调用时传入的
- * `app_analog_signal_value_mode_t` 决定。
- */
-typedef struct {
-    float v_in_v;
-    float i_in_a;
-    float i_l_a;
-    float v_out_v;
-    float i_out_a;
-    float i_aux_a;
-} app_analog_signal_measurements_t;
+/* process() 调用频率（= 主循环 25kHz 节拍），滤波器设计用 */
+#define APP_ANALOG_SAMPLE_RATE_HZ (25000U)
 
 typedef struct {
-    app_analog_signal_measurements_t raw;
-    app_analog_signal_measurements_t filtered;
-} app_analog_signal_snapshot_t;
+    float i_u_a;      /* 相电流 [A] */
+    float i_v_a;      /* 相电流 [A] */
+    float i_w_a;      /* 相电流 [A] */
+    float v_bus_v;    /* 母线电压 [V] */
+    float r_ntc0_ohm; /* NTC0 电阻 [Ω] */
+    float r_ntc1_ohm; /* NTC1 电阻 [Ω] */
+} app_analog_values_t;
 
-extern app_analog_signal_snapshot_t g_analog_signal_snapshot;
-
-/**
- * @brief 初始化模拟量调理模块。
- *
- * 完成 ADC 初始化、校准、默认标定参数装载，以及每路滤波器初始化。
- */
+/** @brief 初始化（默认零点 + 滤波器），须在 app_adc_init() 之后调用 */
 void app_analog_signal_init(void);
 
-/**
- * @brief 装载默认 ADC 标定参数。
- */
-void app_analog_signal_load_default_calibration(void);
-
-/**
- * @brief 更新指定通道的最新原始 ADC 结果。
- *
- * 用于将 PWM/TRGM/PMT 等外部采样链得到的原始值推送进模拟量模块，
- * 供后续物理量换算和滤波读取使用。
- *
- * @param ch  目标 ADC 逻辑通道。
- * @param raw 原始 16-bit ADC 结果。
- */
-void app_analog_signal_update_raw(adc_channel_t ch, uint16_t raw);
-
-/**
- * @brief 从 PMT 缓存拉取全部通道原始值并完成物理量换算 + 滤波。
- *
- * 应在主循环中周期调用，禁止在 ISR 中调用。
- */
+/** @brief 25kHz 主循环每周期调用：读取原始值 → 换算 → 滤波 */
 void app_analog_signal_process(void);
 
-/**
- * @brief 从 PMT 缓存直接刷新快照中的 raw 值（不做滤波）。
- *
- * 轻量级，可在调试 dump 中高频调用。
- */
-void app_analog_signal_snapshot_refresh_raw(void);
+/** @brief 读取最新物理量快照（含滤波）；数据未就绪返回 false */
+bool app_analog_signal_read_all(app_analog_values_t *values);
 
-int app_analog_signal_get_cached_raw(adc_channel_t ch, uint16_t *raw);
+/** @brief 读取单通道物理量（含滤波）；数据未就绪返回 NAN */
+float app_analog_signal_read(adc_channel_t ch);
 
-/**
- * @brief 轻量级 raw → 物理量转换（ISR 专用，无滤波/快照更新）。
- *
- * 在 init 时预计算合并校准系数，调用时仅做 1 次乘法 + 1 次加法。
- *
- * @param ch        ADC 通道。
- * @param raw       原始 ADC 值。
- * @param physical  输出物理量。
- */
-void app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw, float *physical);
+/** @brief 读取单通道原始码 */
+bool app_analog_signal_read_raw(adc_channel_t ch, uint16_t *raw);
 
 /**
- * @brief 单步 LPF 滤波（ISR 安全，内联零开销）。
- *
- * 对指定通道的 LPF 实例执行一步一阶低通滤波。
- * 滤波参数由 app_analog_signal 统一配置。
- * 非法通道直接返回原值，不会触发异常。
+ * @brief 电流通道零点标定：阻塞采集若干帧求平均，写入零点偏置。
+ * @note 必须在无电流状态调用（上电初始化阶段）；检测到电流或超时会拒绝。
+ * @return 0 成功，-1 失败
  */
-ALGO_RAMFUNC
-static inline float app_analog_signal_lpf_step_fast(adc_channel_t ch, float value)
-{
-    if (ch >= ADC_CH_COUNT) return value;
-    algo_lpf_t *lpf = &s_lpf_filters[s_channel_to_item[ch]];
-    return lpf->_inited ? algo_lpf_step_fast(lpf, value) : value;
-}
-
-/**
- * @brief 单步 MA 滤波（ISR 安全，内联零开销）。
- *
- * 对指定通道的 MA 实例执行一步滑动平均滤波。
- * 滤波参数由 app_analog_signal 统一配置。
- * 非法通道或未初始化通道直接返回原值，不会触发异常。
- */
-ALGO_RAMFUNC
-static inline float app_analog_signal_ma_step(adc_channel_t ch, float value)
-{
-    if (ch >= ADC_CH_COUNT) return value;
-    algo_ma_t *ma = &s_ma_filters[s_channel_to_item[ch]];
-    return ma->_inited ? algo_ma_step_fast(ma, value) : value;
-}
-
-/**
- * @brief 读取缓存中的物理量（ISR 专用，无函数调用开销）。
- *
- * @param ch        ADC 通道。
- * @param physical  输出物理量。
- * @return 0 成功，-1 缓存无效。
- */
-int app_analog_signal_get_physical(adc_channel_t ch, float *physical);
-
-/**
- * @brief 读取单个目标模拟量。
- *
- * @param item  目标信号项。
- * @param mode  读取模式：原始值或滤波值。
- * @param value 输出物理量。
- * @return 0 成功，-1 失败。
- */
-int app_analog_signal_read_item(app_analog_signal_item_t item, app_analog_signal_value_mode_t mode, float *value);
-
-/**
- * @brief 一次读取全部目标模拟量。
- *
- * @param measurements 输出测量结构体。
- * @param mode         读取模式：原始值或滤波值。
- * @return 0 成功，-1 失败。
- */
-int app_analog_signal_get_measurements(app_analog_signal_measurements_t *measurements,
-                                       app_analog_signal_value_mode_t mode);
-
-/**
- * @brief 设置指定 ADC 通道的标定参数。
- *
- * @param ch          ADC 通道。
- * @param calibration 标定参数。
- * @return 0 成功，-1 失败。
- */
-int app_analog_signal_set_channel_calibration(adc_channel_t ch, const app_adc_calibration_t *calibration);
-
-/**
- * @brief 获取指定 ADC 通道的当前标定参数。
- *
- * @param ch          ADC 通道。
- * @param calibration 输出标定参数。
- * @return 0 成功，-1 失败。
- */
-int app_analog_signal_get_channel_calibration(adc_channel_t ch, app_adc_calibration_t *calibration);
+int app_analog_signal_calibrate_offsets(void);
 
 #ifdef __cplusplus
 }

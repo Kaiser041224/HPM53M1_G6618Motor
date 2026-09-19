@@ -213,6 +213,10 @@ static int gptmr_drv_init(intf_gptmr_ch_t ch, const intf_gptmr_cfg_t *cfg)
     hw_cfg.enable_sync_follow_previous_channel = false;
     hw_cfg.synci_edge = gptmr_synci_edge_none;
 
+    /* 必须在 switch 之前：PWM/PWM_TIMER 分支的 gptmr_apply_duty() 依赖 reload
+     * 计算 CMP0/CMP1（reload 为 0 时两者均为 0 → CMP0==CMP1 → 输出不翻转） */
+    gptmr_state[ch].reload = reload;
+
     switch (cfg->mode) {
     case INTF_GPTMR_MODE_PWM:
         if (!gptmr_is_valid_duty(cfg->duty)) {
@@ -281,7 +285,6 @@ static int gptmr_drv_init(intf_gptmr_ch_t ch, const intf_gptmr_cfg_t *cfg)
     gptmr_state[ch].configured = true;
     gptmr_state[ch].mode = cfg->mode;
     gptmr_state[ch].frequency_hz = cfg->frequency_hz;
-    gptmr_state[ch].reload = reload;
     gptmr_state[ch].callback = cfg->callback;
     return 0;
 }

@@ -20,13 +20,6 @@
 #include <stddef.h>
 #include <string.h>
 
-/* RTT debug — enable to trace PMT DMA data in ISR */
-#define ADC_PMT_ISR_TRACE 0
-#if ADC_PMT_ISR_TRACE
-# include "SEGGER_RTT.h"
-static uint32_t pmt_trace_cnt[2];
-#endif
-
 #define ADC_DEFAULT_VREF_MV      INTF_ADC_DEFAULT_VREF_MV
 #define ADC_DEFAULT_SAMPLE_CYCLE INTF_ADC_DEFAULT_SAMPLE_CYCLE
 #define ADC_DEFAULT_CLOCK_DIV    INTF_ADC_DEFAULT_CLOCK_DIV
@@ -36,10 +29,16 @@ static uint32_t pmt_trace_cnt[2];
 #define ADC_MAX_CHANNELS         (16U)
 #define ADC_PMT_MAX_TRIG         (11U)
 #define ADC_PMT_DMA_SLOT_LEN     (4U)
+/* PMT DMA 字 bit31：cycle bit（SDK 参考协议 —— 硬件写新数据置 1，软件消费后清 0） */
+#define ADC_PMT_CYCLE_BIT_MASK   (0x80000000UL)
 #define ADC_SEQ_MAX_LEN          16U
 
 /* Discard first N PMT trigger completions to avoid startup transient garbage */
 #define ADC_PMT_STARTUP_DISCARD (8U)
+
+/* PMT 结果缓冲：12 触发 × 4 槽 × 1 字 = 48 字，须位于非缓存本地 RAM（DMA 直接写入） */
+#define ADC_PMT_DMA_WORDS (48U)
+ATTR_PLACE_AT_FAST_RAM_BSS static uint32_t adc_pmt_dma_buff[INTF_ADC_INSTANCE_COUNT][ADC_PMT_DMA_WORDS];
 
 /* ============================================================================
  * Instance State
@@ -55,6 +54,7 @@ typedef struct {
     intf_adc_resolution_t resolution;
     intf_adc_mode_t mode;
     float vref_mv;
+    uint32_t period_rate_hz; /* Period 模式目标速率（init 时记录） */
     ADC16_Type* base;
     uint32_t irq;
     adc_ch_state_t channels[ADC_MAX_CHANNELS];
@@ -66,6 +66,11 @@ typedef struct {
         intf_adc_pmt_cb_t cb;
         void* cb_user_data;
         uint32_t frame_cnt;
+        /* cycle-bit 消费协议（SDK 参考设计）：硬件写新数据置 1，软件读后清 0。
+         * 连续 3 帧全槽无 cycle bit 时判定硬件不复位该位 → 自动关闭协议并回退
+         * 到"不检查 cycle bit"的兼容模式（不会把数据全部拒死）。 */
+        bool cycle_protocol;
+        uint8_t stale_run;
     } pmt;
     /* Sequence */
     struct {
@@ -92,9 +97,8 @@ typedef struct {
 ATTR_PLACE_AT_FAST_RAM_BSS static adc_inst_t adc_instances[INTF_ADC_INSTANCE_COUNT];
 ATTR_PLACE_AT_FAST_RAM_BSS static volatile intf_adc_diag_snapshot_t adc_diag;
 
-/* [TEMP DIAG] 累计 ISR 总 cycle 数，用于精确计算 CPU 占用率(总和/墙钟)，
- * 取代之前不可靠的"最坏值×频率"外推法。g_adc_isr_total_cycles[inst] 由主循环
- * 读取并与经过的墙钟 cycle 相除得到真实占用百分比。 */
+/* 累计 ISR 总 cycle 数：由诊断接口输出，主循环按墙钟周期求差得到真实 CPU 占用率
+ * （取代"最坏值×频率"外推法）。低 32 位即可满足增量统计。 */
 volatile uint64_t g_adc_isr_total_cycles[INTF_ADC_INSTANCE_COUNT];
 
 /* ============================================================================
@@ -180,7 +184,10 @@ static uint32_t adc_calc_clock_div(uint8_t inst, uint32_t sample_rate_hz, uint32
     }
 
     if (sample_rate_hz == 0) {
-        return ADC_DEFAULT_CLOCK_DIV;
+        uint32_t bus_freq = clock_get_frequency(adc_get_clock(inst));
+        uint32_t min_safe_div = (bus_freq + ADC_MAX_CLOCK_HZ - 1) / ADC_MAX_CLOCK_HZ;
+
+        return (ADC_DEFAULT_CLOCK_DIV < min_safe_div) ? min_safe_div : ADC_DEFAULT_CLOCK_DIV;
     }
 
     uint32_t bus_freq = clock_get_frequency(adc_get_clock(inst));
@@ -254,6 +261,35 @@ static void adc_generic_isr(uint8_t inst) {
                 snap[2] = dma_hw[2];
                 snap[3] = dma_hw[3];
 
+                /* cycle bit 统计（硬件写入新数据时置 1）+ 原始帧转储 */
+                uint8_t fresh = 0U;
+                for (uint8_t i = 0; i < 4; i++) {
+                    if ((snap[i] & ADC_PMT_CYCLE_BIT_MASK) != 0U) {
+                        fresh++;
+                    }
+                    adc_diag.pmt_last[inst][i] = snap[i];
+                }
+
+                /* 协议自检：连续多帧全槽无 cycle bit → 硬件不复位该位，回退兼容模式 */
+                if (ai->pmt.cycle_protocol) {
+                    if (fresh == 0U) {
+                        if (++ai->pmt.stale_run >= 3U) {
+                            ai->pmt.cycle_protocol = false;
+                            adc_diag.pmt_cycle_fallback[inst]++;
+                        }
+                    } else {
+                        ai->pmt.stale_run = 0U;
+                    }
+
+                    /* 消费（清除）cycle bit：硬件写新数据置 1，软件读后清 0；
+                     * 下一帧若某槽仍为 0 → 该槽未被硬件更新（数据过期），校验拒绝。 */
+                    for (uint8_t i = 0; i < 4; i++) {
+                        if ((snap[i] & ADC_PMT_CYCLE_BIT_MASK) != 0U) {
+                            dma_hw[i] = snap[i] & ~ADC_PMT_CYCLE_BIT_MASK;
+                        }
+                    }
+                }
+
                 restore_global_irq(mstatus);
 
                 /* 从 DMA 结果字直接位运算提取字段，避免 (adc16_pmt_dma_data_t*)snap
@@ -271,22 +307,11 @@ static void adc_generic_isr(uint8_t inst) {
 #define ADC_PMT_TRIG_CH(w)   ((uint8_t)(((w) >> 25) & 0x0FU))
 #define ADC_PMT_CYCLE_BIT(w) ((uint8_t)(((w) >> 31) & 0x01U))
 #endif
-#if ADC_PMT_ISR_TRACE
-                if (inst < 2 && (++pmt_trace_cnt[inst] % 100) == 0) {
-                    SEGGER_RTT_printf(
-                        0, "[PMT] ADC%d t=%d #%lu:\r\n", inst, ai->pmt.trig_ch,
-                        pmt_trace_cnt[inst]);
-                    for (uint8_t t = 0; t < 4; t++) {
-                        SEGGER_RTT_printf(
-                            0, "  [%d] raw=0x%08X cb=%d tc=%d ac=%d res=0x%04X\r\n", t, snap[t],
-                            ADC_PMT_CYCLE_BIT(snap[t]), ADC_PMT_TRIG_CH(snap[t]),
-                            ADC_PMT_ADC_CH(snap[t]), ADC_PMT_RESULT(snap[t]));
-                    }
-                }
-#endif
+/* 队列内转换序号（PMT 字 bit[30:29]） */
+#define ADC_PMT_SEQ_NUM(w)   ((uint8_t)(((w) >> 29) & 0x03U))
                 for (uint8_t i = 0; i < ai->pmt.ch_count && i < 4; i++) {
                     uint32_t w = snap[i];
-                    if (ADC_PMT_CYCLE_BIT(w) == 0) {
+                    if (ai->pmt.cycle_protocol && (ADC_PMT_CYCLE_BIT(w) == 0)) {
                         adc_diag.pmt_invalid_cycle[inst]++;
                         continue;
                     }
@@ -355,7 +380,7 @@ static void adc_generic_isr(uint8_t inst) {
     if (elapsed > adc_diag.isr_cycles_max[inst]) {
         adc_diag.isr_cycles_max[inst] = elapsed;
     }
-    g_adc_isr_total_cycles[inst] += elapsed; /* [TEMP DIAG] 累计总占用 */
+    g_adc_isr_total_cycles[inst] += elapsed; /* 累计总占用 */
 }
 
 SDK_DECLARE_EXT_ISR_M(IRQn_ADC0, isr_adc0)
@@ -383,6 +408,23 @@ int adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapshot)
     uint32_t mstatus = disable_global_irq(CSR_MSTATUS_MIE_MASK);
     *snapshot = adc_diag;
     restore_global_irq(mstatus);
+
+    for (uint8_t inst = 0; inst < INTF_ADC_INSTANCE_COUNT; inst++) {
+        ADC16_Type* base = adc_instances[inst].base;
+
+        snapshot->isr_total_cycles[inst] = g_adc_isr_total_cycles[inst];
+        if (base != NULL) {
+            snapshot->reg_conv_cfg1[inst] = base->CONV_CFG1;
+            snapshot->reg_adc_cfg0[inst] = base->ADC_CFG0;
+            snapshot->reg_buf_cfg0[inst] = base->BUF_CFG0;
+            snapshot->reg_config0[inst] = base->CONFIG[ADC16_CONFIG_TRG0A];
+            snapshot->reg_int_sts[inst] = base->INT_STS;
+            snapshot->reg_seq_cfg0[inst] = base->SEQ_CFG0;
+            for (uint8_t ch = 0U; ch < 16U; ch++) {
+                snapshot->reg_prd_result[inst][ch] = base->PRD_CFG[ch].PRD_RESULT;
+            }
+        }
+    }
 
     return 0;
 }
@@ -439,10 +481,18 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
         adc_cfg.conv_mode = adc_map_mode(cfg->mode);
         adc_cfg.adc_clk_div =
             (adc16_clock_divider_t)adc_calc_clock_div(inst, cfg->sample_rate_hz, cfg->clock_div);
-        adc_cfg.wait_dis = true; /* nonblocking: safe for ISR, no bus deadlock */
+        /* WAIT_DIS 语义（手册 §53.2.3）：
+         *   0 = 阻塞读：读 BUS_RESULT 触发转换，待完成后返回【本次】结果；
+         *   1 = 非阻塞：立即返回【上一次】转换结果（VALID 位提示完成）。
+         * 读取模式（oneshot）需要每次读取都是新鲜值 → 用阻塞读；
+         * PMT/SEQ 等模式不做 BUS_RESULT 读取 → 保持非阻塞。 */
+        adc_cfg.wait_dis = (cfg->mode != INTF_ADC_MODE_ONESHOT);
 
+        /* SEL_SYNC_AHB=1 要求 ADC 时钟 == 总线时钟（手册 §53.4 ADC_CFG0）；
+         * 本板 ADC 时钟为 AHB/4，故所有模式统一 sel_sync_ahb=false。
+         * adc_ahb_en 仅对序列/抢占的 DMA 有效，oneshot 关闭。 */
         if (adc_cfg.conv_mode == adc16_conv_mode_oneshot) {
-            adc_cfg.sel_sync_ahb = true;
+            adc_cfg.sel_sync_ahb = false;
             adc_cfg.adc_ahb_en = false;
         } else {
             adc_cfg.sel_sync_ahb = false;
@@ -454,12 +504,18 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
         base->ANA_CTRL0 |= ADC16_ANA_CTRL0_ADC_CLK_ON_MASK;
 
+        /* 关闭全部抢占队列：防止复位残留的 QUEUE_EN 位造成误触发 */
+        for (uint8_t t = 0; t < ADC_PMT_MAX_TRIG; t++) {
+            adc16_disable_pmt_queue(base, t);
+        }
+
         ai->initialized = true;
         ai->resolution = cfg->resolution;
         ai->mode = cfg->mode;
         ai->base = base;
         ai->irq = adc_get_irq(inst);
         ai->vref_mv = (cfg->vref_mv > 0.0f) ? cfg->vref_mv : ADC_DEFAULT_VREF_MV;
+        ai->period_rate_hz = (cfg->sample_rate_hz != 0U) ? cfg->sample_rate_hz : 1000U;
     } else {
         if (ai->resolution != cfg->resolution || ai->mode != cfg->mode)
             return -1;
@@ -476,6 +532,10 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
     if (ai->mode == INTF_ADC_MODE_PMT) {
         if (cfg->pmt_ch_count == 0 || cfg->pmt_ch_count > 4 || cfg->pmt_trig_ch >= ADC_PMT_MAX_TRIG)
             return -1;
+        for (uint8_t i = 0; i < cfg->pmt_ch_count; i++) {
+            if (cfg->pmt_ch_list[i] >= ADC_MAX_CHANNELS)
+                return -1;
+        }
 
         ai->pmt.trig_ch = cfg->pmt_trig_ch;
         ai->pmt.ch_count = cfg->pmt_ch_count;
@@ -519,25 +579,36 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
             }
         }
 
-        adc16_enable_interrupts(ai->base, adc16_event_trig_complete);
+        /* 无回调（如慢速通道仅轮询 DMA 缓冲）时不使能中断，避免无谓的 25kHz ISR */
+        if (cfg->pmt_cb != NULL) {
+            adc16_enable_interrupts(ai->base, adc16_event_trig_complete);
+        }
 
-        if (cfg->dma_en && cfg->dma_buff != NULL) {
+        if (cfg->dma_en) {
+            /* dma_buff = NULL：使用驱动内部 fast RAM 缓冲（推荐） */
+            uint32_t* dma_buff = (cfg->dma_buff != NULL) ? cfg->dma_buff : adc_pmt_dma_buff[inst];
+            uint32_t dma_len = (cfg->dma_buff != NULL) ? cfg->dma_buff_len : ADC_PMT_DMA_WORDS;
             uint32_t dma_offset = (uint32_t)cfg->pmt_trig_ch * ADC_PMT_DMA_SLOT_LEN;
-            if (cfg->dma_buff_len < dma_offset + cfg->pmt_ch_count)
+
+            if (dma_len < dma_offset + cfg->pmt_ch_count)
                 return -1;
 
             ai->dma.active = true;
-            ai->dma.buff = cfg->dma_buff;
-            ai->dma.len = cfg->dma_buff_len;
-            adc16_init_pmt_dma(ai->base, core_local_mem_to_sys_address(0, (uint32_t)cfg->dma_buff));
+            ai->dma.buff = dma_buff;
+            ai->dma.len = dma_len;
+            adc16_init_pmt_dma(ai->base, core_local_mem_to_sys_address(0, (uint32_t)dma_buff));
         }
 
 #if defined(HPM_IP_FEATURE_ADC16_HAS_MOT_EN) && HPM_IP_FEATURE_ADC16_HAS_MOT_EN
         adc16_enable_motor(ai->base);
 #endif
         ai->pmt.frame_cnt = 0;
+        ai->pmt.cycle_protocol = true;
+        ai->pmt.stale_run = 0U;
 
-        adc_enable_instance_irq(inst);
+        if (cfg->pmt_cb != NULL) {
+            adc_enable_instance_irq(inst);
+        }
         return 0;
     }
 
@@ -597,9 +668,12 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
                 return -1;
         }
 
-        adc16_enable_interrupts(
-            ai->base, adc16_event_seq_single_complete | adc16_event_seq_full_complete);
-        adc_enable_instance_irq(inst);
+        /* 无回调（仅轮询 PRD_RESULT）时不使能中断，避免无谓 ISR */
+        if (cfg->seq_cb != NULL) {
+            adc16_enable_interrupts(
+                ai->base, adc16_event_seq_single_complete | adc16_event_seq_full_complete);
+            adc_enable_instance_irq(inst);
+        }
         return 0;
     }
 
@@ -618,8 +692,9 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
     if (adc16_init_channel(ai->base, &ch_cfg) != status_success)
         return -1;
 
-    if (ai->mode == INTF_ADC_MODE_ONESHOT) {
+    if (ai->mode == INTF_ADC_MODE_ONESHOT || ai->mode == INTF_ADC_MODE_PERIOD) {
 #if defined(ADC_SOC_BUSMODE_ENABLE_CTRL_SUPPORT) && ADC_SOC_BUSMODE_ENABLE_CTRL_SUPPORT
+        /* BUS_MODE_EN：BUS_RESULT/PRD_RESULT 结果通路使能 */
         adc16_enable_oneshot_mode(ai->base);
 #endif
     }
@@ -638,6 +713,23 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
     return 0;
 }
 
+/* 读取模式（BUS_RESULT）单次读取：WAIT_DIS=1 时 VALID 位是握手标志——
+ * 读操作在 VALID=0 时触发一次转换，转换完成后 VALID=1，此时读到的才是本次结果。
+ * 重试间隔约 1µs（@480MHz），避免在转换进行中反复触发导致转换永不完成。 */
+static hpm_stat_t adc_oneshot_read_retry(ADC16_Type* base, uint8_t ch_idx, uint16_t* value) {
+    hpm_stat_t stat = adc16_get_oneshot_result(base, ch_idx, value);
+    uint32_t retry = 512U;
+
+    while ((stat != status_success) && (retry-- != 0U)) {
+        for (volatile uint32_t d = 0U; d < 480U; d++) {
+            /* 等待在途转换完成（约 1µs） */
+        }
+        stat = adc16_get_oneshot_result(base, ch_idx, value);
+    }
+
+    return stat;
+}
+
 static int adc_read(intf_adc_ch_t ch, uint16_t* value) {
     uint8_t inst = INTF_ADC_CH_INST(ch);
     uint8_t ch_idx = INTF_ADC_CH_IDX(ch);
@@ -652,19 +744,44 @@ static int adc_read(intf_adc_ch_t ch, uint16_t* value) {
     hpm_stat_t stat;
     switch (ai->mode) {
     case INTF_ADC_MODE_PERIOD: stat = adc16_get_prd_result(ai->base, ch_idx, value); break;
-    case INTF_ADC_MODE_ONESHOT:
-        stat = adc16_get_oneshot_result(ai->base, ch_idx, value);
-        if (stat != status_success) {
-            uint32_t retry = 512;
-            while (retry--) {
-                stat = adc16_get_oneshot_result(ai->base, ch_idx, value);
-                if (stat == status_success)
-                    break;
+    case INTF_ADC_MODE_ONESHOT: stat = adc_oneshot_read_retry(ai->base, ch_idx, value); break;
+    case INTF_ADC_MODE_SEQ:
+        /* 序列转换结果由硬件同步到 PRD_RESULTx（手册 §53.2.4），纯寄存器读取 */
+        stat = adc16_get_prd_result(ai->base, ch_idx, value);
+        break;
+    case INTF_ADC_MODE_PMT: {
+        /* PMT 队列内通道：结果由硬件 DMA 每帧刷新，直接取 DMA 缓冲最近一帧
+         * （取最后一个匹配槽：双份队尾方案中尾槽为新鲜值）。 */
+        int slot = -1;
+        for (uint8_t i = 0U; i < ai->pmt.ch_count; i++) {
+            if (ai->pmt.ch_list[i] == ch_idx) {
+                slot = (int) i;
             }
         }
+        if (slot >= 0) {
+            if (!ai->dma.active) {
+                return -1;
+            }
+            volatile uint32_t* dma_hw =
+                &ai->dma.buff[(uint32_t) ai->pmt.trig_ch * ADC_PMT_DMA_SLOT_LEN + (uint32_t) slot];
+            *value = (uint16_t) (*dma_hw & 0xFFFFU);
+            return 0;
+        }
+        /* 非队列通道（静态慢变量，如 CANID DIP）：读取模式单次读取 */
+        if (!ai->channels[ch_idx].configured) {
+            adc16_channel_config_t ch_cfg;
+            adc16_get_channel_default_config(&ch_cfg);
+            ch_cfg.ch = ch_idx;
+            ch_cfg.sample_cycle = ADC_DEFAULT_SAMPLE_CYCLE;
+            if (adc16_init_channel(ai->base, &ch_cfg) != status_success) {
+                return -1;
+            }
+            ai->channels[ch_idx].configured = true;
+        }
+        stat = adc_oneshot_read_retry(ai->base, ch_idx, value);
         break;
-    case INTF_ADC_MODE_PMT:
-    default: stat = adc16_get_oneshot_result(ai->base, ch_idx, value); break;
+    }
+    default: stat = adc_oneshot_read_retry(ai->base, ch_idx, value); break;
     }
 
     return (stat == status_success) ? 0 : -1;
@@ -712,12 +829,41 @@ static int adc_start(intf_adc_ch_t ch) {
         return 0;
     }
 
-    adc16_prd_config_t prd_cfg;
-    prd_cfg.ch = ch_idx;
-    prd_cfg.prescale = 20;
-    prd_cfg.period_count = 5;
-    if (adc16_set_prd_config(ai->base, &prd_cfg) != status_success)
-        return -1;
+    /* 周期 = PRD_CNT × 2^PRESCALE 个 ADC 时钟（PRD_CNT ≤ 255，PRESCALE ≤ 31） */
+    {
+        uint32_t div = (uint32_t) ADC16_CONV_CFG1_CLOCK_DIVIDER_GET(ai->base->CONV_CFG1) + 1U;
+        uint32_t adc_clk = clock_get_frequency(adc_get_clock(inst)) / div;
+        uint32_t rate = (ai->period_rate_hz != 0U) ? ai->period_rate_hz : 1000U;
+        uint32_t clocks = adc_clk / rate;
+        uint8_t prescale = 0U;
+        uint32_t cnt;
+
+        if (clocks < 2U) {
+            clocks = 2U;
+        }
+        while (((clocks >> prescale) > 255U) && (prescale < 31U)) {
+            prescale++;
+        }
+        cnt = clocks >> prescale;
+        if (cnt > 255U) {
+            cnt = 255U;
+        }
+        if (cnt == 0U) {
+            cnt = 1U;
+        }
+
+        adc16_prd_config_t prd_cfg;
+        prd_cfg.ch = ch_idx;
+        prd_cfg.prescale = prescale;
+        prd_cfg.period_count = (uint8_t) cnt;
+        if (adc16_set_prd_config(ai->base, &prd_cfg) != status_success)
+            return -1;
+
+#if defined(ADC_SOC_BUSMODE_ENABLE_CTRL_SUPPORT) && ADC_SOC_BUSMODE_ENABLE_CTRL_SUPPORT
+        /* set_prd_config 会恢复 BUF_CFG0，这里重新确保结果通路使能 */
+        adc16_enable_oneshot_mode(ai->base);
+#endif
+    }
 
     ai->channels[ch_idx].running = true;
     return 0;
@@ -743,59 +889,6 @@ static int adc_stop(intf_adc_ch_t ch) {
     return 0;
 }
 
-static void adc_set_vref(float vref_mv) {
-    for (uint8_t inst = 0; inst < INTF_ADC_INSTANCE_COUNT; inst++) {
-        adc_instances[inst].vref_mv = (vref_mv > 0.0f) ? vref_mv : ADC_DEFAULT_VREF_MV;
-    }
-}
-
-static int adc_calibrate(void) {
-    int ret = 0;
-    for (uint8_t inst = 0; inst < INTF_ADC_INSTANCE_COUNT; inst++) {
-        adc_inst_t* ai = &adc_instances[inst];
-        if (!ai->initialized || ai->base == NULL)
-            continue;
-
-        adc16_config_t adc_cfg;
-        adc16_get_default_config(&adc_cfg);
-        adc_cfg.res = adc_map_resolution(ai->resolution);
-        adc_cfg.conv_mode = adc_map_mode(ai->mode);
-        adc_cfg.adc_clk_div = (adc16_clock_divider_t)ADC_DEFAULT_CLOCK_DIV;
-        adc_cfg.wait_dis = true;
-
-        if (adc_cfg.conv_mode == adc16_conv_mode_oneshot) {
-            adc_cfg.sel_sync_ahb = true;
-            adc_cfg.adc_ahb_en = false;
-        } else {
-            adc_cfg.sel_sync_ahb = false;
-            adc_cfg.adc_ahb_en = true;
-        }
-
-        if (adc16_init(ai->base, &adc_cfg) != status_success) {
-            ret = -1;
-        } else {
-            ai->base->ANA_CTRL0 |= ADC16_ANA_CTRL0_ADC_CLK_ON_MASK;
-        }
-    }
-    return ret;
-}
-
-static void adc_deinit(intf_adc_ch_t ch) {
-    uint8_t inst = INTF_ADC_CH_INST(ch);
-    uint8_t ch_idx = INTF_ADC_CH_IDX(ch);
-
-    if (inst >= INTF_ADC_INSTANCE_COUNT || ch_idx >= ADC_MAX_CHANNELS)
-        return;
-
-    adc_inst_t* ai = &adc_instances[inst];
-    if (!ai->initialized)
-        return;
-
-    ai->channels[ch_idx].configured = false;
-    ai->channels[ch_idx].running = false;
-    ai->wdog.enabled[ch_idx] = false;
-}
-
 /* ============================================================================
  * Operations Structures & Registration
  * ============================================================================ */
@@ -807,9 +900,6 @@ static const intf_adc_t adc_ops_adc0 = {
     .read_voltage = adc_read_voltage,
     .start = adc_start,
     .stop = adc_stop,
-    .set_vref = adc_set_vref,
-    .calibrate = adc_calibrate,
-    .deinit = adc_deinit,
 };
 
 static const intf_adc_t adc_ops_adc1 = {
@@ -819,9 +909,6 @@ static const intf_adc_t adc_ops_adc1 = {
     .read_voltage = adc_read_voltage,
     .start = adc_start,
     .stop = adc_stop,
-    .set_vref = adc_set_vref,
-    .calibrate = adc_calibrate,
-    .deinit = adc_deinit,
 };
 
 void hpm_adc_driver_register(void) {

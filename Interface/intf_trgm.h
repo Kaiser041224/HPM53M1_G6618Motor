@@ -35,6 +35,8 @@ typedef enum {
     INTF_TRGM_SRC_SYNT_CH1,
     INTF_TRGM_SRC_SYNT_CH2,
     INTF_TRGM_SRC_SYNT_CH3,
+    INTF_TRGM_SRC_GPTMR0_OUT2,  /* GPTMR0 CH2 比较输出（1kHz 慢速触发源） */
+    INTF_TRGM_SRC_GPTMR0_OUT3,  /* GPTMR0 CH3 比较输出 */
 } intf_trgm_src_t;
 
 /* ============================================================================
@@ -52,6 +54,8 @@ typedef enum {
     INTF_TRGM_DST_GPTMR1_SYNCI,      /* → GPTMR1 counter sync input */
     INTF_TRGM_DST_GPTMR2_SYNCI,      /* → GPTMR2 counter sync input */
     INTF_TRGM_DST_GPTMR3_SYNCI,      /* → GPTMR3 counter sync input */
+    INTF_TRGM_DST_ADC0_STRGI,        /* → ADC0 序列转换触发输入 */
+    INTF_TRGM_DST_ADC1_STRGI,        /* → ADC1 序列转换触发输入 */
 } intf_trgm_dst_t;
 
 /* ============================================================================

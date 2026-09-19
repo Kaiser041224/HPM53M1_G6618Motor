@@ -103,8 +103,8 @@ typedef struct {
         int (*disable_reload_irq)(void);
         int (*set_phase)(const intf_hrpwm_phase_cfg_t *cfg);
         int (*config_phase_limit)(const intf_hrpwm_phase_limit_t *limit);
-        int (*config_trigger_cmp)(uint8_t cmp_index, float position_ratio);
-        int (*set_trigger_cmp_position)(uint8_t cmp_index, float position_ratio);
+        int (*config_trigger_cmp)(uint8_t cmp_index, uint32_t delay_ns);
+        int (*set_trigger_cmp_delay)(uint8_t cmp_index, uint32_t delay_ns);
         int (*start_counter_only)(void);
     };
 } intf_hrpwm_t;
@@ -141,9 +141,14 @@ int intf_hrpwm_disable_reload_irq(intf_hrpwm_inst_t inst);
 int intf_hrpwm_set_phase(const intf_hrpwm_phase_cfg_t *cfg);
 int intf_hrpwm_config_phase_limit(intf_hrpwm_inst_t inst, const intf_hrpwm_phase_limit_t *limit);
 
-/* PWM 触发信号配置 (用于 ADC 同步等) */
-int intf_hrpwm_config_trigger_cmp(intf_hrpwm_inst_t inst, uint8_t cmp_index, float position_ratio);
-int intf_hrpwm_set_trigger_cmp_position(intf_hrpwm_inst_t inst, uint8_t cmp_index, float position_ratio);
+/*
+ * PWM 触发信号配置（用于 ADC 同步等）
+ *   delay_ns：计数谷底（回卷点）之后的延时，单位 ns。
+ *   驱动按 PWM 时钟换算为 tick（tick = clk × delay_ns / 1e9），与 PWM 频率解耦。
+ *   比较器匹配后经 CHxREF → TRGM 输出触发脉冲（每周期一次）。
+ */
+int intf_hrpwm_config_trigger_cmp(intf_hrpwm_inst_t inst, uint8_t cmp_index, uint32_t delay_ns);
+int intf_hrpwm_set_trigger_cmp_delay(intf_hrpwm_inst_t inst, uint8_t cmp_index, uint32_t delay_ns);
 
 #ifdef __cplusplus
 }
