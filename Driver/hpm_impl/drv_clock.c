@@ -34,6 +34,16 @@ void intf_clock_init(void)
     clock_add_to_group(clock_can3, 0);
     clock_set_source_divider(clock_can3, clk_src_pll1_clk0, 10);
 
+    /*
+     * 板级使用 SPI1（出轴编码器 PA26-29）/ SPI3（转子编码器 PA10-13）：
+     * 节点时钟 PLL1/10 = 80MHz；驱动侧请求 SCLK=10MHz（KTH7823 上限），
+     * 由 SPI 内部分频 8 得到（80/((3+1)*2)）。
+     */
+    clock_add_to_group(clock_spi1, 0);
+    clock_set_source_divider(clock_spi1, clk_src_pll1_clk0, 10);
+    clock_add_to_group(clock_spi3, 0);
+    clock_set_source_divider(clock_spi3, clk_src_pll1_clk0, 10);
+
     clock_connect_group_to_cpu(0, 0);
 
     /* Bump DCDC to the SDK-recommended voltage for stable 480MHz CPU operation. */
