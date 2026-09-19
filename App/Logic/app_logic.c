@@ -16,9 +16,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "app_debug_inverter.h"
 #include "app_debug_can.h"
 #include "app_debug_encoder.h"
 #include "app_debug_flash.h"
+#include "app_debug_motor.h"
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
 #include "app_debug_usb.h"
@@ -72,6 +74,12 @@ void app_init(void) {
 
     /* 8. Flash 自检（XPI NOR：属性 + 末尾扇区破坏性读写测试） */
     app_debug_flash_init();
+
+    /* 9. 三相半桥输出自检（PWM1：U/V/W 25kHz / 50% 持续输出） */
+    app_debug_inverter_init();
+
+    /* 10. 开环旋转自检（V/F，命令 r 启动） */
+    app_debug_motor_init();
 }
 
 void app_run(void) {
@@ -91,6 +99,9 @@ void app_run(void) {
 
         /* 1) 核心：编码器双路采样（25kHz，模拟 FOC 开关频率） */
         app_debug_encoder_sample();
+
+        /* 1b) 开环旋转（V/F）：25kHz 节拍更新三相占空比（未启动时为空操作） */
+        app_debug_motor_run_once();
 
         now = intf_clock_get_cycle();
 

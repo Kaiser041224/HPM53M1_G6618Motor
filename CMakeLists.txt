@@ -25,6 +25,9 @@ find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 
 project(user_app)
 
+# 数学库（sinf/cosf 等，开环旋转与后续 FOC 使用）
+sdk_link_libraries(m)
+
 # ============================================================================
 # SEGGER RTT (manually included, no syscalls)
 # ============================================================================
@@ -110,6 +113,7 @@ sdk_app_src(App/Platform/Src/app_gpio.c)
 sdk_app_src(App/Platform/Src/app_uart.c)
 sdk_app_src(App/Platform/Src/app_usb.c)
 sdk_app_src(App/Platform/Src/app_encoder.c)
+sdk_app_src(App/Platform/Src/app_3phase_inverter.c)
 sdk_app_src(App/Platform/Src/app_param.c)
 sdk_app_src(App/Platform/Src/app_hrpwm.c)
 sdk_app_src(App/Platform/Src/app_gptmr.c)
@@ -127,6 +131,8 @@ sdk_app_src(App/Debug/Src/app_debug_usb.c)
 sdk_app_src(App/Debug/Src/app_debug_encoder.c)
 sdk_app_src(App/Debug/Src/app_debug_cmd.c)
 sdk_app_src(App/Debug/Src/app_debug_flash.c)
+sdk_app_src(App/Debug/Src/app_debug_inverter.c)
+sdk_app_src(App/Debug/Src/app_debug_motor.c)
 sdk_app_src(App/Debug/Src/app_debug_can.c)
 sdk_app_src(App/Debug/Src/app_debug_adc.c)
 sdk_app_src(App/Debug/Src/app_debug_hrpwm.c)

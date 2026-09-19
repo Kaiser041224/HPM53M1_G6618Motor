@@ -111,10 +111,28 @@
 
 ### 6.2 PWM1 三相
 - 映射：**U→PWM1_P_4/5（HIN1/LIN1）、V→PWM1_P_6/7（HIN2/LIN2）、W→PWM1_P_0/1（HIN3/LIN3）**。
-- 平台缺口：现 `hrpwm` 通道表为 `{0,2,4,6}`（PWM1 侧仅覆盖 ch4–7），需扩展以支持 PWM1 ch0/1。
-- 死区：内部预驱自带 50–250ns 死区（datasheet 表 32），HPM 侧建议设小死区（≤100ns）并实测 HO/LO 波形确认，避免与内部死区叠加导致失真。
-- 频率：20kHz 起步；HIN/LIN 高有效，初始占空比 0（输出关闭），先使能 `DRV_+12V_EN` 再开输出。
-- 安全：保留 `emergency_stop`（force low）路径；启动前强制低。
+- ~~平台缺口：现 `hrpwm` 通道表为 `{0,2,4,6}`（PWM1 侧仅覆盖 ch4–7），需扩展以支持 PWM1 ch0/1。~~
+  → **已解决**：drv_hrpwm 映射表增加 `pair` 字段 + PWM1 ch0/1 条目（虚拟通道 8）；
+  app_hrpwm 新增 `HRPWM_PAIR_E`（2026-09-19）。
+- 死区：内部预驱自带 DT=50~250ns（datasheet 表 32）；**HPM 侧死区为逆变器的初始化
+  配置项**（`app_3phase_inverter_cfg_t.deadtime_ns`，默认 50ns =
+  `APP_3PHASE_INVERTER_DEADTIME_NS_DEFAULT`），后续由 YAML 参数管线提供（见 §6.4）。
+  **实测方法注意**：高侧 Vgs 必须用**双通道相减**（CH_gate − CH_VS1）测量——
+  对地测量会叠加开关节点方波，误判为"死区重合"（2026-09-19 实测确认）。
+- **开环旋转自检（V/F）**：`App/Debug/app_debug_motor`（2026-09-19 新增）
+  - 旋转电压矢量：`duty_x = 0.5 + (m/2)·sin(θ + 偏移)`，θ 以电频率积分（mcycle 实测 dt）
+  - 命令：`r` 启停 / `+` `-` 电频率 ±0.5Hz / `m` `M` 调制比 ∓/±1%
+  - 默认 m=3%、f=1Hz；电流估算 `I ≈ m·Vbus/2/R_phase`（G66-18 R=0.158Ω）
+  - 目的：验证"逆变桥 + 电机 + 编码器"链路（不依赖电流采样）
+- **平台模块 `App/Platform/app_3phase_inverter`（2026-09-19 新增）**：
+  - 开关频率默认 **25kHz**（选型依据见 app_3phase_inverter.c：纹波/死区/噪声/采样窗口/CPU 综合）
+  - API：`init / enable / disable / set_duty_abc / set_duty / force_low / release / emergency_stop`
+  - 安全顺序：enable = +12V → PWM 启动；disable = PWM 停 → +12V 关；
+    emergency_stop = 三相 force low + +12V 关
+  - 调试编排在 `App/Debug/app_debug_inverter`（逐相 mask 控制）
+- 实测（2026-09-19）：双板三相开关节点 24V/25kHz/50% 方波正常；
+  首板 U 相因栅极网络容阻焊接异常（重焊后正常）。
+- HIN/LIN 高有效；初始占空比 0.5（零电压矢量）；先使能 `DRV_+12V_EN` 再开输出。
 
 ### 6.3 SPI（KTH7823）
 - mode 3（CPOL=1/CPHA=1），SCK ≤10MHz，16 位帧。
@@ -136,6 +154,12 @@ App/Control/motor_params.h/.c          # 类型 + 默认值出口
 - API 设计：`const motor_params_t *motor_params_default(void);` 与 `void motor_params_load(motor_params_t *out);`
   - 现阶段 `motor_params_load` = 拷贝默认值；
   - 后续在线辨识/自整定时，在 `motor_params_load` 内叠加 Flash 覆盖，YAML 保持为出厂初值。
+- 参数集（规划）：
+  - **电机**（KV70 初值见下）
+  - **逆变器**：`pwm_freq_hz`（开关频率，默认 25kHz）、`deadtime_ns`（死区，默认 50ns）
+    —— 供 `app_3phase_inverter_init(cfg)` 使用（**更换 MOS/驱动电路时只改 YAML**）；
+    HPM 侧已留接口：`app_hrpwm_config_pair(pair, freq_hz, deadtime_ns)`
+  - **控制**（后续）：电流环/速度环带宽、限幅等
 - KV70 初值（G66-18，星型）：
   - 极对数 10；Rs = 0.316/2 = **0.158Ω**（线值÷2）；Ls = 0.237/2 = **0.1185mH**；
   - I_rated 7A / I_peak(10s) 24.3A；Vbus 48V；rpm_max 3300；J = 2.3e-5 kg·m²；

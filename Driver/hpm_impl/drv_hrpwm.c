@@ -69,7 +69,8 @@ static_assert(
 typedef struct {
     intf_hrpwm_ch_t channel;
     uint8_t instance;
-    uint8_t pwm_index;
+    uint8_t pair;      /* 实例内配对序号 */
+    uint8_t pwm_index; /* 物理通道起始索引（偶数） */
     uint8_t cmp_start_index;
 } hrpwm_channel_map_t;
 
@@ -123,26 +124,38 @@ ATTR_PLACE_AT_FAST_RAM_INIT static const hrpwm_channel_map_t hrpwm_channel_maps[
     {
      .channel = BOARD_APP_HRPWM_PWM0_PAIR0_OUT,
      .instance = 0,
+     .pair = 0,
      .pwm_index = BOARD_APP_HRPWM_PWM0_PAIR0_OUT,
      .cmp_start_index = HRPWM_CMP_START_INDEX(BOARD_APP_HRPWM_PWM0_PAIR0_OUT),
      },
     {
      .channel = BOARD_APP_HRPWM_PWM0_PAIR1_OUT,
      .instance = 0,
+     .pair = 1,
      .pwm_index = BOARD_APP_HRPWM_PWM0_PAIR1_OUT,
      .cmp_start_index = HRPWM_CMP_START_INDEX(BOARD_APP_HRPWM_PWM0_PAIR1_OUT),
      },
     {
      .channel = BOARD_APP_HRPWM_PWM1_PAIR0_OUT,
      .instance = 1,
+     .pair = 0,
      .pwm_index = BOARD_APP_HRPWM_PWM1_PAIR0_OUT,
      .cmp_start_index = HRPWM_CMP_START_INDEX(BOARD_APP_HRPWM_PWM1_PAIR0_OUT),
      },
     {
      .channel = BOARD_APP_HRPWM_PWM1_PAIR1_OUT,
      .instance = 1,
+     .pair = 1,
      .pwm_index = BOARD_APP_HRPWM_PWM1_PAIR1_OUT,
      .cmp_start_index = HRPWM_CMP_START_INDEX(BOARD_APP_HRPWM_PWM1_PAIR1_OUT),
+     },
+    {
+     /* PWM1 ch0/1（PA24/25 → HIN3/LIN3，W 相）：虚拟通道 8（物理索引 0） */
+     .channel = 8,
+     .instance = 1,
+     .pair = 2,
+     .pwm_index = 0,
+     .cmp_start_index = HRPWM_CMP_START_INDEX(0),
      },
 };
 
@@ -180,13 +193,8 @@ static inline PWM_Type* hrpwm_get_base(uint8_t inst) {
 
 static const hrpwm_channel_map_t* hrpwm_get_pair_map(uint8_t inst, uint8_t pair) {
     for (size_t i = 0; i < sizeof(hrpwm_channel_maps) / sizeof(hrpwm_channel_maps[0]); i++) {
-        if (hrpwm_channel_maps[i].instance == inst) {
-            if (pair == 0 && hrpwm_channel_maps[i].pwm_index == 0U + inst * 4U) {
-                return &hrpwm_channel_maps[i];
-            }
-            if (pair == 1 && hrpwm_channel_maps[i].pwm_index == 2U + inst * 4U) {
-                return &hrpwm_channel_maps[i];
-            }
+        if ((hrpwm_channel_maps[i].instance == inst) && (hrpwm_channel_maps[i].pair == pair)) {
+            return &hrpwm_channel_maps[i];
         }
     }
     return NULL;

@@ -35,7 +35,8 @@ int intf_hrpwm_register(const intf_hrpwm_t *ops)
 ATTR_RAMFUNC
 static const intf_hrpwm_t *hrpwm_get_ops_by_ch(intf_hrpwm_ch_t ch)
 {
-    uint8_t inst = ch / 4;
+    /* 通道空间：0-3 = PWM0 ch0-3；4-9 = PWM1（ch4-7 及虚拟通道 8/9 = PWM1 ch0/1） */
+    uint8_t inst = (ch < 4U) ? 0U : 1U;
     if (inst >= HRPWM_INSTANCE_COUNT) return NULL;
     return hrpwm_ops[inst];
 }

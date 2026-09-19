@@ -2,7 +2,7 @@
  * HRPWM Platform Implementation
  *
  * PWM0: ch0/ch1 (pair 0), ch2/ch3 (pair 1)
- * PWM1: ch4/ch5 (pair 2), ch6/ch7 (pair 3)
+ * PWM1: ch4/ch5 (pair 0), ch6/ch7 (pair 1), ch0/ch1 (pair 2, 虚拟通道 8)
  *
  * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
@@ -15,7 +15,7 @@
 
 #include <stdbool.h>
 
-ATTR_PLACE_AT_FAST_RAM_INIT static const intf_hrpwm_ch_t pair_to_ch[HRPWM_PAIR_COUNT] = {0, 2, 4, 6};
+ATTR_PLACE_AT_FAST_RAM_INIT static const intf_hrpwm_ch_t pair_to_ch[HRPWM_PAIR_COUNT] = {0, 2, 4, 6, 8};
 
 extern void hpm_hrpwm_driver_register(void);
 
@@ -51,7 +51,7 @@ void app_hrpwm_init(void) {
         [HRPWM_PAIR_C] =
             {.frequency_hz = APP_HRPWM_DEFAULT_FREQ_HZ,
                            .duty = 0.0f,
-                           .deadtime_ns = 15,
+                           .deadtime_ns = 25,
                            .jitter_cmp = 4,
                            .align = INTF_HRPWM_ALIGN_CENTER,
                            .invert_high_side = false,
@@ -59,7 +59,15 @@ void app_hrpwm_init(void) {
         [HRPWM_PAIR_D] =
             {.frequency_hz = APP_HRPWM_DEFAULT_FREQ_HZ,
                            .duty = 0.0f,
-                           .deadtime_ns = 15,
+                           .deadtime_ns = 25,
+                           .jitter_cmp = 4,
+                           .align = INTF_HRPWM_ALIGN_CENTER,
+                           .invert_high_side = false,
+                           .invert_low_side = false},
+        [HRPWM_PAIR_E] =
+            {.frequency_hz = APP_HRPWM_DEFAULT_FREQ_HZ,
+                           .duty = 0.0f,
+                           .deadtime_ns = 25,
                            .jitter_cmp = 4,
                            .align = INTF_HRPWM_ALIGN_CENTER,
                            .invert_high_side = false,
@@ -165,6 +173,24 @@ void app_hrpwm_force_release(hrpwm_pair_t pair) {
 }
 
 ATTR_RAMFUNC
+int app_hrpwm_config_pair(hrpwm_pair_t pair, uint32_t frequency_hz, uint32_t deadtime_ns) {
+    intf_hrpwm_pair_cfg_t cfg = {
+        .frequency_hz = frequency_hz,
+        .duty = 0.0f,
+        .deadtime_ns = deadtime_ns,
+        .jitter_cmp = 4,
+        .align = INTF_HRPWM_ALIGN_CENTER,
+        .invert_high_side = false,
+        .invert_low_side = false,
+    };
+
+    if (!hrpwm_pair_is_valid(pair)) {
+        return -1;
+    }
+
+    return intf_hrpwm_init_pair(hrpwm_pair_channel(pair), &cfg);
+}
+
 void app_hrpwm_emergency_stop(void) {
     for (hrpwm_pair_t pair = HRPWM_PAIR_A; pair < HRPWM_PAIR_COUNT; pair++) {
         app_hrpwm_force_low(pair);
