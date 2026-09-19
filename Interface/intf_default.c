@@ -9,6 +9,7 @@
 #include "intf_synt.h"
 #include "intf_spi.h"
 #include "intf_encoder.h"
+#include "intf_flash.h"
 
 #include <stddef.h>
 
@@ -674,4 +675,22 @@ const intf_encoder_t *intf_encoder_get(intf_encoder_id_t id)
 {
     if (id >= ENCODER_INSTANCE_COUNT) return NULL;
     return encoder_devs[id];
+}
+
+/* ============================================================================
+ * Flash Interface（单实例设备对象，风格 A）
+ * ============================================================================ */
+
+static const intf_flash_t *flash_dev_reg = NULL;
+
+int intf_flash_register(const intf_flash_t *dev)
+{
+    if (dev == NULL) return -1;
+    flash_dev_reg = dev;
+    return 0;
+}
+
+const intf_flash_t *intf_flash_get(void)
+{
+    return flash_dev_reg;
 }

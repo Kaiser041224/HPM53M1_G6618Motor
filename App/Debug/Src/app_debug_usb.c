@@ -12,6 +12,7 @@
 
 #include "app_debug_usb.h"
 
+#include "app_debug_cmd.h"
 #include "app_debug_rtt.h"
 #include "app_usb.h"
 #include "intf_clock.h"
@@ -72,6 +73,7 @@ void app_debug_usb_run_once(void)
         (void) app_usb_write(buf, (size_t) n);
         app_debug_printf("[USB] rx n=%d total=%u last=0x%02X ('%c')\r\n", n, (unsigned) s_rx_total,
                          (unsigned) last, printable);
+        app_debug_cmd_handle(buf, (size_t) n);
     }
 
     /* 4) TX：每秒发送一行状态（不依赖 DTR；未枚举/未打开端口时写失败静默） */

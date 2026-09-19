@@ -9,12 +9,16 @@
 
 ```
 Interface/intf_spi.h            SPI 主机契约（总线层）
-Driver/hpm_impl/drv_spi.c       HPM SPI1/SPI3 适配
+Driver/hpm_impl/drv_spi.c       HPM SPI1/SPI3 适配（MCU 外设驱动）
 Interface/intf_encoder.h        编码器契约（设备层）
-Driver/hpm_impl/drv_kth7823.c   KTH7823 协议实现（只依赖 intf_spi / intf_clock）
-App/Platform/app_encoder.*      实例管理、单位换算、寄存器/零点/方向门面
-App/Debug/app_debug_encoder.*   自检（只读）
+Driver/encoder/drv_kth7823.c    KTH7823 协议实现（器件驱动，只依赖 intf_spi / intf_clock）
+App/Platform/app_encoder.*      实例管理、单位换算、零点、寄存器/方向门面
+App/Platform/app_param.*        flash 键值参数存储（通用；零点等参数落盘）
+App/Debug/app_debug_encoder.*   自检
 ```
+
+**目录约定**：`Driver/hpm_impl/` 放 HPM MCU 外设驱动；`Driver/encoder/` 放编码器器件驱动
+（不同编码器并列新增，互不影响）；器件驱动只依赖 `Interface/` 契约。
 
 换编码器 = 新增 `drv_xxx.c` 实现 `intf_encoder` + 注册；换 SPI 控制器 = 换 `drv_spi.c`。
 编码器驱动不含任何 `hpm_*` 头文件。

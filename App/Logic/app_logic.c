@@ -18,6 +18,7 @@
 
 #include "app_debug_can.h"
 #include "app_debug_encoder.h"
+#include "app_debug_flash.h"
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
 #include "app_debug_usb.h"
@@ -68,6 +69,9 @@ void app_init(void) {
 
     /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴） */
     app_debug_encoder_init();
+
+    /* 8. Flash 自检（XPI NOR：属性 + 末尾扇区破坏性读写测试） */
+    app_debug_flash_init();
 }
 
 void app_run(void) {

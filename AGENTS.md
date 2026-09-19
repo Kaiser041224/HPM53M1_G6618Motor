@@ -190,8 +190,18 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 
 ### 供电与调试纪律（2026-09-18）
 
-- **本板必须使用外部电源供电（XT30/VIN），禁止依赖调试器供电**：
+- **本板必须使用外部电源供电（XTAN/VIN），禁止依赖调试器供电**：
   - 调试器供电电流不足，480MHz 运行时 +3.3V 轨跌落至 VPMC 欠压复位阈值（典型 2.6V）以下，导致芯片反复复位；
   - 现象：RTT 高频重复输出、启动计数恒为 1、程序疑似"跑飞"（实为欠压复位循环）；
   - 排查记录：`docs/superpowers/specs/2026-09-18-m1-board-bringup-design.md` §13。
 - 类似"程序反复重启/跑飞"的问题，**先确认供电（外部电源 + 测量 +3.3V/+5V）**，再查代码。
+
+### 驱动目录与参数存储约定（2026-09-19）
+
+- `Driver/hpm_impl/`：**HPM MCU 外设**驱动（clock/sys/uart/spi/adc/hrpwm/gptmr/mcan/flash/…）
+- `Driver/encoder/`：**编码器器件**驱动（`drv_kth7823.c`；后续不同编码器在此并列新增，
+  互不影响；器件驱动只依赖 `Interface/` 契约，不直接操作 HPM 寄存器）
+- `App/Platform/app_param.*`：**通用 flash 键值参数存储**（magic + key + CRC32；
+  各模块在 `app_param.h` 登记 key 并自定义数据布局；`store` = 整扇区读-改-写 + 回读校验）
+- flash 布局：末尾 8KB 由链接脚本预留（倒数第 2 扇区 = 参数区，最后 1 扇区 = 自检用）
+- 编码器零点用**软件方案**（存 flash），不消耗编码器 MTP（Z 寄存器寿命仅 1000 次）

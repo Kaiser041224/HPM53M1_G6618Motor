@@ -35,10 +35,16 @@ typedef enum {
 int app_encoder_init(void);
 
 /**
- * @brief 读取单圈绝对位置原始值（16bit 原码）。
+ * @brief 读取单圈绝对位置原始值（16bit 原码，未修正）。
  * @return 0 成功，-1 失败（累计于 get_error_count）
  */
 int app_encoder_read_raw(app_encoder_id_t id, uint16_t *raw);
+
+/**
+ * @brief 读取零点修正后的单圈位置：(raw − zero) & 0xFFFF。
+ * @return 0 成功，-1 失败
+ */
+int app_encoder_read_position(app_encoder_id_t id, uint16_t *pos);
 
 /**
  * @brief 读取机械角，单位 rad，范围 [0, 2π)。
@@ -59,14 +65,44 @@ int app_encoder_read_deg(app_encoder_id_t id, float *deg);
 int app_encoder_read_reg(app_encoder_id_t id, uint8_t addr, uint8_t *val);
 
 /*
- * 一次性配置（写 MTP，器件寿命 1000 次；禁止运行期/周期调用）：
+ * 零点（软件方案，推荐）：
+ *   记录当前原始值到 flash 参数区（app_param），掉电保持，
+ *   不消耗编码器 MTP（Z 寄存器寿命仅 1000 次写）。
  */
 
 /**
- * @brief 写零点 Z(15:0)（0x00/0x01，两次 MTP 写）。
+ * @brief 软件设置零点：记录当前原始值并保存到 flash。
+ *        之后 read_position / read_rad / read_deg 均以此为基准。
  * @return 0 成功，-1 失败
  */
-int app_encoder_set_zero(app_encoder_id_t id, uint16_t zero);
+int app_encoder_set_zero(app_encoder_id_t id);
+
+/**
+ * @brief 清除软件零点（偏移归零并写回 flash）。
+ * @return 0 成功，-1 失败
+ */
+int app_encoder_clear_zero(app_encoder_id_t id);
+
+/**
+ * @brief 读取当前软件零点偏移。
+ * @return 0 成功，-1 失败
+ */
+int app_encoder_get_zero(app_encoder_id_t id, uint16_t *zero);
+
+/**
+ * @brief 是否已从 flash 加载到有效的编码器参数记录（false = 使用默认值）。
+ */
+bool app_encoder_is_param_loaded(void);
+
+/*
+ * 硬件零点（写编码器 MTP，器件寿命 1000 次）——仅产线一次性标定用，慎调。
+ */
+
+/**
+ * @brief 写编码器 Z(15:0) 寄存器（0x00/0x01，两次 MTP 写）。
+ * @return 0 成功，-1 失败
+ */
+int app_encoder_set_zero_mtp(app_encoder_id_t id, uint16_t zero);
 
 /**
  * @brief 写旋转方向 RD（0x09，一次 MTP 写）；true = 顺时针角度增加（出厂默认）。
