@@ -678,106 +678,43 @@ bool intf_usb_cdc_is_dtr(void)
 }
 
 /* ============================================================================
- * SPI Interface
+ * SPI Interface（设备对象注册表，风格 A）
  * ============================================================================ */
 
-static const intf_spi_ops_t *spi_ops = NULL;
+#define SPI_INSTANCE_COUNT (4U)
 
-int intf_spi_register(const intf_spi_ops_t *ops)
+static const intf_spi_t *spi_devs[SPI_INSTANCE_COUNT] = { NULL };
+
+int intf_spi_register(const intf_spi_t *dev)
 {
-    if (ops == NULL) return -1;
-    spi_ops = ops;
+    if ((dev == NULL) || (dev->instance_id >= SPI_INSTANCE_COUNT)) return -1;
+    spi_devs[dev->instance_id] = dev;
     return 0;
 }
 
-int intf_spi_init(intf_spi_bus_t bus, const intf_spi_cfg_t *cfg)
+const intf_spi_t *intf_spi_get(intf_spi_bus_t bus)
 {
-    if (spi_ops && spi_ops->init) return spi_ops->init(bus, cfg);
-    return -1;
-}
-
-int intf_spi_transfer(intf_spi_bus_t bus, const void *tx, void *rx,
-                      size_t frames, uint32_t timeout_ms)
-{
-    if (spi_ops && spi_ops->transfer) return spi_ops->transfer(bus, tx, rx, frames, timeout_ms);
-    return -1;
-}
-
-void intf_spi_deinit(intf_spi_bus_t bus)
-{
-    if (spi_ops && spi_ops->deinit) spi_ops->deinit(bus);
-}
-
-uint32_t intf_spi_get_sclk_hz(intf_spi_bus_t bus)
-{
-    if (spi_ops && spi_ops->get_sclk_hz) return spi_ops->get_sclk_hz(bus);
-    return 0U;
+    if (bus >= SPI_INSTANCE_COUNT) return NULL;
+    return spi_devs[bus];
 }
 
 /* ============================================================================
- * Encoder Interface
+ * Encoder Interface（设备对象注册表，风格 A）
  * ============================================================================ */
 
-static const intf_encoder_ops_t *encoder_ops = NULL;
+#define ENCODER_INSTANCE_COUNT (4U)
 
-int intf_encoder_register(const intf_encoder_ops_t *ops)
+static const intf_encoder_t *encoder_devs[ENCODER_INSTANCE_COUNT] = { NULL };
+
+int intf_encoder_register(const intf_encoder_t *dev)
 {
-    if (ops == NULL) return -1;
-    encoder_ops = ops;
+    if ((dev == NULL) || (dev->instance_id >= ENCODER_INSTANCE_COUNT)) return -1;
+    encoder_devs[dev->instance_id] = dev;
     return 0;
 }
 
-int intf_encoder_init(intf_encoder_id_t id, const intf_encoder_cfg_t *cfg)
+const intf_encoder_t *intf_encoder_get(intf_encoder_id_t id)
 {
-    if (encoder_ops && encoder_ops->init) return encoder_ops->init(id, cfg);
-    return -1;
-}
-
-void intf_encoder_deinit(intf_encoder_id_t id)
-{
-    if (encoder_ops && encoder_ops->deinit) encoder_ops->deinit(id);
-}
-
-int intf_encoder_read_raw(intf_encoder_id_t id, uint16_t *raw)
-{
-    if (encoder_ops && encoder_ops->read_raw) return encoder_ops->read_raw(id, raw);
-    return -1;
-}
-
-int intf_encoder_read_reg(intf_encoder_id_t id, uint8_t addr, uint8_t *val)
-{
-    if (encoder_ops && encoder_ops->read_reg) return encoder_ops->read_reg(id, addr, val);
-    return -1;
-}
-
-int intf_encoder_write_reg(intf_encoder_id_t id, uint8_t addr, uint8_t val)
-{
-    if (encoder_ops && encoder_ops->write_reg) return encoder_ops->write_reg(id, addr, val);
-    return -1;
-}
-
-int intf_encoder_set_zero(intf_encoder_id_t id, uint16_t zero)
-{
-    if (encoder_ops && encoder_ops->set_zero) return encoder_ops->set_zero(id, zero);
-    return -1;
-}
-
-int intf_encoder_set_direction(intf_encoder_id_t id, bool cw_increasing)
-{
-    if (encoder_ops && encoder_ops->set_direction) {
-        return encoder_ops->set_direction(id, cw_increasing);
-    }
-    return -1;
-}
-
-int intf_encoder_get_info(intf_encoder_id_t id, intf_encoder_info_t *info)
-{
-    if (encoder_ops && encoder_ops->get_info) return encoder_ops->get_info(id, info);
-    return -1;
-}
-
-uint32_t intf_encoder_get_error_count(intf_encoder_id_t id)
-{
-    if (encoder_ops && encoder_ops->get_error_count) return encoder_ops->get_error_count(id);
-    return 0U;
+    if (id >= ENCODER_INSTANCE_COUNT) return NULL;
+    return encoder_devs[id];
 }

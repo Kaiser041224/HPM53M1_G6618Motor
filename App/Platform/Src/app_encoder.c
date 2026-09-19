@@ -3,6 +3,14 @@
  *
  * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * 板级映射：
+ *   APP_ENCODER_ROTOR  -> SPI3（PA10-13），转子 1:1
+ *   APP_ENCODER_OUTPUT -> SPI1（PA26-29），出轴 49:50（游标）
+ *
+ * 实时性：read_raw 为阻塞短操作（实测 ~7µs），无打印/动态分配；
+ *         设备对象在 init 时解析并缓存，热路径无注册表查表；
+ *         每实例单所有者，不可在多上下文并发调用。
  */
 
 #include "app_encoder.h"
@@ -14,6 +22,10 @@
 
 /* 板级映射：转子 -> SPI3，出轴 -> SPI1（SoC 实例号） */
 static const uint8_t s_encoder_bus[APP_ENCODER_COUNT] = { 3U, 1U };
+
+/* init 时解析的设备对象（热路径直接调用，不再查表） */
+static const intf_encoder_t *s_enc_dev[APP_ENCODER_COUNT];
+static const intf_spi_t *s_spi_dev[APP_ENCODER_COUNT];
 
 static float s_rad_scale[APP_ENCODER_COUNT];
 static float s_deg_scale[APP_ENCODER_COUNT];
@@ -40,11 +52,18 @@ int app_encoder_init(void)
         s_rad_scale[i] = 6.283185307179586f / 65536.0f;
         s_deg_scale[i] = 360.0f / 65536.0f;
 
-        if (intf_encoder_init((intf_encoder_id_t) i, &cfg) != 0) {
+        s_enc_dev[i] = intf_encoder_get((intf_encoder_id_t) i);
+        s_spi_dev[i] = intf_spi_get(s_encoder_bus[i]);
+        if ((s_enc_dev[i] == NULL) || (s_spi_dev[i] == NULL)) {
             ret = -1;
             continue;
         }
-        if (intf_encoder_get_info((intf_encoder_id_t) i, &info) == 0) {
+
+        if (s_enc_dev[i]->init(&cfg) != 0) {
+            ret = -1;
+            continue;
+        }
+        if (s_enc_dev[i]->get_info(&info) == 0) {
             if ((info.resolution_bits > 0U) && (info.resolution_bits <= 31U)) {
                 float counts = (float)(1UL << info.resolution_bits);
 
@@ -59,10 +78,10 @@ int app_encoder_init(void)
 
 int app_encoder_read_raw(app_encoder_id_t id, uint16_t *raw)
 {
-    if ((id >= APP_ENCODER_COUNT) || (raw == NULL)) {
+    if ((id >= APP_ENCODER_COUNT) || (raw == NULL) || (s_enc_dev[id] == NULL)) {
         return -1;
     }
-    return intf_encoder_read_raw((intf_encoder_id_t) id, raw);
+    return s_enc_dev[id]->read_raw(raw);
 }
 
 int app_encoder_read_rad(app_encoder_id_t id, float *rad)
@@ -72,7 +91,7 @@ int app_encoder_read_rad(app_encoder_id_t id, float *rad)
     if ((id >= APP_ENCODER_COUNT) || (rad == NULL)) {
         return -1;
     }
-    if (intf_encoder_read_raw((intf_encoder_id_t) id, &raw) != 0) {
+    if (app_encoder_read_raw(id, &raw) != 0) {
         return -1;
     }
 
@@ -87,7 +106,7 @@ int app_encoder_read_deg(app_encoder_id_t id, float *deg)
     if ((id >= APP_ENCODER_COUNT) || (deg == NULL)) {
         return -1;
     }
-    if (intf_encoder_read_raw((intf_encoder_id_t) id, &raw) != 0) {
+    if (app_encoder_read_raw(id, &raw) != 0) {
         return -1;
     }
 
@@ -97,40 +116,40 @@ int app_encoder_read_deg(app_encoder_id_t id, float *deg)
 
 int app_encoder_read_reg(app_encoder_id_t id, uint8_t addr, uint8_t *val)
 {
-    if ((id >= APP_ENCODER_COUNT) || (val == NULL)) {
+    if ((id >= APP_ENCODER_COUNT) || (val == NULL) || (s_enc_dev[id] == NULL)) {
         return -1;
     }
-    return intf_encoder_read_reg((intf_encoder_id_t) id, addr, val);
+    return s_enc_dev[id]->read_reg(addr, val);
 }
 
 int app_encoder_set_zero(app_encoder_id_t id, uint16_t zero)
 {
-    if (id >= APP_ENCODER_COUNT) {
+    if ((id >= APP_ENCODER_COUNT) || (s_enc_dev[id] == NULL)) {
         return -1;
     }
-    return intf_encoder_set_zero((intf_encoder_id_t) id, zero);
+    return s_enc_dev[id]->set_zero(zero);
 }
 
 int app_encoder_set_direction(app_encoder_id_t id, bool cw_increasing)
 {
-    if (id >= APP_ENCODER_COUNT) {
+    if ((id >= APP_ENCODER_COUNT) || (s_enc_dev[id] == NULL)) {
         return -1;
     }
-    return intf_encoder_set_direction((intf_encoder_id_t) id, cw_increasing);
+    return s_enc_dev[id]->set_direction(cw_increasing);
 }
 
 uint32_t app_encoder_get_error_count(app_encoder_id_t id)
 {
-    if (id >= APP_ENCODER_COUNT) {
+    if ((id >= APP_ENCODER_COUNT) || (s_enc_dev[id] == NULL)) {
         return 0U;
     }
-    return intf_encoder_get_error_count((intf_encoder_id_t) id);
+    return s_enc_dev[id]->get_error_count();
 }
 
 uint32_t app_encoder_get_sclk_hz(app_encoder_id_t id)
 {
-    if (id >= APP_ENCODER_COUNT) {
+    if ((id >= APP_ENCODER_COUNT) || (s_spi_dev[id] == NULL)) {
         return 0U;
     }
-    return intf_spi_get_sclk_hz(s_encoder_bus[id]);
+    return s_spi_dev[id]->get_sclk_hz();
 }

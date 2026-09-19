@@ -1,5 +1,5 @@
 /*
- * SPI Interface - C17 Abstract Interface
+ * SPI Interface - C17 抽象接口（设备对象 + 匿名结构体）
  *
  * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
@@ -21,13 +21,12 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef uint8_t intf_spi_bus_t;
+typedef uint8_t intf_spi_bus_t; /* 总线实例号：0..3 -> SPI0..SPI3 */
 
 typedef struct {
     uint32_t sclk_hz;   /* 期望 SCLK；驱动取可达的整数分频，失败返回 -1 */
@@ -37,20 +36,22 @@ typedef struct {
     uint8_t  cs_index;  /* 片选索引：0..3 -> CS0..CS3 */
 } intf_spi_cfg_t;
 
+/*
+ * SPI 总线设备对象（风格 A：instance_id + 匿名结构体方法）
+ * 用法：const intf_spi_t *spi = intf_spi_get(bus); spi->transfer(...);
+ */
 typedef struct {
-    int      (*init)(intf_spi_bus_t bus, const intf_spi_cfg_t *cfg);
-    int      (*transfer)(intf_spi_bus_t bus, const void *tx, void *rx,
-                         size_t frames, uint32_t timeout_ms);
-    void     (*deinit)(intf_spi_bus_t bus);
-    uint32_t (*get_sclk_hz)(intf_spi_bus_t bus);
-} intf_spi_ops_t;
+    uint8_t instance_id;
+    struct {
+        int      (*init)(const intf_spi_cfg_t *cfg);
+        int      (*transfer)(const void *tx, void *rx, size_t frames, uint32_t timeout_ms);
+        void     (*deinit)(void);
+        uint32_t (*get_sclk_hz)(void);
+    };
+} intf_spi_t;
 
-int      intf_spi_register(const intf_spi_ops_t *ops);
-int      intf_spi_init(intf_spi_bus_t bus, const intf_spi_cfg_t *cfg);
-int      intf_spi_transfer(intf_spi_bus_t bus, const void *tx, void *rx,
-                           size_t frames, uint32_t timeout_ms);
-void     intf_spi_deinit(intf_spi_bus_t bus);
-uint32_t intf_spi_get_sclk_hz(intf_spi_bus_t bus);
+int intf_spi_register(const intf_spi_t *dev);
+const intf_spi_t *intf_spi_get(intf_spi_bus_t bus);
 
 #ifdef __cplusplus
 }

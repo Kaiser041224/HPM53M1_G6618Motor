@@ -30,7 +30,7 @@ App/Debug/app_debug_encoder.*   自检（只读）
 
 ## 3. 契约
 
-### 3.1 `intf_spi`
+### 3.1 `intf_spi`（设备对象，风格 A）
 
 ```c
 typedef struct {
@@ -41,36 +41,59 @@ typedef struct {
     uint8_t  cs_index;  /* 0..3 -> CS0..CS3 */
 } intf_spi_cfg_t;
 
-int      intf_spi_init(bus, cfg);
-int      intf_spi_transfer(bus, const void *tx, void *rx, size_t frames, uint32_t timeout_ms);
-void     intf_spi_deinit(bus);
-uint32_t intf_spi_get_sclk_hz(bus);   /* 诊断：寄存器分频回读 */
+typedef struct {
+    uint8_t instance_id;               /* 总线实例：0..3 -> SPI0..SPI3 */
+    struct {
+        int      (*init)(const intf_spi_cfg_t *cfg);
+        int      (*transfer)(const void *tx, void *rx, size_t frames, uint32_t timeout_ms);
+        void     (*deinit)(void);
+        uint32_t (*get_sclk_hz)(void);
+    };
+} intf_spi_t;
+
+int intf_spi_register(const intf_spi_t *dev);
+const intf_spi_t *intf_spi_get(intf_spi_bus_t bus);
 ```
 
 - **一次 transfer = 一个 CS 周期**；CS 由控制器硬件自动控制。
 - 全双工，`tx`/`rx` 元素宽度 = `data_bits/8` 字节（16bit → uint16_t）。
 - `timeout_ms` 语义与其他驱动一致：0=不等待 / `UINT32_MAX`=无限 / 毫秒。
 - 忙（`status_spi_master_busy`）按超时重试；其他错误立即失败。
+- 驱动为每实例生成薄包装 + const 设备对象（照 `drv_mcan` 模式）；
+  消费者 `intf_spi_get(bus)->transfer(...)`，`drv_kth7823` 在 init 时解析并缓存对象指针。
 
-### 3.2 `intf_encoder`
+### 3.2 `intf_encoder`（设备对象，风格 A）
 
 ```c
 typedef struct { uint8_t bus; uint32_t sclk_hz; } intf_encoder_cfg_t;
 typedef struct { uint8_t resolution_bits; bool has_registers; } intf_encoder_info_t;
 
-int      (*init)(id, cfg);          void (*deinit)(id);
-int      (*read_raw)(id, uint16_t *raw);
-int      (*read_reg)(id, addr, uint8_t *val);
-int      (*write_reg)(id, addr, uint8_t val);
-int      (*set_zero)(id, uint16_t zero);
-int      (*set_direction)(id, bool cw_increasing);
-int      (*get_info)(id, intf_encoder_info_t *info);
-uint32_t (*get_error_count)(id);
+typedef struct {
+    uint8_t instance_id;               /* 编码器实例（平台层映射转子/出轴） */
+    struct {
+        int      (*init)(const intf_encoder_cfg_t *cfg);
+        void     (*deinit)(void);
+        int      (*read_raw)(uint16_t *raw);
+        int      (*read_reg)(uint8_t addr, uint8_t *val);
+        int      (*write_reg)(uint8_t addr, uint8_t val);
+        int      (*set_zero)(uint16_t zero);
+        int      (*set_direction)(bool cw_increasing);
+        int      (*get_info)(intf_encoder_info_t *info);
+        uint32_t (*get_error_count)(void);
+    };
+} intf_encoder_t;
+
+int intf_encoder_register(const intf_encoder_t *dev);
+const intf_encoder_t *intf_encoder_get(intf_encoder_id_t id);
 ```
 
 - 契约只含语义操作，不含 KTH7823 寄存器地址；`resolution_bits` 支持换不同分辨率器件。
 - **每实例单所有者**：不可在多上下文并发调用。
 - `read_raw`：阻塞、无打印、无动态分配、固定内部超时（1ms）+ 错误计数。
+
+> 风格说明（2026-09-18）：本模块按 `AGENTS.md §3.1` 采用"设备对象 + 匿名结构体"
+> （与 `intf_can` / `intf_hrpwm` 一致）；`uart` / `usb` / 既有 `mcan` 的功能式 API
+> 将在后续按同一模式对齐。
 
 ## 4. KTH7823 协议实现（依据数据手册，图 9 已核实）
 
