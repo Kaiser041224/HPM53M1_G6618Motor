@@ -38,11 +38,9 @@ typedef enum {
 } app_3phase_id_t;
 
 /*
- * 初始化配置（后续由 YAML 参数管线提供，见 config/motor.yaml → motor_params）
- *   默认值用于参数管线接入前；更换 MOS/驱动电路后调整 deadtime_ns
+ * 初始化配置（默认值来源 config/hardware.yaml → app_hw_params.inverter）
+ *   更换 MOS/驱动电路后调整 YAML 中的 deadtime_ns
  */
-#define APP_3PHASE_INVERTER_FREQ_HZ_DEFAULT     (25000U) /* 开关频率 [Hz] */
-#define APP_3PHASE_INVERTER_DEADTIME_NS_DEFAULT (50U)    /* HPM 侧死区 [ns] */
 
 typedef struct {
     uint32_t pwm_freq_hz; /* 开关频率 [Hz]（YAML: inverter.pwm_freq_hz） */
@@ -51,7 +49,7 @@ typedef struct {
 
 /**
  * @brief 初始化三相逆变桥：按配置设置三相 PWM（频率/死区/中心对齐），输出保持关闭。
- * @param cfg 配置；NULL = 使用默认值（APP_3PHASE_INVERTER_*_DEFAULT）
+ * @param cfg 配置；NULL = 使用默认值（config/hardware.yaml → app_hw_params.inverter）
  */
 void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg);
 

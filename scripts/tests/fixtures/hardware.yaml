@@ -1,0 +1,40 @@
+# 测试夹具（test fixture）：与 config/ 生产配置解耦，供生成器回归测试；SCHEMA 变更时需同步
+# ============================================================================
+# hardware.yaml — 硬件电路参数（出厂默认初值）
+#
+# 用途：采样链路换算、ADC 触发时序、功率级配置的唯一来源。
+# 说明：引脚/通道映射属 Board 层，不进本文件。
+# 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
+# 占位项：NTC 型号未定、CANID 解码未实现（见各节注释，待硬件确认后修正）。
+# ============================================================================
+
+board:
+  name: "HPM53M1_G6618Motor"   # 仅文档
+
+current_sense:
+  shunt_ohm: 0.002                        # 采样电阻 [Ω]
+  amp_gain: 7.5                           # 运放增益（TPA6584Q）
+  a_per_volt: "1 / (shunt_ohm * amp_gain)"  # 电流标度 [A/V] → 66.6667
+  bias_v: 1.65                            # 零电流偏置 [V]（= vref/2；vref 固定 3.3V 由驱动侧提供，不进 YAML）
+
+vbus_sense:
+  divider_high_ohm: 70000                 # 分压上臂 [Ω]（15K×4 + 10K = 70K）
+  divider_low_ohm: 3300                   # 分压下臂 [Ω]（3.3K；与上臂合计 73.3K）
+  v_per_volt: "(divider_high_ohm + divider_low_ohm) / divider_low_ohm"  # 母线标度 [V/V] → 22.2121
+
+ntc:
+  pullup_ohm: 10000                       # 板上上拉 [Ω]
+  r25_ohm: 10000                          # 占位：NTC 型号未定（按典型 10K 填写，待选型修正）
+  b_value_k: 3950                         # 占位：B 常数 [K]（典型 3950K，待选型修正）
+  max_ohm: 1000000.0                      # 开路/超量程替代值 [Ω]
+
+canid_dip:
+  levels: 16                              # 占位：4-bit 拨码档数；解码逻辑未实现（节点号映射待硬件确认）
+
+adc:
+  sample_cycle: 25                        # 采样窗口 [ADC 时钟数]（SDK 最小 10；曾复现通道数据重复，勿低于 10）
+  trigger_delay_ns: 500                   # 谷底后触发延时 [ns]
+
+inverter:
+  pwm_freq_hz: 25000                      # 开关频率 [Hz]
+  deadtime_ns: 50                         # HPM 侧死区 [ns]（预驱自带 50~250ns）

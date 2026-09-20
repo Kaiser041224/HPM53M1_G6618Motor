@@ -14,7 +14,7 @@
  *   ADC0 结果由内部 DMA 写入缓冲、ISR 回调刷新 raw 缓存；
  *   ADC1 结果由 1kHz 慢任务从 PRD_RESULTx 纯寄存器读取（无中断）。
  *
- * 时序（25kHz / MOT 160MHz / ADC 40MHz，16bit + sample_cycle=25）：
+ * 时序（按当前默认配置：25kHz / MOT 160MHz / ADC 40MHz，16bit + sample_cycle=25）：
  *   单通道 ≈1.15µs（25 采样 + 21 转换 个 ADC 时钟）；4 槽队列 ≈4.6µs；
  *   低侧导通窗口半宽 = (1−占空比)×20µs（更高调制区由后续 FOC 用两相重构处理）。
  */
@@ -46,19 +46,15 @@ typedef enum {
 /* CANID 为静态慢变量：随 ADC1 序列（1kHz）一起采样 */
 _Static_assert(ADC_CH_V_CANID == (ADC_CH_COUNT - 1), "CANID must be the last channel");
 
-/* 默认配置（后续由 YAML 参数管线提供） */
-#define APP_ADC_TRIGGER_DELAY_NS_DEFAULT (500U) /* 谷底后触发延时 [ns] */
-#define APP_ADC_SAMPLE_CYCLE_DEFAULT     (25U)  /* 采样窗口 [ADC 时钟数]：对齐模板/原工程默认值
-                                                * （SDK 最小值 10 曾在多工程复现"通道数据重复"，
-                                                *   FOC 示例用 20，原工程用 25） */
+/* 默认配置来源：config/hardware.yaml（app_hw_params.adc） */
 #define APP_ADC_TRIGGER_CMP_INDEX        (10U)  /* PWM1 比较器/输出通道（三相占用 0/1、8/9、12/13） */
 
 /* WDOG 回调（逻辑通道，非硬件通道） */
 typedef void (*app_adc_wdog_cb_t)(adc_channel_t ch, uint16_t value, void *user);
 
 typedef struct {
-    uint32_t trigger_delay_ns; /* 谷底后触发延时 [ns]（0 = 默认 500ns） */
-    uint16_t sample_cycle;     /* 采样窗口 [ADC 时钟数]（0 = 默认） */
+    uint32_t trigger_delay_ns; /* 谷底后触发延时 [ns]（0 = 回退 hw.adc.trigger_delay_ns） */
+    uint16_t sample_cycle;     /* 采样窗口 [ADC 时钟数]（0 = 回退 hw.adc.sample_cycle） */
     uint8_t resolution;        /* intf_adc_resolution_t（0 = 默认 16bit） */
     /* ADC0 电流通道 WDOG（硬件阈值；wdog_en=false 时忽略） */
     bool     wdog_en;
@@ -74,7 +70,7 @@ typedef struct {
  * @brief 初始化采样链：双 ADC PMT + TRGM 路由 + PWM1 触发比较器，
  *        并启动 PWM1 计数器（仅计数、输出保持关闭；PMT 触发依赖计数器运行）。
  * @note 应在 app_hrpwm/逆变桥初始化之后调用（需要 PWM 时钟与实例信息）。
- * @param cfg 配置；NULL = 默认（500ns 延时、16bit、sample_cycle=10）
+ * @param cfg 配置；NULL = 默认（trigger_delay/sample_cycle 取自 config/hardware.yaml；resolution=16bit）
  */
 void app_adc_init(const app_adc_cfg_t *cfg);
 

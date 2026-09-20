@@ -3,6 +3,10 @@ build/
 output/
 .cache/
 
+# Python（参数管线生成器：py_compile/import 产生的字节码）
+__pycache__/
+*.pyc
+
 # IDE generated files
 *.emProject
 *.ewp

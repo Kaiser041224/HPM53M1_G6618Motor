@@ -9,7 +9,7 @@
  *   V = PWM1 ch6/7（PA22/23 → HIN2/LIN2）
  *   W = PWM1 ch0/1（PA24/25 → HIN3/LIN3）
  *
- * 测试内容：三相 25kHz 中心对齐、50% 占空比、持续输出（示波器检查 HO/LO）。
+ * 测试内容：三相默认频率（见 config/hardware.yaml）中心对齐、50% 占空比、持续输出（示波器检查 HO/LO）。
  * 平台控制逻辑在 app_3phase_inverter（本文件仅自检/调试编排）。
  *
  * 硬件前提（台架）：
@@ -20,6 +20,7 @@
 
 #include "app_3phase_inverter.h"
 #include "app_debug_rtt.h"
+#include "app_hw_params.h"
 
 #include <stddef.h>
 
@@ -54,8 +55,11 @@ void app_debug_inverter_set_output(uint8_t mask)
 void app_debug_inverter_init(void)
 {
 #if INVERTER_TEST_ENABLE
+    app_hw_params_t hw;
+
+    app_hw_params_load(&hw); /* config/hardware.yaml */
     app_debug_printf("\r\n[3PH] 三相逆变桥输出自检：%u Hz / %u%% / 持续\r\n",
-                     (unsigned) APP_3PHASE_INVERTER_FREQ_HZ_DEFAULT,
+                     (unsigned) hw.inverter.pwm_freq_hz,
                      (unsigned) (INVERTER_TEST_DUTY * 100.0f));
 
     app_3phase_inverter_init(NULL);

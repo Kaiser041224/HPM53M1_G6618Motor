@@ -4,12 +4,12 @@
  * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * 换算（2026-09-19，依据原理图 Analog Signal Processing）：
- *   电流   I [A]     = (V_adc − V_zero) × 66.6667      （TPA6584Q ×7.5，Rshunt 2mΩ）
- *   母线   V_bus [V] = V_adc × 22.2121                  （73.3K/3.3K 分压 + 内部运放 B 缓冲）
- *   NTC    R [Ω]     = 10000 × V_adc / (3.3 − V_adc)    （10K 上拉；温度换算待型号确定）
+ * 换算（依据原理图 Analog Signal Processing；系数来源 config/hardware.yaml）：
+ *   电流   I [A]     = (V_adc − V_zero) × a_per_volt    （a_per_volt = 1/(shunt×gain)）
+ *   母线   V_bus [V] = V_adc × v_per_volt               （v_per_volt = (Rhi+Rlo)/Rlo）
+ *   NTC    R [Ω]     = pullup × V_adc / (vref − V_adc)  （pullup = hw.ntc.pullup_ohm；vref = INTF_ADC_DEFAULT_VREF_MV（驱动侧固定 3.3V））
  *
- * 电流链路为比例式：1.65V 偏置与 ADC 基准同源，3.3V 电源漂移不影响精度。
+ * 电流链路为比例式：偏置（bias_v）与 ADC 基准同源，3.3V 电源漂移不影响精度。
  */
 
 #ifndef APP_ANALOG_SIGNAL_H
@@ -24,11 +24,7 @@
 extern "C" {
 #endif
 
-/* process() 调用频率（= 主循环 25kHz 节拍），滤波器设计用 */
-#define APP_ANALOG_SAMPLE_RATE_HZ (25000U)
-
-/* 电流链路转换常数 [A/V]（TPA6584Q ×7.5，Rshunt 2mΩ → 1/(7.5×2mΩ)） */
-#define APP_ANALOG_I_AMP_PER_VOLT (66.6667f)
+/* process() 调用频率 = 主循环节拍（= inverter.pwm_freq_hz，config/hardware.yaml） */
 
 typedef struct {
     float i_u_a;      /* 相电流 [A] */

@@ -84,6 +84,10 @@ make BOARD=user_board build   # 显式指定板级
 make flash                    # OpenOCD 烧录
 ```
 
+> 参数管线依赖：构建期执行 `scripts/gen_params.py`，需要 `python3` + `PyYAML`
+> （环境仓库已具备 6.0.3；脱离工作区构建时需自行安装）。
+> 自测：`python3 scripts/test_gen_params.py`（生成器负例/正例回归）。
+
 ## 创建新工程（推荐）
 
 ```bash

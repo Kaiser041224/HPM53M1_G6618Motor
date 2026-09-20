@@ -8,28 +8,22 @@
 #include "app_analog_signal.h"
 
 #include "algo_filter.h"
+#include "app_hw_params.h"
 #include "intf_clock.h"
 
 #include <math.h>
 #include <stddef.h>
 
 /* ============================================================================
- * 换算常数（原理图定值）
+ * 硬件换算参数（来源 config/hardware.yaml，init 时加载）
  * ============================================================================ */
 
-/* APP_ANALOG_I_AMP_PER_VOLT 定义已上移至头文件（供 app_fault 使用） */
-#define APP_ANALOG_VBUS_VOLT_PER_VOLT (22.2121f) /* (15K×4+10K+3.3K)/3.3K */
-#define APP_ANALOG_NTC_PULLUP_OHM     (10000.0f)
-#define APP_ANALOG_VREF_VOLTS         (INTF_ADC_DEFAULT_VREF_MV / 1000.0f)
-#define APP_ANALOG_I_ZERO_VOLTS       (1.65f) /* 上电默认偏置（未标定时） */
+static app_hw_params_t s_hw;
 
-/* 零点标定参数 */
-#define APP_ANALOG_ZERO_CAL_FRAMES   (256U)   /* ~10ms @25kHz */
+/* 零点标定过程参数（不随 YAML，标定流程专用） */
+#define APP_ANALOG_ZERO_CAL_FRAMES   (256U)   /* ~10ms @25kHz（TBD：随 pwm_freq 派生） */
 #define APP_ANALOG_ZERO_CAL_TIMEOUT_US (50000U) /* 50ms 超时 */
 #define APP_ANALOG_ZERO_CAL_MAX_DEV_PCT (5U)  /* 偏离中值超过 5% FS → 视为有电流 */
-
-/* NTC 满量程上限（悬空/超量程时的替代值） */
-#define APP_ANALOG_NTC_MAX_OHM (1000000.0f)
 
 /* ============================================================================
  * 滤波器（NONE / MA / LPF）
@@ -54,7 +48,7 @@ static app_analog_filter_t s_filters[ADC_CH_COUNT] = {
     [ADC_CH_I_U] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_I_V] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_I_W] = {.type = APP_ANALOG_FILTER_NONE},
-    /* 慢速通道（ADC1 读取模式 @1kHz）：值本身为直流，process 以 25kHz 重复调用，
+    /* 慢速通道（ADC1 读取模式 @1kHz）：值本身为直流，process 以主循环节拍（= inverter.pwm_freq_hz，config/hardware.yaml）重复调用，
      * 滤波系数与调用频率不匹配会过度滤波，故暂用直通；待 FOC 阶段按 1kHz 重新标定。 */
     [ADC_CH_V_VBUS] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_NTC0] = {.type = APP_ANALOG_FILTER_NONE},
@@ -77,15 +71,15 @@ static bool s_valid;
  * ============================================================================ */
 
 static float ntc_resistance_from_volts(float v) {
-    const float vs = APP_ANALOG_VREF_VOLTS;
+    const float vs = INTF_ADC_DEFAULT_VREF_MV / 1000.0f;
 
     if (v <= 0.0f) {
         return 0.0f;
     }
     if (v >= (vs - 0.001f)) { /* 悬空/超量程 */
-        return APP_ANALOG_NTC_MAX_OHM;
+        return s_hw.ntc.max_ohm;
     }
-    return APP_ANALOG_NTC_PULLUP_OHM * v / (vs - v);
+    return s_hw.ntc.pullup_ohm * v / (vs - v);
 }
 
 static float channel_to_physical(adc_channel_t ch, uint16_t raw) {
@@ -95,9 +89,9 @@ static float channel_to_physical(adc_channel_t ch, uint16_t raw) {
     case ADC_CH_I_U:
     case ADC_CH_I_V:
     case ADC_CH_I_W:
-        return (v - s_zero_volts[ch]) * APP_ANALOG_I_AMP_PER_VOLT;
+        return (v - s_zero_volts[ch]) * s_hw.current_sense.a_per_volt;
     case ADC_CH_V_VBUS:
-        return v * APP_ANALOG_VBUS_VOLT_PER_VOLT;
+        return v * s_hw.vbus_sense.v_per_volt;
     case ADC_CH_NTC0:
     case ADC_CH_NTC1:
         return ntc_resistance_from_volts(v);
@@ -127,8 +121,10 @@ static float filter_step(adc_channel_t ch, float x) {
  * ============================================================================ */
 
 void app_analog_signal_init(void) {
+    app_hw_params_load(&s_hw); /* config/hardware.yaml（将来 flash 覆盖） */
+
     for (uint8_t i = 0U; i < APP_ANALOG_CURRENT_COUNT; i++) {
-        s_zero_volts[i] = APP_ANALOG_I_ZERO_VOLTS;
+        s_zero_volts[i] = s_hw.current_sense.bias_v;
     }
     for (uint8_t ch = 0U; ch < ADC_CH_COUNT; ch++) {
         s_phys[ch] = 0.0f;
@@ -147,7 +143,7 @@ void app_analog_signal_init(void) {
         } else if (f->type == APP_ANALOG_FILTER_LPF) {
             algo_lpf_cfg_t cfg = {
                 .cutoff_hz = f->lpf_cutoff_hz,
-                .sample_rate_hz = (float) APP_ANALOG_SAMPLE_RATE_HZ,
+                .sample_rate_hz = (float) s_hw.inverter.pwm_freq_hz,
             };
             algo_lpf_ctor(&f->lpf);
             (void) f->lpf.init(&f->lpf, &cfg);

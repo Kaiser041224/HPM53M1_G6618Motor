@@ -7,6 +7,7 @@
 
 #include "app_adc.h"
 
+#include "app_hw_params.h"
 #include "app_hrpwm.h"
 #include "intf_gptmr.h"
 #include "intf_hrpwm.h"
@@ -148,22 +149,24 @@ void app_adc_init(const app_adc_cfg_t *cfg) {
     intf_adc_cfg_t a1;
     int rc0;
     int rc1 = 0;
+    app_hw_params_t hw;
 
+    app_hw_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
     s_cfg = (app_adc_cfg_t) {
-        .trigger_delay_ns = APP_ADC_TRIGGER_DELAY_NS_DEFAULT,
-        .sample_cycle = APP_ADC_SAMPLE_CYCLE_DEFAULT,
+        .trigger_delay_ns = hw.adc.trigger_delay_ns,
+        .sample_cycle = hw.adc.sample_cycle,
         .resolution = (uint8_t) INTF_ADC_RES_DEFAULT,
     };
     if (cfg != NULL) {
         s_cfg = *cfg;
         if (s_cfg.sample_cycle == 0U) {
-            s_cfg.sample_cycle = APP_ADC_SAMPLE_CYCLE_DEFAULT;
+            s_cfg.sample_cycle = hw.adc.sample_cycle;
         }
         if (s_cfg.resolution == 0U) {
             s_cfg.resolution = (uint8_t) INTF_ADC_RES_DEFAULT;
         }
         if (s_cfg.trigger_delay_ns == 0U) {
-            s_cfg.trigger_delay_ns = APP_ADC_TRIGGER_DELAY_NS_DEFAULT;
+            s_cfg.trigger_delay_ns = hw.adc.trigger_delay_ns;
         }
     }
 

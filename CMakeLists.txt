@@ -29,6 +29,28 @@ project(user_app)
 sdk_link_libraries(m)
 
 # ============================================================================
+# 参数管线（config/*.yaml → build/generated；configure 期生成，失败即中止）
+# ============================================================================
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(PARAMS_GEN_DIR ${CMAKE_BINARY_DIR}/generated)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_params.py
+            --config-dir ${CMAKE_CURRENT_SOURCE_DIR}/config --out-dir ${PARAMS_GEN_DIR}
+    RESULT_VARIABLE _params_rc
+    ERROR_VARIABLE _params_err)
+if(NOT _params_rc EQUAL 0)
+    message(FATAL_ERROR "参数生成失败（退出码 ${_params_rc}）：\n${_params_err}")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/config/motor.yaml
+    ${CMAKE_CURRENT_SOURCE_DIR}/config/hardware.yaml
+    ${CMAKE_CURRENT_SOURCE_DIR}/config/software.yaml
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_params.py)
+sdk_app_inc(${PARAMS_GEN_DIR})
+sdk_app_src(${PARAMS_GEN_DIR}/params_generated.c)
+
+# ============================================================================
 # SEGGER RTT (manually included, no syscalls)
 # ============================================================================
 
@@ -121,12 +143,15 @@ sdk_app_src(App/Platform/Src/app_gptmr.c)
 sdk_app_src(App/Platform/Src/app_adc.c)
 sdk_app_src(App/Platform/Src/app_analog_signal.c)
 sdk_app_src(App/Platform/Src/app_can.c)
+sdk_app_src(App/Platform/Src/app_hw_params.c)
+sdk_app_src(App/Platform/Src/app_sw_params.c)
 
 # ============================================================================
 # Control Layer
 # ============================================================================
 
 sdk_app_src(App/Control/Src/app_fault.c)
+sdk_app_src(App/Control/Src/app_motor_params.c)
 
 # ============================================================================
 # Debug Layer

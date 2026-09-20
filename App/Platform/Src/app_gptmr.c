@@ -19,7 +19,7 @@
 #define APP_GPTMR_CH_BASE       (APP_GPTMR_INSTANCE * 4U)
 
 #define APP_GPTMR_CH0_FREQ  50000U
-#define APP_GPTMR_CH1_FREQ    25000U
+#define APP_GPTMR_CH1_FREQ    25000U /* TBD：FOC 接入后随 inverter.pwm_freq_hz 派生（当前无消费者） */
 #define APP_GPTMR_CH2_FREQ      10000U
 
 extern void hpm_gptmr_driver_register(void);

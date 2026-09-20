@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * 三级过流保护 + 链路健康；只记录/输出，不执行任何动作（v2 接入动作层）。
- * 阈值默认值见 app_fault.h（2026-09-19 评审确认）。
+ * 阈值默认值来源：config/software.yaml（经 app_sw_params 加载）。
  */
 
 #include "app_fault.h"
@@ -13,6 +13,8 @@
 #include "algo_rms.h"
 #include "app_analog_signal.h"
 #include "app_encoder.h"
+#include "app_hw_params.h"
+#include "app_sw_params.h"
 #include "intf_sys.h"
 
 #include <stddef.h>
@@ -170,6 +172,8 @@ static void fault_reset_all(void) {
 
 void app_fault_init(const app_fault_cfg_t *cfg) {
     algo_rms_cfg_t rms_cfg;
+    app_hw_params_t hw;
+    app_sw_params_t sw;
     float dev_v;
     float dev_cnt;
     uint32_t dev;
@@ -177,32 +181,36 @@ void app_fault_init(const app_fault_cfg_t *cfg) {
 
     memset(&s_f, 0, sizeof(s_f));
 
+    /* 工厂默认参数（config/software.yaml + config/hardware.yaml；将来 flash 覆盖） */
+    app_hw_params_load(&hw);
+    app_sw_params_load(&sw);
+
     s_f.oc_fast_a = ((cfg != NULL) && (cfg->oc_fast_a > 0.0f))
                         ? cfg->oc_fast_a
-                        : APP_FAULT_OC_TRIP_A_DEFAULT;
+                        : sw.fault.oc_trip_a;
     s_f.oc_slow_a = ((cfg != NULL) && (cfg->oc_slow_a > 0.0f))
                         ? cfg->oc_slow_a
-                        : APP_FAULT_OC_TRIP_A_DEFAULT;
+                        : sw.fault.oc_trip_a;
     s_f.vbus_ov_v = ((cfg != NULL) && (cfg->vbus_ov_v > 0.0f))
                         ? cfg->vbus_ov_v
-                        : APP_FAULT_VBUS_OV_V_DEFAULT;
+                        : sw.fault.vbus_ov_v;
     s_f.vbus_uv_v = ((cfg != NULL) && (cfg->vbus_uv_v > 0.0f))
                         ? cfg->vbus_uv_v
-                        : APP_FAULT_VBUS_UV_V_DEFAULT;
+                        : sw.fault.vbus_uv_v;
     s_f.slow_debounce = ((cfg != NULL) && (cfg->slow_debounce > 0U))
                             ? cfg->slow_debounce
-                            : APP_FAULT_SLOW_DEBOUNCE_DEFAULT;
+                            : sw.fault.slow_debounce;
     s_f.adc_stall_ms = ((cfg != NULL) && (cfg->adc_stall_ms > 0U))
                            ? cfg->adc_stall_ms
-                           : APP_FAULT_ADC_STALL_MS_DEFAULT;
+                           : sw.fault.adc_stall_ms;
     s_f.enc_err_delta = ((cfg != NULL) && (cfg->enc_err_delta > 0U))
                             ? cfg->enc_err_delta
-                            : APP_FAULT_ENC_ERR_DELTA_DEFAULT;
+                            : sw.fault.enc_err_delta;
 
     /* WDOG 原始窗口：中值 ± (阈值[A] / 转换[A/V] → 电压 → 码值)
      * 注1：基于标称零点（半量程）；逐相标定后重装为 v2 精化项
      * 注2：65535 = 16bit 满量程（与 app_adc 默认分辨率一致；改分辨率需同步） */
-    dev_v = s_f.oc_fast_a / APP_ANALOG_I_AMP_PER_VOLT;
+    dev_v = s_f.oc_fast_a / hw.current_sense.a_per_volt;
     dev_cnt = dev_v * (65535.0f / (INTF_ADC_DEFAULT_VREF_MV / 1000.0f));
     dev = (uint32_t) (dev_cnt + 0.5f);
     mid = 65535U / 2U;

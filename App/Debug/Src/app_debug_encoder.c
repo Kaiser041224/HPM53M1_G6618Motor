@@ -26,7 +26,7 @@
 #define ENC_REG_RD_BIT (0x80U) /* RD 位于 0x09 的 bit7，出厂默认 1 */
 
 /* 出轴编码器降采样：游标差值变化率仅为转子的 1/50，1kHz 足够。
-   设为 1 = 每周期读（双路 25kHz 压力模式）。 */
+   设为 1 = 每周期读（双路 25kHz 压力模式）。（TBD：随 pwm_freq 派生） */
 #define ENC_OUTPUT_SAMPLE_DIV (25U)
 
 /* init 基准：read_raw 平均耗时测量次数 */

@@ -20,6 +20,7 @@
 
 #include "app_gpio.h"
 #include "app_hrpwm.h"
+#include "app_hw_params.h"
 #include "intf_clock.h"
 
 #include <stddef.h>
@@ -53,9 +54,13 @@ static float inverter_clamp_duty(float duty)
 
 void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
 {
-    app_3phase_inverter_cfg_t c = {
-        .pwm_freq_hz = APP_3PHASE_INVERTER_FREQ_HZ_DEFAULT,
-        .deadtime_ns = APP_3PHASE_INVERTER_DEADTIME_NS_DEFAULT,
+    app_hw_params_t hw;
+    app_3phase_inverter_cfg_t c;
+
+    app_hw_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
+    c = (app_3phase_inverter_cfg_t) {
+        .pwm_freq_hz = hw.inverter.pwm_freq_hz,
+        .deadtime_ns = hw.inverter.deadtime_ns,
     };
 
     if (cfg != NULL) {
@@ -64,7 +69,7 @@ void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
 
     app_hrpwm_init(); /* 注册驱动 + 平台默认配对配置 */
 
-    /* 按配置重配三相（频率/死区；后续由 YAML 参数管线提供） */
+    /* 按配置重配三相（频率/死区；来源 config/hardware.yaml） */
     for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
         (void) app_hrpwm_config_pair(s_phase_pair[i], c.pwm_freq_hz, c.deadtime_ns);
         s_duty[i] = APP_3PHASE_INVERTER_DUTY_ZERO;

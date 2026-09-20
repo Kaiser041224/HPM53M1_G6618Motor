@@ -43,17 +43,10 @@ typedef enum {
 } app_fault_state_t;
 
 /* ============================================================================
- * 默认阈值（2026-09-19 评审确认）
- *   L1/L2 相电流 = 3 × 电机手册峰值 24.3A（G66-18）= 72.9A
- *   L3 母线：OV 36V / UV 9V（24V 系统）
+ * 阈值默认值来源：config/software.yaml（app_sw_params.fault，app_fault_init 加载）
+ * 以下为内部时序量（待 FOC 时序体系定义后接入 YAML，见参数管线设计 §10）
  * ============================================================================ */
-#define APP_FAULT_OC_TRIP_A_DEFAULT     (72.9f)
-#define APP_FAULT_VBUS_OV_V_DEFAULT     (36.0f)
-#define APP_FAULT_VBUS_UV_V_DEFAULT     (9.0f)
-#define APP_FAULT_SLOW_DEBOUNCE_DEFAULT (5U)   /* L2/L3 连续次数（1kHz） */
-#define APP_FAULT_ADC_STALL_MS_DEFAULT  (10U)  /* PMT 帧停滞 [ms] */
-#define APP_FAULT_ENC_ERR_DELTA_DEFAULT (3U)   /* 编码器错误增量 */
-#define APP_FAULT_RMS_WINDOW_DEFAULT    (250U) /* 10ms @25kHz */
+#define APP_FAULT_RMS_WINDOW_DEFAULT    (250U) /* 10ms @25kHz（TBD：FOC 时序体系接入后随 pwm_freq 派生） */
 #define APP_FAULT_SETTLE_TICKS_DEFAULT  (50U)  /* 上电静默期（≈50ms @1kHz） */
 
 typedef struct {

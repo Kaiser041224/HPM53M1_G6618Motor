@@ -1,10 +1,10 @@
 /*
- * Application Logic - 板级 bring-up：时钟自检 + 各驱动自检 + 25kHz 控制环仿真
+ * Application Logic - 板级 bring-up：时钟自检 + 各驱动自检 + 控制环仿真（节拍 = inverter.pwm_freq_hz）
  *
  * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * 主循环结构（25kHz 节拍，模拟 FOC 开关频率暂定值）：
+ * 主循环结构（节拍 = config/hardware.yaml 的 inverter.pwm_freq_hz，即半桥开关频率/FOC 闭环频率）：
  *   1) 每周期：编码器双路采样（更新 Ozone 观测变量 + 计时统计）
  *   2) 1ms 分频：UART / CAN / USB 调试轮询（各自内部 1Hz 打印门限）
  *   3) 1s：RTT 心跳 + 编码器统计汇总
@@ -31,10 +31,12 @@
 #include "app_debug_usb.h"
 #include "app_fault.h"
 #include "app_gpio.h"
+#include "app_hw_params.h"
+#include "app_motor_params.h"
+#include "app_sw_params.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
 
-#define APP_LOOP_FREQ_HZ          (25000U) /* 模拟 FOC 开关频率（暂定 25kHz → 40µs） */
 #define APP_SLOW_TASK_PERIOD_MS   (1U)     /* UART/CAN/USB 调试轮询分频 */
 #define APP_HEARTBEAT_INTERVAL_MS (1000U)
 
@@ -54,6 +56,23 @@ void app_init(void) {
     app_debug_printf(
         "boot: seq=%u rst_status=0x%08x\r\n", (unsigned)s_boot_seq, (unsigned)rst_status);
 
+    /* 0b. 参数摘要（验证 YAML 参数管线端到端：config/{motor,hardware,software}.yaml → 生成 → 加载） */
+    {
+        app_motor_params_t mp;
+        app_hw_params_t hw;
+        app_sw_params_t sw;
+
+        app_motor_params_load(&mp);
+        app_hw_params_load(&hw);
+        app_sw_params_load(&sw);
+        app_debug_printf(
+            "params: pp=%u rs=%.4f ls=%g | a/v=%.4f vbus/v=%.4f | oc=%.1f ov=%.1f uv=%.1f | pwm=%u/%u\r\n",
+            (unsigned) mp.pole_pairs, (double) mp.rs_ohm, (double) mp.ls_h,
+            (double) hw.current_sense.a_per_volt, (double) hw.vbus_sense.v_per_volt,
+            (double) sw.fault.oc_trip_a, (double) sw.fault.vbus_ov_v, (double) sw.fault.vbus_uv_v,
+            (unsigned) hw.inverter.pwm_freq_hz, (unsigned) hw.inverter.deadtime_ns);
+    }
+
     /* 1. 系统时钟（顺序与 SuperCap 一致：board_init -> intf_clock_init）
      *    CPU 480MHz / AXI-AHB 160MHz / PLL0 960MHz / DCDC 1275mV */
     intf_clock_init();
@@ -69,7 +88,7 @@ void app_init(void) {
     /* 4. UART0 自检（PA00/PA01，115200 8N1）：TX 周期输出 + RX 回显 */
     app_debug_uart_init();
 
-    /* 5. CAN 自检（MCAN3，经典 CAN @1Mbps，TX ID=0x114） */
+    /* 5. CAN 自检（MCAN3，经典 CAN；总线波特率与周期帧 ID 来源 config/software.yaml） */
     app_debug_can_init();
 
     /* 6. USB 自检（USB0 CDC 虚拟串口，J10） */
@@ -81,7 +100,7 @@ void app_init(void) {
     /* 8. Flash 自检（XPI NOR：属性 + 末尾扇区破坏性读写测试） */
     app_debug_flash_init();
 
-    /* 9. 三相半桥输出自检（PWM1：U/V/W 25kHz / 50% 持续输出） */
+    /* 9. 三相半桥输出自检（PWM1：U/V/W 默认频率 / 50% 持续输出；频率见 config/hardware.yaml） */
     app_debug_inverter_init();
 
     /* 10. 故障保护（在 ADC 之前：提供 WDOG 阈值与回调） */
@@ -120,8 +139,12 @@ void app_init(void) {
 }
 
 void app_run(void) {
+    app_hw_params_t hw;
+
+    /* 控制节拍 = 半桥开关频率（config/hardware.yaml；FOC 闭环同频） */
+    app_hw_params_load(&hw);
     const uint32_t cpu_freq = intf_clock_get_cpu_freq();
-    const uint32_t loop_cycles = cpu_freq / APP_LOOP_FREQ_HZ;
+    const uint32_t loop_cycles = cpu_freq / hw.inverter.pwm_freq_hz;
     const uint32_t slow_cycles = (cpu_freq / 1000U) * APP_SLOW_TASK_PERIOD_MS;
     const uint32_t hb_cycles = (cpu_freq / 1000U) * APP_HEARTBEAT_INTERVAL_MS;
     uint32_t next = intf_clock_get_cycle() + loop_cycles;
@@ -134,15 +157,15 @@ void app_run(void) {
         uint32_t now;
         bool did_heartbeat = false;
 
-        /* 1) 核心：编码器双路采样（25kHz，模拟 FOC 开关频率） */
+        /* 1) 核心：编码器双路采样（主循环节拍） */
         app_debug_encoder_sample();
 
-        /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（25kHz）+ Ozone 观测变量 */
+        /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（主循环节拍）+ Ozone 观测变量 */
         app_analog_signal_process();
-        app_fault_process(); /* 25kHz：三相电流 RMS 累加（故障保护 L2） */
+        app_fault_process(); /* 主循环节拍：三相电流 RMS 累加（故障保护 L2） */
         app_debug_adc_update();
 
-        /* 1b) 开环旋转（V/F）：25kHz 节拍更新三相占空比（未启动时为空操作） */
+        /* 1b) 开环旋转（V/F）：主循环节拍更新三相占空比（未启动时为空操作） */
         app_debug_motor_run_once();
 
         now = intf_clock_get_cycle();
@@ -178,7 +201,7 @@ void app_run(void) {
 #endif
         }
 
-        /* 4) 25kHz 节拍：迟到计数并重同步（心跳轮次不计数） */
+        /* 4) 主循环节拍：迟到计数并重同步（心跳轮次不计数） */
         now = intf_clock_get_cycle();
         {
             int32_t late = (int32_t) (now - next);

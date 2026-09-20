@@ -144,6 +144,11 @@
 - 数据格式：16bit 原码，无 CRC（已确认）。
 
 ### 6.4 YAML 参数管线（方案 B）
+
+> **注（2026-09-20）**：本节方案已被 `2026-09-20-param-pipeline-design.md` 取代——
+> 单文件 `motor.yaml` 改为三域三文件（motor/hardware/software），宏方案改为类型化
+> 结构体 + 访问器（方案 B），并支持表达式与跨文件符号引用。
+
 ```
 config/motor.yaml                      # 电机物理参数（KV70 默认）
 scripts/gen_motor_params.py            # PyYAML（环境已具备 6.0.3）

@@ -1,0 +1,33 @@
+# ============================================================================
+# motor.yaml — 电机机械/电磁参数（出厂默认初值）
+#
+# 用途：FOC 算法（后续）与保护阈值的物理依据；本文件为唯一来源。
+# 说明：机械零点等标定值不进本文件（存 flash，app_param key "ENCD"）。
+# 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
+# ============================================================================
+
+name: "G66-18 KV70"        # 仅文档（不生成 C 字段）
+winding: star              # 仅文档：star | delta
+pole_pairs: 10             # 极对数（24N20P → 20 极 / 2）；电角度 = 机械角 × 10
+rs_ohm: 0.158              # 相电阻 [Ω]（线值 0.316 ÷ 2）
+ls_h: 1.185e-4             # 相电感 [H]（线值 0.237mH ÷ 2）
+ke_vs_per_rad: 0.125       # 反电动势系数 [V·s/rad]（KV70 手册值；待离线辨识校核）
+kt_nm_per_a: 0.117         # 转矩系数 [N·m/A]（手册值；SI 下理想 PMSM 应与 Ke 相等，差异待校核）
+i_rated_a: 7.0             # 额定电流 [A]（RMS，105°C）
+i_peak_10s_a: 24.3         # 峰值电流 10s [A]（RMS）
+i_peak_2s_a: 48.6          # 峰值电流 2s [A]（RMS）
+vbus_nom_v: 48.0           # 母线额定电压 [V]（电机规格 12~48；当前测试系统母线 24V，保护门限见 software.yaml）
+rpm_max: 3300              # 最高转速 [rpm]
+inertia_kgm2: 2.3e-5       # 转动惯量 [kg·m²]
+torque_rated_nm: 1.16      # 额定转矩 [N·m]（手册值；与 Kt×I 差异待校核）
+torque_peak_10s_nm: 2.8    # 峰值转矩 10s [N·m]（手册值；与 Kt×I 差异待校核）
+
+encoder:
+  model: "KTH7823"              # 仅文档
+  resolution_bits: 16           # 单圈绝对分辨率 [bit]
+  rotor_ring_teeth: 49          # 转子轴外齿圈齿数（两路小齿轮共用）
+  rotor_pinion_teeth: 49        # 转子编码器小齿轮齿数（49:49 → 与转子 1:1）
+  output_pinion_teeth: 50       # 出轴编码器小齿轮齿数（49:50）
+  rotor_ratio: "rotor_ring_teeth / rotor_pinion_teeth"     # 转子编码器转角/转子转角 → 1.0
+  output_ratio: "rotor_ring_teeth / output_pinion_teeth"   # 出轴编码器转角/转子转角 → 0.98（实测确认）
+  # reducer_ratio: <待确认>    # 减速器出轴/转子减速比（多圈解算用，待机械确认后加入）

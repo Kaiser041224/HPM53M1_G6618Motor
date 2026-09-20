@@ -122,7 +122,7 @@ const intf_encoder_t *intf_encoder_get(intf_encoder_id_t id);
   20kHz 环路占比可接受；未来如需异步可在 `intf_encoder` 增加 `start/result` 操作（本阶段不做）。
 - 双路顺序采样 ~10µs 间隔，对游标差值动态影响可忽略（差值变化率 = 转速/50）。
 - **25kHz 控制环仿真（M1 bring-up）**：主循环按 40µs 节拍运行
-  （`APP_LOOP_FREQ_HZ = 25000`，模拟 FOC 开关频率暂定值），每周期采样转子；
+  （主循环节拍 = inverter.pwm_freq_hz，config/hardware.yaml），每周期采样转子；
   1Hz 汇总打印实际速率 / 迟到计数与最大迟到 / 单次读耗时 avg·max / 错误计数。
   UART/CAN/USB 调试任务降为 1ms 分频，心跳轮次不计入迟到统计。
 - **读路径优化（实测驱动）**：SDK `spi_transfer` 每次调用做 FIFO/控制器复位，

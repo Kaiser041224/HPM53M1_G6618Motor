@@ -26,6 +26,7 @@
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
 #include "app_debug_rtt.h"
+#include "app_hw_params.h"
 #include "intf_clock.h"
 
 #include <math.h>
@@ -112,7 +113,12 @@ void app_debug_motor_rotation_toggle(void)
 
     /* 防御：占空比开始每周期更新前，重新武装 ADC 触发比较器（on_modify 单次写生效），
      * 避免 PWM 影子寄存器交互导致触发点被扰动（曾观测到 228kHz 触发突发）。 */
-    (void) app_adc_set_trigger_delay_ns(APP_ADC_TRIGGER_DELAY_NS_DEFAULT);
+    {
+        app_hw_params_t hw;
+
+        app_hw_params_load(&hw); /* config/hardware.yaml */
+        (void) app_adc_set_trigger_delay_ns(hw.adc.trigger_delay_ns);
+    }
 
     (void) app_3phase_inverter_enable();
     s_theta = 0.0f;

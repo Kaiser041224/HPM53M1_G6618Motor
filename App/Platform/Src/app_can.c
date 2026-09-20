@@ -1,4 +1,5 @@
 #include "app_can.h"
+#include "app_sw_params.h"
 
 #include "intf_can.h"
 
@@ -23,7 +24,6 @@ static inline void can_critical_exit(uint32_t state)
 
 /* MCAN3: PA15(MCAN3_TXD) / PA14(MCAN3_RXD)，与板级 pinmux 对应 */
 #define APP_CAN_INST      (3U)
-#define APP_CAN_BAUDRATE  (1000000U)
 #define APP_CAN_INT_MASK  (INTF_CAN_EVENT_RX_FIFO0_NEW_MSG   \
                            | INTF_CAN_EVENT_RX_FIFO0_FULL     \
                            | INTF_CAN_EVENT_RX_FIFO0_MSG_LOST \
@@ -279,8 +279,11 @@ int app_can_init(void)
     app_can_reset_state();
 
     {
+        app_sw_params_t sw;
+
+        app_sw_params_load(&sw); /* config/software.yaml（将来 flash 覆盖） */
         intf_can_cfg_t cfg = {
-            .baudrate     = APP_CAN_BAUDRATE,
+            .baudrate     = sw.can.baudrate,
             .mode         = INTF_CAN_MODE_NORMAL,
             .enable_canfd = false,
             .interrupt_mask = APP_CAN_INT_MASK,

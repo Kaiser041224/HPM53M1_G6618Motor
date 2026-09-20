@@ -1,0 +1,37 @@
+# 测试夹具（test fixture）：与 config/ 生产配置解耦，供生成器回归测试；SCHEMA 变更时需同步
+# ============================================================================
+# software.yaml — 软件参数（出厂默认初值）
+#
+# 用途：保护阈值、通信、控制（FOC 预留）参数的唯一来源。
+# 说明：YAML 仅为出厂初值；将来在线辨识/整定结果经 flash 覆盖（设计文档 §7）。
+# 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
+# ============================================================================
+
+can:
+  baudrate: 1000000          # CAN 波特率 [bps]
+  node_id_default: 1         # 占位：DIP 解码未实现时的回退节点号（与 CAN ID 的派生关系待协议定稿）
+  rx_control_id: 0x101       # 接收控制帧 CAN ID（占位：待 CAN 协议定稿）
+  tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
+
+fault:
+  oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
+  vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
+  vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）
+  slow_debounce: 5                        # L2/L3 去抖次数（连续 1kHz tick）
+  adc_stall_ms: 10                        # PMT 帧停滞超时 [ms]
+  enc_err_delta: 3                        # 编码器错误增量阈值（每 1kHz tick 的错误计数增量）
+  # —— 时序量：占位，待 FOC 时序体系定义后接入（当前代码使用内部宏：250 样本 / 50 tick）——
+  # rms_window_samples: 250
+  # settle_ticks: 50
+
+control:
+  # FOC 预留（数值待整定；当前无消费者）
+  current_loop:
+    kp: 0.0                # 电流环 PID（目标带宽 1kHz）
+    ki: 0.0
+  speed_loop:
+    kp: 0.0                # 速度环 PID（目标带宽 50Hz）
+    ki: 0.0
+  limits:
+    i_q_max_a: "motor.i_peak_10s_a"   # 电流限幅 [A]（RMS 口径，与 motor.i_peak_10s_a 一致；FOC 接入时确认）→ 24.3
+    duty_max: 0.95                    # 占空比上限

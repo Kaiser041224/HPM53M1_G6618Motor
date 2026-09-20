@@ -2,8 +2,9 @@
  * CAN 自检（MCAN3，经典 CAN）
  *
  * 测试内容：
- *   1) 内部环回自检：临时切到 LOOPBACK_INTERNAL，发 0x114 并校验回环数据
- *   2) 正常模式：每秒发送一帧 0x114（8 字节，首字节递增计数）
+ *   1) 内部环回自检：临时切到 LOOPBACK_INTERNAL，发 0x114 并校验回环数据（内部常量，测试隔离）
+ *   2) 正常模式：每秒发送一帧参数回报帧（ID 取自 config/software.yaml → sw.can.tx_report_id，
+ *      8 字节，首字节递增计数）
  *   3) 接收：全接收过滤器 + RX 回调，收到帧即打印到 RTT
  *   4) 状态：每秒打印错误计数 / bus off / 收发统计
  *
@@ -15,6 +16,7 @@
 
 #include "app_can.h"
 #include "app_debug_rtt.h"
+#include "app_sw_params.h"
 #include "intf_can.h"
 #include "intf_clock.h"
 
@@ -25,17 +27,18 @@
 /* 驱动注册（App 层不得包含 hpm_* 头文件，沿用既有 extern 约定） */
 extern void hpm_can_driver_register(void);
 
-#define CAN_TEST_INST         (3U)        /* MCAN3 */
-#define CAN_TEST_BAUDRATE     (1000000U)
-#define CAN_TEST_ID           (0x114U)
-#define CAN_TEST_DLC          (8U)
-#define CAN_TEST_TX_PERIOD_MS (1000U)
-#define CAN_TEST_LB_WAIT_MS   (100U)
+#define CAN_INST         (3U)        /* MCAN3 */
+#define CAN_LB_BAUDRATE  (1000000U)  /* 环回自检专用（与总线配置无关） */
+#define CAN_LB_ID        (0x114U)    /* 环回自检专用 */
+#define CAN_DLC          (8U)
+#define CAN_TX_PERIOD_MS (1000U)
+#define CAN_LB_WAIT_MS   (100U)
 
 static uint32_t s_tick;
 static uint32_t s_tx_seq;
 static uint32_t s_rx_total;
 static uint32_t s_last_tx_cycle;
+static uint32_t s_tx_report_id;
 
 static void can_dump_frame(const char *tag, const app_can_msg_t *msg)
 {
@@ -82,7 +85,7 @@ static void can_lb_irq_cb(intf_can_inst_t inst, uint32_t events, void *user_data
     if ((events & INTF_CAN_EVENT_RX_FIFO0_NEW_MSG) != 0U) {
         intf_can_frame_t frame;
         memset(&frame, 0, sizeof(frame));
-        if (intf_can_receive_nonblocking(CAN_TEST_INST, &frame) == 0) {
+        if (intf_can_receive_nonblocking(CAN_INST, &frame) == 0) {
             s_lb_frame = frame;
             s_lb_done = true;
         }
@@ -92,7 +95,7 @@ static void can_lb_irq_cb(intf_can_inst_t inst, uint32_t events, void *user_data
 static bool can_loopback_selfcheck(void)
 {
     intf_can_cfg_t cfg = {
-        .baudrate = CAN_TEST_BAUDRATE,
+        .baudrate = CAN_LB_BAUDRATE,
         .mode = INTF_CAN_MODE_LOOPBACK_INTERNAL,
         .enable_canfd = false,
         .interrupt_mask = INTF_CAN_EVENT_RX_FIFO0_NEW_MSG,
@@ -106,42 +109,42 @@ static bool can_loopback_selfcheck(void)
     intf_can_frame_t tx;
     bool ok = false;
 
-    if (intf_can_init(CAN_TEST_INST, &cfg) != 0) {
+    if (intf_can_init(CAN_INST, &cfg) != 0) {
         return false;
     }
-    if (intf_can_config_irq_callback(CAN_TEST_INST, can_lb_irq_cb, NULL) != 0) {
-        intf_can_deinit(CAN_TEST_INST);
+    if (intf_can_config_irq_callback(CAN_INST, can_lb_irq_cb, NULL) != 0) {
+        intf_can_deinit(CAN_INST);
         return false;
     }
-    if (intf_can_config_filter(CAN_TEST_INST, 0U, &filter) != 0) {
-        intf_can_config_irq_callback(CAN_TEST_INST, NULL, NULL);
-        intf_can_deinit(CAN_TEST_INST);
+    if (intf_can_config_filter(CAN_INST, 0U, &filter) != 0) {
+        intf_can_config_irq_callback(CAN_INST, NULL, NULL);
+        intf_can_deinit(CAN_INST);
         return false;
     }
 
     memset(&tx, 0, sizeof(tx));
-    tx.id = CAN_TEST_ID;
+    tx.id = CAN_LB_ID;
     tx.frame_type = INTF_CAN_FRAME_CLASSIC;
-    tx.dlc = CAN_TEST_DLC;
-    for (uint8_t i = 0U; i < CAN_TEST_DLC; i++) {
+    tx.dlc = CAN_DLC;
+    for (uint8_t i = 0U; i < CAN_DLC; i++) {
         tx.data[i] = (uint8_t) (0x10U + i);
     }
 
     s_lb_done = false;
     memset((void *) &s_lb_frame, 0, sizeof(s_lb_frame));
 
-    if (intf_can_send(CAN_TEST_INST, &tx, 100U) == 0) {
+    if (intf_can_send(CAN_INST, &tx, 100U) == 0) {
         uint32_t waited;
 
-        for (waited = 0U; (waited < CAN_TEST_LB_WAIT_MS) && !s_lb_done; waited++) {
+        for (waited = 0U; (waited < CAN_LB_WAIT_MS) && !s_lb_done; waited++) {
             intf_clock_delay_ms(1U);
         }
-        ok = s_lb_done && (s_lb_frame.id == CAN_TEST_ID) && (s_lb_frame.dlc == CAN_TEST_DLC) &&
-             (memcmp(s_lb_frame.data, tx.data, CAN_TEST_DLC) == 0);
+        ok = s_lb_done && (s_lb_frame.id == CAN_LB_ID) && (s_lb_frame.dlc == CAN_DLC) &&
+             (memcmp(s_lb_frame.data, tx.data, CAN_DLC) == 0);
     }
 
-    intf_can_config_irq_callback(CAN_TEST_INST, NULL, NULL);
-    intf_can_deinit(CAN_TEST_INST);
+    intf_can_config_irq_callback(CAN_INST, NULL, NULL);
+    intf_can_deinit(CAN_INST);
     return ok;
 }
 
@@ -152,12 +155,16 @@ static bool can_loopback_selfcheck(void)
 void app_debug_can_init(void)
 {
     bool lb_ok;
+    app_sw_params_t sw;
 
     /* 先注册驱动：环回自检经 Interface 调用，需要 ops 已就绪（幂等） */
     hpm_can_driver_register();
+    app_sw_params_load(&sw); /* config/software.yaml（总线波特率 + 参数回报帧 ID） */
+    s_tx_report_id = sw.can.tx_report_id;
 
-    app_debug_printf("\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, TX ID=0x%03X\r\n",
-                     (unsigned) CAN_TEST_BAUDRATE, (unsigned) CAN_TEST_ID);
+    app_debug_printf(
+        "\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, report TX ID=0x%03X\r\n",
+        (unsigned) sw.can.baudrate, (unsigned) sw.can.tx_report_id);
 
     lb_ok = can_loopback_selfcheck();
     app_debug_printf("[CAN] loopback self-check: %s\r\n", lb_ok ? "OK" : "FAILED");
@@ -182,14 +189,14 @@ void app_debug_can_init(void)
 void app_debug_can_run_once(void)
 {
     uint32_t now = intf_clock_get_cycle();
-    uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * CAN_TEST_TX_PERIOD_MS;
+    uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * CAN_TX_PERIOD_MS;
 
     /* 1) 分发接收回调（主循环上下文） */
     app_can_poll();
 
     /* 2) 每秒发送一帧 + 状态行 */
     if ((uint32_t) (now - s_last_tx_cycle) >= period_cycles) {
-        uint8_t data[CAN_TEST_DLC];
+        uint8_t data[CAN_DLC];
         intf_can_status_t st;
         app_can_stats_t stats;
         int ret;
@@ -198,11 +205,12 @@ void app_debug_can_run_once(void)
         s_tick++;
 
         data[0] = (uint8_t) s_tx_seq;
-        for (uint8_t i = 1U; i < CAN_TEST_DLC; i++) {
+        for (uint8_t i = 1U; i < CAN_DLC; i++) {
             data[i] = (uint8_t) (0x10U + i);
         }
 
-        ret = app_can_send_std(CAN_TEST_ID, data, CAN_TEST_DLC);
+        /* 参数回报帧 ID（config/software.yaml；11-bit 标准帧，SCHEMA 限 ≤0x7FF）；负载为计数占位，非真实参数回报 */
+        ret = app_can_send_std((uint16_t) s_tx_report_id, data, CAN_DLC);
         s_tx_seq++;
 
 #if APP_DEBUG_PERIODIC_PRINT
