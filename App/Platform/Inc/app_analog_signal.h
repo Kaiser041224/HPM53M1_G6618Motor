@@ -27,6 +27,9 @@ extern "C" {
 /* process() 调用频率（= 主循环 25kHz 节拍），滤波器设计用 */
 #define APP_ANALOG_SAMPLE_RATE_HZ (25000U)
 
+/* 电流链路转换常数 [A/V]（TPA6584Q ×7.5，Rshunt 2mΩ → 1/(7.5×2mΩ)） */
+#define APP_ANALOG_I_AMP_PER_VOLT (66.6667f)
+
 typedef struct {
     float i_u_a;      /* 相电流 [A] */
     float i_v_a;      /* 相电流 [A] */

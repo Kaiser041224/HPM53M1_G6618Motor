@@ -17,7 +17,7 @@
  * 换算常数（原理图定值）
  * ============================================================================ */
 
-#define APP_ANALOG_I_AMP_PER_VOLT     (66.6667f) /* 1/(7.5 × 2mΩ) */
+/* APP_ANALOG_I_AMP_PER_VOLT 定义已上移至头文件（供 app_fault 使用） */
 #define APP_ANALOG_VBUS_VOLT_PER_VOLT (22.2121f) /* (15K×4+10K+3.3K)/3.3K */
 #define APP_ANALOG_NTC_PULLUP_OHM     (10000.0f)
 #define APP_ANALOG_VREF_VOLTS         (INTF_ADC_DEFAULT_VREF_MV / 1000.0f)

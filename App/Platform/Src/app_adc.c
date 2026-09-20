@@ -95,6 +95,31 @@ static bool s_initialized;
 static uint16_t s_full_scale_code = 65535U;
 static app_adc_cfg_t s_cfg;
 
+/* 驱动 WDOG 回调（硬件通道）→ 逻辑通道回调适配 */
+static void adc_wdog_adapter(intf_adc_ch_t ch, uint16_t value, void *user) {
+    uint8_t inst = INTF_ADC_CH_INST(ch);
+    uint8_t hw = INTF_ADC_CH_IDX(ch);
+
+    (void) user;
+    for (uint8_t i = 0U; i < (uint8_t) ADC_CH_COUNT; i++) {
+        if ((s_map[i].inst == inst) && (s_map[i].hw_ch == hw)) {
+            if (s_cfg.wdog_cb != NULL) {
+                s_cfg.wdog_cb((adc_channel_t) i, value, s_cfg.wdog_cb_user);
+            }
+            return;
+        }
+    }
+}
+
+/* 驱动 SEQ 完成回调 → 用户慢帧回调适配（1kHz，ISR） */
+static void adc_slow_adapter(intf_adc_ch_t ch, void *user) {
+    (void) ch;
+    (void) user;
+    if (s_cfg.slow_cb != NULL) {
+        s_cfg.slow_cb();
+    }
+}
+
 /* ============================================================================
  * ISR 回调（PMT 完成，队列顺序 = 通道枚举顺序）
  * ============================================================================ */
@@ -137,6 +162,9 @@ void app_adc_init(const app_adc_cfg_t *cfg) {
         if (s_cfg.resolution == 0U) {
             s_cfg.resolution = (uint8_t) INTF_ADC_RES_DEFAULT;
         }
+        if (s_cfg.trigger_delay_ns == 0U) {
+            s_cfg.trigger_delay_ns = APP_ADC_TRIGGER_DELAY_NS_DEFAULT;
+        }
     }
 
     s_full_scale_code = (uint16_t) ((1UL << s_cfg.resolution) - 1UL);
@@ -157,6 +185,11 @@ void app_adc_init(const app_adc_cfg_t *cfg) {
     a0.pmt_trig_ch = APP_ADC_PMT_TRIG_CH;
     a0.pmt_ch_count = APP_ADC_SLOT_COUNT;
     a0.pmt_cb = adc_current_pmt_cb;
+    a0.wdog_en = s_cfg.wdog_en;
+    a0.wdog_thshd_high = s_cfg.wdog_thshd_high;
+    a0.wdog_thshd_low = s_cfg.wdog_thshd_low;
+    a0.wdog_cb = adc_wdog_adapter;
+    a0.wdog_cb_user_data = NULL;
     /* [I_W(副本), I_U, I_V, I_W]：首槽 = 队尾通道副本（见上方说明） */
     a0.pmt_ch_list[0] = s_map[ADC_CH_I_W].hw_ch;
     for (uint8_t i = 0U; i < APP_ADC_CURRENT_COUNT; i++) {
@@ -182,7 +215,7 @@ void app_adc_init(const app_adc_cfg_t *cfg) {
     a1.seq_ch_list[2] = s_map[ADC_CH_NTC0].hw_ch;
     a1.seq_ch_list[3] = s_map[ADC_CH_NTC1].hw_ch;
     a1.seq_ch_list[4] = s_map[ADC_CH_V_CANID].hw_ch;
-    a1.seq_cb = NULL;
+    a1.seq_cb = (s_cfg.slow_cb != NULL) ? adc_slow_adapter : NULL;
     rc1 = intf_adc_init(INTF_ADC_CH(1U, 0U), &a1);
 
     /* ---- 慢速触发链：GPTMR0 CH2（1kHz 方波，50%）→ TRGM0 → ADC1_STRGI ---- */
@@ -267,4 +300,11 @@ int app_adc_set_trigger_delay_ns(uint32_t delay_ns) {
         s_cfg.trigger_delay_ns = delay_ns;
     }
     return rc;
+}
+
+void app_adc_wdog_reenable(adc_channel_t ch) {
+    if (ch >= ADC_CH_COUNT) {
+        return;
+    }
+    intf_adc_wdog_reenable(INTF_ADC_CH(s_map[ch].inst, s_map[ch].hw_ch));
 }

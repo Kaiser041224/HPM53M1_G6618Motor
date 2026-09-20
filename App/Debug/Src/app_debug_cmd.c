@@ -14,6 +14,7 @@
  *   r = 开环旋转启停（V/F）；+/- = 电频率 ±0.5Hz；m/M = 调制比 ∓/±1%
  *   d = ADC 全通道表（raw / mV / 物理量）；p = ADC 诊断（PMT 完成率等）
  *   k = 触发延时预设循环（100/250/500/1000/2000 ns）；n = 电流零点标定
+ *   f = 故障保护状态（状态机/故障码/计数/快照）；F = 清除锁存
  *
  * 说明：零点为软件方案（app_param），不消耗编码器 MTP。
  */
@@ -23,6 +24,7 @@
 #include "app_adc.h"
 #include "app_analog_signal.h"
 #include "app_debug_adc.h"
+#include "app_debug_fault.h"
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
 #include "app_debug_rtt.h"
@@ -111,6 +113,12 @@ void app_debug_cmd_handle(const uint8_t *data, size_t len)
             break;
         case 'p':
             app_debug_adc_dump_diag();
+            break;
+        case 'f':
+            app_debug_fault_dump();
+            break;
+        case 'F':
+            app_debug_fault_clear();
             break;
         case 'k': {
             /* 触发延时预设循环：验证采样点是否落在低侧导通窗口内 */

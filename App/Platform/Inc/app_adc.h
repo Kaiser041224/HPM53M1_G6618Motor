@@ -53,10 +53,21 @@ _Static_assert(ADC_CH_V_CANID == (ADC_CH_COUNT - 1), "CANID must be the last cha
                                                 *   FOC 示例用 20，原工程用 25） */
 #define APP_ADC_TRIGGER_CMP_INDEX        (10U)  /* PWM1 比较器/输出通道（三相占用 0/1、8/9、12/13） */
 
+/* WDOG 回调（逻辑通道，非硬件通道） */
+typedef void (*app_adc_wdog_cb_t)(adc_channel_t ch, uint16_t value, void *user);
+
 typedef struct {
-    uint32_t trigger_delay_ns; /* 谷底后触发延时 [ns]（YAML: adc.trigger_delay_ns） */
+    uint32_t trigger_delay_ns; /* 谷底后触发延时 [ns]（0 = 默认 500ns） */
     uint16_t sample_cycle;     /* 采样窗口 [ADC 时钟数]（0 = 默认） */
     uint8_t resolution;        /* intf_adc_resolution_t（0 = 默认 16bit） */
+    /* ADC0 电流通道 WDOG（硬件阈值；wdog_en=false 时忽略） */
+    bool     wdog_en;
+    uint16_t wdog_thshd_high;
+    uint16_t wdog_thshd_low;
+    app_adc_wdog_cb_t wdog_cb;
+    void    *wdog_cb_user;
+    /* ADC1 序列完成回调（1kHz，ISR 上下文；NULL = 不启用） */
+    void   (*slow_cb)(void);
 } app_adc_cfg_t;
 
 /**
@@ -85,6 +96,9 @@ uint32_t app_adc_get_sequence(void);
  *        PRD_RESULTx（GPTMR0 1kHz 硬件触发，每轮 5 项），写入 raw 缓存。
  */
 void app_adc_slow_process(void);
+
+/** @brief 重装指定通道的 WDOG 中断（故障清除后调用） */
+void app_adc_wdog_reenable(adc_channel_t ch);
 
 /** @brief 全部通道是否均已产出数据 */
 bool app_adc_is_valid(void);

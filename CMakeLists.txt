@@ -56,6 +56,7 @@ sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Interface)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Logic)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Algorithm/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Platform/Inc)
+sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Control/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Debug/Inc)
 
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/hpm_impl)
@@ -122,6 +123,12 @@ sdk_app_src(App/Platform/Src/app_analog_signal.c)
 sdk_app_src(App/Platform/Src/app_can.c)
 
 # ============================================================================
+# Control Layer
+# ============================================================================
+
+sdk_app_src(App/Control/Src/app_fault.c)
+
+# ============================================================================
 # Debug Layer
 # ============================================================================
 
@@ -134,6 +141,7 @@ sdk_app_src(App/Debug/Src/app_debug_inverter.c)
 sdk_app_src(App/Debug/Src/app_debug_motor.c)
 sdk_app_src(App/Debug/Src/app_debug_can.c)
 sdk_app_src(App/Debug/Src/app_debug_adc.c)
+sdk_app_src(App/Debug/Src/app_debug_fault.c)
 sdk_app_src(App/Debug/Src/app_debug_hrpwm.c)
 sdk_app_src(App/Debug/Src/app_debug_profiler.c)
 sdk_app_src(App/Debug/Src/app_debug_rtt.c)

@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
@@ -28,6 +29,7 @@
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
 #include "app_debug_usb.h"
+#include "app_fault.h"
 #include "app_gpio.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
@@ -82,20 +84,38 @@ void app_init(void) {
     /* 9. 三相半桥输出自检（PWM1：U/V/W 25kHz / 50% 持续输出） */
     app_debug_inverter_init();
 
-    /* 10. ADC 采样链（PWM1 CMP10 触发 → TRGM → 双 ADC PMT：三相电流 + 母线/NTC）
+    /* 10. 故障保护（在 ADC 之前：提供 WDOG 阈值与回调） */
+    app_fault_init(NULL);
+
+    /* 11. ADC 采样链（PWM1 CMP10 触发 → TRGM → 双 ADC PMT：三相电流 + 母线/NTC；
+     *     ADC0 电流通道启用 WDOG；ADC1 序列完成回调接入故障 tick @1kHz）
      *     内部启动 PWM1 计数（仅计数、输出仍由逆变桥控制） */
-    app_adc_init(NULL);
+    {
+        app_adc_cfg_t adc_cfg;
+        uint16_t wdog_hi;
+        uint16_t wdog_lo;
+
+        memset(&adc_cfg, 0, sizeof(adc_cfg));
+        app_fault_get_wdog_raw(&wdog_hi, &wdog_lo);
+        adc_cfg.wdog_en = true;
+        adc_cfg.wdog_thshd_high = wdog_hi;
+        adc_cfg.wdog_thshd_low = wdog_lo;
+        adc_cfg.wdog_cb = app_fault_on_wdog;
+        adc_cfg.wdog_cb_user = NULL;
+        adc_cfg.slow_cb = app_fault_tick;
+        app_adc_init(&adc_cfg);
+    }
     app_analog_signal_init();
     app_debug_adc_init();
 
-    /* 11. 电流零点标定（须在无电流状态：桥臂零矢量且未旋转） */
+    /* 12. 电流零点标定（须在无电流状态：桥臂零矢量且未旋转） */
     if (app_analog_signal_calibrate_offsets() == 0) {
         app_debug_printf("[ADC] zero calibration: OK\r\n");
     } else {
         app_debug_printf("[ADC] zero calibration: FAILED (default 1.65V in use)\r\n");
     }
 
-    /* 12. 开环旋转自检（V/F，命令 r 启动） */
+    /* 13. 开环旋转自检（V/F，命令 r 启动） */
     app_debug_motor_init();
 }
 
@@ -119,6 +139,7 @@ void app_run(void) {
 
         /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（25kHz）+ Ozone 观测变量 */
         app_analog_signal_process();
+        app_fault_process(); /* 25kHz：三相电流 RMS 累加（故障保护 L2） */
         app_debug_adc_update();
 
         /* 1b) 开环旋转（V/F）：25kHz 节拍更新三相占空比（未启动时为空操作） */

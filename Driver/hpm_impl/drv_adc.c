@@ -245,6 +245,21 @@ static void adc_generic_isr(uint8_t inst) {
             return;
         }
 
+        /* 首次有效帧后使能 WDOG 中断（SoC 延迟式：避免启动期误报；
+         * adc16_enable_wdog_interrupt 先清挂起标志再置 INT_EN） */
+        if (ai->pmt.frame_cnt == ADC_PMT_STARTUP_DISCARD) {
+            uint32_t wdog_mask = 0U;
+
+            for (uint8_t c = 0U; c < ADC_MAX_CHANNELS; c++) {
+                if (ai->wdog.enabled[c]) {
+                    wdog_mask |= (uint32_t) (1u << c);
+                }
+            }
+            if (wdog_mask != 0U) {
+                adc16_enable_wdog_interrupt(base, wdog_mask);
+            }
+        }
+
         if (ai->pmt.cb && ai->pmt.ch_count > 0) {
             uint16_t values[4];
             uint8_t valid = 0;
@@ -345,14 +360,7 @@ static void adc_generic_isr(uint8_t inst) {
         }
     }
 
-    /* Sequence single conversion complete */
-    if (ADC16_INT_STS_SEQ_CVC_GET(status) && ai->mode == INTF_ADC_MODE_SEQ) {
-        if (ai->seq.cb) {
-            ai->seq.cb(INTF_ADC_CH(inst, 0), ai->seq.cb_user_data);
-        }
-    }
-
-    /* Sequence full queue complete */
+    /* Sequence full queue complete（每帧一次；CVC 为末通道单次完成，不单独回调） */
     if (ADC16_INT_STS_SEQ_CMPT_GET(status) && ai->mode == INTF_ADC_MODE_SEQ) {
         if (ai->seq.cb) {
             ai->seq.cb(INTF_ADC_CH(inst, 0), ai->seq.cb_user_data);
@@ -364,12 +372,11 @@ static void adc_generic_isr(uint8_t inst) {
     if (wdog_status) {
         for (uint8_t ch = 0; ch < ADC_MAX_CHANNELS; ch++) {
             if ((wdog_status & (1u << ch)) && ai->wdog.enabled[ch]) {
-                uint32_t bus_res = base->BUS_RESULT[ch];
-                if (ADC16_BUS_RESULT_VALID_GET(bus_res)) {
-                    uint16_t val = ADC16_BUS_RESULT_CHAN_RESULT_GET(bus_res);
-                    if (ai->wdog.cb) {
-                        ai->wdog.cb(INTF_ADC_CH(inst, ch), val, ai->wdog.cb_user_data);
-                    }
+                /* PRD_RESULTx 保存通道 x 最近一次转换结果（所有模式通用，PMT 已实测） */
+                uint16_t val = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(
+                    base->PRD_CFG[ch].PRD_RESULT);
+                if (ai->wdog.cb) {
+                    ai->wdog.cb(INTF_ADC_CH(inst, ch), val, ai->wdog.cb_user_data);
                 }
                 adc16_disable_interrupts(base, (uint32_t)(1u << ch));
             }
@@ -446,7 +453,8 @@ void adc_wdog_reenable(uint8_t inst, uint8_t ch) {
     adc_inst_t* ai = &adc_instances[inst];
     if (!ai->initialized || !ai->wdog.enabled[ch])
         return;
-    adc16_enable_interrupts(ai->base, (uint32_t)(1u << ch));
+    /* 先清挂起标志再使能（避免陈旧标志立即重触发） */
+    adc16_enable_wdog_interrupt(ai->base, (uint32_t)(1u << ch));
 }
 
 /* ============================================================================
@@ -549,12 +557,23 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
         adc16_channel_config_t ch_cfg;
         adc16_get_channel_default_config(&ch_cfg);
         ch_cfg.sample_cycle = sample_cycle;
+        if (cfg->wdog_en) {
+            ch_cfg.wdog_int_en = true;
+            ch_cfg.thshdh = cfg->wdog_thshd_high;
+            ch_cfg.thshdl = cfg->wdog_thshd_low;
+        }
 
         for (uint8_t i = 0; i < cfg->pmt_ch_count; i++) {
             ch_cfg.ch = cfg->pmt_ch_list[i];
             if (adc16_init_channel(ai->base, &ch_cfg) != status_success)
                 return -1;
             ai->channels[cfg->pmt_ch_list[i]].configured = true;
+            if (cfg->wdog_en) {
+                ai->wdog.enabled[cfg->pmt_ch_list[i]] = true;
+                ai->wdog.cb = cfg->wdog_cb;
+                ai->wdog.cb_user_data = cfg->wdog_cb_user_data;
+                /* INT_EN 延迟到首次有效帧后再置（SoC 延迟式，见 ISR 内 arm） */
+            }
         }
 
         adc16_pmt_config_t pmt_cfg;
@@ -606,7 +625,7 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
         ai->pmt.cycle_protocol = true;
         ai->pmt.stale_run = 0U;
 
-        if (cfg->pmt_cb != NULL) {
+        if ((cfg->pmt_cb != NULL) || cfg->wdog_en) {
             adc_enable_instance_irq(inst);
         }
         return 0;
@@ -668,10 +687,10 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
                 return -1;
         }
 
-        /* 无回调（仅轮询 PRD_RESULT）时不使能中断，避免无谓 ISR */
+        /* 无回调（仅轮询 PRD_RESULT）时不使能中断，避免无谓 ISR；
+         * 有回调时仅使能整帧完成中断（回调按帧触发一次） */
         if (cfg->seq_cb != NULL) {
-            adc16_enable_interrupts(
-                ai->base, adc16_event_seq_single_complete | adc16_event_seq_full_complete);
+            adc16_enable_interrupts(ai->base, adc16_event_seq_full_complete);
             adc_enable_instance_irq(inst);
         }
         return 0;
