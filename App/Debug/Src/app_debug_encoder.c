@@ -127,39 +127,33 @@ static const char* encoder_name(app_encoder_id_t id) {
  * @param id 编码器实例
  * @return read_raw 结果（0 = 成功）
  */
-static int encoder_sample_one(app_encoder_id_t id) {
+/**
+ * @brief 采样出轴编码器并更新观测变量与统计（转子已改由共享采样路径处理）
+ * @return 0 = 成功；-1 = 失败
+ */
+static int encoder_sample_output(void) {
     uint32_t cycle_start = intf_clock_get_cycle();
     uint16_t raw = 0U;
     uint16_t zero = 0U;
     uint32_t mdeg = 0U;
-    int ret = app_encoder_read_raw(id, &raw);
+    int ret = app_encoder_read_raw(APP_ENCODER_OUTPUT, &raw);
     uint32_t cycles = intf_clock_get_cycle() - cycle_start;
 
-    s_read_cycles_sum[id] += cycles;
-    if (cycles > s_read_cycles_max[id]) {
-        s_read_cycles_max[id] = cycles;
+    s_read_cycles_sum[APP_ENCODER_OUTPUT] += cycles;
+    if (cycles > s_read_cycles_max[APP_ENCODER_OUTPUT]) {
+        s_read_cycles_max[APP_ENCODER_OUTPUT] = cycles;
     }
-    s_read_count[id]++;
-
-    if (id == APP_ENCODER_ROTOR) {
-        g_enc_rotor_read_us = cycles_to_us(cycles);
-    } else {
-        g_enc_output_read_us = cycles_to_us(cycles);
-    }
+    s_read_count[APP_ENCODER_OUTPUT]++;
+    g_enc_output_read_us = cycles_to_us(cycles);
 
     if (ret == 0) {
         /* 观测角度为"零点修正后"的机械角（与 app API 语义一致） */
-        (void)app_encoder_get_zero(id, &zero);
+        (void)app_encoder_get_zero(APP_ENCODER_OUTPUT, &zero);
         mdeg = (uint32_t)(((uint64_t)(uint16_t)(raw - zero) * 360000U) / 65536U);
     }
 
-    if (id == APP_ENCODER_ROTOR) {
-        g_enc_rotor_raw = raw;
-        g_enc_rotor_deg = (float)mdeg / 1000.0f;
-    } else {
-        g_enc_output_raw = raw;
-        g_enc_output_deg = (float)mdeg / 1000.0f;
-    }
+    g_enc_output_raw = raw;
+    g_enc_output_deg = (float)mdeg / 1000.0f;
 
     return ret;
 }
@@ -253,7 +247,7 @@ void app_debug_encoder_sample(void) {
     }
 
     if ((s_sample_index % ENC_OUTPUT_SAMPLE_DIV) == 0U) {
-        int ret_output = encoder_sample_one(APP_ENCODER_OUTPUT);
+        int ret_output = encoder_sample_output();
 
         if ((ret_rotor == 0) && (ret_output == 0)
             && (app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
