@@ -65,11 +65,12 @@ typedef int (*foc_current_init_fn)(foc_current_t* self, const foc_current_cfg_t*
 /**
  * @brief 单步
  * @return 0 = 成功；-1 = 未初始化/参数空
+ * @note 非有限输入（给定/反馈/ωe/限幅值）按 0 处理；输出保证有限
  */
 typedef int (*foc_current_step_fn)(foc_current_t* self, const foc_current_in_t* in,
                                    foc_current_out_t* out);
 /**
- * @brief 复位（清积分与饱和历史）
+ * @brief 复位（清 d/q 积分器）
  */
 typedef void (*foc_current_reset_fn)(foc_current_t* self);
 /**
@@ -90,6 +91,7 @@ struct foc_current {
 
     float _kp, _ki;    /**< 增益 */
     float _ts;         /**< 采样周期 [s] */
+    float _kits;       /**< ki × 采样周期 [V/A]（预计算，热路径） */
     uint8_t _decouple; /**< 前馈开关 */
     float _ld, _lq;    /**< 电感 [H] */
     float _lambda;     /**< 磁链 [Wb] */

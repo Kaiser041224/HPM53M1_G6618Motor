@@ -112,12 +112,12 @@ void test_foc_current(void) {
         CHECK_NEAR(out.i_d_ref_lim / out.i_q_ref_lim, 30.0f / 40.0f, 1e-4f);
     }
 
-    /* 非有限反馈 → 给定归零 */
+    /* 非有限反馈 → 给定归零 + 输出零电压（有限） */
     {
         foc_current_t c5;
         foc_current_out_t out;
         foc_current_in_t in = {
-            .i_d_ref = 1.0f, .i_q_ref = 1.0f, .i_d_a = 0.0f / 0.0f, .i_q_a = 0.0f,
+            .i_d_ref = 1.0f, .i_q_ref = 1.0f, .i_d_a = NAN, .i_q_a = 0.0f,
             .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f, .omega_e_rad_s = 0.0f,
         };
         foc_current_ctor(&c5);
@@ -125,6 +125,122 @@ void test_foc_current(void) {
         CHECK(c5.step(&c5, &in, &out) == 0);
         CHECK_NEAR(out.i_d_ref_lim, 0.0f, 1e-6f);
         CHECK_NEAR(out.i_q_ref_lim, 0.0f, 1e-6f);
+        CHECK(foc_finite(out.v_d) && foc_finite(out.v_q));
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.0f, 1e-6f);
+
+        /* +Inf 反馈 */
+        in.i_d_a = INFINITY;
+        in.i_q_a = -INFINITY;
+        CHECK(c5.step(&c5, &in, &out) == 0);
+        CHECK(foc_finite(out.v_d) && foc_finite(out.v_q));
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.0f, 1e-6f);
+    }
+
+    /* 解耦前馈开启：精确校验 vd_ff/vq_ff（对照关闭时） */
+    {
+        foc_current_t c8;
+        foc_current_cfg_t c8cfg = cfg;
+        foc_current_out_t out_on, out_off;
+        foc_current_in_t in = {
+            .i_d_ref = 0.0f, .i_q_ref = 0.0f,
+            .i_d_a = 2.0f, .i_q_a = 3.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f,
+            .omega_e_rad_s = 100.0f,
+        };
+        c8cfg.decoupling_en = 1U;
+        c8cfg.l_d = 1.0e-4f;
+        c8cfg.l_q = 1.0e-4f;
+        c8cfg.lambda = 0.1f;
+        foc_current_ctor(&c8);
+        CHECK(c8.init(&c8, &c8cfg) == 0);
+        CHECK(c8.step(&c8, &in, &out_on) == 0);
+        /* vd = kp·(−2) − 100·1e-4·3 = −1.49 − 0.03 = −1.52
+         * vq = kp·(−3) + 100·(1e-4·2 + 0.1) = −2.235 + 10.02 = 7.785 */
+        CHECK_NEAR(out_on.v_d, -1.52f, 1e-3f);
+        CHECK_NEAR(out_on.v_q, 7.785f, 1e-2f);
+
+        c8cfg.decoupling_en = 0U;
+        foc_current_ctor(&c8);
+        CHECK(c8.init(&c8, &c8cfg) == 0);
+        CHECK(c8.step(&c8, &in, &out_off) == 0);
+        CHECK_NEAR(out_off.v_d, -1.49f, 1e-3f);
+        CHECK_NEAR(out_off.v_q, -2.235f, 1e-3f);
+    }
+
+    /* 前馈开启 + 非有限 ωe → 按 0 处理，输出仍有限 */
+    {
+        foc_current_t c9;
+        foc_current_cfg_t c9cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 0.0f, .i_q_ref = 0.0f,
+            .i_d_a = 1.0f, .i_q_a = 1.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f,
+            .omega_e_rad_s = NAN,
+        };
+        c9cfg.decoupling_en = 1U;
+        foc_current_ctor(&c9);
+        CHECK(c9.init(&c9, &c9cfg) == 0);
+        CHECK(c9.step(&c9, &in, &out) == 0);
+        CHECK(foc_finite(out.v_d) && foc_finite(out.v_q));
+    }
+
+    /* reset：饱和后复位，积分清零 */
+    {
+        foc_current_t c10;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 10.0f, .i_q_ref = 0.0f, .i_d_a = 0.0f, .i_q_a = 0.0f,
+            .v_bus_v = 24.0f, .v_max = 0.5f, .i_max = 24.3f, .omega_e_rad_s = 0.0f,
+        };
+        foc_current_ctor(&c10);
+        CHECK(c10.init(&c10, &cfg) == 0);
+        for (int n = 0; n < 200; n++) {
+            (void)c10.step(&c10, &in, &out);
+        }
+        CHECK(fabsf(out.v_d) > 0.1f); /* 有积分贡献 */
+        c10.reset(&c10);
+        in.i_d_ref = 0.0f;
+        in.i_q_ref = 0.0f;
+        (void)c10.step(&c10, &in, &out);
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.0f, 1e-6f);
+    }
+
+    /* 退化限幅：v_max = 0 → 零输出且饱和；i_max = 0 → 给定归零 */
+    {
+        foc_current_t c11;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 1.0f, .i_q_ref = 1.0f, .i_d_a = 0.0f, .i_q_a = 0.0f,
+            .v_bus_v = 24.0f, .v_max = 0.0f, .i_max = 24.3f, .omega_e_rad_s = 0.0f,
+        };
+        foc_current_ctor(&c11);
+        CHECK(c11.init(&c11, &cfg) == 0);
+        CHECK(c11.step(&c11, &in, &out) == 0);
+        CHECK(out.saturated);
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.0f, 1e-6f);
+
+        in.v_max = 12.3f;
+        in.i_max = 0.0f;
+        CHECK(c11.step(&c11, &in, &out) == 0);
+        CHECK_NEAR(out.i_d_ref_lim, 0.0f, 1e-6f);
+        CHECK_NEAR(out.i_q_ref_lim, 0.0f, 1e-6f);
+    }
+
+    /* 未初始化对象 → step 返回 -1 */
+    {
+        foc_current_t c12;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 0.0f, .i_q_ref = 0.0f, .i_d_a = 0.0f, .i_q_a = 0.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f, .omega_e_rad_s = 0.0f,
+        };
+        foc_current_ctor(&c12);
+        CHECK(c12.step(&c12, &in, &out) == -1);
     }
 
     /* set_gains 运行中更新：kp=1、ki=0 → v_q = e */
@@ -142,12 +258,24 @@ void test_foc_current(void) {
         CHECK_NEAR(out.v_q, 1.0f, 1e-5f);
     }
 
-    /* 非法配置 */
+    /* 非法配置：aw_decay 越界 / 非有限增益与时间常数 */
     {
         foc_current_t c7;
         foc_current_cfg_t bad = cfg;
-        bad.aw_decay = 0.0f;
         foc_current_ctor(&c7);
+        bad.aw_decay = 0.0f;
+        CHECK(c7.init(&c7, &bad) == -1);
+        bad = cfg;
+        bad.kp = NAN;
+        CHECK(c7.init(&c7, &bad) == -1);
+        bad = cfg;
+        bad.ki = NAN;
+        CHECK(c7.init(&c7, &bad) == -1);
+        bad = cfg;
+        bad.sample_time_s = NAN;
+        CHECK(c7.init(&c7, &bad) == -1);
+        bad = cfg;
+        bad.lambda = INFINITY;
         CHECK(c7.init(&c7, &bad) == -1);
     }
 }
