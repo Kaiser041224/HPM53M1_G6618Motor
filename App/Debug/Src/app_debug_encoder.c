@@ -230,13 +230,25 @@ void app_debug_encoder_sample(void) {
     /* 转子：共享采样（FOC 与 Debug 共用一次 SPI 读；耗时计入统计） */
     {
         uint32_t t0 = intf_clock_get_cycle();
+        uint32_t cycles;
 
         ret_rotor = app_encoder_sample_rotor();
-        s_read_cycles_sum[APP_ENCODER_ROTOR] += intf_clock_get_cycle() - t0;
+        cycles = intf_clock_get_cycle() - t0;
+        s_read_cycles_sum[APP_ENCODER_ROTOR] += cycles;
+        if (cycles > s_read_cycles_max[APP_ENCODER_ROTOR]) {
+            s_read_cycles_max[APP_ENCODER_ROTOR] = cycles;
+        }
+        g_enc_rotor_read_us = cycles_to_us(cycles);
         s_read_count[APP_ENCODER_ROTOR]++;
         if ((ret_rotor == 0) && (app_encoder_get_rotor_raw(&raw, &valid) == 0) && valid) {
+            uint16_t zero = 0U;
+
             g_enc_rotor_raw = raw;
-            g_enc_rotor_deg = (float)raw * (360.0f / 65536.0f);
+            /* 观测角保持"零点修正后"语义（与 app API / 出轴实例一致）；
+             * FOC 换相直接读共享缓存原始值（app_encoder_get_rotor_raw） */
+            if (app_encoder_get_zero(APP_ENCODER_ROTOR, &zero) == 0) {
+                g_enc_rotor_deg = (float)(uint16_t)(raw - zero) * (360.0f / 65536.0f);
+            }
         }
     }
 
