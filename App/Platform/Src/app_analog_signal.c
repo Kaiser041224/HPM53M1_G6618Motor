@@ -17,10 +17,10 @@
 #include <stddef.h>
 
 /* ============================================================================
- * 硬件换算参数（来源 config/hardware.yaml，init 时加载）
+ * 硬件换算参数（来源 config/hardware.yaml）
+ *   换算因子（a_per_volt / v_per_volt / NTC）逐次使用读取 → 支持 Shell 在线调整；
+ *   零点偏置（bias_v）在 init 时快照到 s_zero_volts。
  * ============================================================================ */
-
-static app_hardware_params_t s_hardware_params;
 
 /* 零点标定过程参数（不随 YAML，标定流程专用） */
 #define APP_ANALOG_ZERO_CAL_FRAMES      (256U)   /* ~10ms @25kHz（TBD：随 pwm_freq 派生） */
@@ -85,9 +85,9 @@ static float ntc_resistance_from_volts(float volts) {
         return 0.0f;
     }
     if (volts >= (vref_volts - 0.001f)) { /* 悬空/超量程 */
-        return s_hardware_params.ntc.max_ohm;
+        return app_hardware_params_current()->ntc.max_ohm;
     }
-    return s_hardware_params.ntc.pullup_ohm * volts / (vref_volts - volts);
+    return app_hardware_params_current()->ntc.pullup_ohm * volts / (vref_volts - volts);
 }
 
 /**
@@ -102,8 +102,9 @@ static float channel_to_physical(adc_channel_t ch, uint16_t raw) {
     switch (ch) {
     case ADC_CH_I_U:
     case ADC_CH_I_V:
-    case ADC_CH_I_W: return (volts - s_zero_volts[ch]) * s_hardware_params.current_sense.a_per_volt;
-    case ADC_CH_V_VBUS: return volts * s_hardware_params.vbus_sense.v_per_volt;
+    case ADC_CH_I_W:
+        return (volts - s_zero_volts[ch]) * app_hardware_params_current()->current_sense.a_per_volt;
+    case ADC_CH_V_VBUS: return volts * app_hardware_params_current()->vbus_sense.v_per_volt;
     case ADC_CH_NTC0:
     case ADC_CH_NTC1: return ntc_resistance_from_volts(volts);
     case ADC_CH_V_CANID: return volts; /* CANID DIP 电阻网络电压（解码表待补充） */
@@ -133,10 +134,8 @@ static float filter_step(adc_channel_t ch, float x) {
  * ============================================================================ */
 
 void app_analog_signal_init(void) {
-    app_hardware_params_load(&s_hardware_params); /* config/hardware.yaml（将来 flash 覆盖） */
-
     for (uint8_t i = 0U; i < APP_ANALOG_CURRENT_COUNT; i++) {
-        s_zero_volts[i] = s_hardware_params.current_sense.bias_v;
+        s_zero_volts[i] = app_hardware_params_current()->current_sense.bias_v;
     }
     for (uint8_t ch = 0U; ch < ADC_CH_COUNT; ch++) {
         s_phys_values[ch] = 0.0f;
@@ -155,7 +154,7 @@ void app_analog_signal_init(void) {
         } else if (filter->type == APP_ANALOG_FILTER_LPF) {
             algo_lpf_cfg_t cfg = {
                 .cutoff_hz = filter->lpf_cutoff_hz,
-                .sample_rate_hz = (float)s_hardware_params.inverter.pwm_freq_hz,
+                .sample_rate_hz = (float)app_hardware_params_current()->inverter.pwm_freq_hz,
             };
             algo_lpf_ctor(&filter->lpf);
             (void)filter->lpf.init(&filter->lpf, &cfg);
@@ -208,63 +207,131 @@ bool app_analog_signal_read_raw(adc_channel_t ch, uint16_t* raw) {
     return app_adc_get_raw(ch, raw);
 }
 
-int app_analog_signal_calibrate_offsets(void) {
+/* ============================================================================
+ * 电流零点标定（非阻塞状态机；阻塞包装供 boot 使用）
+ * ============================================================================ */
+
+#define APP_ANALOG_ZERO_CAL_FRAMES_PER_STEP (32U)  /* 单次 step 最多累积帧数 */
+#define APP_ANALOG_ZERO_CAL_STEP_BUDGET_US  (200U) /* 单次 step 时间预算 */
+
+/** 标定状态（非阻塞） */
+typedef struct {
+    bool active;                                /**< 进行中 */
+    uint32_t start_cycle;                       /**< 起始 cycle（超时基准） */
+    uint32_t timeout_cycles;                    /**< 超时周期数 */
+    uint32_t start_seq;                         /**< 上一帧序列号 */
+    uint32_t frames_acquired;                   /**< 已累积帧数 */
+    uint32_t mid_code;                          /**< 中值码 */
+    uint32_t max_dev;                           /**< 允许偏离 */
+    uint64_t raw_sum[APP_ANALOG_CURRENT_COUNT]; /**< 原始码累加 */
+} app_analog_calib_t;
+
+static app_analog_calib_t s_calib;
+
+int app_analog_signal_calibrate_start(void) {
     uint32_t full_scale;
-    uint32_t mid_code;
-    uint32_t max_dev;
-    uint32_t start_seq;
-    uint32_t frames_acquired = 0U;
-    uint64_t raw_sum[APP_ANALOG_CURRENT_COUNT] = {0};
-    uint32_t start_cycle;
-    uint32_t timeout_cycles;
     uint8_t resolution;
 
     resolution = app_adc_get_config()->resolution;
     full_scale = (1UL << resolution) - 1UL;
-    mid_code = full_scale / 2U;
-    max_dev = full_scale * APP_ANALOG_ZERO_CAL_MAX_DEV_PCT / 100U;
 
-    start_cycle = intf_clock_get_cycle();
-    timeout_cycles = (intf_clock_get_cpu_freq() / 1000000U) * APP_ANALOG_ZERO_CAL_TIMEOUT_US;
-
-    /* 等待链路就绪（首帧到达 + 启动丢弃期结束） */
-    while (!app_adc_is_valid()) {
-        if ((intf_clock_get_cycle() - start_cycle) > timeout_cycles) {
-            return -1;
-        }
+    s_calib.active = true;
+    s_calib.start_cycle = intf_clock_get_cycle();
+    s_calib.timeout_cycles =
+        (intf_clock_get_cpu_freq() / 1000000U) * APP_ANALOG_ZERO_CAL_TIMEOUT_US;
+    s_calib.start_seq = app_adc_get_sequence();
+    s_calib.frames_acquired = 0U;
+    s_calib.mid_code = full_scale / 2U;
+    s_calib.max_dev = full_scale * APP_ANALOG_ZERO_CAL_MAX_DEV_PCT / 100U;
+    for (uint8_t i = 0U; i < APP_ANALOG_CURRENT_COUNT; i++) {
+        s_calib.raw_sum[i] = 0U;
     }
 
-    start_seq = app_adc_get_sequence();
+    return 0;
+}
 
-    while (frames_acquired < APP_ANALOG_ZERO_CAL_FRAMES) {
+int app_analog_signal_calibrate_step(void) {
+    uint32_t step_start;
+    uint32_t frames_this_step = 0U;
+
+    if (!s_calib.active) {
+        return -1;
+    }
+
+    /* 等待链路就绪（首帧到达 + 启动丢弃期结束） */
+    if (!app_adc_is_valid()) {
+        if ((intf_clock_get_cycle() - s_calib.start_cycle) > s_calib.timeout_cycles) {
+            s_calib.active = false;
+            return -1;
+        }
+        return 1;
+    }
+
+    step_start = intf_clock_get_cycle();
+    while (s_calib.frames_acquired < APP_ANALOG_ZERO_CAL_FRAMES) {
         uint32_t seq = app_adc_get_sequence();
 
-        if (seq != start_seq) {
+        if (seq != s_calib.start_seq) {
             for (uint8_t i = 0U; i < APP_ANALOG_CURRENT_COUNT; i++) {
                 uint16_t raw;
 
                 if (!app_adc_get_raw((adc_channel_t)(ADC_CH_I_U + i), &raw)) {
+                    s_calib.active = false;
                     return -1;
                 }
                 /* 偏离中值过大 → 判定为有电流，拒绝标定 */
-                if ((raw > (mid_code + max_dev)) || (raw < (mid_code - max_dev))) {
+                if ((raw > (s_calib.mid_code + s_calib.max_dev))
+                    || (raw < (s_calib.mid_code - s_calib.max_dev))) {
+                    s_calib.active = false;
                     return -1;
                 }
-                raw_sum[i] += raw;
+                s_calib.raw_sum[i] += raw;
             }
-            frames_acquired++;
-            start_seq = seq;
+            s_calib.frames_acquired++;
+            s_calib.start_seq = seq;
+            frames_this_step++;
         }
 
-        if ((intf_clock_get_cycle() - start_cycle) > timeout_cycles) {
+        if ((intf_clock_get_cycle() - s_calib.start_cycle) > s_calib.timeout_cycles) {
+            s_calib.active = false;
             return -1;
         }
+        if (frames_this_step >= APP_ANALOG_ZERO_CAL_FRAMES_PER_STEP) {
+            break; /* 单次调用有界 */
+        }
+        if ((intf_clock_get_cycle() - step_start)
+            > (intf_clock_get_cpu_freq() / 1000000U) * APP_ANALOG_ZERO_CAL_STEP_BUDGET_US) {
+            break;
+        }
+    }
+
+    if (s_calib.frames_acquired < APP_ANALOG_ZERO_CAL_FRAMES) {
+        return 1;
     }
 
     for (uint8_t i = 0U; i < APP_ANALOG_CURRENT_COUNT; i++) {
-        uint16_t average = (uint16_t)(raw_sum[i] / APP_ANALOG_ZERO_CAL_FRAMES);
+        uint16_t average = (uint16_t)(s_calib.raw_sum[i] / APP_ANALOG_ZERO_CAL_FRAMES);
 
         s_zero_volts[i] = app_adc_code_to_volts(average);
     }
+    s_calib.active = false;
+
     return 0;
+}
+
+void app_analog_signal_calibrate_cancel(void) {
+    s_calib.active = false;
+}
+
+int app_analog_signal_calibrate_offsets(void) {
+    int rc = app_analog_signal_calibrate_start();
+
+    if (rc != 0) {
+        return -1;
+    }
+    while ((rc = app_analog_signal_calibrate_step()) == 1) {
+        /* 阻塞推进（boot 阶段；运行期请用 job 驱动 start/step） */
+    }
+
+    return rc;
 }

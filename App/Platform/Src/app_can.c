@@ -316,11 +316,9 @@ int app_can_init(void) {
     app_can_reset_state();
 
     {
-        app_software_params_t software;
-
-        app_software_params_load(&software); /* config/software.yaml（将来 flash 覆盖） */
+        const app_software_params_t* software = app_software_params_current(); /* config/software.yaml */
         intf_can_cfg_t cfg = {
-            .baudrate = software.can.baudrate,
+            .baudrate = software->can.baudrate,
             .mode = INTF_CAN_MODE_NORMAL,
             .enable_canfd = false,
             .interrupt_mask = APP_CAN_INT_MASK,

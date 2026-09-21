@@ -174,16 +174,16 @@ static bool can_loopback_selfcheck(void) {
 
 void app_debug_can_init(void) {
     bool lb_ok;
-    app_software_params_t software;
+    const app_software_params_t* software;
 
     /* 先注册驱动：环回自检经 Interface 调用，需要 ops 已就绪（幂等） */
     hpm_can_driver_register();
-    app_software_params_load(&software); /* config/software.yaml（总线波特率 + 参数回报帧 ID） */
-    s_tx_report_id = software.can.tx_report_id;
+    software = app_software_params_current(); /* config/software.yaml（总线波特率 + 参数回报帧 ID） */
+    s_tx_report_id = software->can.tx_report_id;
 
     app_debug_printf(
         "\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, report TX ID=0x%03X\r\n",
-        (unsigned)software.can.baudrate, (unsigned)software.can.tx_report_id);
+        (unsigned)software->can.baudrate, (unsigned)software->can.tx_report_id);
 
     lb_ok = can_loopback_selfcheck();
     app_debug_printf("[CAN] loopback self-check: %s\r\n", lb_ok ? "OK" : "FAILED");

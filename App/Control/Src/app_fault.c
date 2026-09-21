@@ -192,8 +192,8 @@ static void fault_reset_all(void) {
 
 void app_fault_init(const app_fault_cfg_t* cfg) {
     algo_rms_cfg_t rms_cfg;
-    app_hardware_params_t hardware;
-    app_software_params_t software;
+    const app_hardware_params_t* hardware;
+    const app_software_params_t* software;
     float dev_v;
     float dev_cnt;
     uint32_t dev;
@@ -201,32 +201,32 @@ void app_fault_init(const app_fault_cfg_t* cfg) {
 
     memset(&s_fault_ctx, 0, sizeof(s_fault_ctx));
 
-    /* 工厂默认参数（config/software.yaml + config/hardware.yaml；将来 flash 覆盖） */
-    app_hardware_params_load(&hardware);
-    app_software_params_load(&software);
+    /* 运行期参数单例（config/software.yaml + config/hardware.yaml；将来 flash 覆盖） */
+    hardware = app_hardware_params_current();
+    software = app_software_params_current();
 
     s_fault_ctx.oc_fast_a =
-        ((cfg != NULL) && (cfg->oc_fast_a > 0.0f)) ? cfg->oc_fast_a : software.fault.oc_trip_a;
+        ((cfg != NULL) && (cfg->oc_fast_a > 0.0f)) ? cfg->oc_fast_a : software->fault.oc_trip_a;
     s_fault_ctx.oc_slow_a =
-        ((cfg != NULL) && (cfg->oc_slow_a > 0.0f)) ? cfg->oc_slow_a : software.fault.oc_trip_a;
+        ((cfg != NULL) && (cfg->oc_slow_a > 0.0f)) ? cfg->oc_slow_a : software->fault.oc_trip_a;
     s_fault_ctx.vbus_ov_v =
-        ((cfg != NULL) && (cfg->vbus_ov_v > 0.0f)) ? cfg->vbus_ov_v : software.fault.vbus_ov_v;
+        ((cfg != NULL) && (cfg->vbus_ov_v > 0.0f)) ? cfg->vbus_ov_v : software->fault.vbus_ov_v;
     s_fault_ctx.vbus_uv_v =
-        ((cfg != NULL) && (cfg->vbus_uv_v > 0.0f)) ? cfg->vbus_uv_v : software.fault.vbus_uv_v;
+        ((cfg != NULL) && (cfg->vbus_uv_v > 0.0f)) ? cfg->vbus_uv_v : software->fault.vbus_uv_v;
     s_fault_ctx.slow_debounce = ((cfg != NULL) && (cfg->slow_debounce > 0U))
                                   ? cfg->slow_debounce
-                                  : software.fault.slow_debounce;
+                                  : software->fault.slow_debounce;
     s_fault_ctx.adc_stall_ms = ((cfg != NULL) && (cfg->adc_stall_ms > 0U))
                                  ? cfg->adc_stall_ms
-                                 : software.fault.adc_stall_ms;
+                                 : software->fault.adc_stall_ms;
     s_fault_ctx.enc_err_delta = ((cfg != NULL) && (cfg->enc_err_delta > 0U))
                                   ? cfg->enc_err_delta
-                                  : software.fault.enc_err_delta;
+                                  : software->fault.enc_err_delta;
 
     /* WDOG 原始窗口：中值 ± (阈值[A] / 转换[A/V] → 电压 → 码值)
      * 注1：基于标称零点（半量程）；逐相标定后重装为 v2 精化项
      * 注2：65535 = 16bit 满量程（与 app_adc 默认分辨率一致；改分辨率需同步） */
-    dev_v = s_fault_ctx.oc_fast_a / hardware.current_sense.a_per_volt;
+    dev_v = s_fault_ctx.oc_fast_a / hardware->current_sense.a_per_volt;
     dev_cnt = dev_v * (65535.0f / (INTF_ADC_DEFAULT_VREF_MV / 1000.0f));
     dev = (uint32_t)(dev_cnt + 0.5f);
     mid = 65535U / 2U;

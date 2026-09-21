@@ -74,11 +74,29 @@ float app_analog_signal_read(adc_channel_t ch);
 bool app_analog_signal_read_raw(adc_channel_t ch, uint16_t* raw);
 
 /**
- * @brief 电流通道零点标定：阻塞采集若干帧求平均，写入零点偏置。
- * @note 必须在无电流状态调用（上电初始化阶段）；检测到电流或超时会拒绝。
+ * @brief 电流零点标定（阻塞包装：boot 初始化阶段使用）。
+ * @note 必须在无电流状态调用；检测到电流或超时会拒绝。
  * @return 0 成功，-1 失败
  */
 int app_analog_signal_calibrate_offsets(void);
+
+/**
+ * @brief 电流零点标定（非阻塞）：启动状态机。
+ * @note 必须在无电流状态调用（电机停止、零矢量）。
+ * @return 0 = 已启动；-1 = 失败
+ */
+int app_analog_signal_calibrate_start(void);
+
+/**
+ * @brief 电流零点标定（非阻塞）：推进一步（单次调用有界，供 1kHz job 驱动）。
+ * @return 1 = 进行中；0 = 完成；-1 = 失败
+ */
+int app_analog_signal_calibrate_step(void);
+
+/**
+ * @brief 电流零点标定（非阻塞）：取消进行中的标定（保留原零点）。
+ */
+void app_analog_signal_calibrate_cancel(void);
 
 #ifdef __cplusplus
 }

@@ -63,6 +63,29 @@ def run(cfg_dir: Path, check: bool):
     return rc, out.getvalue(), err.getvalue()
 
 
+META_ENTRY_RE = re.compile(
+    r'\{"(?P<name>[^"]*)",\s*'
+    r'offsetof\((?P<struct>\w+),\s*(?P<cfield>[\w.]+)\),\s*'
+    r'(?P<type>PARAM_META_TYPE_\w+),\s*'
+    r'(?P<domain>PARAM_META_DOMAIN_\w+),\s*'
+    r'(?P<apply>PARAM_META_APPLY_\w+),\s*'
+    r'(?P<min>-?INFINITY|-?[\d.]+)f?,\s*'
+    r'(?P<max>-?INFINITY|-?[\d.]+)f?,\s*'
+    r'(?P<unit>NULL|"[^"]*")\}'
+)
+
+
+def parse_meta(cfg: Path) -> list:
+    src = (cfg / "out" / "params_meta_generated.c").read_text(encoding="utf-8")
+    return [m.groupdict() for m in META_ENTRY_RE.finditer(src)]
+
+
+def schema_items() -> list:
+    return [(d, path, cfield, ctype)
+            for d in gen.DOMAINS
+            for (path, cfield, ctype, _lo, _hi) in gen.SCHEMA[d]]
+
+
 def sub1(path: Path, pattern: str, repl: str) -> None:
     """正则替换且断言恰好命中 1 处（避免硬编码字面值 / 静默失配）。"""
     text = path.read_text(encoding="utf-8")
@@ -187,6 +210,84 @@ def test_expression_hex(root: Path) -> None:
     expect("expression-hex-literal", rc == 0 and "校验通过" in so, f"rc={rc} se={se!r}")
 
 
+def test_meta_count(root: Path) -> None:
+    cfg = fresh_copy(root)
+    rc, so, se = run(cfg, check=False)
+    n = len(parse_meta(cfg))
+    expect("meta-count", rc == 0 and n == len(schema_items()), f"rc={rc} n={n} se={se!r}")
+
+
+def test_meta_name_sequence(root: Path) -> None:
+    cfg = fresh_copy(root)
+    run(cfg, check=False)
+    names = [m["name"] for m in parse_meta(cfg)]
+    expected = [f"{d}.{path}" for (d, path, _cf, _ct) in schema_items()]
+    expect("meta-name-sequence", names == expected, f"{names} != {expected}")
+
+
+def test_meta_apply(root: Path) -> None:
+    cfg = fresh_copy(root)
+    run(cfg, check=False)
+    seen_reboot = set()
+    bad = ""
+    for m in parse_meta(cfg):
+        key = m["name"]
+        want = gen.META_APPLY_REBOOT if key in gen.APPLY_REBOOT else gen.META_APPLY_LIVE
+        if m["apply"] != want:
+            bad = f"{key}: {m['apply']} != {want}"
+            break
+        if m["apply"] == gen.META_APPLY_REBOOT:
+            seen_reboot.add(key)
+    expect("meta-apply-mapping",
+           not bad and seen_reboot == gen.APPLY_REBOOT,
+           bad or f"reboot={sorted(seen_reboot)}")
+
+
+def test_meta_unit(root: Path) -> None:
+    cfg = fresh_copy(root)
+    run(cfg, check=False)
+    unit = {m["name"]: m["unit"] for m in parse_meta(cfg)}
+    ok = (unit.get("motor.rs_ohm") == '"Ω"'
+          and unit.get("motor.pole_pairs") == "NULL"
+          and unit.get("hardware.current_sense.amp_gain") == "NULL")
+    expect("meta-unit-extraction", ok,
+           f"rs_ohm={unit.get('motor.rs_ohm')} pole_pairs={unit.get('motor.pole_pairs')} "
+           f"amp_gain={unit.get('hardware.current_sense.amp_gain')}")
+
+
+def test_meta_type(root: Path) -> None:
+    cfg = fresh_copy(root)
+    run(cfg, check=False)
+    got = {m["name"]: m["type"] for m in parse_meta(cfg)}
+    bad = {f"{d}.{path}": (got.get(f"{d}.{path}"), gen.META_TYPE_ENUMS[ctype])
+           for (d, path, _cf, ctype) in schema_items()
+           if got.get(f"{d}.{path}") != gen.META_TYPE_ENUMS[ctype]}
+    expect("meta-type-mapping", not bad, f"mismatch={bad}")
+
+
+def test_meta_range(root: Path) -> None:
+    cfg = fresh_copy(root)
+    run(cfg, check=False)
+    meta = {m["name"]: m for m in parse_meta(cfg)}
+    duty = meta.get("software.control.limits.duty_max", {})
+    kp = meta.get("software.control.current_loop.kp", {})
+    ok = (duty.get("min") == "0.0" and duty.get("max") == "1.0"
+          and kp.get("min") == "-INFINITY" and kp.get("max") == "INFINITY")
+    expect("meta-range-bounds", ok,
+           f"duty={duty.get('min')}..{duty.get('max')} kp={kp.get('min')}..{kp.get('max')}")
+
+
+def test_meta_deterministic(root: Path) -> None:
+    cfg = fresh_copy(root)
+    run(cfg, check=False)
+    p = cfg / "out" / "params_meta_generated.c"
+    first, mtime = p.read_bytes(), p.stat().st_mtime_ns
+    run(cfg, check=False)
+    second, mtime2 = p.read_bytes(), p.stat().st_mtime_ns
+    expect("meta-deterministic", first == second and mtime == mtime2,
+           f"same_content={first == second} same_mtime={mtime == mtime2}")
+
+
 CASES = (
     test_normal,
     test_production_config_check,
@@ -201,6 +302,13 @@ CASES = (
     test_pow_guard,
     test_bare_ambiguity,
     test_expression_hex,
+    test_meta_count,
+    test_meta_name_sequence,
+    test_meta_apply,
+    test_meta_unit,
+    test_meta_type,
+    test_meta_range,
+    test_meta_deterministic,
 )
 
 

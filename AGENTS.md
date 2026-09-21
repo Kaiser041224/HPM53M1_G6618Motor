@@ -246,3 +246,28 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   - 既有改名基准：`s_f`→`s_fault_ctx`、`s_hw`→`s_hardware_params`、`s_sw`→`s_software_params`、
     `s_cfg`→`s_adc_cfg`、`s_ctx`→`s_spi_ctx`/`s_uart_ctx`/`s_kth7823_ctx`；
     模块 `app_hw_params`→`app_hardware_params`、`app_sw_params`→`app_software_params`。
+
+### Comm 层与 USB Terminal（2026-09-21，同日模块化改名）
+
+- **`App/Comm/` 通讯层**（与 Control 平级）：通讯接口与协议的唯一归属，**按模块分子目录**：
+  - `terminal/`（`Inc/` + `Src/`）：USB CDC 终端（CherrySH 绑定、命令层、常驻状态区）；
+  - `can/`（`Inc/` + `Src/`，预留）：CAN 协议——电机控制报文 / 反馈报文（独立 spec）；
+  - UART 单字符调试暂留 Debug 层（现状）。
+- **术语**：本层模块统一用 **terminal**（终端）表述，不使用 shell（`app_terminal_*`）；
+  "CherrySH / chry_shell / csh_*" 仅指 SDK 中间件本身，保持不变。
+- **通讯子系统统一约定**：
+  - 生命周期 `init()` + `run_once()`（1kHz 慢任务）；ISR 零协议逻辑（中断仅收发搬运）；
+  - 输入输出经 Interface 契约（`intf_usb_cdc` 等，经 Platform `app_usb_*` 封装），不直接操作寄存器；
+  - 单次处理有界（目标 ≤200 µs）；长操作一律走 job 框架（`app_terminal_job`）；
+  - flash 操作仅允许停机窗口（命令前置联锁 + 停顿提示）。
+- **通道分工**：USB CDC = Terminal 交互；RTT = 高频 trace（`app_debug_printf` 不变）；
+  UART0 = 单字符调试（现状）。
+- **Terminal 命令扩展**：新命令按域归入
+  `App/Comm/terminal/Src/app_terminal_cmd_{sys,diag,param,motor}.c`；
+  模板见 `app_terminal_cmd.h`（`CSH_CMD_EXPORT_ALIAS(func, name, )`；usage 由命令自身打印）。
+- **参数访问约定**：消费者统一经 `app_*_params_current()` 读取；
+  调试写入仅经 Terminal `param` 命令（`_mutable()`）；名称空间 `<域>.<路径>`
+  （如 `hardware.current_sense.a_per_volt`）；生效语义见元数据 `apply` 字段
+  （live = 实时读取；reboot = init 期消费，v1 不持久化）。
+- **第三方豁免**：SDK 中间件源文件（`middleware/cherrysh`、`middleware/cherryrb`）保持原样，
+  不适用本工程版权头/命名规范；`config/csh_config.h` 为 SDK 模板派生（保留原归属，注明工程修改）。

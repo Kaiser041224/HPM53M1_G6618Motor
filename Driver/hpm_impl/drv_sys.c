@@ -28,3 +28,8 @@ void intf_sys_irq_restore(uint32_t state)
 {
     restore_global_irq(state);
 }
+
+void intf_sys_reset(void)
+{
+    ppor_sw_reset(HPM_PPOR, 10U);
+}

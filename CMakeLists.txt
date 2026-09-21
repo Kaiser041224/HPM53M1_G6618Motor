@@ -49,6 +49,22 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_params.py)
 sdk_app_inc(${PARAMS_GEN_DIR})
 sdk_app_src(${PARAMS_GEN_DIR}/params_generated.c)
+sdk_app_src(${PARAMS_GEN_DIR}/params_meta_generated.c)
+
+# ============================================================================
+# CherrySH（Shell 核心）+ cherryrb（环形缓冲）
+# 不使用 SDK port（barebone_usb/shell.c 的 CDC 描述符/回调与 drv_usb_cdc.c 冲突）；
+# 不设置 CONFIG_CHERRYSH，直接引用源文件（同 SEGGER RTT 方式）。
+# csh.h 无条件 include "csh_config.h" → 由 config/csh_config.h 提供。
+# ============================================================================
+
+set(CHERRYSH_DIR $ENV{HPM_SDK_BASE}/middleware/cherrysh)
+set(CHERRYRB_DIR $ENV{HPM_SDK_BASE}/middleware/cherryrb)
+sdk_inc(${CHERRYSH_DIR})
+sdk_inc(${CHERRYRB_DIR})
+sdk_app_src(${CHERRYSH_DIR}/chry_shell.c)
+sdk_app_src(${CHERRYSH_DIR}/builtin/help.c)
+sdk_app_src(${CHERRYRB_DIR}/chry_ringbuffer.c)
 
 # ============================================================================
 # SEGGER RTT (manually included, no syscalls)
@@ -79,6 +95,8 @@ sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Logic)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Algorithm/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Platform/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Control/Inc)
+sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Comm/terminal/Inc)
+sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Comm/can/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Debug/Inc)
 
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/hpm_impl)
@@ -154,11 +172,25 @@ sdk_app_src(App/Control/Src/app_fault.c)
 sdk_app_src(App/Control/Src/app_motor_params.c)
 
 # ============================================================================
+# Comm Layer（通讯：终端 / CAN 协议）
+#   terminal/ — USB CDC 终端（CherrySH 绑定 + 命令 + 常驻状态区）
+#   can/      — CAN 协议（预留：电机控制报文 / 反馈报文，独立 spec）
+# ============================================================================
+
+sdk_app_src(App/Comm/terminal/Src/app_terminal.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_job.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_sys.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_diag.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_motor.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_param.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_monitor.c)
+
+# ============================================================================
 # Debug Layer
 # ============================================================================
 
 sdk_app_src(App/Debug/Src/app_debug_uart.c)
-sdk_app_src(App/Debug/Src/app_debug_usb.c)
 sdk_app_src(App/Debug/Src/app_debug_encoder.c)
 sdk_app_src(App/Debug/Src/app_debug_cmd.c)
 sdk_app_src(App/Debug/Src/app_debug_flash.c)

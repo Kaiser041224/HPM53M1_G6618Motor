@@ -170,24 +170,24 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
     intf_adc_cfg_t adc1_cfg;
     int rc0;
     int rc1 = 0;
-    app_hardware_params_t hardware;
+    const app_hardware_params_t* hardware;
 
-    app_hardware_params_load(&hardware); /* config/hardware.yaml（将来 flash 覆盖） */
+    hardware = app_hardware_params_current(); /* config/hardware.yaml（将来 flash 覆盖） */
     s_adc_cfg = (app_adc_cfg_t){
-        .trigger_delay_ns = hardware.adc.trigger_delay_ns,
-        .sample_cycle = hardware.adc.sample_cycle,
+        .trigger_delay_ns = hardware->adc.trigger_delay_ns,
+        .sample_cycle = hardware->adc.sample_cycle,
         .resolution = (uint8_t)INTF_ADC_RES_DEFAULT,
     };
     if (cfg != NULL) {
         s_adc_cfg = *cfg;
         if (s_adc_cfg.sample_cycle == 0U) {
-            s_adc_cfg.sample_cycle = hardware.adc.sample_cycle;
+            s_adc_cfg.sample_cycle = hardware->adc.sample_cycle;
         }
         if (s_adc_cfg.resolution == 0U) {
             s_adc_cfg.resolution = (uint8_t)INTF_ADC_RES_DEFAULT;
         }
         if (s_adc_cfg.trigger_delay_ns == 0U) {
-            s_adc_cfg.trigger_delay_ns = hardware.adc.trigger_delay_ns;
+            s_adc_cfg.trigger_delay_ns = hardware->adc.trigger_delay_ns;
         }
     }
 

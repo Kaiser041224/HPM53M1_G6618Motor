@@ -82,6 +82,15 @@ const app_software_params_t* app_software_params_default(void);
 /** @brief 加载参数：工厂默认 +（将来）flash 覆盖（整定/自校准结果） */
 void app_software_params_load(app_software_params_t* out);
 
+/** @brief 初始化运行期单例（boot 时调用一次；幂等） */
+void app_software_params_init(void);
+
+/** @brief 运行期参数单例（只读；消费者统一经此读取；未初始化时自动初始化） */
+const app_software_params_t* app_software_params_current(void);
+
+/** @brief 运行期参数单例（可写；仅 Shell param 命令等调试路径使用） */
+app_software_params_t* app_software_params_mutable(void);
+
 #ifdef __cplusplus
 }
 #endif

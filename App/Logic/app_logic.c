@@ -30,12 +30,13 @@
 #include "app_debug_motor.h"
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
-#include "app_debug_usb.h"
 #include "app_fault.h"
 #include "app_gpio.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
+#include "app_terminal.h"
 #include "app_software_params.h"
+#include "app_usb.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
 
@@ -58,24 +59,25 @@ void app_init(void) {
     app_debug_printf(
         "boot: seq=%u rst_status=0x%08x\r\n", (unsigned)s_boot_seq, (unsigned)rst_status);
 
-    /* 0b. 参数摘要（验证 YAML 参数管线端到端：config/{motor,hardware,software}.yaml → 生成 → 加载）
-     */
+    /* 0b. 参数单例初始化 + 摘要（验证 YAML 参数管线端到端：
+     * config/{motor,hardware,software}.yaml → 生成 → 加载） */
     {
-        app_motor_params_t motor_params;
-        app_hardware_params_t hardware;
-        app_software_params_t software;
+        app_motor_params_init();
+        app_hardware_params_init();
+        app_software_params_init();
 
-        app_motor_params_load(&motor_params);
-        app_hardware_params_load(&hardware);
-        app_software_params_load(&software);
+        const app_motor_params_t *motor_params = app_motor_params_current();
+        const app_hardware_params_t *hardware = app_hardware_params_current();
+        const app_software_params_t *software = app_software_params_current();
+
         app_debug_printf(
             "params: pp=%u rs=%.4f ls=%g | a/v=%.4f vbus/v=%.4f | oc=%.1f ov=%.1f uv=%.1f | "
             "pwm=%u/%u\r\n",
-            (unsigned)motor_params.pole_pairs, (double)motor_params.rs_ohm,
-            (double)motor_params.ls_h, (double)hardware.current_sense.a_per_volt,
-            (double)hardware.vbus_sense.v_per_volt, (double)software.fault.oc_trip_a,
-            (double)software.fault.vbus_ov_v, (double)software.fault.vbus_uv_v,
-            (unsigned)hardware.inverter.pwm_freq_hz, (unsigned)hardware.inverter.deadtime_ns);
+            (unsigned)motor_params->pole_pairs, (double)motor_params->rs_ohm,
+            (double)motor_params->ls_h, (double)hardware->current_sense.a_per_volt,
+            (double)hardware->vbus_sense.v_per_volt, (double)software->fault.oc_trip_a,
+            (double)software->fault.vbus_ov_v, (double)software->fault.vbus_uv_v,
+            (unsigned)hardware->inverter.pwm_freq_hz, (unsigned)hardware->inverter.deadtime_ns);
     }
 
     /* 1. 系统时钟（顺序与 SuperCap 一致：board_init -> intf_clock_init）
@@ -96,8 +98,9 @@ void app_init(void) {
     /* 5. CAN 自检（MCAN3，经典 CAN；总线波特率与周期帧 ID 来源 config/software.yaml） */
     app_debug_can_init();
 
-    /* 6. USB 自检（USB0 CDC 虚拟串口，J10） */
-    app_debug_usb_init();
+    /* 6. USB 终端（USB0 CDC 虚拟串口，J10；CherrySH 交互 Terminal，1kHz 慢任务轮询） */
+    app_usb_init();
+    app_terminal_init();
 
     /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴） */
     app_debug_encoder_init();
@@ -144,12 +147,11 @@ void app_init(void) {
 }
 
 void app_run(void) {
-    app_hardware_params_t hardware;
+    const app_hardware_params_t *hardware = app_hardware_params_current();
 
     /* 控制节拍 = 半桥开关频率（config/hardware.yaml；FOC 闭环同频） */
-    app_hardware_params_load(&hardware);
     const uint32_t cpu_freq = intf_clock_get_cpu_freq();
-    const uint32_t loop_cycles = cpu_freq / hardware.inverter.pwm_freq_hz;
+    const uint32_t loop_cycles = cpu_freq / hardware->inverter.pwm_freq_hz;
     const uint32_t slow_cycles = (cpu_freq / 1000U) * APP_SLOW_TASK_PERIOD_MS;
     const uint32_t hb_cycles = (cpu_freq / 1000U) * APP_HEARTBEAT_INTERVAL_MS;
     uint32_t next = intf_clock_get_cycle() + loop_cycles;
@@ -181,7 +183,7 @@ void app_run(void) {
             app_adc_slow_process(); /* ADC1 慢速通道（VBUS/NTC/CANID）@1kHz */
             app_debug_uart_run_once();
             app_debug_can_run_once();
-            app_debug_usb_run_once();
+            app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
         }
 
         /* 3) 心跳 + 编码器统计汇总（1s） */

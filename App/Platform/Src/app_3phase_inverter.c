@@ -59,13 +59,13 @@ static float inverter_clamp_duty(float duty) {
 }
 
 void app_3phase_inverter_init(const app_3phase_inverter_cfg_t* cfg) {
-    app_hardware_params_t hardware;
+    const app_hardware_params_t* hardware;
     app_3phase_inverter_cfg_t cfg_effective;
 
-    app_hardware_params_load(&hardware); /* config/hardware.yaml（将来 flash 覆盖） */
+    hardware = app_hardware_params_current(); /* config/hardware.yaml（将来 flash 覆盖） */
     cfg_effective = (app_3phase_inverter_cfg_t){
-        .pwm_freq_hz = hardware.inverter.pwm_freq_hz,
-        .deadtime_ns = hardware.inverter.deadtime_ns,
+        .pwm_freq_hz = hardware->inverter.pwm_freq_hz,
+        .deadtime_ns = hardware->inverter.deadtime_ns,
     };
 
     if (cfg != NULL) {

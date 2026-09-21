@@ -53,6 +53,22 @@ static float s_mod;
 static float s_theta;
 static uint32_t s_last_cycle;
 
+bool app_debug_motor_is_running(void) {
+    return s_running;
+}
+
+void app_debug_motor_get_state(float* freq_hz, float* mod, bool* running) {
+    if (freq_hz != NULL) {
+        *freq_hz = s_freq_hz;
+    }
+    if (mod != NULL) {
+        *mod = s_mod;
+    }
+    if (running != NULL) {
+        *running = s_running;
+    }
+}
+
 /**
  * @brief 打印当前旋转状态（启停 / 电频率 / 调制比）
  */
@@ -60,6 +76,28 @@ static void motor_print_state(void) {
     app_debug_printf(
         "[MOTOR] rotation=%s f=%.2f Hz mod=%.1f%% (Vamp=%.2f V @24V)\r\n", s_running ? "ON" : "OFF",
         (double)s_freq_hz, (double)(s_mod * 100.0f), (double)(s_mod * 24.0f * 0.5f));
+}
+
+void app_debug_motor_set_freq(float freq_hz) {
+    if (freq_hz < MOTOR_TEST_FREQ_MIN) {
+        freq_hz = MOTOR_TEST_FREQ_MIN;
+    } else if (freq_hz > MOTOR_TEST_FREQ_MAX) {
+        freq_hz = MOTOR_TEST_FREQ_MAX;
+    }
+
+    s_freq_hz = freq_hz;
+    motor_print_state();
+}
+
+void app_debug_motor_set_mod(float mod) {
+    if (mod < MOTOR_TEST_MOD_MIN) {
+        mod = MOTOR_TEST_MOD_MIN;
+    } else if (mod > MOTOR_TEST_MOD_MAX) {
+        mod = MOTOR_TEST_MOD_MAX;
+    }
+
+    s_mod = mod;
+    motor_print_state();
 }
 
 /**
@@ -117,10 +155,9 @@ void app_debug_motor_rotation_toggle(void) {
     /* 防御：占空比开始每周期更新前，重新武装 ADC 触发比较器（on_modify 单次写生效），
      * 避免 PWM 影子寄存器交互导致触发点被扰动（曾观测到 228kHz 触发突发）。 */
     {
-        app_hardware_params_t hardware;
+        const app_hardware_params_t* hardware = app_hardware_params_current(); /* config/hardware.yaml */
 
-        app_hardware_params_load(&hardware); /* config/hardware.yaml */
-        (void)app_adc_set_trigger_delay_ns(hardware.adc.trigger_delay_ns);
+        (void)app_adc_set_trigger_delay_ns(hardware->adc.trigger_delay_ns);
     }
 
     (void)app_3phase_inverter_enable();

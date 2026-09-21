@@ -56,12 +56,12 @@ void app_debug_inverter_set_output(uint8_t mask) {
 
 void app_debug_inverter_init(void) {
 #if INVERTER_TEST_ENABLE
-    app_hardware_params_t hardware;
+    const app_hardware_params_t* hardware;
 
-    app_hardware_params_load(&hardware); /* config/hardware.yaml */
+    hardware = app_hardware_params_current(); /* config/hardware.yaml */
     app_debug_printf(
         "\r\n[3PH] 三相逆变桥输出自检：%u Hz / %u%% / 持续\r\n",
-        (unsigned)hardware.inverter.pwm_freq_hz, (unsigned)(INVERTER_TEST_DUTY * 100.0f));
+        (unsigned)hardware->inverter.pwm_freq_hz, (unsigned)(INVERTER_TEST_DUTY * 100.0f));
 
     app_3phase_inverter_init(NULL);
     (void)app_3phase_inverter_set_duty_abc(

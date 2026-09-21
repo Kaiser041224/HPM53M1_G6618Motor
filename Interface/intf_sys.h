@@ -47,10 +47,17 @@ uint32_t intf_sys_get_reset_status(void);
 uint32_t intf_sys_irq_save(void);
 
 /**
- * @brief 恢复全局中断到保存状态
- * @param state 由 intf_sys_irq_save 返回的状态
+ * @brief 恢复中断使能状态（与 intf_sys_irq_save 配对）。
+ * @param state intf_sys_irq_save 返回的状态
  */
 void intf_sys_irq_restore(uint32_t state);
+
+/**
+ * @brief 软件复位（PPOR SOFTWARE_RESET；调用后立即复位，不返回）。
+ *
+ * 用途：Shell reboot 命令。调用前须确保电机停止等安全前置条件。
+ */
+void intf_sys_reset(void);
 
 #ifdef __cplusplus
 }

@@ -62,6 +62,23 @@ const app_motor_params_t *app_motor_params_default(void);
  */
 void app_motor_params_load(app_motor_params_t *out);
 
+/**
+ * @brief 初始化运行期单例（boot 时调用一次；幂等）。
+ */
+void app_motor_params_init(void);
+
+/**
+ * @brief 运行期参数单例（只读；消费者统一经此读取）。
+ * @return 单例指针（未初始化时自动初始化）
+ */
+const app_motor_params_t *app_motor_params_current(void);
+
+/**
+ * @brief 运行期参数单例（可写；仅 Shell param 命令等调试路径使用）。
+ * @return 单例指针
+ */
+app_motor_params_t *app_motor_params_mutable(void);
+
 #ifdef __cplusplus
 }
 #endif
