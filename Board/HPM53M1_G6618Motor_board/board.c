@@ -8,6 +8,8 @@
  */
 
 #include "board.h"
+
+#include "hpm_l1c_drv.h"
 #include "pinmux.h"
 #include "hpm_clock_drv.h"
 #include "hpm_usb_drv.h"
@@ -93,6 +95,15 @@ static void board_disable_usb_phy_dp_dm_pulldown(void)
  */
 void board_init(void)
 {
+    /* L1 Cache（HPM53M1：16KB I + 16KB D，32B line）——必须尽早使能：
+     * 不使能时所有 flash(XIP) 代码/常量按无 cache 速度取指，热路径慢 5~10 倍
+     * （台架实测 FOC 单拍 100us、主循环 200us ≈ 5kHz，设计目标 25kHz）。
+     * 安全性：本工程 DMA 缓冲全部位于 DLM 非缓存区
+     * （linker 将 .noncacheable 与 .fast_ram 均放入 DLM 0x00080300）；
+     * D-Cache 采用 write-around（写直达内存，不分配行），DMA 可见性不受影响。 */
+    l1c_ic_enable();
+    l1c_dc_enable();
+
     board_disable_usb_phy_dp_dm_pulldown();
     init_pins();
 }

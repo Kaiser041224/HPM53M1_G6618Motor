@@ -18,6 +18,8 @@
  */
 
 #include "intf_flash.h"
+
+#include "hpm_l1c_drv.h"
 #include "board.h"
 
 #include "hpm_romapi.h"
@@ -171,7 +173,13 @@ static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
                                  (const uint32_t *) buf, addr - s_base, (uint32_t) len);
     flash_exit_critical(irq_state);
 
-    return (status == status_success) ? 0 : -1;
+    if (status == status_success) {
+        /* ROM 经 XPI 写 flash，CPU 侧 D-Cache 中的旧行必须失效，否则回读校验读到陈旧数据
+         * （L1C 已使能；XIP flash 区为可缓存区） */
+        l1c_dc_invalidate(addr, (uint32_t) len);
+        return 0;
+    }
+    return -1;
 }
 
 /**
@@ -196,7 +204,12 @@ static int flash_erase_sector_impl(uint32_t addr)
                                       addr - s_base);
     flash_exit_critical(irq_state);
 
-    return (status == status_success) ? 0 : -1;
+    if (status == status_success) {
+        /* 同上：擦除后整扇区内容变化，失效该扇区的缓存行 */
+        l1c_dc_invalidate(addr, s_sector_size);
+        return 0;
+    }
+    return -1;
 }
 
 /* ============================================================================
