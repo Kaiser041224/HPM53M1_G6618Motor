@@ -11,6 +11,7 @@
 
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
+#include "app_analog_signal.h"
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_hardware_params.h"
@@ -124,12 +125,25 @@ static void app_foc_run_body(void) {
     }
 
     if (s_state == APP_FOC_STATE_OFF) {
-        /* OFF：仅刷新角度观测（不写桥、不跑电流环），供台架静态链路检查（spec §9.1 步骤 1） */
+        /* OFF：仅刷新观测（角度 + 实测电流；不写桥、不跑电流环）。
+         * 桥已关闭 → 实测电流应为 0（±噪声）；快照同步刷新，避免"OFF 仍有电流"的误读。 */
+        app_analog_values_t values;
+
         if (s_angle_ready && app_foc_read_rotor_rad(&theta_m)) {
             float omega_off = 0.0f;
+            float theta_off = s_angle.step(&s_angle, theta_m, &omega_off);
 
-            g_foc_current_snapshot.theta_e_rad = s_angle.step(&s_angle, theta_m, &omega_off);
+            g_foc_current_snapshot.theta_e_rad = theta_off;
             g_foc_current_snapshot.omega_e_rad_s = omega_off;
+            if (app_analog_signal_read_all(&values)) {
+                float i_alpha, i_beta, s, c;
+
+                foc_clarke(values.i_u_a, values.i_v_a, values.i_w_a, &i_alpha, &i_beta);
+                foc_sincos(theta_off, &s, &c);
+                foc_park_sc(i_alpha, i_beta, s, c, &g_foc_current_snapshot.i_d_a,
+                            &g_foc_current_snapshot.i_q_a);
+                g_foc_current_snapshot.v_bus_v = values.v_bus_v;
+            }
         }
         return;
     }
@@ -228,9 +242,12 @@ int app_foc_enable(void) {
         return -1;
     }
 
-    /* live 参数热更新 */
-    s_angle.set_offset(&s_angle, motor->encoder.electrical_offset_rad,
-                       motor->encoder.direction);
+    /* 角度链参数重载：pole_pairs / direction / offset 改动在本次 foc on 生效
+     * （pole_pairs 为 init 期消费，此处显式重建，避免必须重编译） */
+    s_angle_ready = (app_foc_angle_init() == 0);
+    if (!s_angle_ready) {
+        return -1;
+    }
 
     /* 注：app_3phase_inverter_enable() 内含 +12V 栅极供电稳定等待（约 10ms 阻塞）。
      * 该窗口内桥处于关闭态（PWM 未启动），无电流风险；但 25kHz 环与 L2/L3 保护暂停。

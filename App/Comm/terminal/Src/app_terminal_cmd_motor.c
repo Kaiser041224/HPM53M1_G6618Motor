@@ -29,6 +29,7 @@
 #include "app_debug_motor.h"
 #include "app_foc.h"
 #include "app_motor_identify.h"
+#include "app_motor_params.h"
 #include "foc_math.h"
 
 #include <string.h>
@@ -323,8 +324,16 @@ static void cal_encoder_tick(uint32_t now_ms) {
                               (double)result.direction, (double)result.quality);
         app_terminal_cmd_emit("    verify: mean=%.2f deg  max=%.2f deg (limit 5/15)\r\n",
                               (double)result.verify_mean_deg, (double)result.verify_max_deg);
-        app_terminal_cmd_emit("    ratio_err=%+.1f%% (mech travel vs 2pi/p; RAM only, flash v2)\r\n",
-                              (double)(result.ratio_err * 100.0f));
+        {
+            const app_motor_params_t* motor = app_motor_params_current();
+            float implied_pp = (float)motor->pole_pairs / (1.0f + result.ratio_err);
+
+            app_terminal_cmd_emit(
+                "    ratio_err=%+.1f%% (mech travel vs 2pi/p; RAM only, flash v2)\r\n",
+                (double)(result.ratio_err * 100.0f));
+            app_terminal_cmd_emit("    implied effective pole_pairs = %.1f (if encoder ratio is 1:1)\r\n",
+                                  (double)implied_pp);
+        }
     } else {
         app_terminal_cmd_emit("\r\nFAIL: encoder identify (%s)  q=%.3f  ratio_err=%+.1f%%\r\n",
                               cal_encoder_fail_name(result.fail_reason),
