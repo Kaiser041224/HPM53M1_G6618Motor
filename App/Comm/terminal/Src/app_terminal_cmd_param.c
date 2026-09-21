@@ -28,7 +28,8 @@ static const char* const s_safety_params[] = {
     "software.fault.oc_trip_a",        "software.fault.vbus_ov_v",
     "software.fault.vbus_uv_v",        "hardware.inverter.pwm_freq_hz",
     "hardware.inverter.deadtime_ns",   "software.control.limits.duty_max",
-    "software.control.limits.i_q_max_a",
+    "software.control.limits.i_q_max_a", "software.control.limits.i_trip_a",
+    "hardware.current_sense.invert",
 };
 
 /** @brief apply 字段文本 */

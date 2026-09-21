@@ -601,6 +601,7 @@ control:
 | 13 | `app_3phase_inverter_enable()` 含 ~10ms 阻塞（+12V 栅极稳定等待），`foc on`/`motor start` 期间 25kHz 环与 L2/L3 暂停 | 实时性 | 阻塞窗口内桥关闭、无电流风险；与既有 V/F 路径同构。**v2：非阻塞桥使能**（断言 +12V → 主循环 deadline 后启动 PWM） |
 | 14 | 辨识为**单一总超时**（15s）+ 30s 编排兜底，未实现 spec §5.5 的每阶段独立超时 | 范围 | V1 接受（锁定态 2A 持续 15s 热效应可忽略）；v2 细化 |
 | 15 | `motor.encoder.*` 参数元数据标 LIVE，实际在下一次 `app_foc_enable()` 消费 | 元数据 | V1 已记录（§6 偏差）；v2 可细化 apply 语义或改为运行期热更新 |
+| 17 | 快速过流跳闸（`i_trip_a`，默认 10A）**低于**电流限幅 `i_q_max_a`（24.3A）：V1 bring-up 阶段有效电流上限 = 10A；超过将跳闸 | 设计取舍 | 有意为之（首轮台架保护弱电源）；需要更大电流前先上调 `i_trip_a`（LIVE）；量产建议 ≥1.2×`i_q_max_a`。跳闸未接入 `app_fault` 位图（无 first-fault 记录，仅 `foc status` 的 `trip=`/FAULT 态）——v2 接入 |
 | 16 | **电流采样符号与马达约定反相**（低侧采样 `I_*+` 接 MOSFET 源极）——V1 首轮台架 `foc on` 即失控（母线跌落复位） | 硬件/软件约定 | 已修复：`hardware.current_sense.invert`（默认 1，LIVE）+ `app_analog_signal` 取反；详见 ADC spec §6。V/F 开环无电流反馈，无法发现该问题 |
 
 ---
