@@ -5,6 +5,7 @@
  *
  * 命令：
  *   motor start | stop | freq <+|-> | mod <+|->   （开环 V/F 自检）
+ *   motor iq [<A>]                               （FOC 转矩给定；无参 = 查询）
  *   inv <u|v|w|all|off>                          （三相逆变桥逐相输出）
  *   cal current                                  （电流零点标定）
  *
@@ -24,6 +25,7 @@
 #include "app_analog_signal.h"
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
+#include "app_foc.h"
 
 #include <string.h>
 
@@ -71,12 +73,17 @@ static int cmd_motor(int argc, char** argv) {
                    "usage: motor [status]\r\n"
                    "       motor start | stop\r\n"
                    "       motor freq [<hz>|+|-]   (0.5~10 Hz; no arg = query)\r\n"
-                   "       motor mod  [<pct>|+|-]  (1~10 %%; no arg = query)\r\n");
+                   "       motor mod  [<pct>|+|-]  (1~10 %%; no arg = query)\r\n"
+                   "       motor iq [<A>]          (FOC torque ref; no arg = query)\r\n");
         return 0;
     }
 
     if (strcmp(sub, "start") == 0) {
         if (!app_terminal_cmd_require_no_fault(csh)) {
+            return -1;
+        }
+        if (app_foc_is_active()) {
+            csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
             return -1;
         }
         if (app_debug_motor_is_running()) {
@@ -96,6 +103,35 @@ static int cmd_motor(int argc, char** argv) {
         app_debug_motor_stop();
         app_terminal_cmd_capture_end();
         motor_print_status(csh);
+        return 0;
+    }
+
+    if (strcmp(sub, "iq") == 0) {
+        float value;
+        app_foc_current_snapshot_t snap;
+
+        if ((app_foc_get_state() != APP_FOC_STATE_READY)
+            && (app_foc_get_state() != APP_FOC_STATE_RUN)) {
+            csh_printf(csh, "ERR: FOC not enabled (use 'foc on')\r\n");
+            return -1;
+        }
+        if (argc < 3) {
+            app_foc_get_snapshot(&snap);
+            csh_printf(csh, "foc iq: ref=%.3f A  meas=%.3f A\r\n", (double)snap.i_q_ref_a,
+                       (double)snap.i_q_a);
+            return 0;
+        }
+        if (app_terminal_cmd_parse_float(argv[2], &value) != 0) {
+            csh_printf(csh, "ERR: invalid value '%s'\r\n", argv[2]);
+            return -1;
+        }
+        if (app_foc_set_iq_ref(value) != 0) {
+            csh_printf(csh, "ERR: set iq failed\r\n");
+            return -1;
+        }
+        app_foc_get_snapshot(&snap);
+        csh_printf(csh, "foc iq: ref=%.3f A  meas=%.3f A\r\n", (double)snap.i_q_ref_a,
+                   (double)snap.i_q_a);
         return 0;
     }
 

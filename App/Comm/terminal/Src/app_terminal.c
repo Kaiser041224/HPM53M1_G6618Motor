@@ -269,8 +269,9 @@ typedef struct {
     uint8_t count;            /**< 候选数 */
 } app_terminal_argument_t;
 
-static const char* const s_sub_motor[] = {"start", "stop", "status", "freq", "mod", "help"};
+static const char* const s_sub_motor[] = {"start", "stop", "status", "freq", "mod", "iq", "help"};
 static const char* const s_sub_inv[] = {"u", "v", "w", "all", "off"};
+static const char* const s_sub_foc[] = {"status", "on", "off"};
 static const char* const s_sub_adc[] = {"dump", "diag", "delay"};
 static const char* const s_sub_enc[] = {"info", "zero", "clear"};
 static const char* const s_sub_fault[] = {"show", "clear"};
@@ -283,6 +284,7 @@ static const char* const s_sub_param[] = {"list", "get", "set", "reset"};
 static const app_terminal_subcommand_t s_subcommands[] = {
     {"motor", s_sub_motor, (uint8_t)(sizeof(s_sub_motor) / sizeof(s_sub_motor[0]))},
     {"inv", s_sub_inv, (uint8_t)(sizeof(s_sub_inv) / sizeof(s_sub_inv[0]))},
+    {"foc", s_sub_foc, (uint8_t)(sizeof(s_sub_foc) / sizeof(s_sub_foc[0]))},
     {"adc", s_sub_adc, (uint8_t)(sizeof(s_sub_adc) / sizeof(s_sub_adc[0]))},
     {"enc", s_sub_enc, (uint8_t)(sizeof(s_sub_enc) / sizeof(s_sub_enc[0]))},
     {"fault", s_sub_fault, (uint8_t)(sizeof(s_sub_fault) / sizeof(s_sub_fault[0]))},

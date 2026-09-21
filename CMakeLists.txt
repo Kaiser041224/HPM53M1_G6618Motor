@@ -189,6 +189,7 @@ sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_sys.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_diag.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_motor.c)
+sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_foc.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd_param.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_monitor.c)
 
