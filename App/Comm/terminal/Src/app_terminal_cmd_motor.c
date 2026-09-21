@@ -8,6 +8,7 @@
  *   motor iq [<A>]                               （FOC 转矩给定；无参 = 查询）
  *   inv <u|v|w|all|off>                          （三相逆变桥逐相输出）
  *   cal current                                  （电流零点标定）
+ *   cal encoder                                  （电角度辨识；job 驱动，结果落 RAM）
  *
  * 安全联锁（设计文档 §8）：
  *   驱动类命令要求无故障锁存；先停旋转；标定要求电机停止。
@@ -26,6 +27,8 @@
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
 #include "app_foc.h"
+#include "app_motor_identify.h"
+#include "foc_math.h"
 
 #include <string.h>
 
@@ -264,13 +267,94 @@ static app_terminal_job_t s_cal_job = {
 };
 
 /**
- * @brief 命令 cal：电流零点标定（current，job 驱动，不阻塞控制环）。
+ * @brief cal encoder job：1kHz 推进辨识编排（进度/验证/结果打印）
+ * @param now_ms 系统毫秒计数
+ */
+static void cal_encoder_tick(uint32_t now_ms) {
+    app_motor_identify_result_t result;
+
+    app_motor_identify_run_once(now_ms);
+    if (app_motor_identify_is_active()) {
+        return;
+    }
+
+    /* 结束：由 Comm 层读取 Control 结果并打印（分层：Comm → Control） */
+    app_motor_identify_get_result(&result);
+    if (result.done) {
+        app_terminal_cmd_emit("\r\nOK: encoder identify  offset=%.4f rad (%.2f deg)  dir=%+.0f  q=%.3f\r\n",
+                              (double)result.offset_rad,
+                              (double)(result.offset_rad * (180.0f / FOC_PI_F)),
+                              (double)result.direction, (double)result.quality);
+        app_terminal_cmd_emit("    verify: mean=%.2f deg  max=%.2f deg (limit 5/15)\r\n",
+                              (double)result.verify_mean_deg, (double)result.verify_max_deg);
+        app_terminal_cmd_emit("    ratio_err=%.3f  (RAM only; flash v2)\r\n",
+                              (double)result.ratio_err);
+    } else {
+        app_terminal_cmd_emit("\r\nFAIL: encoder identify (reason=%u  q=%.3f  ratio_err=%.3f)\r\n",
+                              (unsigned)result.fail_reason, (double)result.quality,
+                              (double)result.ratio_err);
+        app_terminal_cmd_emit("      check: mechanical slack / encoder dir / pole pairs / "
+                              "I_cal too low\r\n");
+    }
+    app_terminal_job_abort(); /* 结束 job（触发 abort 回调换行+刷新） */
+}
+
+/**
+ * @brief cal encoder job 中止回调
+ */
+static void cal_encoder_abort(void) {
+    app_motor_identify_abort();
+    app_terminal_cmd_emit("\r\n");
+    app_terminal_refresh();
+}
+
+/** cal encoder job（静态生命周期） */
+static app_terminal_job_t s_cal_encoder_job = {
+    .name = "cal encoder",
+    .tick = cal_encoder_tick,
+    .abort = cal_encoder_abort,
+    .active = false,
+};
+
+/**
+ * @brief 命令 cal：电流零点标定（current）/ 电角度辨识（encoder），job 驱动，不阻塞控制环。
  */
 static int cmd_cal(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
 
-    if ((argc < 2) || (strcmp(argv[1], "current") != 0)) {
-        return app_terminal_cmd_usage(csh, "cal current");
+    if (argc < 2) {
+        return app_terminal_cmd_usage(csh, "cal current | cal encoder");
+    }
+
+    if (strcmp(argv[1], "encoder") == 0) {
+        if (!app_terminal_cmd_require_no_fault(csh)) {
+            return -1;
+        }
+        if (app_foc_get_state() == APP_FOC_STATE_OFF) {
+            csh_printf(csh, "ERR: FOC not enabled (use 'foc on' first)\r\n");
+            return -1;
+        }
+        if (app_debug_motor_is_running()) {
+            csh_printf(csh, "ERR: V/F rotation running (stop first)\r\n");
+            return -1;
+        }
+        csh_printf(csh,
+                   "WARN: motor must be FREE to rotate; I_cal=2.0A; ~4s; any key aborts\r\n");
+        /* 先启动 job（会中止旧 job），再启动辨识 */
+        if (app_terminal_job_start(&s_cal_encoder_job) != 0) {
+            csh_printf(csh, "FAIL: job start\r\n");
+            return -1;
+        }
+        if (app_motor_identify_start() != 0) {
+            app_terminal_job_abort();
+            csh_printf(csh, "FAIL: identify start (fault/foc state/params)\r\n");
+            return -1;
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[1], "current") != 0) {
+        return app_terminal_cmd_usage(csh, "cal current | cal encoder");
     }
     if (!app_terminal_cmd_require_motor_stopped(csh)) {
         return -1;

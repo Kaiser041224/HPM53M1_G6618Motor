@@ -14,6 +14,7 @@
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_hardware_params.h"
+#include "app_motor_identify.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
 #include "foc_angle.h"
@@ -118,6 +119,11 @@ static void app_foc_run_body(void) {
     if ((s_state != APP_FOC_STATE_READY) && (s_state != APP_FOC_STATE_RUN)
         && (s_state != APP_FOC_STATE_CALIB)) {
         return;
+    }
+
+    /* 辨识模式：由辨识模块提供激励（强制角 + 电流给定） */
+    if (s_state == APP_FOC_STATE_CALIB) {
+        (void)app_motor_identify_fast_step();
     }
 
     /* 角度 */

@@ -277,7 +277,7 @@ static const char* const s_sub_enc[] = {"info", "zero", "clear"};
 static const char* const s_sub_fault[] = {"show", "clear"};
 static const char* const s_sub_pwm[] = {"dump"};
 static const char* const s_sub_profiler[] = {"dump"};
-static const char* const s_sub_cal[] = {"current"};
+static const char* const s_sub_cal[] = {"current", "encoder"};
 static const char* const s_sub_reboot[] = {"confirm"};
 static const char* const s_sub_param[] = {"list", "get", "set", "reset"};
 

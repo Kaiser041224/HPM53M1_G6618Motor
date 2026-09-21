@@ -177,6 +177,7 @@ sdk_app_src(App/Control/Src/app_fault.c)
 sdk_app_src(App/Control/Src/app_motor_params.c)
 sdk_app_src(App/Control/Src/app_foc_current.c)
 sdk_app_src(App/Control/Src/app_foc.c)
+sdk_app_src(App/Control/Src/app_motor_identify.c)
 
 # ============================================================================
 # Comm Layer（通讯：终端 / CAN 协议）
