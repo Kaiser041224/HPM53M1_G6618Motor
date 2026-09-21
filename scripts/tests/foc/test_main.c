@@ -18,10 +18,12 @@ int g_checks = 0;
 int g_fails = 0;
 
 void test_foc_math(void);
+void test_foc_angle(void);
 
 int main(void) {
     printf("FOC host tests\n");
     test_foc_math();
+    test_foc_angle();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");
