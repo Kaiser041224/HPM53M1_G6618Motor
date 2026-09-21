@@ -20,15 +20,17 @@
 #define APP_IDENTIFY_I_CAL_A       (2.0f)   /**< 辨识电流（峰值）[A] */
 #define APP_IDENTIFY_QUALITY_MIN   (0.8f)   /**< 质量下限（与 id_encoder 配置一致） */
 #define APP_IDENTIFY_RUN_TICK_MAX  (30000U) /**< 编排侧 RUN 超时 [1kHz tick]（30s 兜底） */
-#define APP_IDENTIFY_SETTLE_TICKS  (50U)    /**< 验证起始静默 [tick]（排除残余速度） */
-#define APP_IDENTIFY_VERIFY_MS     (500.0f) /**< 验证时长 [ms] */
-/* 验证判据：i_d 锁定后转子应停在扫描终点（0）。
- * 残差均值 = 零点误差的直接度量（> 15° 时 FOC 转矩误差 > 3%，且转矩角误差会
- * 驱动转子持续爬行/飞转）；残差峰值用于兜底"飞转"（真零点错误 → 恒转矩 →
- * 角度斜坡 → 峰值冲到 180°）。机械回差/摩擦会造成有界振荡（±7~14° 电角），
- * 不影响 FOC（转矩误差 cos(7°)=0.7%），故峰值门限放宽到 45°。 */
-#define APP_IDENTIFY_VERIFY_MEAN_DEG (15.0f) /**< 验证残差均值上限 [deg] */
-#define APP_IDENTIFY_VERIFY_MAX_DEG  (45.0f) /**< 验证残差峰值上限 [deg]（兜底飞转） */
+/* 验证 = 探针法（参考实现同法）：静默后给一个小 i_q 脉冲，转子必须按"电角正方向"
+ * 转动（机械行程 × direction ≥ 0.05 rad）。判据免疫机械回差/摩擦/爬行——只回答
+ * "零点是否可用"：~90° 错误 → 无转矩 → 行程≈0 → 失败；180° 错误 → 反转 → 失败。
+ * 静默段的角度残差仅作信息量（回差/摩擦会造成 ±7~14° 有界振荡，对 FOC 无影响），
+ * 但残差峰值 > 90° 说明转子在"静止窗口"内大幅移动（飞转/零点严重错误）→ 一并失败。 */
+#define APP_IDENTIFY_VERIFY_SETTLE_MS (50.0f) /**< 静默段时长 [ms]（排除残余速度） */
+#define APP_IDENTIFY_VERIFY_RESID_MS  (50.0f) /**< 残差采样窗口 [ms] */
+#define APP_IDENTIFY_VERIFY_RESID_MAX_DEG (90.0f) /**< 静默段残差峰值上限 [deg] */
+#define APP_IDENTIFY_PROBE_A          (0.5f)  /**< 探针 i_q [A]（0.058 N·m，克服静摩擦留 1.7x 余量） */
+#define APP_IDENTIFY_PROBE_MS         (40.0f) /**< 探针时长 [ms] */
+#define APP_IDENTIFY_PROBE_MIN_RAD    (0.05f) /**< 探针最小机械行程 [rad] */
 
 typedef enum {
     APP_IDENTIFY_STATE_IDLE = 0,
@@ -49,7 +51,9 @@ static float s_prev_offset_rad;   /**< 辨识前运行态零点（验证失败�
 static float s_prev_direction;    /**< 辨识前运行态方向 */
 static bool s_offset_applied;     /**< 辨识结果已应用到运行态（待验证/回滚） */
 static uint32_t s_run_ticks;      /**< RUN 阶段 tick 计数（编排侧超时） */
-static uint32_t s_verify_settle;  /**< 验证静默剩余 tick */
+static float s_probe_theta_prev;  /**< 探针段上一拍机械角 [rad] */
+static float s_probe_travel;      /**< 探针段机械行程累计 [rad] */
+static bool s_probe_active;       /**< 探针段已开始 */
 static uint32_t s_rotor_seq_last; /**< 转子采样序号（停摆检测） */
 static bool s_rotor_seq_valid;    /**< 序号已建立 */
 
@@ -142,6 +146,8 @@ bool app_motor_identify_fast_step(void) {
         s_verify_sum_deg = 0.0f;
         s_verify_max_deg = 0.0f;
         s_verify_n = 0U;
+        s_probe_active = false;
+        s_probe_travel = 0.0f;
     } else if (out.failed) {
         /* 直接映射 id_encoder 失败原因（不再由 quality 反推） */
         switch (out.fail_reason) {
@@ -232,40 +238,75 @@ void app_motor_identify_run_once(uint32_t now_ms) {
         }
 
         s_verify_ms += 1.0f; /* 1kHz */
-        if (s_verify_settle > 0U) {
-            s_verify_settle--; /* 起始静默：排除扫描残余速度 */
+
+        /* 段 1：静默（排除扫描残余速度） */
+        if (s_verify_ms <= APP_IDENTIFY_VERIFY_SETTLE_MS) {
             return;
         }
-        delta_deg = snap.theta_e_rad * (180.0f / FOC_PI_F);
-        if (delta_deg > 180.0f) {
-            delta_deg -= 360.0f;
+
+        /* 段 2：残差采样（i_d 锁定，转子静止；仅信息量） */
+        if (s_verify_ms <= (APP_IDENTIFY_VERIFY_SETTLE_MS + APP_IDENTIFY_VERIFY_RESID_MS)) {
+            delta_deg = snap.theta_e_rad * (180.0f / FOC_PI_F);
+            if (delta_deg > 180.0f) {
+                delta_deg -= 360.0f;
+            }
+            s_verify_sum_deg += delta_deg;
+            if (fabsf(delta_deg) > s_verify_max_deg) {
+                s_verify_max_deg = fabsf(delta_deg);
+            }
+            s_verify_n++;
+            return;
         }
-        s_verify_sum_deg += delta_deg;
-        if (fabsf(delta_deg) > s_verify_max_deg) {
-            s_verify_max_deg = fabsf(delta_deg);
-        }
-        s_verify_n++;
 
-        if (s_verify_ms >= APP_IDENTIFY_VERIFY_MS) {
-            float mean_deg = (s_verify_n > 0U) ? (s_verify_sum_deg / (float)s_verify_n) : 999.0f;
-
-            s_result.verify_mean_deg = mean_deg;
-            s_result.verify_max_deg = s_verify_max_deg;
-            if ((fabsf(mean_deg) <= APP_IDENTIFY_VERIFY_MEAN_DEG)
-                && (s_verify_max_deg <= APP_IDENTIFY_VERIFY_MAX_DEG)) {
-                app_motor_params_t* motor = app_motor_params_mutable();
-
-                motor->encoder.electrical_offset_rad = s_result.offset_rad;
-                motor->encoder.direction = s_result.direction;
-                s_offset_applied = false; /* 已落库，无需回滚 */
-                s_result.done = true;
-                s_result.active = false;
-                s_state = APP_IDENTIFY_STATE_DONE;
-            } else {
-                s_result.fail_reason = APP_IDENTIFY_REASON_VERIFY;
+        /* 探针段起点：解除 i_d 锁定，取起始机械角 */
+        if (!s_probe_active) {
+            if (!identify_read_theta_m(&s_probe_theta_prev)) {
+                s_result.fail_reason = APP_IDENTIFY_REASON_ENCODER;
                 s_result.failed = true;
                 app_motor_identify_abort();
+                return;
             }
+            s_probe_travel = 0.0f;
+            s_probe_active = true;
+            (void)app_foc_set_id_ref(0.0f);
+            (void)app_foc_set_iq_ref(APP_IDENTIFY_PROBE_A);
+            return;
+        }
+
+        /* 探针段：累计机械行程（wrap-safe） */
+        {
+            float theta_m;
+
+            if (identify_read_theta_m(&theta_m)) {
+                s_probe_travel += foc_wrap_pm_pi(theta_m - s_probe_theta_prev);
+                s_probe_theta_prev = theta_m;
+            }
+        }
+        if (s_verify_ms
+            < (APP_IDENTIFY_VERIFY_SETTLE_MS + APP_IDENTIFY_VERIFY_RESID_MS
+               + APP_IDENTIFY_PROBE_MS)) {
+            return;
+        }
+
+        /* 判定 */
+        (void)app_foc_set_iq_ref(0.0f);
+        s_result.verify_mean_deg = (s_verify_n > 0U) ? (s_verify_sum_deg / (float)s_verify_n) : 0.0f;
+        s_result.verify_max_deg = s_verify_max_deg;
+        s_result.probe_travel_rad = s_probe_travel;
+        if ((s_probe_travel * s_result.direction) >= APP_IDENTIFY_PROBE_MIN_RAD
+            && (s_verify_max_deg <= APP_IDENTIFY_VERIFY_RESID_MAX_DEG)) {
+            app_motor_params_t* motor = app_motor_params_mutable();
+
+            motor->encoder.electrical_offset_rad = s_result.offset_rad;
+            motor->encoder.direction = s_result.direction;
+            s_offset_applied = false; /* 已落库，无需回滚 */
+            s_result.done = true;
+            s_result.active = false;
+            s_state = APP_IDENTIFY_STATE_DONE;
+        } else {
+            s_result.fail_reason = APP_IDENTIFY_REASON_VERIFY;
+            s_result.failed = true;
+            app_motor_identify_abort();
         }
         break;
     }
@@ -294,7 +335,6 @@ int app_motor_identify_start(void) {
     identify_read_errors(s_enc_err_base);
     s_offset_applied = false;
     s_run_ticks = 0U;
-    s_verify_settle = APP_IDENTIFY_SETTLE_TICKS;
     s_rotor_seq_valid = false;
 
     cfg.pole_pairs = motor->pole_pairs;

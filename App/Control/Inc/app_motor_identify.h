@@ -49,8 +49,9 @@ typedef struct {
     float direction;           /**< 方向（+1.0 / −1.0） */
     float quality;             /**< 质量 |Σ|/N */
     float ratio_err;           /**< 极对数校验偏差（相对） */
-    float verify_mean_deg;     /**< 验证残差均值 [deg] */
-    float verify_max_deg;      /**< 验证残差峰值 [deg] */
+    float verify_mean_deg;     /**< 验证静默段角度残差均值 [deg]（信息量） */
+    float verify_max_deg;      /**< 验证静默段角度残差峰值 [deg]（信息量） */
+    float probe_travel_rad;    /**< 探针段机械行程 [rad]（判据：×direction ≥ 0.05） */
     app_identify_fail_t fail_reason; /**< 失败原因 */
 } app_motor_identify_result_t;
 
