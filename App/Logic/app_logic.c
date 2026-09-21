@@ -31,6 +31,7 @@
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
 #include "app_fault.h"
+#include "app_foc.h"
 #include "app_gpio.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
@@ -142,7 +143,10 @@ void app_init(void) {
         app_debug_printf("[ADC] zero calibration: FAILED (default 1.65V in use)\r\n");
     }
 
-    /* 13. 开环旋转自检（V/F，命令 r 启动） */
+    /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
+    app_foc_init();
+
+    /* 14. 开环旋转自检（V/F，命令 r 启动） */
     app_debug_motor_init();
 }
 
@@ -170,10 +174,15 @@ void app_run(void) {
         /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（主循环节拍）+ Ozone 观测变量 */
         app_analog_signal_process();
         app_fault_process(); /* 主循环节拍：三相电流 RMS 累加（故障保护 L2） */
+
+        /* 1a2) FOC 电流环（25kHz，与开关周期同频；OFF 时为空操作） */
+        app_foc_run_once();
         app_debug_adc_update();
 
-        /* 1b) 开环旋转（V/F）：主循环节拍更新三相占空比（未启动时为空操作） */
-        app_debug_motor_run_once();
+        /* 1b) 开环旋转（V/F）：FOC 活动时让位（互斥） */
+        if (!app_foc_is_active()) {
+            app_debug_motor_run_once();
+        }
 
         now = intf_clock_get_cycle();
 
