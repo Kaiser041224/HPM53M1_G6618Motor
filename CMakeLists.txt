@@ -149,6 +149,7 @@ sdk_app_src(App/Algorithm/Src/algo_rms.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_angle.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_current.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_modulation.c)
+sdk_app_src(App/Algorithm/FOC/Src/id_encoder.c)
 
 # ============================================================================
 # Platform Layer

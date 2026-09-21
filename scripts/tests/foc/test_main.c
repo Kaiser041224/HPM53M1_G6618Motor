@@ -21,6 +21,7 @@ void test_foc_math(void);
 void test_foc_angle(void);
 void test_foc_modulation(void);
 void test_foc_current(void);
+void test_id_encoder(void);
 
 int main(void) {
     printf("FOC host tests\n");
@@ -28,6 +29,7 @@ int main(void) {
     test_foc_angle();
     test_foc_modulation();
     test_foc_current();
+    test_id_encoder();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");
