@@ -66,6 +66,7 @@ void app_foc_disable(void);
 
 /**
  * @brief 设置转矩给定（限幅 ±i_q_max）
+ * @param i_q_a q 轴电流给定 [A]
  * @return 0 = 成功；-1 = 状态不允许/参数非法
  */
 int app_foc_set_iq_ref(float i_q_a);
@@ -131,6 +132,7 @@ void app_foc_apply_encoder_offset(float offset_rad, float direction);
 
 /**
  * @brief 是否处于 FAULT 门控
+ * @return true = 当前状态为 FAULT
  */
 bool app_foc_fault_gate(void);
 
