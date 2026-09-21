@@ -99,6 +99,9 @@ bool app_motor_identify_fast_step(void) {
     }
 
     if (!identify_read_theta_m(&theta_m)) {
+        /* 读取失败/无效/采样停摆：置失败原因（否则上层打印 reason=none） */
+        s_result.fail_reason = APP_IDENTIFY_REASON_ENCODER;
+        s_result.failed = true;
         app_motor_identify_abort();
         return false;
     }
