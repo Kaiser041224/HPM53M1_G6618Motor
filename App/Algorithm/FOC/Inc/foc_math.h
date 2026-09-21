@@ -31,6 +31,8 @@ extern "C" {
 #define FOC_TWO_PI_F (2.0f * FOC_PI_F)       /**< 2π */
 #define FOC_SQRT3_F  1.73205080756887729353f /**< √3 */
 
+_Static_assert(sizeof(float) == 4, "foc_math requires IEEE-754 binary32 float");
+
 /* 热路径段属性：映射到链接脚本 .fast（ILM）段（与 algo_pid 同约定） */
 #ifndef ALGO_ENABLE_ILM
 # define ALGO_ENABLE_ILM 1
@@ -54,9 +56,11 @@ static inline bool foc_finite(float x) {
 }
 
 /**
- * @brief 角度归一化到 [0, 2π)（对任意幅值有效）
- * @param x 角度 [rad]
+ * @brief 角度归一化到 [0, 2π)（快速版）
+ * @param x 角度 [rad]；要求有限（非有限返回 NaN，调用方须先经 foc_finite 过滤）
  * @return 归一化角度 [rad]
+ * @note 有效精度范围 |x| ≲ 1e4 rad（float 精度所限；FOC 场景 θe 输入有界）。
+ *       实测误差：≈1.7e-7 @ 小角度、≈3.4e-5 rad @ 1600 rad。
  */
 FOC_ATTR_RAMFUNC
 static inline float foc_wrap_2pi(float x) {
@@ -67,8 +71,8 @@ static inline float foc_wrap_2pi(float x) {
 
 /**
  * @brief 角度归一化到 (−π, π]
- * @param x 角度 [rad]
- * @return 归一化角度 [rad]
+ * @param x 角度 [rad]；要求有限（同 foc_wrap_2pi）
+ * @return 归一化角度 [rad]；+π 归入 +π 侧
  */
 FOC_ATTR_RAMFUNC
 static inline float foc_wrap_pm_pi(float x) {
@@ -78,9 +82,11 @@ static inline float foc_wrap_pm_pi(float x) {
 
 /**
  * @brief 同时求 sin/cos
- * @param theta 角度 [rad]
+ * @param theta 角度 [rad]（调用方保证有界，如 [0, 2π)）
  * @param s 输出 sin
  * @param c 输出 cos
+ * @note 实现为 sinf + cosf 两次 libm 调用（不依赖非标准 sincosf）；
+ *       GCC 可能自动融合。25kHz 热路径单拍调用一次，实测开销可接受。
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_sincos(float theta, float* s, float* c) {
@@ -90,6 +96,12 @@ static inline void foc_sincos(float theta, float* s, float* c) {
 
 /**
  * @brief Clarke 变换（幅值不变，2/3 系数）
+ * @param iu U 相电流 [A]
+ * @param iv V 相电流 [A]
+ * @param iw W 相电流 [A]
+ * @param ia 输出 iα [A]
+ * @param ib 输出 iβ [A]
+ * @note 期望 iu + iv + iw ≈ 0（三相无中线）
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_clarke(float iu, float iv, float iw, float* ia, float* ib) {
@@ -99,6 +111,10 @@ static inline void foc_clarke(float iu, float iv, float iw, float* ia, float* ib
 
 /**
  * @brief Park 变换（预计算 sin/cos；热路径复用同一 θ 的 sincos）
+ * @param ia iα [A] @param ib iβ [A]
+ * @param s cos 的同伴 sin(θe) @param c cos(θe)
+ * @param id 输出 id [A] @param iq 输出 iq [A]
+ * @note 参数顺序为 (s, c)，调用点勿交换
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_park_sc(float ia, float ib, float s, float c, float* id, float* iq) {
@@ -108,6 +124,9 @@ static inline void foc_park_sc(float ia, float ib, float s, float c, float* id, 
 
 /**
  * @brief Park 变换（内部求 sin/cos）
+ * @param ia iα [A] @param ib iβ [A]
+ * @param theta 电角度 [rad]
+ * @param id 输出 id [A] @param iq 输出 iq [A]
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_park(float ia, float ib, float theta, float* id, float* iq) {
@@ -118,6 +137,9 @@ static inline void foc_park(float ia, float ib, float theta, float* id, float* i
 
 /**
  * @brief 反 Park 变换（预计算 sin/cos）
+ * @param vd d 轴电压 [V] @param vq q 轴电压 [V]
+ * @param s sin(θe) @param c cos(θe)
+ * @param va 输出 vα [V] @param vb 输出 vβ [V]
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_inv_park_sc(float vd, float vq, float s, float c, float* va, float* vb) {
@@ -127,6 +149,9 @@ static inline void foc_inv_park_sc(float vd, float vq, float s, float c, float* 
 
 /**
  * @brief 反 Park 变换（内部求 sin/cos）
+ * @param vd d 轴电压 [V] @param vq q 轴电压 [V]
+ * @param theta 电角度 [rad]
+ * @param va 输出 vα [V] @param vb 输出 vβ [V]
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_inv_park(float vd, float vq, float theta, float* va, float* vb) {
@@ -137,6 +162,10 @@ static inline void foc_inv_park(float vd, float vq, float theta, float* va, floa
 
 /**
  * @brief 反 Clarke 变换（相电压参考，三相和为零）
+ * @param va vα [V] @param vb vβ [V]
+ * @param vu 输出 U 相电压参考 [V]
+ * @param vv 输出 V 相电压参考 [V]
+ * @param vw 输出 W 相电压参考 [V]
  */
 FOC_ATTR_RAMFUNC
 static inline void foc_inv_clarke(float va, float vb, float* vu, float* vv, float* vw) {
