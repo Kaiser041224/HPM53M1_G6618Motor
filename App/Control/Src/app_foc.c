@@ -190,6 +190,9 @@ int app_foc_enable(void) {
     s_angle.set_offset(&s_angle, motor->encoder.electrical_offset_rad,
                        motor->encoder.direction);
 
+    /* 注：app_3phase_inverter_enable() 内含 +12V 栅极供电稳定等待（约 10ms 阻塞）。
+     * 该窗口内桥处于关闭态（PWM 未启动），无电流风险；但 25kHz 环与 L2/L3 保护暂停。
+     * 与既有 V/F 启动路径同构；非阻塞桥使能为 v2 项（spec §10）。 */
     if (app_3phase_inverter_enable() != 0) {
         return -1;
     }
@@ -261,6 +264,8 @@ int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad) {
     s_forced_theta = theta_e_rad;
     return 0;
 }
+
+float app_foc_get_iq_ref(void) { return s_i_q_ref; }
 
 app_foc_state_t app_foc_get_state(void) { return s_state; }
 

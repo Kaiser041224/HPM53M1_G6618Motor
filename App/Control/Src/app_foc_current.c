@@ -63,7 +63,15 @@ void app_foc_current_zero_vector(void) {
     g_foc_current_snapshot.v_q_v = 0.0f;
     g_foc_current_snapshot.saturated = false;
     g_foc_current_snapshot.v_scale = 1.0f;
-    g_foc_current_snapshot.valid = false; /* 保护路径：数据不可信（保持上一拍） */
+    /* 命令式零矢量（使能/关闭/待机）：不改变 valid/fault_count */
+}
+
+/**
+ * @brief 保护式零矢量：输出零矢量 + 标记数据不可信 + 故障计数
+ */
+static void app_foc_current_protect(void) {
+    app_foc_current_zero_vector();
+    g_foc_current_snapshot.valid = false;
     g_foc_current_snapshot.fault_count++;
 }
 
@@ -78,17 +86,17 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     float v_bus, duty_max;
 
     if (!s_ready) {
-        app_foc_current_zero_vector();
+        app_foc_current_protect();
         return -1;
     }
 
     if (!app_analog_signal_read_all(&values)) {
-        app_foc_current_zero_vector();
+        app_foc_current_protect();
         return -1;
     }
     v_bus = values.v_bus_v;
     if (!foc_finite(v_bus) || (v_bus < APP_FOC_V_BUS_MIN_V)) {
-        app_foc_current_zero_vector();
+        app_foc_current_protect();
         return -1;
     }
 
@@ -114,7 +122,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     in.omega_e_rad_s = omega_e_rad_s;
 
     if (s_current.step(&s_current, &in, &out) != 0) {
-        app_foc_current_zero_vector();
+        app_foc_current_protect();
         return -1;
     }
 
@@ -123,12 +131,12 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     mod_cfg.duty_max = duty_max;
     mod_cfg.v_bus_min = APP_FOC_V_BUS_MIN_V;
     if (foc_modulation_step(&mod_cfg, v_alpha, v_beta, v_bus, duty, &v_scale) != 0) {
-        app_foc_current_zero_vector();
+        app_foc_current_protect();
         return -1;
     }
 
     if (app_3phase_inverter_set_duty_abc(duty[0], duty[1], duty[2]) != 0) {
-        app_foc_current_zero_vector();
+        app_foc_current_protect();
         return -1;
     }
 

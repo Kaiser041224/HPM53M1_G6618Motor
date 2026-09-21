@@ -14,8 +14,6 @@
 
 #include "csh.h"
 
-#include <stddef.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,7 +26,7 @@ extern "C" {
 const char* app_terminal_cmd_foc_state_name(app_foc_state_t state);
 
 /**
- * @brief 打印 FOC 状态块（state/θe/ωe/id/iq/vd/vq/duty/valid/counters）
+ * @brief 打印 FOC 状态块（state/θe/ωe/id/iq ref+meas/vd/vq/vbus/sat/scale/duty/valid/计数）
  * @param csh terminal 实例
  */
 void app_terminal_cmd_foc_status(chry_shell_t* csh);

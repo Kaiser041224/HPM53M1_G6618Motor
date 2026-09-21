@@ -5,6 +5,7 @@
  *
  * 命令：
  *   motor start | stop | freq <+|-> | mod <+|->   （开环 V/F 自检）
+ *   motor iq [<A>]                               （FOC 转矩给定/查询）
  *   motor iq [<A>]                               （FOC 转矩给定；无参 = 查询）
  *   inv <u|v|w|all|off>                          （三相逆变桥逐相输出）
  *   cal current                                  （电流零点标定）
@@ -110,27 +111,28 @@ static int cmd_motor(int argc, char** argv) {
         float value;
         app_foc_current_snapshot_t snap;
 
+        if (app_foc_get_state() == APP_FOC_STATE_CALIB) {
+            csh_printf(csh, "ERR: FOC busy (calibration in progress)\r\n");
+            return -1;
+        }
         if ((app_foc_get_state() != APP_FOC_STATE_READY)
             && (app_foc_get_state() != APP_FOC_STATE_RUN)) {
             csh_printf(csh, "ERR: FOC not enabled (use 'foc on')\r\n");
             return -1;
         }
-        if (argc < 3) {
-            app_foc_get_snapshot(&snap);
-            csh_printf(csh, "foc iq: ref=%.3f A  meas=%.3f A\r\n", (double)snap.i_q_ref_a,
-                       (double)snap.i_q_a);
-            return 0;
+        if (argc >= 3) {
+            if (app_terminal_cmd_parse_float(argv[2], &value) != 0) {
+                csh_printf(csh, "ERR: invalid value '%s'\r\n", argv[2]);
+                return -1;
+            }
+            if (app_foc_set_iq_ref(value) != 0) {
+                csh_printf(csh, "ERR: set iq failed\r\n");
+                return -1;
+            }
         }
-        if (app_terminal_cmd_parse_float(argv[2], &value) != 0) {
-            csh_printf(csh, "ERR: invalid value '%s'\r\n", argv[2]);
-            return -1;
-        }
-        if (app_foc_set_iq_ref(value) != 0) {
-            csh_printf(csh, "ERR: set iq failed\r\n");
-            return -1;
-        }
+        /* 回显实际生效给定（getter）与最新测量；快照为上一拍数据 */
         app_foc_get_snapshot(&snap);
-        csh_printf(csh, "foc iq: ref=%.3f A  meas=%.3f A\r\n", (double)snap.i_q_ref_a,
+        csh_printf(csh, "foc iq: ref=%.3f A  meas=%.3f A\r\n", (double)app_foc_get_iq_ref(),
                    (double)snap.i_q_a);
         return 0;
     }
@@ -177,7 +179,9 @@ static int cmd_motor(int argc, char** argv) {
     }
 
     csh_printf(csh, "ERR: unknown subcommand '%s'\r\n", sub);
-    csh_printf(csh, "usage: motor [status] | start | stop | freq [<hz>|+|-] | mod [<pct>|+|-]\r\n");
+    csh_printf(csh,
+               "usage: motor [status] | start | stop | freq [<hz>|+|-] | mod [<pct>|+|-] | "
+               "iq [<A>]\r\n");
     return -1;
 }
 

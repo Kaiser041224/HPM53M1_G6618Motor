@@ -77,6 +77,12 @@ void app_foc_disable(void);
 int app_foc_set_iq_ref(float i_q_a);
 
 /**
+ * @brief 读取当前 q 轴给定（已限幅；命令回显用）
+ * @return q 轴给定 [A]
+ */
+float app_foc_get_iq_ref(void);
+
+/**
  * @brief 设置 d 轴给定（辨识/调试；默认 0）
  * @param i_d_a d 轴给定 [A]（不做单独限幅：内部电流矢量限幅兜底）
  * @return 0 = 成功；-1 = 状态不允许/参数非法
