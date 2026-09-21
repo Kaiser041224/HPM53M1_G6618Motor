@@ -47,6 +47,7 @@ void test_id_encoder(void) {
         .dir_step_rad = FOC_PI_F / 3.0f,
         .sweep_steps = 36U,
         .sweep_step_ms = 5.0f,
+        .sweep_settle_ms = 100.0f,
         .quality_min = 0.8f,
         .ratio_tol = 0.2f,
         .timeout_ms = 10000.0f,
@@ -214,6 +215,33 @@ void test_id_encoder(void) {
         }
         CHECK(out7.failed);
         CHECK(out7.fail_reason == ID_ENCODER_FAIL_QUALITY);
+    }
+
+    /* 等效极对数不符（真 9 对极 vs 配置 10）→ ratio_err ≈ +11.1%（诊断判据固化） */
+    {
+        id_encoder_t id11;
+        id_encoder_in_t in;
+        id_encoder_out_t out11;
+        id_encoder_ctor(&id11);
+        CHECK(id11.init(&id11, &cfg) == 0);
+        id11.reset(&id11);
+        out11 = (id_encoder_out_t){0};
+        for (int n = 0; n < 300000; n++) {
+            /* 真机 9 对极：θm = (θapplied + offset) / 9 */
+            float theta_m = foc_wrap_2pi((out11.theta_e_cmd + 1.234f) / 9.0f);
+
+            in.theta_m_raw_rad = theta_m;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id11.step(&id11, &in, &out11);
+            if (out11.done || out11.failed) {
+                break;
+            }
+        }
+        CHECK(out11.done || out11.failed);
+        CHECK_NEAR(out11.mech_ratio_err, 0.1111f, 0.015f); /* 10/9 − 1 */
     }
 
     /* 总超时：正常跟随但超时极短 → FAILED(TIMEOUT) */

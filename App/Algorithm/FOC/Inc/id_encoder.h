@@ -39,6 +39,7 @@ typedef struct {
     float dir_step_rad;   /**< 方向判定电角度步进 [rad] */
     uint16_t sweep_steps; /**< 单次扫描步数（≥8） */
     float sweep_step_ms;  /**< 每步驻留时长 [ms] */
+    float sweep_settle_ms;/**< 扫描起止静默 [ms]（稳定后再取端点；消除回摆振铃污染） */
     float quality_min;    /**< 质量下限（低于则 FAILED） */
     float ratio_tol;      /**< 极对数校验容差（相对） */
     float timeout_ms;     /**< 总超时 [ms] */
@@ -135,9 +136,9 @@ struct id_encoder {
     float _s_sum, _c_sum;      /**< sin/cos 累加 */
     uint32_t _acc_n;           /**< 累加点数 */
     float _theta_m_start;      /**< 方向判定起点机械角 [rad] */
-    float _mech_travel;        /**< 扫描累计机械位移（wrap-safe）[rad] */
-    float _theta_m_prev;       /**< 上拍机械角 [rad] */
-    bool _theta_m_prev_valid;  /**< 上拍机械角有效 */
+    float _mech_travel;        /**< 正向扫描机械行程（端点差，wrap-safe）[rad] */
+    float _theta_m_sweep_start;/**< 正向扫描起点机械角 [rad] */
+    bool _sweep_started;       /**< 正向扫描已越过起始静默 */
     float _offset_rad;         /**< 结果：零点 [rad] */
     float _direction;          /**< 结果：方向 */
     float _quality;            /**< 结果：质量 */

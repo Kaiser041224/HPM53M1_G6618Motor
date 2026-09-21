@@ -30,7 +30,8 @@ static int id_encoder_init(id_encoder_t* self, const id_encoder_cfg_t* cfg) {
     if ((cfg->pole_pairs == 0U) || (cfg->sweep_steps < 8U) || (cfg->sweep_step_ms <= 0.0f)
         || (cfg->i_cal_a <= 0.0f) || (cfg->lockin_ms <= 0.0f) || (cfg->dir_ms <= 0.0f)
         || (cfg->timeout_ms <= 0.0f) || (cfg->dir_step_rad <= 0.0f)
-        || (cfg->quality_min <= 0.0f) || (cfg->quality_min > 1.0f) || (cfg->ratio_tol < 0.0f)) {
+        || (cfg->quality_min <= 0.0f) || (cfg->quality_min > 1.0f) || (cfg->ratio_tol < 0.0f)
+        || (cfg->sweep_settle_ms < 0.0f)) {
         return -1;
     }
     self->_cfg = *cfg;
@@ -55,8 +56,8 @@ static void id_encoder_reset(id_encoder_t* self) {
     self->_acc_n = 0U;
     self->_theta_m_start = 0.0f;
     self->_mech_travel = 0.0f;
-    self->_theta_m_prev = 0.0f;
-    self->_theta_m_prev_valid = false;
+    self->_theta_m_sweep_start = 0.0f;
+    self->_sweep_started = false;
     self->_offset_rad = 0.0f;
     self->_direction = 1.0f;
     self->_quality = 0.0f;
@@ -73,38 +74,50 @@ static bool id_encoder_sweep_step(id_encoder_t* self, const id_encoder_in_t* in,
     uint16_t steps = self->_cfg.sweep_steps;
     float frac;
 
-    /* 目标角按步索引分档：FWD 0→2π；REV 2π→0 */
-    frac = (float)self->_step_idx / (float)steps;
-    self->_theta_cmd = fwd ? (FOC_TWO_PI_F * frac) : (FOC_TWO_PI_F * (1.0f - frac));
-
-    /* 机械位移累计（wrap-safe；仅正向扫描累计，用于极对数校验）。
-     * 仅在首个采样点之后累计：DIR 段结束时强制角由 dir_step_rad 回落至 0，
-     * 转子随之回退的瞬态不属于正向扫描行程，须排除。
-     * 非有限样本完全跳过（不更新 prev / 不累加），由 step() 的样本计数兜底。 */
-    if (foc_finite(in->theta_m_raw_rad)) {
-        if (fwd && self->_theta_m_prev_valid && (self->_acc_n > 0U)) {
-            self->_mech_travel += foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_prev);
+    /* 起始静默（仅 FWD）：先稳定在 0 位置再取起点。
+     * DIR 段结束时强制角由 dir_step_rad 回落至 0，转子回摆并振铃（欠阻尼）；
+     * 若立即取起点，振铃会污染行程测量（台架实测 ±5% 散布）。 */
+    if (fwd && !self->_sweep_started) {
+        self->_theta_cmd = 0.0f;
+        if (self->_t_ms >= self->_cfg.sweep_settle_ms) {
+            self->_sweep_started = true;
+            self->_t_ms = 0.0f;
+            self->_theta_m_sweep_start = in->theta_m_raw_rad;
         }
-        self->_theta_m_prev = in->theta_m_raw_rad;
-        self->_theta_m_prev_valid = true;
+        return false;
     }
 
-    /* 每步驻留结束采样一次（转子已稳定）；样本无效则跳过累加但推进步索引 */
-    if (self->_t_ms >= self->_cfg.sweep_step_ms) {
-        if (foc_finite(in->theta_m_raw_rad)) {
-            float p = (float)self->_cfg.pole_pairs;
-            float delta =
-                foc_wrap_pm_pi(self->_theta_cmd - p * self->_direction * in->theta_m_raw_rad);
+    /* 步进阶段：目标角按步索引分档（FWD 0→2π；REV 2π→0），
+     * 每步驻留结束采样一次（转子已稳定）；样本无效则跳过累加但推进步索引 */
+    if (self->_step_idx < steps) {
+        frac = (float)self->_step_idx / (float)steps;
+        self->_theta_cmd = fwd ? (FOC_TWO_PI_F * frac) : (FOC_TWO_PI_F * (1.0f - frac));
 
-            self->_s_sum += sinf(delta);
-            self->_c_sum += cosf(delta);
-            self->_acc_n++;
+        if (self->_t_ms >= self->_cfg.sweep_step_ms) {
+            if (foc_finite(in->theta_m_raw_rad)) {
+                float p = (float)self->_cfg.pole_pairs;
+                float delta = foc_wrap_pm_pi(self->_theta_cmd
+                                             - p * self->_direction * in->theta_m_raw_rad);
+
+                self->_s_sum += sinf(delta);
+                self->_c_sum += cosf(delta);
+                self->_acc_n++;
+            }
+            self->_t_ms = 0.0f;
+            self->_step_idx++;
         }
-        self->_t_ms = 0.0f;
-        self->_step_idx++;
+        return false;
     }
 
-    return (self->_step_idx >= steps);
+    /* 结束静默（独立于步进定时器：步进完成后 _t_ms 自由累计）：
+     * 稳定后取终点；行程 = 端点差（对中途振铃不敏感） */
+    if (self->_t_ms < self->_cfg.sweep_settle_ms) {
+        return false;
+    }
+    if (fwd && foc_finite(in->theta_m_raw_rad)) {
+        self->_mech_travel = foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_sweep_start);
+    }
+    return true;
 }
 
 /**
@@ -213,8 +226,7 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
             self->_c_sum = 0.0f;
             self->_acc_n = 0U;
             self->_mech_travel = 0.0f;
-            self->_theta_m_prev = in->theta_m_raw_rad;
-            self->_theta_m_prev_valid = true;
+            self->_sweep_started = false; /* FWD 起始静默后取起点 */
             self->_theta_cmd = 0.0f;
         }
         break;
@@ -320,8 +332,8 @@ void id_encoder_ctor(id_encoder_t* self) {
     self->_acc_n = 0U;
     self->_theta_m_start = 0.0f;
     self->_mech_travel = 0.0f;
-    self->_theta_m_prev = 0.0f;
-    self->_theta_m_prev_valid = false;
+    self->_theta_m_sweep_start = 0.0f;
+    self->_sweep_started = false;
     self->_offset_rad = 0.0f;
     self->_direction = 1.0f;
     self->_quality = 0.0f;

@@ -299,6 +299,7 @@ int app_motor_identify_start(void) {
     cfg.dir_step_rad = FOC_PI_F / 3.0f;
     cfg.sweep_steps = 180U;
     cfg.sweep_step_ms = 5.0f;
+    cfg.sweep_settle_ms = 100.0f;
     cfg.quality_min = APP_IDENTIFY_QUALITY_MIN;
     cfg.ratio_tol = 0.2f;
     cfg.timeout_ms = 15000.0f;
