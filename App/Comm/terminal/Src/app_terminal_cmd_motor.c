@@ -28,6 +28,7 @@
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
 #include "app_foc.h"
+#include "intf_clock.h"
 #include "app_motor_identify.h"
 #include "app_motor_params.h"
 #include "foc_math.h"
@@ -296,6 +297,7 @@ static const char* cal_encoder_fail_name(app_identify_fail_t reason) {
     case APP_IDENTIFY_REASON_DIR: return "rotor not following (dir)";
     case APP_IDENTIFY_REASON_QUALITY: return "quality low";
     case APP_IDENTIFY_REASON_RATIO: return "pole-pair/ratio mismatch";
+    case APP_IDENTIFY_REASON_HYST: return "hysteresis/slip too large (check encoder coupling)";
     case APP_IDENTIFY_REASON_NONFINITE: return "non-finite samples";
     case APP_IDENTIFY_REASON_VERIFY: return "verify failed";
     case APP_IDENTIFY_REASON_ENCODER: return "encoder error";
@@ -314,14 +316,19 @@ static void cal_encoder_tick(uint32_t now_ms) {
 
     app_motor_identify_run_once(now_ms);
     if (app_motor_identify_is_active()) {
-        /* 心跳：辨识约 10s 无输出会让上位机串口工具读超时（表现为连接不稳定） */
-        if ((uint32_t)(now_ms - s_cal_beat_ms) >= 1000U) {
+        /* 心跳：长流程无输出会让上位机串口工具读超时（表现为连接不稳定）。
+         * 250ms 一行；同时带实测节拍 dt / FOC 单拍耗时，便于定位主循环负载。 */
+        if ((uint32_t)(now_ms - s_cal_beat_ms) >= 250U) {
+            uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
+
             s_cal_beat_ms = now_ms;
             s_cal_beat_count++;
             app_motor_identify_get_result(&result);
-            app_terminal_cmd_emit("cal: running %2u%% (%us)\r\n",
+            app_terminal_cmd_emit("cal: running %2u%% (%.1fs) dt=%u us cyc=%u us\r\n",
                                   (unsigned)(result.progress * 100.0f),
-                                  (unsigned)s_cal_beat_count);
+                                  (double)s_cal_beat_count * 0.25,
+                                  (unsigned)g_foc_loop_dt_us,
+                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
         }
         return;
     }
@@ -345,8 +352,12 @@ static void cal_encoder_tick(uint32_t now_ms) {
             float implied_pp = (float)motor->pole_pairs / (1.0f + result.ratio_err);
 
             app_terminal_cmd_emit(
-                "    ratio_err=%+.1f%% (mech travel vs 2pi/p; RAM only, flash v2)\r\n",
-                (double)(result.ratio_err * 100.0f));
+                "    ratio_err=%+.1f%%  offset fwd=%.2f rev=%.2f deg (diff=%.2f)\r\n",
+                (double)(result.ratio_err * 100.0f),
+                (double)(result.offset_fwd_rad * (180.0f / FOC_PI_F)),
+                (double)(result.offset_rev_rad * (180.0f / FOC_PI_F)),
+                (double)(fabsf(result.offset_fwd_rad - result.offset_rev_rad)
+                         * (180.0f / FOC_PI_F)));
             app_terminal_cmd_emit("    implied effective pole_pairs = %.1f (if encoder ratio is 1:1)\r\n",
                                   (double)implied_pp);
         }

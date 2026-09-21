@@ -48,6 +48,8 @@ void test_id_encoder(void) {
         .sweep_steps = 36U,
         .sweep_step_ms = 5.0f,
         .sweep_settle_ms = 100.0f,
+        .sweep_turns = 1.0f,
+        .hyst_max_rad = 0.0f, /* 用例单独启用回差检查 */
         .quality_min = 0.8f,
         .ratio_tol = 0.2f,
         .timeout_ms = 10000.0f,
@@ -216,6 +218,68 @@ void test_id_encoder(void) {
         }
         CHECK(out7.failed);
         CHECK(out7.fail_reason == ID_ENCODER_FAIL_QUALITY);
+    }
+
+    /* 多圈扫描（turns=3）：零点/质量/行程校验仍成立 */
+    {
+        id_encoder_t id12;
+        id_encoder_in_t in;
+        id_encoder_out_t out12;
+        id_encoder_cfg_t c12 = cfg;
+
+        c12.sweep_turns = 3.0f;
+        id_encoder_ctor(&id12);
+        CHECK(id12.init(&id12, &c12) == 0);
+        id12.reset(&id12);
+        out12 = (id_encoder_out_t){0};
+        for (int n = 0; n < 300000; n++) {
+            float theta_m = foc_wrap_2pi((out12.theta_e_cmd + 1.234f) / 10.0f);
+
+            in.theta_m_raw_rad = theta_m;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id12.step(&id12, &in, &out12);
+            if (out12.done || out12.failed) {
+                break;
+            }
+        }
+        CHECK(out12.done);
+        CHECK_NEAR(out12.offset_rad, 1.234f, 0.05f);
+        CHECK(out12.quality > 0.95f);
+        CHECK_NEAR(out12.mech_ratio_err, 0.0f, 0.05f);
+    }
+
+    /* 传动打滑：反向扫描零点偏移 0.6 rad（34°）→ FAILED(HYST) */
+    {
+        id_encoder_t id13;
+        id_encoder_in_t in;
+        id_encoder_out_t out13;
+        id_encoder_cfg_t c13 = cfg;
+        c13.hyst_max_rad = 0.5f;
+        id_encoder_ctor(&id13);
+        CHECK(id13.init(&id13, &c13) == 0);
+        id13.reset(&id13);
+        out13 = (id_encoder_out_t){0};
+        for (int n = 0; n < 300000; n++) {
+            /* 反向扫描段用偏移 0.6 rad 的传动：模拟联轴打滑（按相位判定，避免一拍滞后） */
+            float off =
+                (out13.phase == ID_ENCODER_PHASE_SWEEP_REV) ? 1.834f : 1.234f;
+            float theta_m = foc_wrap_2pi((out13.theta_e_cmd + off) / 10.0f);
+
+            in.theta_m_raw_rad = theta_m;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id13.step(&id13, &in, &out13);
+            if (out13.done || out13.failed) {
+                break;
+            }
+        }
+        CHECK(out13.failed);
+        CHECK(out13.fail_reason == ID_ENCODER_FAIL_HYST);
     }
 
     /* 等效极对数不符（真 9 对极 vs 配置 10）→ ratio_err ≈ +11.1%（诊断判据固化） */

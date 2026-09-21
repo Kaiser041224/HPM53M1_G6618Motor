@@ -257,6 +257,13 @@ static void app_foc_run_body(void) {
     }
 }
 
+float app_foc_get_last_dt_s(void) {
+    if ((s_dt_s > 0.0f) && (s_dt_s <= 5.0e-3f)) {
+        return s_dt_s;
+    }
+    return 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
+}
+
 void app_foc_run_once(void) {
     uint32_t t0 = intf_clock_get_cycle();
 

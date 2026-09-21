@@ -30,7 +30,8 @@ typedef enum {
     APP_IDENTIFY_REASON_TIMEOUT,    /**< 超时（辨识或编排） */
     APP_IDENTIFY_REASON_DIR,        /**< 方向判定无效（转子未跟随） */
     APP_IDENTIFY_REASON_QUALITY,    /**< 质量不足 */
-    APP_IDENTIFY_REASON_RATIO,      /**< 极对数/传动比校验失败 */
+    APP_IDENTIFY_REASON_RATIO,  /**< 极对数/传动比校验失败 */
+    APP_IDENTIFY_REASON_HYST,   /**< 正/反向零点差超限：传动回差/联轴打滑 */
     APP_IDENTIFY_REASON_NONFINITE,  /**< 非有限测量样本过多 */
     APP_IDENTIFY_REASON_VERIFY,     /**< 闭环验证失败 */
     APP_IDENTIFY_REASON_ENCODER,    /**< 编码器读失败/错误计数增长 */
@@ -54,6 +55,8 @@ typedef struct {
     float probe_travel_rad;    /**< 探针段机械行程 [rad]（判据：×direction ≥ 0.05） */
     float verify_drift_deg_s;  /**< 静默段残差漂移 [deg/s]（≈0 静止；大 = 转子被恒转矩驱动） */
     float progress;            /**< 进行中进度 0~1（RUN 阶段；非活动时为 0/1） */
+    float offset_fwd_rad;      /**< 正向扫描零点 [rad]（诊断） */
+    float offset_rev_rad;      /**< 反向扫描零点 [rad]（诊断；与正向之差 = 回差/打滑） */
     app_identify_fail_t fail_reason; /**< 失败原因 */
 } app_motor_identify_result_t;
 

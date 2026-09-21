@@ -37,7 +37,9 @@ typedef struct {
     float lockin_ms;      /**< lock-in 时长 [ms] */
     float dir_ms;         /**< 方向判定步时长 [ms] */
     float dir_step_rad;   /**< 方向判定电角度步进 [rad] */
-    uint16_t sweep_steps; /**< 单次扫描步数（≥8） */
+    uint16_t sweep_steps; /**< 单次扫描步数（≥8，含全部圈数） */
+    float sweep_turns;    /**< 单方向扫描圈数（电周期数，≥1；多圈平均局部传动误差） */
+    float hyst_max_rad;   /**< 正/反向零点差上限 [rad]（传动回差/打滑检测；0 = 不检查） */
     float sweep_step_ms;  /**< 每步驻留时长 [ms] */
     float sweep_settle_ms;/**< 扫描起止静默 [ms]（稳定后再取端点；消除回摆振铃污染） */
     float quality_min;    /**< 质量下限（低于则 FAILED） */
@@ -79,6 +81,7 @@ typedef enum {
     ID_ENCODER_FAIL_QUALITY,   /**< 质量不足 */
     ID_ENCODER_FAIL_RATIO,     /**< 极对数/传动比校验失败 */
     ID_ENCODER_FAIL_NONFINITE, /**< 非有限测量样本过多 */
+    ID_ENCODER_FAIL_HYST,      /**< 正/反向零点差超限（传动回差/编码器联轴打滑） */
     ID_ENCODER_FAIL_CONFIG,    /**< 配置非法 */
 } id_encoder_fail_t;
 
@@ -91,6 +94,8 @@ typedef struct {
     float i_q_ref;            /**< q 轴电流给定 [A]（终止态为 0） */
     id_encoder_phase_t phase; /**< 当前阶段 */
     float progress;           /**< 进度 0~1 */
+    float offset_fwd_rad;     /**< 正向扫描零点 [rad]（诊断：与反向之差 = 回差/打滑） */
+    float offset_rev_rad;     /**< 反向扫描零点 [rad] */
     float offset_rad;         /**< 结果：电角度零点 [rad] */
     float direction;          /**< 结果：方向（+1.0 / −1.0） */
     float quality;            /**< 结果：质量 |Σ|/N */
@@ -133,13 +138,18 @@ struct id_encoder {
     float _elapsed_ms;         /**< 总计时 [ms] */
     float _theta_cmd;          /**< 当前强制角 [rad] */
     uint16_t _step_idx;        /**< 扫描步索引 */
-    float _s_sum, _c_sum;      /**< sin/cos 累加 */
-    uint32_t _acc_n;           /**< 累加点数 */
+    float _s_sum, _c_sum;      /**< 正向扫描 sin/cos 累加 */
+    float _s_sum_rev, _c_sum_rev; /**< 反向扫描 sin/cos 累加 */
+    uint32_t _acc_n;           /**< 正向累加点数 */
+    uint32_t _acc_n_rev;       /**< 反向累加点数 */
     float _theta_m_start;      /**< 方向判定起点机械角 [rad] */
     float _mech_travel;        /**< 正向扫描机械行程（端点差，wrap-safe）[rad] */
     float _theta_m_sweep_start;/**< 正向扫描起点机械角 [rad] */
     bool _sweep_started;       /**< 正向扫描已越过起始静默 */
-    float _offset_rad;         /**< 结果：零点 [rad] */
+    float _offset_rad;         /**< 结果：零点 [rad]（正/反向合计） */
+    float _offset_fwd_rad;     /**< 结果：正向零点 [rad]（诊断） */
+    float _offset_rev_rad;     /**< 结果：反向零点 [rad]（诊断） */
+    float _hyst_rad;           /**< 正/反向零点差 [rad]（回差/打滑度量） */
     float _direction;          /**< 结果：方向 */
     float _quality;            /**< 结果：质量 */
     float _mech_ratio_err;     /**< 结果：极对数偏差 */

@@ -17,7 +17,7 @@
 #include "foc_math.h"
 #include "id_encoder.h"
 
-#define APP_IDENTIFY_I_CAL_A       (4.0f)   /**< 辨识电流（峰值）[A]（加大：转子跟得更紧，摩擦/齿槽影响更小） */
+#define APP_IDENTIFY_I_CAL_A       (2.0f)   /**< 辨识电流（峰值）[A]（4A 台架实测导致联轴打滑：残差 54~68°，回退 2A） */
 #define APP_IDENTIFY_QUALITY_MIN   (0.8f)   /**< 质量下限（与 id_encoder 配置一致） */
 #define APP_IDENTIFY_RUN_TICK_MAX  (60000U) /**< 编排侧 RUN 超时 [1kHz tick]（60s 兜底） */
 /* 验证 = 探针法（参考实现同法）：静默后给一个小 i_q 脉冲，转子必须按"电角正方向"
@@ -120,7 +120,9 @@ bool app_motor_identify_fast_step(void) {
     in.i_d_a = snap.i_d_a;
     in.i_q_a = snap.i_q_a;
     in.v_bus_v = snap.v_bus_v;
-    in.dt_s = 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
+    /* 实测调用间隔：主循环节拍受 USB/终端/负载影响（台架实测可降到 ~4kHz），
+     * 固定 1/25kHz 会让辨识时长膨胀数倍（曾 48s）；按真实 dt 推进保证时长可控 */
+    in.dt_s = app_foc_get_last_dt_s();
 
     s_id_encoder.step(&s_id_encoder, &in, &out);
     app_foc_calib_set_excitation(out.theta_e_cmd, out.i_d_ref, out.i_q_ref);
@@ -130,6 +132,8 @@ bool app_motor_identify_fast_step(void) {
         const app_motor_params_t* motor = app_motor_params_current();
 
         s_result.offset_rad = out.offset_rad;
+        s_result.offset_fwd_rad = out.offset_fwd_rad;
+        s_result.offset_rev_rad = out.offset_rev_rad;
         s_result.direction = out.direction;
         s_result.quality = out.quality;
         s_result.ratio_err = out.mech_ratio_err;
@@ -159,6 +163,7 @@ bool app_motor_identify_fast_step(void) {
         case ID_ENCODER_FAIL_DIR: s_result.fail_reason = APP_IDENTIFY_REASON_DIR; break;
         case ID_ENCODER_FAIL_QUALITY: s_result.fail_reason = APP_IDENTIFY_REASON_QUALITY; break;
         case ID_ENCODER_FAIL_RATIO: s_result.fail_reason = APP_IDENTIFY_REASON_RATIO; break;
+        case ID_ENCODER_FAIL_HYST: s_result.fail_reason = APP_IDENTIFY_REASON_HYST; break;
         case ID_ENCODER_FAIL_NONFINITE: s_result.fail_reason = APP_IDENTIFY_REASON_NONFINITE; break;
         case ID_ENCODER_FAIL_CONFIG:
         default: s_result.fail_reason = APP_IDENTIFY_REASON_STATE; break;
@@ -356,12 +361,14 @@ int app_motor_identify_start(void) {
     cfg.lockin_ms = 800.0f;
     cfg.dir_ms = 400.0f;
     cfg.dir_step_rad = FOC_PI_F / 3.0f;
-    cfg.sweep_steps = 360U;
-    cfg.sweep_step_ms = 10.0f;
+    cfg.sweep_steps = 1080U;    /* 3 电周期 × 360 步 */
+    cfg.sweep_turns = 3.0f;     /* 多圈：平均局部传动误差（编码器/齿轮偏心） */
+    cfg.sweep_step_ms = 8.0f;
     cfg.sweep_settle_ms = 200.0f;
+    cfg.hyst_max_rad = 0.5f;    /* 正/反向零点差 > 28.6° 电角 → 判定回差/打滑 */
     cfg.quality_min = APP_IDENTIFY_QUALITY_MIN;
     cfg.ratio_tol = 0.2f;
-    cfg.timeout_ms = 30000.0f;
+    cfg.timeout_ms = 40000.0f;
 
     id_encoder_ctor(&s_id_encoder);
     if (s_id_encoder.init(&s_id_encoder, &cfg) != 0) {

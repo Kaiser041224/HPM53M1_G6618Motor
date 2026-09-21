@@ -31,7 +31,8 @@ static int id_encoder_init(id_encoder_t* self, const id_encoder_cfg_t* cfg) {
         || (cfg->i_cal_a <= 0.0f) || (cfg->lockin_ms <= 0.0f) || (cfg->dir_ms <= 0.0f)
         || (cfg->timeout_ms <= 0.0f) || (cfg->dir_step_rad <= 0.0f)
         || (cfg->quality_min <= 0.0f) || (cfg->quality_min > 1.0f) || (cfg->ratio_tol < 0.0f)
-        || (cfg->sweep_settle_ms < 0.0f)) {
+        || (cfg->sweep_settle_ms < 0.0f) || (cfg->sweep_turns < 1.0f)
+        || (cfg->hyst_max_rad < 0.0f)) {
         return -1;
     }
     self->_cfg = *cfg;
@@ -53,12 +54,18 @@ static void id_encoder_reset(id_encoder_t* self) {
     self->_step_idx = 0U;
     self->_s_sum = 0.0f;
     self->_c_sum = 0.0f;
+    self->_s_sum_rev = 0.0f;
+    self->_c_sum_rev = 0.0f;
     self->_acc_n = 0U;
+    self->_acc_n_rev = 0U;
     self->_theta_m_start = 0.0f;
     self->_mech_travel = 0.0f;
     self->_theta_m_sweep_start = 0.0f;
     self->_sweep_started = false;
     self->_offset_rad = 0.0f;
+    self->_offset_fwd_rad = 0.0f;
+    self->_offset_rev_rad = 0.0f;
+    self->_hyst_rad = 0.0f;
     self->_direction = 1.0f;
     self->_quality = 0.0f;
     self->_mech_ratio_err = 0.0f;
@@ -87,15 +94,17 @@ static bool id_encoder_sweep_step(id_encoder_t* self, const id_encoder_in_t* in,
         return false;
     }
 
-    /* 步进阶段：目标角按步索引分档（FWD 0→2π；REV 2π→0），
-     * 每步驻留结束采样一次（转子已稳定）；样本无效则跳过累加但推进步索引 */
+    /* 步进阶段：目标角按步索引分档（FWD 0→span；REV span→0），span = 2π·圈数。
+     * 每步驻留结束采样一次（转子已稳定）；样本无效则跳过累加但推进步索引。
+     * 正/反向分别累加：两者零点之差直接反映传动回差/联轴打滑。 */
     if (self->_step_idx < steps) {
-        /* FWD: 0 → 2π·(steps-1)/steps；REV: 2π·(steps-1)/steps → 0
+        float span = FOC_TWO_PI_F * self->_cfg.sweep_turns;
+
+        /* FWD: 0 → span·(steps-1)/steps；REV: span·(steps-1)/steps → 0
          * （REV 终点精确为 0：验证阶段以 0 为参考角，转子停在终点） */
         frac = (float)self->_step_idx / (float)steps;
-        self->_theta_cmd = fwd ? (FOC_TWO_PI_F * frac)
-                               : (FOC_TWO_PI_F
-                                  * (1.0f - (float)(self->_step_idx + 1U) / (float)steps));
+        self->_theta_cmd = fwd ? (span * frac)
+                               : (span * (1.0f - (float)(self->_step_idx + 1U) / (float)steps));
 
         if (self->_t_ms >= self->_cfg.sweep_step_ms) {
             if (foc_finite(in->theta_m_raw_rad)) {
@@ -103,9 +112,15 @@ static bool id_encoder_sweep_step(id_encoder_t* self, const id_encoder_in_t* in,
                 float delta = foc_wrap_pm_pi(self->_theta_cmd
                                              - p * self->_direction * in->theta_m_raw_rad);
 
-                self->_s_sum += sinf(delta);
-                self->_c_sum += cosf(delta);
-                self->_acc_n++;
+                if (fwd) {
+                    self->_s_sum += sinf(delta);
+                    self->_c_sum += cosf(delta);
+                    self->_acc_n++;
+                } else {
+                    self->_s_sum_rev += sinf(delta);
+                    self->_c_sum_rev += cosf(delta);
+                    self->_acc_n_rev++;
+                }
             }
             self->_t_ms = 0.0f;
             self->_step_idx++;
@@ -167,6 +182,8 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     }
     out->phase = self->_phase;
     out->offset_rad = self->_offset_rad;
+    out->offset_fwd_rad = self->_offset_fwd_rad;
+    out->offset_rev_rad = self->_offset_rev_rad;
     out->direction = self->_direction;
     out->quality = self->_quality;
     out->mech_ratio_err = self->_mech_ratio_err;
@@ -255,10 +272,17 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
         if (self->_acc_n > 0U) {
             float p = (float)self->_cfg.pole_pairs;
             float steps = (float)self->_cfg.sweep_steps;
-            /* 扫描覆盖 (steps−1)/steps 个电周期（首驻留点即 0，末点未采） */
-            float expected_travel = (FOC_TWO_PI_F / p) * ((steps - 1.0f) / steps);
+            /* 扫描覆盖 turns·(steps−1)/steps 个电周期（首驻留点即 0，末点未采） */
+            float expected_travel =
+                (FOC_TWO_PI_F * self->_cfg.sweep_turns / p) * ((steps - 1.0f) / steps);
 
             self->_offset_rad = foc_wrap_2pi(-atan2f(self->_s_sum, self->_c_sum));
+            self->_offset_fwd_rad = self->_offset_rad;
+            self->_offset_rev_rad =
+                (self->_acc_n_rev > 0U)
+                    ? foc_wrap_2pi(-atan2f(self->_s_sum_rev, self->_c_sum_rev))
+                    : self->_offset_rad;
+            self->_hyst_rad = foc_wrap_pm_pi(self->_offset_fwd_rad - self->_offset_rev_rad);
             self->_quality =
                 sqrtf(self->_s_sum * self->_s_sum + self->_c_sum * self->_c_sum)
                 / (float)self->_acc_n;
@@ -273,6 +297,10 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
                 self->_phase = ID_ENCODER_PHASE_FAILED;
             } else if (self->_quality < self->_cfg.quality_min) {
                 self->_fail = ID_ENCODER_FAIL_QUALITY;
+                self->_phase = ID_ENCODER_PHASE_FAILED;
+            } else if ((self->_cfg.hyst_max_rad > 0.0f)
+                       && (fabsf(self->_hyst_rad) > self->_cfg.hyst_max_rad)) {
+                self->_fail = ID_ENCODER_FAIL_HYST;
                 self->_phase = ID_ENCODER_PHASE_FAILED;
             } else if ((self->_mech_ratio_err > self->_cfg.ratio_tol)
                        || (self->_mech_ratio_err < -self->_cfg.ratio_tol)) {
@@ -302,6 +330,8 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     out->phase = self->_phase;
     out->fail_reason = self->_fail;
     out->offset_rad = self->_offset_rad;
+    out->offset_fwd_rad = self->_offset_fwd_rad;
+    out->offset_rev_rad = self->_offset_rev_rad;
     out->direction = self->_direction;
     out->quality = self->_quality;
     out->mech_ratio_err = self->_mech_ratio_err;
@@ -333,12 +363,18 @@ void id_encoder_ctor(id_encoder_t* self) {
     self->_step_idx = 0U;
     self->_s_sum = 0.0f;
     self->_c_sum = 0.0f;
+    self->_s_sum_rev = 0.0f;
+    self->_c_sum_rev = 0.0f;
     self->_acc_n = 0U;
+    self->_acc_n_rev = 0U;
     self->_theta_m_start = 0.0f;
     self->_mech_travel = 0.0f;
     self->_theta_m_sweep_start = 0.0f;
     self->_sweep_started = false;
     self->_offset_rad = 0.0f;
+    self->_offset_fwd_rad = 0.0f;
+    self->_offset_rev_rad = 0.0f;
+    self->_hyst_rad = 0.0f;
     self->_direction = 1.0f;
     self->_quality = 0.0f;
     self->_mech_ratio_err = 0.0f;

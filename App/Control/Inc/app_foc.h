@@ -52,6 +52,12 @@ extern volatile uint32_t g_foc_loop_cycles;
 extern volatile uint32_t g_foc_loop_dt_us;
 
 /**
+ * @brief 本拍实测调用间隔 [s]
+ * @return 实测间隔；首拍/异常时为标称值（1/pwm_freq）
+ */
+float app_foc_get_last_dt_s(void);
+
+/**
  * @brief 初始化（上电状态 OFF）
  */
 void app_foc_init(void);

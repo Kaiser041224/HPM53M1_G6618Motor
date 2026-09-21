@@ -24,6 +24,10 @@
 
 #include "app_debug_rtt.h"
 #include "app_terminal_job.h"
+
+#include "app_foc.h"
+#include "app_foc_current.h"
+#include "app_terminal_cmd.h"
 #include "app_terminal_monitor.h"
 #include "app_usb.h"
 #include "chry_ringbuffer.h"
@@ -90,6 +94,7 @@ static uint32_t s_ms_last_cycle;     /**< 上次计时 cycle */
 static uint32_t s_ms_remainder;      /**< 计时余数（避免截断漂移） */
 static uint32_t s_now_ms;            /**< 毫秒计数（供 job 使用） */
 static uint32_t s_flush_deadline;    /**< 本轮 run_once 的输出 flush 截止 cycle */
+static uint32_t s_keepalive_ms;      /**< 运行期保活：上次输出时刻 [ms] */
 static bool s_flush_deadline_valid;  /**< 截止时间有效（run_once 期间） */
 
 /* ============================================================================
@@ -748,6 +753,20 @@ void app_terminal_run_once(void) {
 
     /* 3a) 常驻状态区刷新（monitor；未启用时空操作） */
     app_terminal_monitor_run_once(s_now_ms);
+
+    /* 3b) 运行期保活：FOC 活动且无 job 输出时，每 1s 一行紧凑状态。
+     * 上位机串口工具在长时间无数据时会报读错误（表现为"终端断联"，
+     * 实际芯片/链路正常）——保活同时兼作运行观测。 */
+    if (app_usb_is_dtr() && !app_terminal_job_is_active() && app_foc_is_active()
+        && ((uint32_t)(s_now_ms - s_keepalive_ms) >= 1000U)) {
+        app_foc_current_snapshot_t snap;
+
+        s_keepalive_ms = s_now_ms;
+        app_foc_get_snapshot(&snap);
+        app_terminal_cmd_emit("foc: i_q=%.2f/%.2f A  om=%.0f rad/s  trip=%u\r\n",
+                              (double)snap.i_q_ref_a, (double)snap.i_q_avg_a,
+                              (double)snap.omega_e_rad_s, (unsigned)snap.tripped);
+    }
 
     /* 4) DTR 边沿（清环 + banner + 提示符） */
     app_terminal_dtr_process();
