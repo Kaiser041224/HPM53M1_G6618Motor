@@ -79,6 +79,14 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
                         float duty_abc_out[3], bool* saturated_out);
 
 /**
+ * @brief 电流环（显式输入版本：ADC 完成回调内使用，输入为本拍新鲜采样）
+ * @return 0 = 成功；-1 = 失败（已输出保护零矢量）
+ */
+int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
+                              float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
+                              float duty_abc_out[3], bool* saturated_out);
+
+/**
  * @brief 读取最近一拍快照
  */
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);

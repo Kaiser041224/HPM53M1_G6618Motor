@@ -82,6 +82,14 @@ typedef struct {
  */
 void app_adc_init(const app_adc_cfg_t* cfg);
 
+/**
+ * @brief 注册"电流环钩子"：在 ADC0 PMT 完成中断内、原始码锁存后立即调用
+ * @param hook 回调（ISR 上下文；NULL = 注销）
+ * @note 供 FOC 把电流环放进采样完成点，获得固定 25kHz 节拍与最小
+ *       "采样→输出"延迟（主循环节拍抖动不再影响控制环）。
+ */
+void app_adc_register_current_hook(void (*hook)(void));
+
 /** @brief 实际生效配置（调试打印 / 参数核对用） */
 const app_adc_cfg_t* app_adc_get_config(void);
 

@@ -59,6 +59,14 @@ void app_analog_signal_process(void);
 bool app_analog_signal_read_all(app_analog_values_t* values);
 
 /**
+ * @brief 原始码 → 物理量（单通道，无滤波；ISR 上下文可用）
+ * @param ch 通道
+ * @param raw 原始码
+ * @return 物理量（电流 [A] / 电压 [V] / 电阻 [Ω]）；通道非法返回 NAN
+ */
+float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw);
+
+/**
  * @brief 读取单通道物理量（含滤波）
  * @param ch 逻辑通道
  * @return 物理量；数据未就绪返回 NAN

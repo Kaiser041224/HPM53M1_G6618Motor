@@ -100,6 +100,11 @@ static volatile uint32_t s_sequence;
 static bool s_initialized;
 static uint16_t s_full_scale_code = 65535U;
 static app_adc_cfg_t s_adc_cfg;
+static void (*s_current_hook)(void); /**< 电流环钩子（ADC0 PMT ISR 内调用） */
+
+void app_adc_register_current_hook(void (*hook)(void)) {
+    s_current_hook = hook;
+}
 
 /**
  * @brief 驱动 WDOG 回调（硬件通道）→ 逻辑通道回调适配
@@ -159,6 +164,11 @@ static void adc_current_pmt_cb(
         s_valid_mask |= (1UL << ch);
     }
     s_sequence++;
+
+    /* 电流环钩子：紧随原始码锁存（同一 ISR，采样到输出的延迟最小） */
+    if (s_current_hook != NULL) {
+        s_current_hook();
+    }
 }
 
 /* ============================================================================

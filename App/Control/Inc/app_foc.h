@@ -68,6 +68,12 @@ void app_foc_init(void);
 void app_foc_run_once(void);
 
 /**
+ * @brief FOC 快速路径（ADC0 PMT 完成中断内调用；由 app_foc_init 自动注册）
+ * @note 编码器采样 + 角度链 + 电流环；固定 25kHz。禁止在中断外直接调用。
+ */
+void app_foc_isr_step(void);
+
+/**
  * @brief 使能（OFF → READY）：检查故障/ADC/编码器/参数 → 使能逆变桥
  * @return 0 = 成功；-1 = 拒绝
  */

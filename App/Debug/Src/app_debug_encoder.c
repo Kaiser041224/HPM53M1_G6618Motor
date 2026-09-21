@@ -221,13 +221,12 @@ void app_debug_encoder_sample(void) {
     uint16_t raw;
     bool valid;
 
-    /* 转子：共享采样（FOC 与 Debug 共用一次 SPI 读；耗时计入统计） */
+    /* 转子：采样已迁至 ADC 完成中断内的 FOC 快速路径（app_foc_isr_step），
+     * 此处只读缓存（避免与 ISR 争用 SPI3，也避免重复 SPI 读）。 */
     {
-        uint32_t t0 = intf_clock_get_cycle();
-        uint32_t cycles;
+        uint32_t cycles = 0U;
 
-        ret_rotor = app_encoder_sample_rotor();
-        cycles = intf_clock_get_cycle() - t0;
+        ret_rotor = 0;
         s_read_cycles_sum[APP_ENCODER_ROTOR] += cycles;
         if (cycles > s_read_cycles_max[APP_ENCODER_ROTOR]) {
             s_read_cycles_max[APP_ENCODER_ROTOR] = cycles;

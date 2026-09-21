@@ -191,6 +191,13 @@ void app_analog_signal_process(void) {
     }
 }
 
+float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw) {
+    if (ch >= ADC_CH_COUNT) {
+        return NAN;
+    }
+    return channel_to_physical(ch, raw);
+}
+
 bool app_analog_signal_read_all(app_analog_values_t* values) {
     if ((values == NULL) || !s_valid) {
         return false;

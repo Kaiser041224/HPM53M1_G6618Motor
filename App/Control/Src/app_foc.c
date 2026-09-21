@@ -46,6 +46,8 @@ static uint32_t s_last_cycle;     /**< 上一拍 FOC 调用时刻 [cycle]（实�
 static bool s_dt_valid;           /**< 已建立上一拍时刻 */
 static float s_dt_s;              /**< 实测调用间隔 [s]（0 = 首拍/异常） */
 static bool s_speed_limited;      /**< 限速滞环状态（避免阈值附近转矩断续） */
+static uint32_t s_isr_last_cycle; /**< ISR 上一拍 cycle（实测 dt） */
+static bool s_isr_dt_valid;       /**< ISR dt 已建立 */
 static bool s_vsat_limited;       /**< 电压饱和降转矩滞环状态 */
 
 /* Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss，调试器直读） */
@@ -98,6 +100,9 @@ void app_foc_init(void) {
     s_angle_ready = (app_foc_angle_init() == 0);
     app_foc_current_init();
     s_initialized = true;
+
+    /* 电流环挂到 ADC0 PMT 完成中断（固定 25kHz、采样到输出延迟最小） */
+    app_adc_register_current_hook(app_foc_isr_step);
 }
 
 /**
@@ -129,9 +134,7 @@ static bool app_foc_read_rotor_rad(float* theta_m_rad) {
  * @brief 25kHz 单拍主体（由 app_foc_run_once 计时包裹）
  */
 static void app_foc_run_body(void) {
-    float theta_e = 0.0f;
     float omega_e = 0.0f;
-    float theta_m;
 
     if (!s_initialized) {
         return;
@@ -159,6 +162,7 @@ static void app_foc_run_body(void) {
         /* OFF：仅刷新观测（角度 + 实测电流；不写桥、不跑电流环）。
          * 桥已关闭 → 实测电流应为 0（±噪声）；快照同步刷新，避免"OFF 仍有电流"的误读。 */
         app_analog_values_t values;
+        float theta_m;
 
         if (s_angle_ready && app_foc_read_rotor_rad(&theta_m)) {
             float omega_off = 0.0f;
@@ -190,23 +194,14 @@ static void app_foc_run_body(void) {
         return;
     }
 
-    /* 辨识模式：由辨识模块提供激励（强制角 + 电流给定） */
+    /* 辨识模式：由辨识模块提供激励（强制角 + 电流给定）；电流环在 ISR 内执行 */
     if (s_state == APP_FOC_STATE_CALIB) {
         (void)app_motor_identify_fast_step();
     }
 
-    /* 角度 */
-    if (s_angle_src == APP_FOC_ANGLE_FORCED) {
-        theta_e = foc_wrap_2pi(s_forced_theta);
-        omega_e = 0.0f;
-    } else {
-        if (!app_foc_read_rotor_rad(&theta_m)) {
-            app_foc_current_protect_reason(APP_FOC_PROT_ENC);
-            app_foc_current_protect(); /* 换相数据停摆/无效：保护式零矢量 */
-            return;
-        }
-        theta_e = s_angle.step(&s_angle, theta_m, s_dt_s, &omega_e);
-    }
+    /* 角度/电流环已迁至 app_foc_isr_step（ADC 完成回调，固定 25kHz）；
+     * 此处只做状态机、限幅与激励编排。ωe 取 ISR 侧快照用于限速判据。 */
+    omega_e = g_foc_current_snapshot.omega_e_rad_s;
 
     /* 转矩模式限速（保护，不锁存）：|ωe| 超限 → 生效给定置零；带 15% 滞环恢复
      * （无滞环时 ωe 噪声/回摆会在阈值附近反复切断 → 机械顿挫、电流冲击）。
@@ -249,9 +244,6 @@ static void app_foc_run_body(void) {
         }
     }
 
-    /* 电流环 */
-    (void)app_foc_current_run(theta_e, omega_e, s_i_d_ref, s_i_q_ref, NULL, NULL);
-
     if ((s_state == APP_FOC_STATE_READY)
         && ((s_i_d_ref != 0.0f) || (s_i_q_ref_cmd != 0.0f))) {
         s_state = APP_FOC_STATE_RUN;
@@ -263,6 +255,83 @@ float app_foc_get_last_dt_s(void) {
         return s_dt_s;
     }
     return 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
+}
+
+/**
+ * @brief FOC 快速路径（ADC0 PMT 完成中断内调用）：编码器采样 + 角度链 + 电流环
+ * @note 固定 25kHz（与开关/采样同频），采样到输出延迟最小；主循环节拍抖动、
+ *       USB/终端停顿均不再影响控制环。状态机/限幅/辨识激励仍在主循环。
+ */
+FOC_ATTR_RAMFUNC
+void app_foc_isr_step(void) {
+    float theta_m;
+    float theta_e;
+    float omega_e = 0.0f;
+    float i_u;
+    float i_v;
+    float i_w;
+    float v_bus;
+    uint16_t raw;
+
+    if (!s_initialized) {
+        return;
+    }
+
+    /* 转子编码器：ISR 内采样（角度新鲜度直接决定换相质量） */
+    (void)app_encoder_sample_rotor();
+
+    if ((s_state == APP_FOC_STATE_OFF) || (s_state == APP_FOC_STATE_FAULT)) {
+        return; /* 桥已关断：零矢量由关闭路径保证 */
+    }
+
+    /* 角度：强制角（辨识/开环）或编码器跟踪 */
+    if (s_angle_src == APP_FOC_ANGLE_FORCED) {
+        theta_e = foc_wrap_2pi(s_forced_theta);
+        omega_e = 0.0f;
+    } else {
+        uint32_t now;
+        float dt = 0.0f;
+
+        if (!app_foc_read_rotor_rad(&theta_m)) {
+            app_foc_current_protect_reason(APP_FOC_PROT_ENC);
+            app_foc_current_protect();
+            return;
+        }
+        now = intf_clock_get_cycle();
+        if (s_isr_dt_valid) {
+            dt = (float)(now - s_isr_last_cycle) / (float)intf_clock_get_cpu_freq();
+        }
+        s_isr_last_cycle = now;
+        s_isr_dt_valid = true;
+        theta_e = s_angle.step(&s_angle, theta_m, dt, &omega_e);
+    }
+
+    /* 本拍新鲜电流（原始码 → A，无滤波） */
+    if (!app_adc_get_raw(ADC_CH_I_U, &raw)) {
+        app_foc_current_protect_reason(APP_FOC_PROT_READ);
+        app_foc_current_protect();
+        return;
+    }
+    i_u = app_analog_signal_convert_raw(ADC_CH_I_U, raw);
+    if (!app_adc_get_raw(ADC_CH_I_V, &raw)) {
+        app_foc_current_protect_reason(APP_FOC_PROT_READ);
+        app_foc_current_protect();
+        return;
+    }
+    i_v = app_analog_signal_convert_raw(ADC_CH_I_V, raw);
+    if (!app_adc_get_raw(ADC_CH_I_W, &raw)) {
+        app_foc_current_protect_reason(APP_FOC_PROT_READ);
+        app_foc_current_protect();
+        return;
+    }
+    i_w = app_analog_signal_convert_raw(ADC_CH_I_W, raw);
+
+    /* 母线电压：ADC1 慢速通道（1kHz 更新，足够） */
+    v_bus = app_analog_signal_read(ADC_CH_V_VBUS);
+
+    /* 电流环（含限幅/过流跳闸/占空比下发） */
+    (void)app_foc_current_run_fresh(theta_e, omega_e, s_i_d_ref, s_i_q_ref, i_u, i_v, i_w, v_bus,
+                                    NULL, NULL);
 }
 
 void app_foc_run_once(void) {

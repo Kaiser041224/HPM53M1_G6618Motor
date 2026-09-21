@@ -270,12 +270,16 @@ float app_foc_current_get_v_scale(void) {
     return g_foc_current_snapshot.v_scale;
 }
 
-int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
-                        float duty_abc_out[3], bool* saturated_out) {
+/**
+ * @brief 电流环（显式输入版本：供 ADC 完成回调使用，输入为本拍新鲜采样）
+ * @note 与 app_foc_current_run 的区别：不读模拟量缓存，电流/母线由调用方给出
+ */
+int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
+                              float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
+                              float duty_abc_out[3], bool* saturated_out) {
     uint32_t t_entry = intf_clock_get_cycle();
     uint32_t t_pi = 0U;
     const app_software_params_t* software = app_software_params_current();
-    app_analog_values_t values;
     foc_current_in_t in = {0};
     foc_current_out_t out = {0};
     foc_modulation_cfg_t mod_cfg;
@@ -287,13 +291,8 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         return -1;
     }
 
-    if (!app_analog_signal_read_all(&values)) {
-        app_foc_current_protect_reason(APP_FOC_PROT_READ);
-        app_foc_current_protect();
-        return -1;
-    }
+    v_bus = v_bus_v;
     g_foc_cyc_read = intf_clock_get_cycle() - t_entry;
-    v_bus = values.v_bus_v;
     if (!foc_finite(v_bus) || (v_bus < APP_FOC_V_BUS_MIN_V)) {
         app_foc_current_protect_reason(APP_FOC_PROT_VBUS);
         app_foc_current_protect();
@@ -309,7 +308,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     s_current.set_decoupling(&s_current, software->control.current_loop.decoupling_en);
 
     /* Clarke → Park（同一 θ 的 sincos 复用于反 Park） */
-    foc_clarke(values.i_u_a, values.i_v_a, values.i_w_a, &i_alpha, &i_beta);
+    foc_clarke(i_u_a, i_v_a, i_w_a, &i_alpha, &i_beta);
     foc_sincos(theta_e_rad, &s, &c);
     foc_park_sc(i_alpha, i_beta, s, c, &in.i_d_a, &in.i_q_a);
 
@@ -416,6 +415,20 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     }
     app_foc_trace_capture();
     return 0;
+}
+
+int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
+                        float duty_abc_out[3], bool* saturated_out) {
+    app_analog_values_t values;
+
+    if (!app_analog_signal_read_all(&values)) {
+        app_foc_current_protect_reason(APP_FOC_PROT_READ);
+        app_foc_current_protect();
+        return -1;
+    }
+    return app_foc_current_run_fresh(theta_e_rad, omega_e_rad_s, i_d_ref, i_q_ref, values.i_u_a,
+                                     values.i_v_a, values.i_w_a, values.v_bus_v, duty_abc_out,
+                                     saturated_out);
 }
 
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out) {
