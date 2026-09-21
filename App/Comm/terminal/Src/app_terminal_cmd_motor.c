@@ -340,9 +340,10 @@ static void cal_encoder_tick(uint32_t now_ms) {
                                   (unsigned)pct, (double)s_cal_beat_count * 0.2,
                                   (unsigned)g_foc_loop_dt_us,
                                   (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
-            app_debug_printf("[cal] %3u%% (%.1fs) dt=%u us cyc=%u us\r\n", (unsigned)pct,
+            app_debug_printf("[cal] %3u%% (%.1fs) dt=%u us cyc=%u us jmp=%u\r\n", (unsigned)pct,
                              (double)s_cal_beat_count * 0.2, (unsigned)g_foc_loop_dt_us,
-                             (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
+                             (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
+                             (unsigned)app_encoder_get_rotor_jump_count());
         }
         return;
     }

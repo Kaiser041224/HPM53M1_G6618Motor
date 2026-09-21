@@ -42,6 +42,7 @@ typedef enum {
 static app_identify_state_t s_state;
 static id_encoder_t s_id_encoder;
 static uint32_t s_enc_err_base[APP_ENCODER_COUNT];
+static uint32_t s_enc_jump_base; /**< 辨识起点：转子编码器跳变计数基线 */
 static float s_verify_ms;
 static float s_verify_sum_deg;
 static float s_verify_max_deg;
@@ -212,6 +213,13 @@ void app_motor_identify_run_once(uint32_t now_ms) {
                 app_motor_identify_abort();
                 return;
             }
+            if (app_encoder_get_rotor_jump_count() != s_enc_jump_base) {
+                /* 编码器坏帧（SPI 无 CRC，已由跳变检测丢弃）：角度基准不可信 */
+                s_result.fail_reason = APP_IDENTIFY_REASON_ENCODER;
+                s_result.failed = true;
+                app_motor_identify_abort();
+                return;
+            }
         }
         break;
 
@@ -231,6 +239,13 @@ void app_motor_identify_run_once(uint32_t now_ms) {
         }
         for (uint8_t i = 0U; i < (uint8_t)APP_ENCODER_COUNT; i++) {
             if (app_encoder_get_error_count((app_encoder_id_t)i) != s_enc_err_base[i]) {
+                s_result.fail_reason = APP_IDENTIFY_REASON_ENCODER;
+                s_result.failed = true;
+                app_motor_identify_abort();
+                return;
+            }
+            if (app_encoder_get_rotor_jump_count() != s_enc_jump_base) {
+                /* 编码器坏帧（SPI 无 CRC，已由跳变检测丢弃）：角度基准不可信 */
                 s_result.fail_reason = APP_IDENTIFY_REASON_ENCODER;
                 s_result.failed = true;
                 app_motor_identify_abort();
@@ -352,6 +367,7 @@ int app_motor_identify_start(void) {
     }
 
     identify_read_errors(s_enc_err_base);
+    s_enc_jump_base = app_encoder_get_rotor_jump_count();
     s_offset_applied = false;
     s_run_ticks = 0U;
     s_rotor_seq_valid = false;

@@ -28,6 +28,9 @@
 
 #define APP_ENCODER_SCLK_HZ (10000000U) /* KTH7823 上限（TSCK≥100ns） */
 
+/** 机械角单步跳变上限 [deg]（25kHz 采样；5° ≈ 20000 rpm，远超实际转速） */
+#define APP_ENCODER_JUMP_LIMIT_DEG (5.0f)
+
 /**
  * @brief 编码器持久化参数（app_param 键 APP_PARAM_KEY_ENCODER 的数据布局）
  */
@@ -37,6 +40,12 @@ typedef struct {
 } encoder_param_t;
 
 /* 板级映射：转子 -> SPI3，出轴 -> SPI1（SoC 实例号） */
+static bool s_rotor_valid;
+static uint32_t s_rotor_seq;      /* 成功采样序号（陈旧检测） */
+static uint16_t s_rotor_prev_raw; /**< 上一有效原始值（跳变检测） */
+static bool s_rotor_prev_valid;   /**< 上一有效值已建立 */
+static int32_t s_rotor_jump_limit;/**< 单步跳变上限 [count]（init 时按分辨率算） */
+static uint32_t s_rotor_jump_count; /**< 跳变（坏帧）计数 */
 static const uint8_t s_encoder_bus[APP_ENCODER_COUNT] = {3U, 1U};
 
 /* init 时解析的设备对象（热路径直接调用，不再查表） */
@@ -67,6 +76,9 @@ int app_encoder_init(void) {
 
         /* 默认 16bit；驱动返回实际分辨率后重算换算系数 */
         s_rad_scale[i] = 6.283185307179586f / 65536.0f;
+        if (i == (uint8_t)APP_ENCODER_ROTOR) {
+            s_rotor_jump_limit = (int32_t)(65536.0f * (APP_ENCODER_JUMP_LIMIT_DEG / 360.0f));
+        }
         s_deg_scale[i] = 360.0f / 65536.0f;
 
         s_encoder_dev[i] = intf_encoder_get((intf_encoder_id_t)i);
@@ -85,6 +97,9 @@ int app_encoder_init(void) {
                 float counts = (float)(1UL << info.resolution_bits);
 
                 s_rad_scale[i] = 6.283185307179586f / counts;
+                if (i == (uint8_t)APP_ENCODER_ROTOR) {
+                    s_rotor_jump_limit = (int32_t)(counts * (APP_ENCODER_JUMP_LIMIT_DEG / 360.0f));
+                }
                 s_deg_scale[i] = 360.0f / counts;
             }
         }
@@ -117,15 +132,36 @@ int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw) {
  * 注：单上下文（主循环）使用；若将来迁入 ISR，需重新审视本缓存的一致性。 */
 static uint16_t s_rotor_raw;
 static bool s_rotor_valid;
-static uint32_t s_rotor_seq; /* 成功采样序号（陈旧检测） */
+static uint32_t s_rotor_seq;      /* 成功采样序号（陈旧检测） */
 
 int app_encoder_sample_rotor(void) {
     int rc = app_encoder_read_raw(APP_ENCODER_ROTOR, &s_rotor_raw);
 
-    s_rotor_valid = (rc == 0);
     if (rc == 0) {
+        /* 跳变防护：KTH7823 的 SPI 帧无 CRC/奇偶校验（驱动仅判 SPI 传输成败），
+         * 坏帧会直接给出错误角度。25kHz 采样下真实机械角单步变化远小于阈值
+         * （5° 对应 ~20000 rpm），超限即判为坏帧：丢弃本样本并计错误，
+         * 避免坏帧把 N 倍电角误差注入 FOC 换相与辨识。 */
+        if (s_rotor_prev_valid) {
+            int32_t delta = (int32_t)s_rotor_raw - (int32_t)s_rotor_prev_raw;
+
+            if (delta > 32767) {
+                delta -= 65536;
+            } else if (delta < -32768) {
+                delta += 65536;
+            }
+            if ((delta > s_rotor_jump_limit) || (delta < -s_rotor_jump_limit)) {
+                s_rotor_jump_count++;
+                s_rotor_valid = false; /* 不更新 prev：下一帧与上一有效帧比较 */
+                return -1;
+            }
+        }
+        s_rotor_prev_raw = s_rotor_raw;
+        s_rotor_prev_valid = true;
         s_rotor_seq++;
     }
+
+    s_rotor_valid = (rc == 0);
     return rc;
 }
 
@@ -266,6 +302,10 @@ int app_encoder_set_direction(app_encoder_id_t id, bool cw_increasing) {
         return -1;
     }
     return s_encoder_dev[id]->set_direction(cw_increasing);
+}
+
+uint32_t app_encoder_get_rotor_jump_count(void) {
+    return s_rotor_jump_count;
 }
 
 uint32_t app_encoder_get_error_count(app_encoder_id_t id) {

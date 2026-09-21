@@ -53,6 +53,12 @@ int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw);
 int app_encoder_sample_rotor(void);
 
 /**
+ * @brief 转子编码器"角度跳变（坏帧）"计数
+ * @return 累计次数（SPI 帧无 CRC，超阈值样本被丢弃并计入）
+ */
+uint32_t app_encoder_get_rotor_jump_count(void);
+
+/**
  * @brief 读取转子共享采样缓存并换算为机械角（按器件分辨率；无 I/O）。
  * @param rad 输出机械角（未加软件零点）[rad]，范围 [0, 2π)
  * @param valid 输出缓存有效性

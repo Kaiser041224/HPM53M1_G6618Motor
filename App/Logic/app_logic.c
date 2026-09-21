@@ -228,14 +228,15 @@ void app_run(void) {
                                  (double)snap.i_q_avg_a, (double)snap.omega_e_rad_s,
                                  (unsigned)snap.tripped, (unsigned)app_fault_get_codes());
                 /* 分段耗时 + L1C 运行态（ic/dc = 1 表示已使能） */
-                app_debug_printf("     cyc: tot=%u rd=%u pi=%u mod=%u us | dt=%u us ic=%u dc=%u\r\n",
+                app_debug_printf("     cyc: tot=%u rd=%u pi=%u mod=%u us | dt=%u us ic=%u dc=%u jmp=%u\r\n",
                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_read / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_pi / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_mod / mhz) : 0U),
                                  (unsigned)g_foc_loop_dt_us,
                                  (unsigned)(g_board_l1c_ctl & 0x1U),
-                                 (unsigned)((g_board_l1c_ctl >> 1) & 0x1U));
+                                 (unsigned)((g_board_l1c_ctl >> 1) & 0x1U),
+                                 (unsigned)app_encoder_get_rotor_jump_count());
             }
 #else
             (void)last_printf_cycles;
