@@ -31,5 +31,5 @@ encoder:
   rotor_ratio: "rotor_ring_teeth / rotor_pinion_teeth"     # 转子编码器转角/转子转角 → 1.0
   output_ratio: "rotor_ring_teeth / output_pinion_teeth"   # 出轴编码器转角/转子转角 → 0.98（实测确认）
   electrical_offset_rad: 0.0    # 电角度零点 [rad]（cal encoder 写入；V1 RAM，flash V2）
-  direction: 1.0                # 编码器方向（+1.0 / −1.0；cal encoder 写入）
+  direction: 1.0                # 编码器方向（合法值仅 +1.0 / −1.0；cal encoder 写入）
   # reducer_ratio: <待确认>    # 减速器出轴/转子减速比（多圈解算用，待机械确认后加入）

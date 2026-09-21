@@ -94,7 +94,7 @@ SCHEMA = {
         ("control.speed_loop.kp", "control.speed_loop.kp", "f32", None, None),
         ("control.speed_loop.ki", "control.speed_loop.ki", "f32", None, None),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
-        ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.0, 1.0),
+        ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.501, 1.0),
     ],
 }
 

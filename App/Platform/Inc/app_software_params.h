@@ -51,11 +51,11 @@ typedef struct {
 } app_software_pid_t;
 
 /**
- * @brief 控制限幅参数
+ * @brief 控制限幅参数（FOC 电流环消费）
  */
 typedef struct {
     float i_q_max_a; /**< 电流限幅 [A]（峰值口径 = 相电流峰值） */
-    float duty_max;  /**< 占空比上限（FOC 预留，未消费） */
+    float duty_max;  /**< 调制上限（有效域 (0.5, 1.0]；FOC 电流环消费） */
 } app_software_limits_t;
 
 /**

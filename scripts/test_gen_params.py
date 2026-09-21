@@ -271,7 +271,7 @@ def test_meta_range(root: Path) -> None:
     meta = {m["name"]: m for m in parse_meta(cfg)}
     duty = meta.get("software.control.limits.duty_max", {})
     kp = meta.get("software.control.current_loop.kp", {})
-    ok = (duty.get("min") == "0.0" and duty.get("max") == "1.0"
+    ok = (duty.get("min") == "0.501" and duty.get("max") == "1.0"
           and kp.get("min") == "-INFINITY" and kp.get("max") == "INFINITY")
     expect("meta-range-bounds", ok,
            f"duty={duty.get('min')}..{duty.get('max')} kp={kp.get('min')}..{kp.get('max')}")

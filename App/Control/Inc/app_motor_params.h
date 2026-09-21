@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 /**
- * @brief 编码器齿系（转子轴外齿圈 + 两路小齿轮）
+ * @brief 编码器齿系与电角度标定（转子轴外齿圈 + 两路小齿轮）
  */
 typedef struct {
     uint8_t resolution_bits;     /**< 单圈绝对分辨率 [bit] */
@@ -49,7 +49,7 @@ typedef struct {
     float    inertia_kgm2;       /**< 转动惯量 [kg·m²] */
     float    torque_rated_nm;    /**< 额定转矩 [N·m] */
     float    torque_peak_10s_nm; /**< 峰值转矩 10s [N·m] */
-    app_motor_encoder_t encoder; /**< 编码器齿系 */
+    app_motor_encoder_t encoder; /**< 编码器齿系与电角度标定 */
 } app_motor_params_t;
 
 /**
