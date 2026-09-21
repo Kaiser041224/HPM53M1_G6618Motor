@@ -83,6 +83,7 @@ SCHEMA = {
         # CAN ID 暂限标准帧（11-bit ≤0x7FF）；扩展帧待协议定义帧格式字段后放宽
         ("can.rx_control_id", "can.rx_control_id", "u32", 0, 0x7FF),
         ("can.tx_report_id", "can.tx_report_id", "u32", 0, 0x7FF),
+        ("fault.shutdown_en", "fault.shutdown_en", "u8", 0, 1),
         ("fault.oc_trip_a", "fault.oc_trip_a", "f32", 0.0, None),
         ("fault.vbus_ov_v", "fault.vbus_ov_v", "f32", 0.0, None),
         ("fault.vbus_uv_v", "fault.vbus_uv_v", "f32", 0.0, None),

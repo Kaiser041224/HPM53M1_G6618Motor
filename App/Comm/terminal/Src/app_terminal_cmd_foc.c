@@ -12,6 +12,7 @@
 #include "app_terminal_cmd.h"
 
 #include "app_motor_params.h"
+#include "app_software_params.h"
 #include "app_terminal.h"
 #include "app_terminal_job.h"
 
@@ -178,6 +179,38 @@ static int cmd_foc(int argc, char** argv) {
                    "'foc vtest off' stops)\r\n",
                    (double)volts, (double)deg,
                    (double)(volts / ((motor->rs_ohm > 0.0f) ? motor->rs_ohm : 1.0f)));
+        return 0;
+    }
+
+    if (strcmp(sub, "bench") == 0) {
+        /* 台架模式：一键关闭“自动停机”类保护（限流电源调试用；参数均为 LIVE）。
+         * 仅关停保护，不改变控制律；vsat 降转矩（非停机）保持启用。 */
+        app_software_params_t* software;
+        uint8_t on;
+
+        if (argc < 3) {
+            csh_printf(csh, "usage: foc bench <0|1>  (1=关闭自动停机保护，0=恢复)\r\n");
+            return -1;
+        }
+        on = (uint8_t)((argv[2][0] == '1') ? 1U : 0U);
+        software = app_software_params_mutable();
+        {
+            /* 恢复值取编译期默认（config 下 yaml），避免硬编码漂移 */
+            const app_software_params_t* defaults = app_software_params_default();
+
+            software->control.limits.i_trip_a =
+                on ? 0.0f : defaults->control.limits.i_trip_a;
+            software->control.limits.speed_max_rad_s =
+                on ? 0.0f : defaults->control.limits.speed_max_rad_s;
+            software->fault.shutdown_en = on ? 0U : defaults->fault.shutdown_en;
+        }
+        csh_printf(csh, "bench=%u: i_trip_a=%.1f A  speed_max=%.0f rad/s  fault.shutdown_en=%u\r\n",
+                   (unsigned)on, (double)software->control.limits.i_trip_a,
+                   (double)software->control.limits.speed_max_rad_s,
+                   (unsigned)software->fault.shutdown_en);
+        if (on != 0U) {
+            csh_printf(csh, "WARN: all auto-stop protections OFF (use current-limited supply)\r\n");
+        }
         return 0;
     }
 

@@ -323,9 +323,9 @@ static void cal_encoder_tick(uint32_t now_ms) {
                               (double)(result.offset_rad * (180.0f / FOC_PI_F)),
                               (double)result.direction, (double)result.quality);
         app_terminal_cmd_emit("    verify: probe=%.3f rad (need >=0.05, x dir)  resid mean=%.2f "
-                              "max=%.2f deg\r\n",
+                              "max=%.2f deg  drift=%.0f deg/s\r\n",
                               (double)result.probe_travel_rad, (double)result.verify_mean_deg,
-                              (double)result.verify_max_deg);
+                              (double)result.verify_max_deg, (double)result.verify_drift_deg_s);
         {
             const app_motor_params_t* motor = app_motor_params_current();
             float implied_pp = (float)motor->pole_pairs / (1.0f + result.ratio_err);
@@ -341,9 +341,9 @@ static void cal_encoder_tick(uint32_t now_ms) {
                               cal_encoder_fail_name(result.fail_reason),
                               (double)result.quality, (double)(result.ratio_err * 100.0f));
         app_terminal_cmd_emit("      verify: probe=%.3f rad (need >=0.05, x dir)  resid mean=%.2f "
-                              "max=%.2f deg\r\n",
+                              "max=%.2f deg  drift=%.0f deg/s\r\n",
                               (double)result.probe_travel_rad, (double)result.verify_mean_deg,
-                              (double)result.verify_max_deg);
+                              (double)result.verify_max_deg, (double)result.verify_drift_deg_s);
         app_terminal_cmd_emit("      check: free rotation / I_cal enough / encoder mounting / "
                               "pole_pairs\r\n");
     }

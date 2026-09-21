@@ -246,6 +246,10 @@ void app_foc_current_protect(void) {
     g_foc_current_snapshot.fault_count++;
 }
 
+float app_foc_current_get_v_scale(void) {
+    return g_foc_current_snapshot.v_scale;
+}
+
 int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
                         float duty_abc_out[3], bool* saturated_out) {
     const app_software_params_t* software = app_software_params_current();

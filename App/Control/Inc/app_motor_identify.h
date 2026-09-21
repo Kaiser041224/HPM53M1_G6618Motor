@@ -52,6 +52,7 @@ typedef struct {
     float verify_mean_deg;     /**< 验证静默段角度残差均值 [deg]（信息量） */
     float verify_max_deg;      /**< 验证静默段角度残差峰值 [deg]（信息量） */
     float probe_travel_rad;    /**< 探针段机械行程 [rad]（判据：×direction ≥ 0.05） */
+    float verify_drift_deg_s;  /**< 静默段残差漂移 [deg/s]（≈0 静止；大 = 转子被恒转矩驱动） */
     app_identify_fail_t fail_reason; /**< 失败原因 */
 } app_motor_identify_result_t;
 

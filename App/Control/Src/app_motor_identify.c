@@ -17,9 +17,9 @@
 #include "foc_math.h"
 #include "id_encoder.h"
 
-#define APP_IDENTIFY_I_CAL_A       (2.0f)   /**< 辨识电流（峰值）[A] */
+#define APP_IDENTIFY_I_CAL_A       (4.0f)   /**< 辨识电流（峰值）[A]（加大：转子跟得更紧，摩擦/齿槽影响更小） */
 #define APP_IDENTIFY_QUALITY_MIN   (0.8f)   /**< 质量下限（与 id_encoder 配置一致） */
-#define APP_IDENTIFY_RUN_TICK_MAX  (30000U) /**< 编排侧 RUN 超时 [1kHz tick]（30s 兜底） */
+#define APP_IDENTIFY_RUN_TICK_MAX  (60000U) /**< 编排侧 RUN 超时 [1kHz tick]（60s 兜底） */
 /* 验证 = 探针法（参考实现同法）：静默后给一个小 i_q 脉冲，转子必须按"电角正方向"
  * 转动（机械行程 × direction ≥ 0.05 rad）。判据免疫机械回差/摩擦/爬行——只回答
  * "零点是否可用"：~90° 错误 → 无转矩 → 行程≈0 → 失败；180° 错误 → 反转 → 失败。
@@ -28,8 +28,8 @@
 #define APP_IDENTIFY_VERIFY_SETTLE_MS (50.0f) /**< 静默段时长 [ms]（排除残余速度） */
 #define APP_IDENTIFY_VERIFY_RESID_MS  (50.0f) /**< 残差采样窗口 [ms] */
 #define APP_IDENTIFY_VERIFY_RESID_MAX_DEG (90.0f) /**< 静默段残差峰值上限 [deg] */
-#define APP_IDENTIFY_PROBE_A          (0.5f)  /**< 探针 i_q [A]（0.058 N·m，克服静摩擦留 1.7x 余量） */
-#define APP_IDENTIFY_PROBE_MS         (40.0f) /**< 探针时长 [ms] */
+#define APP_IDENTIFY_PROBE_A          (1.0f)  /**< 探针 i_q [A] */
+#define APP_IDENTIFY_PROBE_MS         (60.0f) /**< 探针时长 [ms] */
 #define APP_IDENTIFY_PROBE_MIN_RAD    (0.05f) /**< 探针最小机械行程 [rad] */
 
 typedef enum {
@@ -46,6 +46,8 @@ static float s_verify_ms;
 static float s_verify_sum_deg;
 static float s_verify_max_deg;
 static uint32_t s_verify_n;
+static float s_verify_first_deg; /**< 残差窗口首值 [deg]（漂移诊断） */
+static bool s_verify_first_valid;
 static app_motor_identify_result_t s_result;
 static float s_prev_offset_rad;   /**< 辨识前运行态零点（验证失败回滚用） */
 static float s_prev_direction;    /**< 辨识前运行态方向 */
@@ -148,6 +150,7 @@ bool app_motor_identify_fast_step(void) {
         s_verify_n = 0U;
         s_probe_active = false;
         s_probe_travel = 0.0f;
+        s_verify_first_valid = false;
     } else if (out.failed) {
         /* 直接映射 id_encoder 失败原因（不再由 quality 反推） */
         switch (out.fail_reason) {
@@ -250,6 +253,10 @@ void app_motor_identify_run_once(uint32_t now_ms) {
             if (delta_deg > 180.0f) {
                 delta_deg -= 360.0f;
             }
+            if (!s_verify_first_valid) {
+                s_verify_first_deg = delta_deg;
+                s_verify_first_valid = true;
+            }
             s_verify_sum_deg += delta_deg;
             if (fabsf(delta_deg) > s_verify_max_deg) {
                 s_verify_max_deg = fabsf(delta_deg);
@@ -292,6 +299,12 @@ void app_motor_identify_run_once(uint32_t now_ms) {
         (void)app_foc_set_iq_ref(0.0f);
         s_result.verify_mean_deg = (s_verify_n > 0U) ? (s_verify_sum_deg / (float)s_verify_n) : 0.0f;
         s_result.verify_max_deg = s_verify_max_deg;
+        /* 残差漂移 [deg/s]：静默窗口内转子被"恒转矩"驱动的直接证据（静止应为 ~0） */
+        s_result.verify_drift_deg_s =
+            (s_verify_first_valid && (s_verify_n > 1U))
+                ? ((s_verify_sum_deg / (float)s_verify_n - s_verify_first_deg)
+                   / (APP_IDENTIFY_VERIFY_RESID_MS / 1000.0f))
+                : 0.0f;
         s_result.probe_travel_rad = s_probe_travel;
         if ((s_probe_travel * s_result.direction) >= APP_IDENTIFY_PROBE_MIN_RAD
             && (s_verify_max_deg <= APP_IDENTIFY_VERIFY_RESID_MAX_DEG)) {
@@ -339,15 +352,15 @@ int app_motor_identify_start(void) {
 
     cfg.pole_pairs = motor->pole_pairs;
     cfg.i_cal_a = APP_IDENTIFY_I_CAL_A;
-    cfg.lockin_ms = 500.0f;
-    cfg.dir_ms = 300.0f;
+    cfg.lockin_ms = 800.0f;
+    cfg.dir_ms = 400.0f;
     cfg.dir_step_rad = FOC_PI_F / 3.0f;
-    cfg.sweep_steps = 180U;
-    cfg.sweep_step_ms = 5.0f;
-    cfg.sweep_settle_ms = 100.0f;
+    cfg.sweep_steps = 360U;
+    cfg.sweep_step_ms = 10.0f;
+    cfg.sweep_settle_ms = 200.0f;
     cfg.quality_min = APP_IDENTIFY_QUALITY_MIN;
     cfg.ratio_tol = 0.2f;
-    cfg.timeout_ms = 15000.0f;
+    cfg.timeout_ms = 30000.0f;
 
     id_encoder_ctor(&s_id_encoder);
     if (s_id_encoder.init(&s_id_encoder, &cfg) != 0) {

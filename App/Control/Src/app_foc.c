@@ -25,6 +25,11 @@
 #define APP_FOC_SPEED_LPF_HZ (100.0f) /**< ωe 估计低通截止 [Hz] */
 /* 限速滞环：超限切断，回落至 85% 才恢复（ωe 噪声/回摆不再造成转矩断续） */
 #define APP_FOC_SPEED_LIMIT_RESTORE (0.85f)
+/* 电压饱和降转矩：调制缩放低于切入阈值 → 给定置零（防止转子被驱动进入
+ * "反电动势 > 可用电压"的失控反灌区：电流环失去调节能力 → 电流冲击/母线抬升）；
+ * 回升到恢复阈值以上才恢复。非停机保护，速度回落自动恢复。 */
+#define APP_FOC_VSAT_ENTER (0.95f)
+#define APP_FOC_VSAT_EXIT  (0.99f)
 
 static app_foc_state_t s_state;
 static foc_angle_t s_angle;
@@ -41,6 +46,7 @@ static uint32_t s_last_cycle;     /**< 上一拍 FOC 调用时刻 [cycle]（实�
 static bool s_dt_valid;           /**< 已建立上一拍时刻 */
 static float s_dt_s;              /**< 实测调用间隔 [s]（0 = 首拍/异常） */
 static bool s_speed_limited;      /**< 限速滞环状态（避免阈值附近转矩断续） */
+static bool s_vsat_limited;       /**< 电压饱和降转矩滞环状态 */
 
 /* Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss，调试器直读） */
 volatile uint32_t g_foc_loop_cycles __attribute__((section(".noncacheable.bss")));
@@ -222,6 +228,24 @@ static void app_foc_run_body(void) {
         } else {
             s_speed_limited = false;
         }
+
+        /* 电压饱和降转矩（滞环；独立于限速） */
+        if (s_state == APP_FOC_STATE_RUN) {
+            float v_scale = app_foc_current_get_v_scale();
+
+            if (s_vsat_limited) {
+                if (v_scale > APP_FOC_VSAT_EXIT) {
+                    s_vsat_limited = false;
+                }
+            } else if (v_scale < APP_FOC_VSAT_ENTER) {
+                s_vsat_limited = true;
+            }
+            if (s_vsat_limited) {
+                s_i_q_ref = 0.0f;
+            }
+        } else {
+            s_vsat_limited = false;
+        }
     }
 
     /* 电流环 */
@@ -318,6 +342,7 @@ void app_foc_disable(void) {
     s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_speed_limited = false; /* 限速滞环随禁用复位 */
+    s_vsat_limited = false;  /* 电压饱和滞环随禁用复位 */
     s_dt_valid = false;      /* 重新使能后首拍不注入 dt 尖峰 */
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_state = APP_FOC_STATE_OFF;

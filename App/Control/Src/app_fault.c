@@ -378,10 +378,13 @@ void app_fault_tick(void) {
         }
     }
 
-    /* ---- 状态汇总（FAULT 锁存优先） ---- */
-    if (s_fault_ctx.latched != 0U) {
+    /* ---- 状态汇总（FAULT 锁存优先） ----
+     * software.fault.shutdown_en = 0（台架模式）：仍检测/计数/上报，但状态不进入
+     * FAULT（消费方据此停机），仅保持 WARNING。用于限流电源台架调试。 */
+    if ((s_fault_ctx.latched != 0U)
+        && (app_software_params_current()->fault.shutdown_en != 0U)) {
         s_fault_ctx.state = APP_FAULT_STATE_FAULT;
-    } else if (pending) {
+    } else if ((s_fault_ctx.latched != 0U) || pending) {
         s_fault_ctx.state = APP_FAULT_STATE_WARNING;
     } else {
         s_fault_ctx.state = APP_FAULT_STATE_NORMAL;

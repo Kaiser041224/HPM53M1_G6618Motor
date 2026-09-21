@@ -84,6 +84,12 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);
 
 /**
+ * @brief 上一拍调制缩放（1.0 = 未限幅；<1 = 电压饱和）
+ * @return 缩放系数（0.0~1.0）
+ */
+float app_foc_current_get_v_scale(void);
+
+/**
  * @brief 开环电压矢量诊断（vtest）：不经电流环，按给定电压/角度直接调制输出。
  *        用于核实电流采样符号/相序映射/标度与电机直流增益（I ≈ v/R）。
  * @param volts 相电压峰值 [V]（内部限幅 0~2V）
