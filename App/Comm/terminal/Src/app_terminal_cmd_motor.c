@@ -317,17 +317,31 @@ static void cal_encoder_tick(uint32_t now_ms) {
 
     app_motor_identify_run_once(now_ms);
     if (app_motor_identify_is_active()) {
-        /* 进度走 RTT（终端保持"只回命令"，周期输出会干扰键入）；
-         * 250ms 一行，带实测节拍 dt / FOC 单拍耗时，便于定位主循环负载。 */
-        if ((uint32_t)(now_ms - s_cal_beat_ms) >= 250U) {
+        /* 终端进度条（单行原地刷新 \r；job 期间输入已被屏蔽，不与 readline 冲突），
+         * 同时把 dt/cyc 走 RTT（主循环负载观测）。 */
+        if ((uint32_t)(now_ms - s_cal_beat_ms) >= 200U) {
             uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
+            uint32_t pct;
+            char bar[21];
+            uint32_t i;
 
             s_cal_beat_ms = now_ms;
             s_cal_beat_count++;
             app_motor_identify_get_result(&result);
-            app_debug_printf("[cal] %2u%% (%.1fs) dt=%u us cyc=%u us\r\n",
-                             (unsigned)(result.progress * 100.0f),
-                             (double)s_cal_beat_count * 0.25, (unsigned)g_foc_loop_dt_us,
+            pct = (uint32_t)(result.progress * 100.0f);
+            if (pct > 100U) {
+                pct = 100U;
+            }
+            for (i = 0U; i < 20U; i++) {
+                bar[i] = (i < (pct / 5U)) ? '#' : '-';
+            }
+            bar[20] = '\0';
+            app_terminal_cmd_emit("\rcal [%s] %3u%%  %4.1fs  dt=%u us cyc=%u us   ", bar,
+                                  (unsigned)pct, (double)s_cal_beat_count * 0.2,
+                                  (unsigned)g_foc_loop_dt_us,
+                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
+            app_debug_printf("[cal] %3u%% (%.1fs) dt=%u us cyc=%u us\r\n", (unsigned)pct,
+                             (double)s_cal_beat_count * 0.2, (unsigned)g_foc_loop_dt_us,
                              (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
         }
         return;
@@ -421,7 +435,7 @@ static int cmd_cal(int argc, char** argv) {
             return -1;
         }
         csh_printf(csh,
-                   "WARN: motor must be FREE to rotate; I_cal~2A; ~3.2s; any key aborts\r\n");
+                   "WARN: motor must be FREE to rotate; I_cal=2A; ~20s; input disabled\r\n");
         /* 先启动 job（会中止旧 job），再启动辨识 */
         if (app_terminal_job_start(&s_cal_encoder_job) != 0) {
             csh_printf(csh, "FAIL: job start\r\n");

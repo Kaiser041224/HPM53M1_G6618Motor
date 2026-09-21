@@ -202,7 +202,7 @@ static uint16_t app_terminal_sput(chry_readline_t* rl, const void* data, uint16_
  * ============================================================================ */
 
 /**
- * @brief 输入回调：USB 驱动环 → CherrySH（非阻塞；任意新输入中止前台 job）。
+ * @brief 输入回调：USB 驱动环 → CherrySH（非阻塞；前台 job 期间丢弃输入）。
  * @param rl readline 实例（未用）
  * @param data 输出缓冲
  * @param size 期望长度
@@ -216,8 +216,9 @@ static uint16_t app_terminal_sget(chry_readline_t* rl, void* data, uint16_t size
     received = app_usb_read((uint8_t*)data, (size_t)size);
     if (received > 0) {
         if (app_terminal_job_is_active()) {
-            app_terminal_job_abort(); /* 任意新输入中止前台 job */
-            return 0U;             /* 吞掉触发键，避免其落入命令行 */
+            /* job 期间不接受指令输入：直接丢弃（不再"任意键中止"，
+             * 避免长流程被误触打断；job 自身有超时兜底） */
+            return 0U;
         }
         return (uint16_t)received;
     }
