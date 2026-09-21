@@ -379,15 +379,22 @@ void app_fault_tick(void) {
     }
 
     /* ---- 状态汇总（FAULT 锁存优先） ----
-     * software.fault.shutdown_en = 0（台架模式）：仍检测/计数/上报，但状态不进入
-     * FAULT（消费方据此停机），仅保持 WARNING。用于限流电源台架调试。 */
-    if ((s_fault_ctx.latched != 0U)
-        && (app_software_params_current()->fault.shutdown_en != 0U)) {
-        s_fault_ctx.state = APP_FAULT_STATE_FAULT;
-    } else if ((s_fault_ctx.latched != 0U) || pending) {
-        s_fault_ctx.state = APP_FAULT_STATE_WARNING;
-    } else {
-        s_fault_ctx.state = APP_FAULT_STATE_NORMAL;
+     * software.fault.shutdown_en = 0（台架模式）：过流/健康类保护仍检测、计数、
+     * 上报，但状态不进入 FAULT（消费方据此停机），仅保持 WARNING。
+     * 例外：母线过压/欠压仍保持停机 —— 反灌抬压是真实硬件风险（电容耐压），
+     * 限流电源无法吸收回馈能量，此保护不可关。 */
+    {
+        uint32_t hard = s_fault_ctx.latched & (APP_FAULT_VBUS_OV | APP_FAULT_VBUS_UV);
+        uint32_t soft = s_fault_ctx.latched & ~(APP_FAULT_VBUS_OV | APP_FAULT_VBUS_UV);
+        bool shutdown_en = (app_software_params_current()->fault.shutdown_en != 0U);
+
+        if ((hard != 0U) || (shutdown_en && (soft != 0U))) {
+            s_fault_ctx.state = APP_FAULT_STATE_FAULT;
+        } else if ((soft != 0U) || pending) {
+            s_fault_ctx.state = APP_FAULT_STATE_WARNING;
+        } else {
+            s_fault_ctx.state = APP_FAULT_STATE_NORMAL;
+        }
     }
     fault_publish();
 }

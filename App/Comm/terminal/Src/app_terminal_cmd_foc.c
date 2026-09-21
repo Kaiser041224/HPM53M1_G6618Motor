@@ -209,7 +209,8 @@ static int cmd_foc(int argc, char** argv) {
                    (double)software->control.limits.speed_max_rad_s,
                    (unsigned)software->fault.shutdown_en);
         if (on != 0U) {
-            csh_printf(csh, "WARN: all auto-stop protections OFF (use current-limited supply)\r\n");
+            csh_printf(csh, "WARN: auto-stop protections OFF except bus OV/UV "
+                            "(use current-limited supply)\r\n");
         }
         return 0;
     }
