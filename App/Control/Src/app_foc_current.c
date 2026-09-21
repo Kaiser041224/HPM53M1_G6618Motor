@@ -22,6 +22,8 @@
 
 static foc_current_t s_current;
 static bool s_ready;
+static uint8_t s_trip_count; /**< 连续超限拍数 */
+static bool s_tripped;       /**< 跳闸锁存（reset 清除） */
 
 /* Ozone 观测（.noncacheable.bss：启动清零 + 调试器直读，不受 D-Cache 影响） */
 app_foc_current_snapshot_t g_foc_current_snapshot
@@ -50,7 +52,12 @@ void app_foc_current_reset(void) {
     if (s_ready) {
         s_current.reset(&s_current);
     }
+    s_trip_count = 0U;
+    s_tripped = false;
+    g_foc_current_snapshot.tripped = false;
 }
+
+bool app_foc_current_is_tripped(void) { return s_tripped; }
 
 bool app_foc_current_is_ready(void) { return s_ready; }
 
@@ -111,6 +118,29 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     foc_clarke(values.i_u_a, values.i_v_a, values.i_w_a, &i_alpha, &i_beta);
     foc_sincos(theta_e_rad, &s, &c);
     foc_park_sc(i_alpha, i_beta, s, c, &in.i_d_a, &in.i_q_a);
+
+    /* 快速软件过流保护：|i_dq| 连续 2 拍超限 → 保护性停机（防止失控/母线跌落）。
+     * 阈值 control.limits.i_trip_a（峰值口径，0 = 关闭）。 */
+    {
+        float i_trip = software->control.limits.i_trip_a;
+
+        if (s_tripped) {
+            app_foc_current_protect();
+            return -1;
+        }
+        if (foc_finite(i_trip) && (i_trip > 0.0f)
+            && ((in.i_d_a * in.i_d_a + in.i_q_a * in.i_q_a) > (i_trip * i_trip))) {
+            s_trip_count++;
+            if (s_trip_count >= 2U) {
+                s_tripped = true;
+                g_foc_current_snapshot.tripped = true;
+                app_foc_current_protect();
+                return -1;
+            }
+        } else {
+            s_trip_count = 0U;
+        }
+    }
 
     in.i_d_ref = i_d_ref;
     in.i_q_ref = i_q_ref;

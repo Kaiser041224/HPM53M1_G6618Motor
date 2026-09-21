@@ -30,6 +30,7 @@ typedef struct {
     float v_bus_v;                /**< 母线电压 [V] */
     float v_scale;                /**< 调制缩放（1.0 = 未限幅；不含逐相钳位） */
     bool  saturated;              /**< PI 圆形电压限幅触发（不含调制限幅） */
+    bool  tripped;                /**< 快速过流跳闸（需 app_foc_disable() 清除） */
     bool  valid;                  /**< 本拍数据可信（false = 保护路径：零矢量/输入无效） */
     uint32_t run_count;           /**< 健康拍计数（valid=true 时递增） */
     uint32_t fault_count;         /**< 保护路径计数（零矢量/无效输入） */
@@ -80,6 +81,12 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
  * @brief 读取最近一拍快照
  */
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);
+
+/**
+ * @brief 快速过流是否已跳闸（|i_dq| 连续超限）
+ * @return true = 已跳闸
+ */
+bool app_foc_current_is_tripped(void);
 
 /**
  * @brief 输出零矢量（duty = 0.5/0.5/0.5），不改变算法状态

@@ -601,6 +601,7 @@ control:
 | 13 | `app_3phase_inverter_enable()` 含 ~10ms 阻塞（+12V 栅极稳定等待），`foc on`/`motor start` 期间 25kHz 环与 L2/L3 暂停 | 实时性 | 阻塞窗口内桥关闭、无电流风险；与既有 V/F 路径同构。**v2：非阻塞桥使能**（断言 +12V → 主循环 deadline 后启动 PWM） |
 | 14 | 辨识为**单一总超时**（15s）+ 30s 编排兜底，未实现 spec §5.5 的每阶段独立超时 | 范围 | V1 接受（锁定态 2A 持续 15s 热效应可忽略）；v2 细化 |
 | 15 | `motor.encoder.*` 参数元数据标 LIVE，实际在下一次 `app_foc_enable()` 消费 | 元数据 | V1 已记录（§6 偏差）；v2 可细化 apply 语义或改为运行期热更新 |
+| 16 | **电流采样符号与马达约定反相**（低侧采样 `I_*+` 接 MOSFET 源极）——V1 首轮台架 `foc on` 即失控（母线跌落复位） | 硬件/软件约定 | 已修复：`hardware.current_sense.invert`（默认 1，LIVE）+ `app_analog_signal` 取反；详见 ADC spec §6。V/F 开环无电流反馈，无法发现该问题 |
 
 ---
 
@@ -619,4 +620,5 @@ control:
 | 日期 | 变更 | 说明 |
 | :--- | :--- | :--- |
 | 2026-09-21 | 初稿 | 决策记录见 §0（Kaiser）；V1 范围 = 电流环 + 电角度辨识；R/L/Ke 与无感后置 |
+| 2026-09-21 | 台架修复 | **现象**：`foc on` 启动电流过大 → 母线跌落 → 芯片复位（高概率）。**根因**：电流采样符号与 FOC 马达约定反相（原理图核实：低侧采样 `I_*+` 接 MOSFET 源极、`I_*−` 接 PGND，运放 +IN 接 `I_*+` → 测得电流为"流出电机"方向）→ 电流环成**正反馈**，零给定时亦指数发散（τ≈200µs，上限 v_max/R≈78A）。**修复**：`app_analog_signal` 按 `hardware.current_sense.invert`（默认 1，LIVE 可在线翻转）取反；**安全网**：新增快速过流跳闸 `control.limits.i_trip_a`（默认 10A，连续 2 拍 → 零矢量+关桥+FAULT，`foc status` 显示 `trip=`，`foc off` 恢复） |
 | 2026-09-21 | V1 实施 | P1a~P1d 落地：Algorithm/FOC（foc_math/foc_angle/foc_current/foc_modulation/id_encoder）+ Control（app_foc/app_foc_current/app_motor_identify）+ Terminal（foc/motor iq/cal encoder）+ 参数登记；主机自测 252 用例；台架待按 §9 执行 |

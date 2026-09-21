@@ -188,6 +188,16 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - 新增外设或改板时，先对照 HPM53M1 datasheet §2.2（引脚表）与 §2.5（"GPIO 都分配在 PA 组"）核对引脚能力，不要沿用 HPM5361 的引脚分配（HPM5361 上 PB 为 GPIO，HPM53M1 上不是）。
 - 数字外设（UART/SPI/CAN/PWM）的引脚分配必须来自 PA 组，且优先核对 datasheet §2.2 中的 ALT 功能。
 
+### 电流采样符号（2026-09-21，硬件事实）
+
+- 低侧三电阻采样：**`I_*+` 接低侧 MOSFET 源极、`I_*−` 接 PGND**（原理图
+  `Inverter_Power_Stage` R30~R32），运放 `+IN` 接 `I_*+` → 硬件测得电流对应
+  **"流出电机"方向**，与 FOC/马达约定（流入电机为正）**反相**。
+- 软件侧统一在 `app_analog_signal` 按 `hardware.current_sense.invert`（默认 1）取反；
+  新增/更换电流采样硬件时**必须重新核实该符号**（符号错误 → 电流环正反馈 → 失控）。
+- 教训：开环 V/F 无电流反馈，无法暴露符号错误；FOC 首次上电务必先做零给定
+  （`foc on` 不设转矩）观察电流 ≈ 0，再做闭环。
+
 ### 供电与调试纪律（2026-09-18）
 
 - **本板必须使用外部电源供电（XTAN/VIN），禁止依赖调试器供电**：

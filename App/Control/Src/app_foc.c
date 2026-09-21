@@ -115,6 +115,12 @@ static void app_foc_run_body(void) {
         s_state = APP_FOC_STATE_FAULT;
         return;
     }
+    /* 快速过流跳闸（电流环内置）：零矢量已由保护路径输出，此处关桥并锁存 FAULT */
+    if ((s_state != APP_FOC_STATE_OFF) && app_foc_current_is_tripped()) {
+        app_3phase_inverter_disable();
+        s_state = APP_FOC_STATE_FAULT;
+        return;
+    }
 
     if (s_state == APP_FOC_STATE_OFF) {
         /* OFF：仅刷新角度观测（不写桥、不跑电流环），供台架静态链路检查（spec §9.1 步骤 1） */
@@ -231,6 +237,7 @@ int app_foc_enable(void) {
 void app_foc_disable(void) {
     app_foc_current_zero_vector();
     app_3phase_inverter_disable();
+    app_foc_current_reset(); /* 清除积分器与过流跳闸锁存 */
     s_i_d_ref = 0.0f;
     s_i_q_ref = 0.0f;
     s_angle_src = APP_FOC_ANGLE_ENCODER;

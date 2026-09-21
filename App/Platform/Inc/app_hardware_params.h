@@ -27,6 +27,7 @@ typedef struct {
     float amp_gain;   /**< 运放增益 */
     float a_per_volt; /**< 电流标度 [A/V]（= 1/(shunt×gain)，派生） */
     float bias_v;     /**< 零电流偏置 [V]（标称 vref/2；vref 由驱动侧固定 3.3V） */
+    uint8_t invert;   /**< 1 = 反相为"流入电机为正"（本板硬件反相；见 YAML 注释） */
 } app_hardware_current_sense_t;
 
 /**

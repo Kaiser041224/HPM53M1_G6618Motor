@@ -40,9 +40,10 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     csh_printf(csh, "     v_d=%.3f V  v_q=%.3f V  vbus=%.2f V  sat=%u scale=%.3f\r\n",
                (double)snap.v_d_v, (double)snap.v_q_v, (double)snap.v_bus_v,
                (unsigned)snap.saturated, (double)snap.v_scale);
-    csh_printf(csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u\r\n",
+    csh_printf(csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u\r\n",
                (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w,
-               (unsigned)snap.valid, (unsigned)snap.run_count, (unsigned)snap.fault_count);
+               (unsigned)snap.valid, (unsigned)snap.run_count, (unsigned)snap.fault_count,
+               (unsigned)snap.tripped);
     if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
         csh_printf(csh, "     hint: run 'foc off' then 'foc on' to recover\r\n");
     }

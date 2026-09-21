@@ -56,6 +56,7 @@ typedef struct {
 typedef struct {
     float i_q_max_a; /**< 电流限幅 [A]（峰值口径 = 相电流峰值） */
     float duty_max;  /**< 调制上限（有效域 (0.5, 1.0]；FOC 电流环消费） */
+    float i_trip_a;  /**< 快速过流跳闸 [A]（峰值口径；0 = 关闭） */
 } app_software_limits_t;
 
 /**

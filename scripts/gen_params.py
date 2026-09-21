@@ -62,6 +62,7 @@ SCHEMA = {
         ("current_sense.amp_gain", "current_sense.amp_gain", "f32", 0.0, None),
         ("current_sense.a_per_volt", "current_sense.a_per_volt", "f32", 0.0, None),
         ("current_sense.bias_v", "current_sense.bias_v", "f32", 0.0, None),
+        ("current_sense.invert", "current_sense.invert", "u8", 0, 1),
         ("vbus_sense.divider_high_ohm", "vbus_sense.divider_high_ohm", "u32", 1, None),
         ("vbus_sense.divider_low_ohm", "vbus_sense.divider_low_ohm", "u32", 1, None),
         ("vbus_sense.v_per_volt", "vbus_sense.v_per_volt", "f32", 1.0, None),
@@ -95,6 +96,7 @@ SCHEMA = {
         ("control.speed_loop.ki", "control.speed_loop.ki", "f32", None, None),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
         ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.501, 1.0),
+        ("control.limits.i_trip_a", "control.limits.i_trip_a", "f32", 0.0, None),
     ],
 }
 

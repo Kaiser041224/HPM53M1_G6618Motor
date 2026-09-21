@@ -127,12 +127,24 @@ int   app_analog_signal_calibrate_offsets(void);
 
 ```
 V_adc [V] = raw × 3.3 / (2^res − 1)
-I_x   [A] = (V_adc − V_zero) × 66.6667      （V_zero = 零点标定值，默认 1.65V）
+I_x   [A] = (V_adc − V_zero) × 66.6667 × sign   （V_zero = 零点标定值，默认 1.65V）
 V_bus [V] = V_adc × 22.2121                 （73.3K/3.3K）
 R_ntc [Ω] = 10000 × V_adc / (3.3 − V_adc)   （V_adc ≥ 3.299V → 1MΩ 上限）
 ```
 
 电流链路为比例式：1.65V 偏置与 ADC 基准同源，3.3V 电源漂移不影响精度。
+
+**电流符号约定（2026-09-21 定稿，原理图核实）**：
+
+- **正电流 = 流入电机**（马达约定，FOC dq 变换与转矩公式的前提）；
+- 本板低侧采样链路：`I_*+` 接低侧 MOSFET 源极、`I_*−` 接 PGND（原理图 Inverter_Power_Stage
+  R30~R32），`I_*+ → 运放 +IN`（Analog Signal Processing U9B/C/D，差分增益 7.5）；
+  低侧导通期间测得电压对应"流出电机"方向 → **与马达约定反相**；
+- 因此换算中乘 `sign`，由 `hardware.current_sense.invert`（默认 1）控制；
+  **该参数为 LIVE**：若台架发现符号不符，`param set hardware.current_sense.invert 0/1`
+  即时生效，无需重编译。
+- 影响面：FOC 电流环（决定正反馈/负反馈，符号错误会导致失控）、monitor/`d` 显示、
+  故障 RMS（符号无关，不受影响）。
 
 ## 7. 零点标定
 

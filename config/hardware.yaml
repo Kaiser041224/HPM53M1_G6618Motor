@@ -15,6 +15,7 @@ current_sense:
   amp_gain: 7.5                           # 运放增益（TPA6584Q）
   a_per_volt: "1 / (shunt_ohm * amp_gain)"  # 电流标度 [A/V] → 66.6667
   bias_v: 1.65                            # 零电流偏置 [V]（= vref/2；vref 固定 3.3V 由驱动侧提供，不进 YAML）
+  invert: 1                               # 1 = 反相为"流入电机为正"（本板低侧采样 I_*+ 接 MOSFET 源极 → 硬件测得与马达约定反相；原理图 Inverter_Power_Stage）
 
 vbus_sense:
   divider_high_ohm: 70000                 # 分压上臂 [Ω]（15K×4 + 10K = 70K）

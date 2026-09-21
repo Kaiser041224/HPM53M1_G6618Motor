@@ -102,8 +102,17 @@ static float channel_to_physical(adc_channel_t ch, uint16_t raw) {
     switch (ch) {
     case ADC_CH_I_U:
     case ADC_CH_I_V:
-    case ADC_CH_I_W:
-        return (volts - s_zero_volts[ch]) * app_hardware_params_current()->current_sense.a_per_volt;
+    case ADC_CH_I_W: {
+        const app_hardware_current_sense_t* sense =
+            &app_hardware_params_current()->current_sense;
+        float amps = (volts - s_zero_volts[ch]) * sense->a_per_volt;
+
+        /* 符号约定：正电流 = 流入电机（马达约定，FOC dq 变换的前提）。
+         * 本板低侧采样：I_*+ 接低侧 MOSFET 源极、I_*− 接 PGND（原理图 Inverter_Power_Stage
+         * R30~R32），I_*+ → 运放 +IN（Analog Signal Processing U9B/C/D）→ 低侧导通期间
+         * 测得电压与马达约定反相 → hardware.current_sense.invert 默认 1（取反）。 */
+        return (sense->invert != 0U) ? -amps : amps;
+    }
     case ADC_CH_V_VBUS: return volts * app_hardware_params_current()->vbus_sense.v_per_volt;
     case ADC_CH_NTC0:
     case ADC_CH_NTC1: return ntc_resistance_from_volts(volts);
