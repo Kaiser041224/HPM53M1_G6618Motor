@@ -143,8 +143,8 @@ sdk_app_src(App/Platform/Src/app_gptmr.c)
 sdk_app_src(App/Platform/Src/app_adc.c)
 sdk_app_src(App/Platform/Src/app_analog_signal.c)
 sdk_app_src(App/Platform/Src/app_can.c)
-sdk_app_src(App/Platform/Src/app_hw_params.c)
-sdk_app_src(App/Platform/Src/app_sw_params.c)
+sdk_app_src(App/Platform/Src/app_hardware_params.c)
+sdk_app_src(App/Platform/Src/app_software_params.c)
 
 # ============================================================================
 # Control Layer

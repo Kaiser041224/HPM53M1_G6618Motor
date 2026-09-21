@@ -1,3 +1,12 @@
+/**
+ * @file    app_debug_uart.h
+ * @brief   UART0 自检（RX 回显 / TX 状态行）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #ifndef APP_DEBUG_UART_H
 #define APP_DEBUG_UART_H
 

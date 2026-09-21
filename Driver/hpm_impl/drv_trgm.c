@@ -1,7 +1,9 @@
-/*
- * TRGM Driver - HPM Trigger Mux implementation (C17 OOP)
+/**
+ * @file    drv_trgm.c
+ * @brief   TRGM 驱动 - 触发矩阵多路复用实现
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -9,6 +11,12 @@
 #include "hpm_trgmmux_src.h"
 #include "intf_trgm.h"
 
+/**
+ * @brief 连接触发源到触发目标
+ * @param src 触发源
+ * @param dst 触发目标
+ * @return 0 = 成功；-1 = 源/目标越界
+ */
 static int trgm_connect_impl(intf_trgm_src_t src, intf_trgm_dst_t dst) {
     static const uint32_t src_map[] = {
         [INTF_TRGM_SRC_PWM0_CH8REF] = HPM_TRGM0_INPUT_SRC_PWM0_CH8REF,
@@ -54,9 +62,9 @@ static int trgm_connect_impl(intf_trgm_src_t src, intf_trgm_dst_t dst) {
     return 0;
 }
 
-static const intf_trgm_t trgm_ops = {
+static const intf_trgm_t s_trgm_ops = {
     .instance_id = 0,
     .connect = trgm_connect_impl,
 };
 
-void hpm_trgm_driver_register(void) { intf_trgm_register(&trgm_ops); }
+void hpm_trgm_driver_register(void) { intf_trgm_register(&s_trgm_ops); }

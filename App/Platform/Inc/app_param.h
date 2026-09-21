@@ -1,8 +1,7 @@
-/*
- * App Param - 片内 Flash 键值参数存储（通用，掉电保持）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    app_param.h
+ * @brief   片内 Flash 键值参数存储（通用，掉电保持）
+ * @author  Kaiser
  *
  * 记录槽（128B；扇区 4KB → 32 槽）：
  *   magic(4) + key(4) + version(2) + length(2) + data[112] + crc32(4)
@@ -13,6 +12,9 @@
  *   - store = 整扇区读-改-写（1 次擦除）+ 回读校验
  *   - load  = 逐槽扫描 + magic/CRC32 校验，失败返回 -1
  *   - 存储位置：flash 参数扇区（倒数第 2 个扇区，链接脚本已预留）
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef APP_PARAM_H
@@ -52,13 +54,13 @@ bool app_param_is_ready(void);
  * @param len 期望长度（必须与记录长度一致）
  * @return 0 = 成功；-1 = 未找到 / 校验失败 / 长度不符 / 存储不可用
  */
-int app_param_load(uint32_t key, void *buf, size_t len);
+int app_param_load(uint32_t key, void* buf, size_t len);
 
 /**
  * @brief 保存参数：更新（或新增）key 对应记录（整扇区读-改-写 + 回读校验）。
  * @return 0 = 成功；-1 = 失败
  */
-int app_param_store(uint32_t key, const void *buf, size_t len);
+int app_param_store(uint32_t key, const void* buf, size_t len);
 
 #ifdef __cplusplus
 }

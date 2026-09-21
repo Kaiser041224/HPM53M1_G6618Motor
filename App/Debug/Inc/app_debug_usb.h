@@ -1,3 +1,12 @@
+/**
+ * @file    app_debug_usb.h
+ * @brief   USB0 CDC 虚拟串口自检
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #ifndef APP_DEBUG_USB_H
 #define APP_DEBUG_USB_H
 

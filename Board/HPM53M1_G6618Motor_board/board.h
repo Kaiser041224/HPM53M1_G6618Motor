@@ -1,8 +1,10 @@
-/*
- * Copyright (c) 2024 HPMicro
+/**
+ * @file    board.h
+ * @brief   HPM53M1_G6618Motor_board 板级定义
+ * @author  Kaiser
  *
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
- *
  */
 
 #ifndef _HPM_BOARD_H
@@ -36,8 +38,19 @@
 extern "C" {
 #endif /* __cplusplus */
 
+/**
+ * @brief 板级初始化（关闭 USB PHY 下拉 + 配置引脚复用）
+ */
 void board_init(void);
+
+/**
+ * @brief USB0 板级初始化（时钟就绪后调用）
+ */
 void board_init_usb(void);
+
+/**
+ * @brief 从核初始化（HPM53M1 单核，空实现）
+ */
 void board_init_core1(void);
 
 #if defined(__cplusplus)

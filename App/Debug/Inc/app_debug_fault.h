@@ -1,7 +1,9 @@
-/*
- * Debug Fault - 故障保护调试（f：打印 / F：清除锁存）
+/**
+ * @file    app_debug_fault.h
+ * @brief   故障保护调试（f：打印 / F：清除锁存）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 

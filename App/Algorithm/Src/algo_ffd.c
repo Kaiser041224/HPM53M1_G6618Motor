@@ -1,10 +1,12 @@
-/*
+/**
+ * @file    algo_ffd.c
+ * @brief   前馈补偿（线性 / 查表）实现
+ * @author  Kaiser
+ *
  * Feedforward Implementation
  *
- * Copyright (c) 2026 Alliance HardWare Team
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
- *
- * Author: Kaiser
  */
 
 #include "algo_ffd.h"
@@ -12,105 +14,140 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static int   algo_ffd_init_impl(algo_ffd_t *s, const algo_ffd_cfg_t *c);
-static float algo_ffd_step_impl(algo_ffd_t *s, float sp, float dv);
-static void  algo_ffd_reset_impl(algo_ffd_t *s);
+static int algo_ffd_init_impl(algo_ffd_t* self, const algo_ffd_cfg_t* cfg);
+static float algo_ffd_step_impl(algo_ffd_t* self, float sp, float dv);
+static void algo_ffd_reset_impl(algo_ffd_t* self);
 
-static float algo_ffd_interp1d(const float *x_tbl, const float *y_tbl,
-                               uint16_t n, float x);
+static float algo_ffd_interp1d(const float* x_tbl, const float* y_tbl, uint16_t count, float x);
 
 /* ── Init ─────────────────────────────────────────────────────────────── */
 
-static int algo_ffd_init_impl(algo_ffd_t *s, const algo_ffd_cfg_t *c)
-{
-    if (s != NULL) s->_inited = false;
+/**
+ * @brief 初始化前馈对象
+ * @param self 对象
+ * @param cfg 配置
+ * @return 0 成功；负数错误码
+ */
+static int algo_ffd_init_impl(algo_ffd_t* self, const algo_ffd_cfg_t* cfg) {
+    if (self != NULL)
+        self->_inited = false;
 
-    if (s == NULL)  return -1;
-    if (c == NULL)  return -2;
+    if (self == NULL)
+        return -1;
+    if (cfg == NULL)
+        return -2;
 
     /* shared checks — both modes use all gains */
-    if (!algo_ffd_finite(c->gain_sp)) return -3;
-    if (!algo_ffd_finite(c->gain_dv)) return -4;
-    if (!algo_ffd_finite(c->offset))  return -5;
+    if (!algo_ffd_finite(cfg->gain_sp))
+        return -3;
+    if (!algo_ffd_finite(cfg->gain_dv))
+        return -4;
+    if (!algo_ffd_finite(cfg->offset))
+        return -5;
 
-    switch (c->mode) {
-    case ALGO_FFD_MODE_LINEAR:
-        break;
+    switch (cfg->mode) {
+    case ALGO_FFD_MODE_LINEAR: break;
 
     case ALGO_FFD_MODE_TABLE:
-        if (c->x_tbl == NULL || c->y_tbl == NULL) return -6;
-        if (c->n_pts < 2)                         return -7;
-        for (uint16_t i = 0; i < c->n_pts; i++) {
-            if (!algo_ffd_finite(c->x_tbl[i])) return -8;
-            if (!algo_ffd_finite(c->y_tbl[i])) return -9;
+        if (cfg->x_tbl == NULL || cfg->y_tbl == NULL)
+            return -6;
+        if (cfg->n_pts < 2)
+            return -7;
+        for (uint16_t i = 0; i < cfg->n_pts; i++) {
+            if (!algo_ffd_finite(cfg->x_tbl[i]))
+                return -8;
+            if (!algo_ffd_finite(cfg->y_tbl[i]))
+                return -9;
         }
-        for (uint16_t i = 1; i < c->n_pts; i++) {
-            if (c->x_tbl[i] <= c->x_tbl[i - 1]) return -10;
+        for (uint16_t i = 1; i < cfg->n_pts; i++) {
+            if (cfg->x_tbl[i] <= cfg->x_tbl[i - 1])
+                return -10;
         }
         break;
 
-    default:
-        return -11;
+    default: return -11;
     }
 
-    s->_mode    = c->mode;
-    s->_gain_sp = c->gain_sp;
-    s->_gain_dv = c->gain_dv;
-    s->_offset  = c->offset;
-    s->_x_tbl   = c->x_tbl;
-    s->_y_tbl   = c->y_tbl;
-    s->_n_pts   = c->n_pts;
-    s->_y       = 0.0f;
-    s->_inited  = true;
+    self->_mode = cfg->mode;
+    self->_gain_sp = cfg->gain_sp;
+    self->_gain_dv = cfg->gain_dv;
+    self->_offset = cfg->offset;
+    self->_x_tbl = cfg->x_tbl;
+    self->_y_tbl = cfg->y_tbl;
+    self->_n_pts = cfg->n_pts;
+    self->_y = 0.0f;
+    self->_inited = true;
 
     return 0;
 }
 
 /* ── Step ─────────────────────────────────────────────────────────────── */
 
-static float algo_ffd_step_impl(algo_ffd_t *s, float sp, float dv)
-{
-    if (s == NULL || !s->_inited) return 0.0f;
+/**
+ * @brief 前馈单步计算
+ * @param self 对象
+ * @param sp 设定值
+ * @param dv 扰动量
+ * @return 前馈输出；未初始化或非有限输入时返回 0
+ */
+static float algo_ffd_step_impl(algo_ffd_t* self, float sp, float dv) {
+    if (self == NULL || !self->_inited)
+        return 0.0f;
 
-    if (!algo_ffd_finite(sp)) sp = 0.0f;
-    if (!algo_ffd_finite(dv)) dv = 0.0f;
+    if (!algo_ffd_finite(sp))
+        sp = 0.0f;
+    if (!algo_ffd_finite(dv))
+        dv = 0.0f;
 
-    float u = s->_offset + s->_gain_dv * dv;
+    float out = self->_offset + self->_gain_dv * dv;
 
-    if (s->_mode == ALGO_FFD_MODE_TABLE) {
-        u += algo_ffd_interp1d(s->_x_tbl, s->_y_tbl, s->_n_pts, sp);
+    if (self->_mode == ALGO_FFD_MODE_TABLE) {
+        out += algo_ffd_interp1d(self->_x_tbl, self->_y_tbl, self->_n_pts, sp);
     } else {
-        u += s->_gain_sp * sp;
+        out += self->_gain_sp * sp;
     }
 
-    if (!algo_ffd_finite(u)) return s->_y;
+    if (!algo_ffd_finite(out))
+        return self->_y;
 
-    s->_y = u;
-    return u;
+    self->_y = out;
+    return out;
 }
 
 /* ── Reset ────────────────────────────────────────────────────────────── */
 
-static void algo_ffd_reset_impl(algo_ffd_t *s)
-{
-    if (s == NULL || !s->_inited) return;
-    s->_y = 0.0f;
+/**
+ * @brief 前馈复位
+ * @param self 对象
+ */
+static void algo_ffd_reset_impl(algo_ffd_t* self) {
+    if (self == NULL || !self->_inited)
+        return;
+    self->_y = 0.0f;
 }
 
 /* ── interp1d (binary search) ────────────────────────────────────────── */
 
-static float algo_ffd_interp1d(const float *x_tbl, const float *y_tbl,
-                               uint16_t n, float x)
-{
-    if (x_tbl == NULL || y_tbl == NULL || n < 2 || !algo_ffd_finite(x)) {
+/**
+ * @brief 一维分段线性插值（二分查找）
+ * @param x_tbl 断点数组（递增）
+ * @param y_tbl 输出数组
+ * @param count 断点数量
+ * @param x 查询点
+ * @return 插值结果；参数非法或非有限输入时返回 0
+ */
+static float algo_ffd_interp1d(const float* x_tbl, const float* y_tbl, uint16_t count, float x) {
+    if (x_tbl == NULL || y_tbl == NULL || count < 2 || !algo_ffd_finite(x)) {
         return 0.0f;
     }
 
-    if (x <= x_tbl[0])   return y_tbl[0];
-    if (x >= x_tbl[n - 1]) return y_tbl[n - 1];
+    if (x <= x_tbl[0])
+        return y_tbl[0];
+    if (x >= x_tbl[count - 1])
+        return y_tbl[count - 1];
 
     uint16_t lo = 0;
-    uint16_t hi = n - 1;
+    uint16_t hi = count - 1;
 
     while (hi - lo > 1) {
         uint16_t mid = (lo + hi) >> 1;
@@ -121,96 +158,133 @@ static float algo_ffd_interp1d(const float *x_tbl, const float *y_tbl,
         }
     }
 
-    float t = (x - x_tbl[lo]) / (x_tbl[hi] - x_tbl[lo]);
-    return y_tbl[lo] + t * (y_tbl[hi] - y_tbl[lo]);
+    float frac = (x - x_tbl[lo]) / (x_tbl[hi] - x_tbl[lo]);
+    return y_tbl[lo] + frac * (y_tbl[hi] - y_tbl[lo]);
 }
 
 /* ── Constructor ──────────────────────────────────────────────────────── */
 
-void algo_ffd_ctor(algo_ffd_t *s)
-{
-    if (s == NULL) return;
+/**
+ * @brief 构造前馈对象
+ * @param self 对象
+ */
+void algo_ffd_ctor(algo_ffd_t* self) {
+    if (self == NULL)
+        return;
 
-    s->init     = algo_ffd_init_impl;
-    s->step     = algo_ffd_step_impl;
-    s->reset    = algo_ffd_reset_impl;
-    s->_mode    = ALGO_FFD_MODE_LINEAR;
-    s->_gain_sp = 0.0f;
-    s->_gain_dv = 0.0f;
-    s->_offset  = 0.0f;
-    s->_x_tbl   = NULL;
-    s->_y_tbl   = NULL;
-    s->_n_pts   = 0;
-    s->_y       = 0.0f;
-    s->_inited  = false;
+    self->init = algo_ffd_init_impl;
+    self->step = algo_ffd_step_impl;
+    self->reset = algo_ffd_reset_impl;
+    self->_mode = ALGO_FFD_MODE_LINEAR;
+    self->_gain_sp = 0.0f;
+    self->_gain_dv = 0.0f;
+    self->_offset = 0.0f;
+    self->_x_tbl = NULL;
+    self->_y_tbl = NULL;
+    self->_n_pts = 0;
+    self->_y = 0.0f;
+    self->_inited = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  PID + Feedforward  —  Unified Controller
  * ═══════════════════════════════════════════════════════════════════════ */
 
-static int   algo_pid_ffd_init_impl(algo_pid_ffd_t *s, const algo_pid_ffd_cfg_t *c);
-static float algo_pid_ffd_step_impl(algo_pid_ffd_t *s, float sp, float pv, float dv);
-static void  algo_pid_ffd_reset_impl(algo_pid_ffd_t *s);
+static int algo_pid_ffd_init_impl(algo_pid_ffd_t* self, const algo_pid_ffd_cfg_t* cfg);
+static float algo_pid_ffd_step_impl(algo_pid_ffd_t* self, float sp, float pv, float dv);
+static void algo_pid_ffd_reset_impl(algo_pid_ffd_t* self);
 
-static int algo_pid_ffd_init_impl(algo_pid_ffd_t *s, const algo_pid_ffd_cfg_t *c)
-{
-    if (s != NULL) s->_inited = false;
-    if (s == NULL) return -1;
-    if (c == NULL) return -2;
+/**
+ * @brief 初始化 PID + 前馈联合控制器
+ * @param self 对象
+ * @param cfg 配置
+ * @return 0 成功；负数错误码
+ */
+static int algo_pid_ffd_init_impl(algo_pid_ffd_t* self, const algo_pid_ffd_cfg_t* cfg) {
+    if (self != NULL)
+        self->_inited = false;
+    if (self == NULL)
+        return -1;
+    if (cfg == NULL)
+        return -2;
 
-    int r = s->_ffd.init(&s->_ffd, &c->ffd);
-    if (r < 0) return r;
+    int rc = self->_ffd.init(&self->_ffd, &cfg->ffd);
+    if (rc < 0)
+        return rc;
 
-    r = s->_pid.init(&s->_pid, &c->pid);
-    if (r < 0) return r - 100;
+    rc = self->_pid.init(&self->_pid, &cfg->pid);
+    if (rc < 0)
+        return rc - 100;
 
-    s->_inited = true;
+    self->_inited = true;
     return 0;
 }
 
-static float algo_pid_ffd_step_impl(algo_pid_ffd_t *s, float sp, float pv, float dv)
-{
-    if (s == NULL || !s->_inited) return 0.0f;
+/**
+ * @brief PID + 前馈联合控制器单步计算
+ * @param self 对象
+ * @param sp 设定值
+ * @param pv 测量值
+ * @param dv 扰动量
+ * @return 控制输出；未初始化时返回 0
+ */
+static float algo_pid_ffd_step_impl(algo_pid_ffd_t* self, float sp, float pv, float dv) {
+    if (self == NULL || !self->_inited)
+        return 0.0f;
 
-    float u_pid = s->_pid.step(&s->_pid, sp, pv);
-    float u_ffd = s->_ffd.step(&s->_ffd, sp, dv);
+    float out_pid = self->_pid.step(&self->_pid, sp, pv);
+    float out_ffd = self->_ffd.step(&self->_ffd, sp, dv);
 
-    if (!algo_ffd_finite(u_pid)) u_pid = 0.0f;
-    if (!algo_ffd_finite(u_ffd)) u_ffd = 0.0f;
+    if (!algo_ffd_finite(out_pid))
+        out_pid = 0.0f;
+    if (!algo_ffd_finite(out_ffd))
+        out_ffd = 0.0f;
 
-    float u = u_pid + u_ffd;
-    if (!algo_ffd_finite(u)) return u_pid;
-    return u;
+    float out = out_pid + out_ffd;
+    if (!algo_ffd_finite(out))
+        return out_pid;
+    return out;
 }
 
-static void algo_pid_ffd_reset_impl(algo_pid_ffd_t *s)
-{
-    if (s == NULL || !s->_inited) return;
+/**
+ * @brief PID + 前馈联合控制器复位
+ * @param self 对象
+ */
+static void algo_pid_ffd_reset_impl(algo_pid_ffd_t* self) {
+    if (self == NULL || !self->_inited)
+        return;
 
-    s->_pid.reset(&s->_pid);
-    s->_ffd.reset(&s->_ffd);
+    self->_pid.reset(&self->_pid);
+    self->_ffd.reset(&self->_ffd);
 }
 
-void algo_pid_ffd_ctor(algo_pid_ffd_t *s)
-{
-    if (s == NULL) return;
+/**
+ * @brief 构造 PID + 前馈联合控制器对象
+ * @param self 对象
+ */
+void algo_pid_ffd_ctor(algo_pid_ffd_t* self) {
+    if (self == NULL)
+        return;
 
-    s->init    = algo_pid_ffd_init_impl;
-    s->step    = algo_pid_ffd_step_impl;
-    s->reset   = algo_pid_ffd_reset_impl;
-    s->_inited = false;
+    self->init = algo_pid_ffd_init_impl;
+    self->step = algo_pid_ffd_step_impl;
+    self->reset = algo_pid_ffd_reset_impl;
+    self->_inited = false;
 
-    algo_pid_ctor(&s->_pid);
-    algo_ffd_ctor(&s->_ffd);
+    algo_pid_ctor(&self->_pid);
+    algo_ffd_ctor(&self->_ffd);
 }
 
-algo_pid_t *algo_pid_ffd_get_pid(algo_pid_ffd_t *s)
-{
-    return s ? &s->_pid : NULL;
-}
+/**
+ * @brief 获取内部 PID 对象
+ * @param self 联合控制器对象
+ * @return PID 对象指针；self 为 NULL 时返回 NULL
+ */
+algo_pid_t* algo_pid_ffd_get_pid(algo_pid_ffd_t* self) { return self ? &self->_pid : NULL; }
 
-algo_ffd_t *algo_pid_ffd_get_ffd(algo_pid_ffd_t *s)
-{
-    return s ? &s->_ffd : NULL;
-}
+/**
+ * @brief 获取内部前馈对象
+ * @param self 联合控制器对象
+ * @return 前馈对象指针；self 为 NULL 时返回 NULL
+ */
+algo_ffd_t* algo_pid_ffd_get_ffd(algo_pid_ffd_t* self) { return self ? &self->_ffd : NULL; }

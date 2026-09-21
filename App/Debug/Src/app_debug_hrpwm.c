@@ -1,39 +1,50 @@
+/**
+ * @file    app_debug_hrpwm.c
+ * @brief   HRPWM 调试（寄存器快照 / IRQ 计数 / 扫描测试）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "app_debug_hrpwm.h"
 
 #include "app_debug_rtt.h"
 #include "app_hrpwm.h"
-#include "board.h"
-#include "hpm_clock_drv.h"
-#include "hpm_pwm_drv.h"
-#include "hpm_soc.h"
 #include "intf_clock.h"
 #include "intf_hrpwm.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 
-#define APP_DBG_CMP_START_INDEX(pwm_index) ((uint8_t) ((pwm_index) * 2U))
-#define PWM_IRQ_INSTANCE_COUNT (2U)
+#define APP_DBG_CMP_START_INDEX(pwm_index) ((uint8_t)((pwm_index) * 2U))
+#define PWM_IRQ_INSTANCE_COUNT             (2U)
 
 typedef struct {
-    PWM_Type *base;
-    const char *name;
+    uint8_t inst;
+    const char* name;
     uint8_t pwm_index;
 } app_dbg_hrpwm_probe_t;
 
-static const app_dbg_hrpwm_probe_t app_dbg_hrpwm_probes[] = {
-    {.base = HPM_PWM0, .name = "PWM0_PAIR0", .pwm_index = 0U},
-    {.base = HPM_PWM0, .name = "PWM0_PAIR1", .pwm_index = 2U},
-    {.base = HPM_PWM1, .name = "PWM1_PAIR0", .pwm_index = 4U},
-    {.base = HPM_PWM1, .name = "PWM1_PAIR1", .pwm_index = 6U},
+static const app_dbg_hrpwm_probe_t s_hrpwm_probes[] = {
+    {.inst = 0U, .name = "PWM0_PAIR0", .pwm_index = 0U},
+    {.inst = 0U, .name = "PWM0_PAIR1", .pwm_index = 2U},
+    {.inst = 1U, .name = "PWM1_PAIR0", .pwm_index = 4U},
+    {.inst = 1U, .name = "PWM1_PAIR1", .pwm_index = 6U},
 };
 
-static volatile uint32_t pwm_irq_count[PWM_IRQ_INSTANCE_COUNT] = {0};
-static volatile bool pwm_irq_enabled[PWM_IRQ_INSTANCE_COUNT] = {0};
-static pwm_irq_user_callback_t pwm_user_callback[PWM_IRQ_INSTANCE_COUNT] = {NULL};
+static volatile uint32_t s_pwm_irq_count[PWM_IRQ_INSTANCE_COUNT] = {0};
+static volatile bool s_pwm_irq_enabled[PWM_IRQ_INSTANCE_COUNT] = {0};
+static pwm_irq_user_callback_t s_pwm_user_callback[PWM_IRQ_INSTANCE_COUNT] = {NULL};
 
-static const char *app_dbg_detect_alignment(uint32_t reload, uint32_t cmp_begin, uint32_t cmp_end)
-{
+/**
+ * @brief 依据 compare 值推断 PWM 对齐模式（EDGE-like / CENTER-like / UNKNOWN）
+ * @param reload 重载值
+ * @param cmp_begin 起始比较值
+ * @param cmp_end 结束比较值
+ * @return 指向常量字符串的对齐模式名
+ */
+static const char* app_dbg_detect_alignment(uint32_t reload, uint32_t cmp_begin, uint32_t cmp_end) {
     if (cmp_end == reload) {
         return "EDGE-like";
     }
@@ -45,62 +56,62 @@ static const char *app_dbg_detect_alignment(uint32_t reload, uint32_t cmp_begin,
     return "UNKNOWN";
 }
 
-void app_debug_dump_hrpwm_cmp(void)
-{
+void app_debug_dump_hrpwm_cmp(void) {
     app_debug_printf("[HRPWM] compare register snapshot\r\n");
 
-    for (size_t i = 0; i < sizeof(app_dbg_hrpwm_probes) / sizeof(app_dbg_hrpwm_probes[0]); i++) {
-        const app_dbg_hrpwm_probe_t *probe = &app_dbg_hrpwm_probes[i];
+    for (size_t i = 0; i < sizeof(s_hrpwm_probes) / sizeof(s_hrpwm_probes[0]); i++) {
+        const app_dbg_hrpwm_probe_t* probe = &s_hrpwm_probes[i];
         uint8_t cmp_start = APP_DBG_CMP_START_INDEX(probe->pwm_index);
-        uint32_t reload = pwm_get_reload_val(probe->base);
-        uint32_t cmp_begin = pwm_cmp_get_cmp_value(probe->base, cmp_start);
-        uint32_t cmp_end = pwm_cmp_get_cmp_value(probe->base, cmp_start + 1U);
-        const char *align = app_dbg_detect_alignment(reload, cmp_begin, cmp_end);
+        uint32_t reload = intf_hrpwm_get_reload(probe->inst);
+        uint32_t cmp_begin = intf_hrpwm_get_cmp_value(probe->inst, cmp_start);
+        uint32_t cmp_end = intf_hrpwm_get_cmp_value(probe->inst, cmp_start + 1U);
+        const char* align = app_dbg_detect_alignment(reload, cmp_begin, cmp_end);
 
-        app_debug_printf("[HRPWM] %s: reload=%lu cmp[%u]=%lu cmp[%u]=%lu => %s\r\n", probe->name,
-                         (unsigned long) reload, (unsigned int) cmp_start,
-                         (unsigned long) cmp_begin, (unsigned int) (cmp_start + 1U),
-                         (unsigned long) cmp_end, align);
+        app_debug_printf(
+            "[HRPWM] %s: reload=%lu cmp[%u]=%lu cmp[%u]=%lu => %s\r\n", probe->name,
+            (unsigned long)reload, (unsigned int)cmp_start, (unsigned long)cmp_begin,
+            (unsigned int)(cmp_start + 1U), (unsigned long)cmp_end, align);
     }
 }
 
-static void pwm0_center_irq_callback(void)
-{
-    pwm_irq_count[0]++;
-    if (pwm_user_callback[0] != NULL) {
-        pwm_user_callback[0]();
+/**
+ * @brief PWM0 reload 中断回调：累加计数并分发用户回调
+ */
+static void pwm0_center_irq_callback(void) {
+    s_pwm_irq_count[0]++;
+    if (s_pwm_user_callback[0] != NULL) {
+        s_pwm_user_callback[0]();
     }
 }
 
-static void pwm1_center_irq_callback(void)
-{
-    pwm_irq_count[1]++;
-    if (pwm_user_callback[1] != NULL) {
-        pwm_user_callback[1]();
+/**
+ * @brief PWM1 reload 中断回调：累加计数并分发用户回调
+ */
+static void pwm1_center_irq_callback(void) {
+    s_pwm_irq_count[1]++;
+    if (s_pwm_user_callback[1] != NULL) {
+        s_pwm_user_callback[1]();
     }
 }
 
-int app_debug_pwm_irq_register_callback(uint8_t inst, pwm_irq_user_callback_t callback)
-{
+int app_debug_pwm_irq_register_callback(uint8_t inst, pwm_irq_user_callback_t callback) {
     if (inst >= PWM_IRQ_INSTANCE_COUNT) {
         return -1;
     }
-    pwm_user_callback[inst] = callback;
+    s_pwm_user_callback[inst] = callback;
     app_debug_printf("[HRPWM] IRQ PWM%d user callback registered\r\n", inst);
     return 0;
 }
 
-void app_debug_pwm_irq_unregister_callback(uint8_t inst)
-{
+void app_debug_pwm_irq_unregister_callback(uint8_t inst) {
     if (inst >= PWM_IRQ_INSTANCE_COUNT) {
         return;
     }
-    pwm_user_callback[inst] = NULL;
+    s_pwm_user_callback[inst] = NULL;
     app_debug_printf("[HRPWM] IRQ PWM%d user callback unregistered\r\n", inst);
 }
 
-void app_debug_pwm_irq_enable(uint8_t inst)
-{
+void app_debug_pwm_irq_enable(uint8_t inst) {
     if (inst >= PWM_IRQ_INSTANCE_COUNT) {
         return;
     }
@@ -119,16 +130,15 @@ void app_debug_pwm_irq_enable(uint8_t inst)
     }
 
     if (ret == 0) {
-        pwm_irq_enabled[inst] = true;
-        pwm_irq_count[inst] = 0;
+        s_pwm_irq_enabled[inst] = true;
+        s_pwm_irq_count[inst] = 0;
         app_debug_printf("[HRPWM] IRQ PWM%d center IRQ enabled\r\n", inst);
     } else {
         app_debug_printf("[HRPWM] IRQ PWM%d center IRQ enable FAILED\r\n", inst);
     }
 }
 
-void app_debug_pwm_irq_disable(uint8_t inst)
-{
+void app_debug_pwm_irq_disable(uint8_t inst) {
     if (inst >= PWM_IRQ_INSTANCE_COUNT) {
         return;
     }
@@ -139,49 +149,46 @@ void app_debug_pwm_irq_disable(uint8_t inst)
         intf_hrpwm_disable_reload_irq(1);
     }
 
-    pwm_irq_enabled[inst] = false;
-    app_debug_printf("[HRPWM] IRQ PWM%d center IRQ disabled, count=%lu\r\n", inst,
-                     (unsigned long) pwm_irq_count[inst]);
+    s_pwm_irq_enabled[inst] = false;
+    app_debug_printf(
+        "[HRPWM] IRQ PWM%d center IRQ disabled, count=%lu\r\n", inst,
+        (unsigned long)s_pwm_irq_count[inst]);
 }
 
-uint32_t app_debug_pwm_irq_get_count(uint8_t inst)
-{
+uint32_t app_debug_pwm_irq_get_count(uint8_t inst) {
     if (inst >= PWM_IRQ_INSTANCE_COUNT) {
         return 0;
     }
-    return pwm_irq_count[inst];
+    return s_pwm_irq_count[inst];
 }
 
-void app_debug_pwm_irq_reset_count(uint8_t inst)
-{
+void app_debug_pwm_irq_reset_count(uint8_t inst) {
     if (inst < PWM_IRQ_INSTANCE_COUNT) {
-        pwm_irq_count[inst] = 0;
+        s_pwm_irq_count[inst] = 0;
     }
 }
 
-void app_debug_pwm_irq_dump_status(void)
-{
+void app_debug_pwm_irq_dump_status(void) {
     app_debug_printf("[HRPWM] IRQ status:\r\n");
     for (uint8_t i = 0; i < PWM_IRQ_INSTANCE_COUNT; i++) {
-        app_debug_printf("[HRPWM] IRQ PWM%d: %s, count=%lu\r\n", i,
-                         pwm_irq_enabled[i] ? "enabled" : "disabled",
-                         (unsigned long) pwm_irq_count[i]);
+        app_debug_printf(
+            "[HRPWM] IRQ PWM%d: %s, count=%lu\r\n", i,
+            s_pwm_irq_enabled[i] ? "enabled" : "disabled", (unsigned long)s_pwm_irq_count[i]);
     }
 }
 
-void app_debug_pwm_test_frequency_sweep(uint8_t inst, uint32_t freq_start, uint32_t freq_end,
-                                        uint32_t freq_step, uint32_t delay_ms)
-{
-    app_debug_printf("[HRPWM] TEST PWM%d frequency sweep: %lu -> %lu Hz, step=%lu Hz\r\n", inst,
-                     (unsigned long) freq_start, (unsigned long) freq_end,
-                     (unsigned long) freq_step);
+void app_debug_pwm_test_frequency_sweep(
+    uint8_t inst, uint32_t freq_start, uint32_t freq_end, uint32_t freq_step, uint32_t delay_ms) {
+    app_debug_printf(
+        "[HRPWM] TEST PWM%d frequency sweep: %lu -> %lu Hz, step=%lu Hz\r\n", inst,
+        (unsigned long)freq_start, (unsigned long)freq_end, (unsigned long)freq_step);
 
     int32_t direction = (freq_end > freq_start) ? 1 : -1;
     uint32_t freq = freq_start;
 
     while (1) {
         intf_hrpwm_set_frequency(inst, freq);
-        app_debug_printf("[HRPWM] TEST freq = %lu Hz\r\n", (unsigned long) freq);
+        app_debug_printf("[HRPWM] TEST freq = %lu Hz\r\n", (unsigned long)freq);
         intf_clock_delay_ms(delay_ms);
 
         if (direction > 0) {
@@ -206,12 +213,12 @@ void app_debug_pwm_test_frequency_sweep(uint8_t inst, uint32_t freq_start, uint3
     app_debug_printf("[HRPWM] TEST PWM%d frequency sweep done\r\n", inst);
 }
 
-void app_debug_pwm_test_phase_sweep(uint8_t inst, uint8_t ref_pair, uint8_t target_pair,
-                                    float phase_start, float phase_end, float phase_step,
-                                    uint32_t delay_ms)
-{
-    app_debug_printf("[HRPWM] TEST PWM%d phase sweep: %.1f -> %.1f deg, step=%.1f deg\r\n", inst,
-                     phase_start, phase_end, phase_step);
+void app_debug_pwm_test_phase_sweep(
+    uint8_t inst, uint8_t ref_pair, uint8_t target_pair, float phase_start, float phase_end,
+    float phase_step, uint32_t delay_ms) {
+    app_debug_printf(
+        "[HRPWM] TEST PWM%d phase sweep: %.1f -> %.1f deg, step=%.1f deg\r\n", inst, phase_start,
+        phase_end, phase_step);
 
     intf_hrpwm_phase_cfg_t cfg = {
         .inst = inst,
@@ -250,12 +257,12 @@ void app_debug_pwm_test_phase_sweep(uint8_t inst, uint8_t ref_pair, uint8_t targ
     app_debug_printf("[HRPWM] TEST PWM%d phase sweep done\r\n", inst);
 }
 
-void app_debug_pwm_test_duty_resolution(uint8_t inst, uint8_t pair, float duty_start,
-                                        float duty_end, float duty_step, uint32_t delay_ms)
-{
+void app_debug_pwm_test_duty_resolution(
+    uint8_t inst, uint8_t pair, float duty_start, float duty_end, float duty_step,
+    uint32_t delay_ms) {
     app_debug_printf("[HRPWM] TEST PWM%d pair%d duty resolution test\r\n", inst, pair);
-    app_debug_printf("[HRPWM] TEST range: %.4f -> %.4f, step=%.4f\r\n", duty_start, duty_end,
-                     duty_step);
+    app_debug_printf(
+        "[HRPWM] TEST range: %.4f -> %.4f, step=%.4f\r\n", duty_start, duty_end, duty_step);
 
 #if defined(HRPWM_USE_EXTENDED_COUNTER) && (HRPWM_USE_EXTENDED_COUNTER == 1)
     app_debug_printf("[HRPWM] TEST mode: 28-bit counter (higher resolution)\r\n");
@@ -294,8 +301,7 @@ void app_debug_pwm_test_duty_resolution(uint8_t inst, uint8_t pair, float duty_s
     app_debug_printf("[HRPWM] TEST PWM%d pair%d duty resolution test done\r\n", inst, pair);
 }
 
-void app_debug_hrpwm_run_tests(void)
-{
+void app_debug_hrpwm_run_tests(void) {
     app_debug_printf("\r\n[HRPWM] === HRPWM Validation Tests ===\r\n");
     app_debug_dump_hrpwm_cmp();
 
@@ -359,17 +365,17 @@ void app_debug_hrpwm_run_tests(void)
     app_debug_printf("\r\n[HRPWM] === HRPWM Validation Tests Completed ===\r\n");
 }
 
-void app_debug_dump_hrpwm_freq(void)
-{
-    uint32_t clk = clock_get_frequency(clock_mot0);
-    uint32_t ahb = clock_get_frequency(clock_ahb);
-    uint32_t r0 = pwm_get_reload_val(HPM_PWM0);
-    uint32_t r1 = pwm_get_reload_val(HPM_PWM1);
-    uint32_t f0 = (r0 > 0U) ? clk / (r0 + 1U) : 0U;
-    uint32_t f1 = (r1 > 0U) ? clk / (r1 + 1U) : 0U;
+void app_debug_dump_hrpwm_freq(void) {
+    uint32_t clock_hz = intf_clock_get_mot0_freq();
+    uint32_t ahb_hz = intf_clock_get_ahb_freq();
+    uint32_t reload0 = intf_hrpwm_get_reload(0);
+    uint32_t reload1 = intf_hrpwm_get_reload(1);
+    uint32_t freq0 = (reload0 > 0U) ? clock_hz / (reload0 + 1U) : 0U;
+    uint32_t freq1 = (reload1 > 0U) ? clock_hz / (reload1 + 1U) : 0U;
 
-    app_debug_printf("[HRPWM] PWM0 reload=%lu freq=%luHz | PWM1 reload=%lu freq=%luHz | mot0=%luHz ahb=%luHz\r\n",
-                     (unsigned long)r0, (unsigned long)f0,
-                     (unsigned long)r1, (unsigned long)f1,
-                     (unsigned long)clk, (unsigned long)ahb);
+    app_debug_printf(
+        "[HRPWM] PWM0 reload=%lu freq=%luHz | PWM1 reload=%lu freq=%luHz | mot0=%luHz "
+        "ahb=%luHz\r\n",
+        (unsigned long)reload0, (unsigned long)freq0, (unsigned long)reload1, (unsigned long)freq1,
+        (unsigned long)clock_hz, (unsigned long)ahb_hz);
 }

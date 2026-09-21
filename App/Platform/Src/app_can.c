@@ -1,5 +1,14 @@
+/**
+ * @file    app_can.c
+ * @brief   CAN 平台封装（MCAN 驱动注册、收发与统计）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "app_can.h"
-#include "app_sw_params.h"
+#include "app_software_params.h"
 
 #include "intf_can.h"
 
@@ -10,29 +19,31 @@
  * 临界区保护：直接操作 RISC-V MSTATUS.MIE，避免引入驱动层依赖。
  * TODO: 后续可提升为 Interface 层通用抽象。
  */
-static inline uint32_t can_critical_enter(void)
-{
+/**
+ * @brief 进入临界区：保存并关闭全局中断
+ * @return 原 MSTATUS 值（供恢复）
+ */
+static inline uint32_t can_critical_enter(void) {
     uint32_t mie;
     __asm__ volatile("csrrc %0, mstatus, %1" : "=r"(mie) : "i"(0x8));
     return mie;
 }
 
-static inline void can_critical_exit(uint32_t state)
-{
-    __asm__ volatile("csrw mstatus, %0" :: "r"(state));
+/**
+ * @brief 退出临界区：恢复 MSTATUS
+ * @param state 进入临界区时保存的 MSTATUS 值
+ */
+static inline void can_critical_exit(uint32_t state) {
+    __asm__ volatile("csrw mstatus, %0" ::"r"(state));
 }
 
 /* MCAN3: PA15(MCAN3_TXD) / PA14(MCAN3_RXD)，与板级 pinmux 对应 */
-#define APP_CAN_INST      (3U)
-#define APP_CAN_INT_MASK  (INTF_CAN_EVENT_RX_FIFO0_NEW_MSG   \
-                           | INTF_CAN_EVENT_RX_FIFO0_FULL     \
-                           | INTF_CAN_EVENT_RX_FIFO0_MSG_LOST \
-                           | INTF_CAN_EVENT_TX_COMPLETED      \
-                           | INTF_CAN_EVENT_BUS_OFF           \
-                           | INTF_CAN_EVENT_ERROR_WARNING     \
-                           | INTF_CAN_EVENT_ERROR_PASSIVE     \
-                          | INTF_CAN_EVENT_PROTOCOL_ERROR    \
-                          | INTF_CAN_EVENT_RAM_ACCESS_FAIL)
+#define APP_CAN_INST (3U)
+#define APP_CAN_INT_MASK                                                                           \
+    (INTF_CAN_EVENT_RX_FIFO0_NEW_MSG | INTF_CAN_EVENT_RX_FIFO0_FULL                                \
+     | INTF_CAN_EVENT_RX_FIFO0_MSG_LOST | INTF_CAN_EVENT_TX_COMPLETED | INTF_CAN_EVENT_BUS_OFF     \
+     | INTF_CAN_EVENT_ERROR_WARNING | INTF_CAN_EVENT_ERROR_PASSIVE | INTF_CAN_EVENT_PROTOCOL_ERROR \
+     | INTF_CAN_EVENT_RAM_ACCESS_FAIL)
 
 static app_can_rx_callback_t s_rx_callback;
 static bool s_initialized;
@@ -50,23 +61,28 @@ static uint32_t s_filter_index;
 extern void hpm_can_driver_register(void);
 extern uint32_t hpm_can_get_clock_freq(uint8_t inst_id);
 
-void app_can_register_driver(void)
-{
-    hpm_can_driver_register();
-}
+void app_can_register_driver(void) { hpm_can_driver_register(); }
 
-static bool app_can_is_std_id_valid(uint32_t id)
-{
-    return id <= 0x7FFU;
-}
+/**
+ * @brief 判断标准帧 ID 是否合法
+ * @param id 待检查 ID
+ * @return true = 合法
+ */
+static bool app_can_is_std_id_valid(uint32_t id) { return id <= 0x7FFU; }
 
-static bool app_can_is_ext_id_valid(uint32_t id)
-{
-    return id <= 0x1FFFFFFFU;
-}
+/**
+ * @brief 判断扩展帧 ID 是否合法
+ * @param id 待检查 ID
+ * @return true = 合法
+ */
+static bool app_can_is_ext_id_valid(uint32_t id) { return id <= 0x1FFFFFFFU; }
 
-static bool app_can_ring_pop_locked(app_can_msg_t *msg)
-{
+/**
+ * @brief 从接收环形缓冲取出一帧（调用者已持临界区）
+ * @param msg 输出报文
+ * @return true = 取到报文
+ */
+static bool app_can_ring_pop_locked(app_can_msg_t* msg) {
     if (s_rx_ring.count == 0U) {
         return false;
     }
@@ -77,8 +93,10 @@ static bool app_can_ring_pop_locked(app_can_msg_t *msg)
     return true;
 }
 
-static void app_can_refresh_status_snapshot(void)
-{
+/**
+ * @brief 读取并缓存 CAN 状态快照
+ */
+static void app_can_refresh_status_snapshot(void) {
     intf_can_status_t status;
 
     if (intf_can_get_status(APP_CAN_INST, &status) == 0) {
@@ -88,8 +106,10 @@ static void app_can_refresh_status_snapshot(void)
     }
 }
 
-static void app_can_reset_state(void)
-{
+/**
+ * @brief 复位接收环形缓冲、统计与过滤器索引
+ */
+static void app_can_reset_state(void) {
     uint32_t irq_state = can_critical_enter();
 
     memset(&s_rx_ring, 0, sizeof(s_rx_ring));
@@ -100,8 +120,11 @@ static void app_can_reset_state(void)
     can_critical_exit(irq_state);
 }
 
-static void app_can_note_event_flags(uint32_t event_flags)
-{
+/**
+ * @brief 记录事件标志并累加对应统计计数
+ * @param event_flags 事件标志位
+ */
+static void app_can_note_event_flags(uint32_t event_flags) {
     s_stats.last_event_flags = event_flags;
 
     if ((event_flags & INTF_CAN_EVENT_RX_FIFO0_FULL) != 0U) {
@@ -130,9 +153,15 @@ static void app_can_note_event_flags(uint32_t event_flags)
     }
 }
 
-static int app_can_send_internal(uint32_t id, bool is_ext_id,
-                                 const uint8_t *data, uint8_t len)
-{
+/**
+ * @brief 报文发送内部实现（构造帧、非阻塞发送、统计）
+ * @param id 报文 ID
+ * @param is_ext_id 是否扩展帧
+ * @param data 数据
+ * @param len 数据长度
+ * @return 0 = 成功；-1 = 失败
+ */
+static int app_can_send_internal(uint32_t id, bool is_ext_id, const uint8_t* data, uint8_t len) {
     int ret;
     intf_can_frame_t frame;
     uint32_t irq_state;
@@ -157,10 +186,10 @@ static int app_can_send_internal(uint32_t id, bool is_ext_id,
     }
 
     memset(&frame, 0, sizeof(frame));
-    frame.id         = id;
-    frame.is_ext_id  = is_ext_id;
+    frame.id = id;
+    frame.is_ext_id = is_ext_id;
     frame.frame_type = INTF_CAN_FRAME_CLASSIC;
-    frame.dlc        = len;
+    frame.dlc = len;
     if (len != 0U) {
         memcpy(frame.data, data, len);
     }
@@ -182,9 +211,14 @@ static int app_can_send_internal(uint32_t id, bool is_ext_id,
     return ret;
 }
 
-static int app_can_add_filter_internal(uint32_t id, bool is_ext_id,
-                                       uint32_t mask)
-{
+/**
+ * @brief 过滤器添加内部实现（校验 ID、配置并递增索引）
+ * @param id 过滤 ID
+ * @param is_ext_id 是否扩展帧
+ * @param mask 过滤掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int app_can_add_filter_internal(uint32_t id, bool is_ext_id, uint32_t mask) {
     intf_can_filter_elem_t filter;
     int ret;
 
@@ -205,11 +239,11 @@ static int app_can_add_filter_internal(uint32_t id, bool is_ext_id,
     }
 
     memset(&filter, 0, sizeof(filter));
-    filter.type        = INTF_CAN_FILTER_CLASSIC;
+    filter.type = INTF_CAN_FILTER_CLASSIC;
     filter.target_fifo = INTF_CAN_FILTER_FIFO0;
-    filter.is_ext_id   = is_ext_id;
-    filter.id          = id;
-    filter.mask        = mask;
+    filter.is_ext_id = is_ext_id;
+    filter.id = id;
+    filter.mask = mask;
 
     ret = intf_can_config_filter(APP_CAN_INST, s_filter_index, &filter);
     if (ret == 0) {
@@ -218,9 +252,13 @@ static int app_can_add_filter_internal(uint32_t id, bool is_ext_id,
     return ret;
 }
 
-static void can_irq_handler(intf_can_inst_t inst, uint32_t event_flags,
-                            void *user_data)
-{
+/**
+ * @brief CAN 中断处理：统计事件、收取 RX FIFO 报文、处理 Bus-Off
+ * @param inst CAN 实例（未使用）
+ * @param event_flags 事件标志位
+ * @param user_data 用户上下文（未使用）
+ */
+static void can_irq_handler(intf_can_inst_t inst, uint32_t event_flags, void* user_data) {
     (void)inst;
     (void)user_data;
 
@@ -235,9 +273,9 @@ static void can_irq_handler(intf_can_inst_t inst, uint32_t event_flags,
             app_can_msg_t local_msg;
 
             memset(&local_msg, 0, sizeof(local_msg));
-            local_msg.id        = frame.id;
+            local_msg.id = frame.id;
             local_msg.is_ext_id = frame.is_ext_id;
-            local_msg.dlc       = frame.dlc;
+            local_msg.dlc = frame.dlc;
             local_msg.timestamp = frame.timestamp;
             if (frame.dlc != 0U) {
                 memcpy(local_msg.data, frame.data, frame.dlc);
@@ -260,13 +298,12 @@ static void can_irq_handler(intf_can_inst_t inst, uint32_t event_flags,
 
     if ((event_flags & INTF_CAN_EVENT_BUS_OFF) != 0U) {
         s_rx_ring.count = 0U;
-        s_rx_ring.head  = 0U;
-        s_rx_ring.tail  = 0U;
+        s_rx_ring.head = 0U;
+        s_rx_ring.tail = 0U;
     }
 }
 
-int app_can_init(void)
-{
+int app_can_init(void) {
     int ret;
 
     /* 注册驱动（幂等），确保可单独调用 */
@@ -279,18 +316,19 @@ int app_can_init(void)
     app_can_reset_state();
 
     {
-        app_sw_params_t sw;
+        app_software_params_t software;
 
-        app_sw_params_load(&sw); /* config/software.yaml（将来 flash 覆盖） */
+        app_software_params_load(&software); /* config/software.yaml（将来 flash 覆盖） */
         intf_can_cfg_t cfg = {
-            .baudrate     = sw.can.baudrate,
-            .mode         = INTF_CAN_MODE_NORMAL,
+            .baudrate = software.can.baudrate,
+            .mode = INTF_CAN_MODE_NORMAL,
             .enable_canfd = false,
             .interrupt_mask = APP_CAN_INT_MASK,
-            .ram = {
-                .std_filter_count = APP_CAN_FILTER_COUNT,
-                .ext_filter_count = APP_CAN_FILTER_COUNT,
-            },
+            .ram =
+                {
+                      .std_filter_count = APP_CAN_FILTER_COUNT,
+                      .ext_filter_count = APP_CAN_FILTER_COUNT,
+                      },
         };
 
         ret = intf_can_init(APP_CAN_INST, &cfg);
@@ -310,8 +348,7 @@ int app_can_init(void)
     return 0;
 }
 
-void app_can_deinit(void)
-{
+void app_can_deinit(void) {
     if (!s_initialized) {
         app_can_reset_state();
         return;
@@ -323,15 +360,13 @@ void app_can_deinit(void)
     s_initialized = false;
 }
 
-void app_can_set_rx_callback(app_can_rx_callback_t cb)
-{
+void app_can_set_rx_callback(app_can_rx_callback_t cb) {
     uint32_t irq_state = can_critical_enter();
     s_rx_callback = cb;
     can_critical_exit(irq_state);
 }
 
-void app_can_poll(void)
-{
+void app_can_poll(void) {
     for (;;) {
         app_can_msg_t msg;
         app_can_rx_callback_t cb;
@@ -348,23 +383,19 @@ void app_can_poll(void)
     }
 }
 
-int app_can_send(uint32_t id, const uint8_t *data, uint8_t len)
-{
+int app_can_send(uint32_t id, const uint8_t* data, uint8_t len) {
     return app_can_send_internal(id, id > 0x7FFU, data, len);
 }
 
-int app_can_send_std(uint16_t id, const uint8_t *data, uint8_t len)
-{
+int app_can_send_std(uint16_t id, const uint8_t* data, uint8_t len) {
     return app_can_send_internal(id, false, data, len);
 }
 
-int app_can_send_ext(uint32_t id, const uint8_t *data, uint8_t len)
-{
+int app_can_send_ext(uint32_t id, const uint8_t* data, uint8_t len) {
     return app_can_send_internal(id, true, data, len);
 }
 
-int app_can_receive(app_can_msg_t *msg)
-{
+int app_can_receive(app_can_msg_t* msg) {
     bool popped;
     uint32_t irq_state;
 
@@ -378,26 +409,22 @@ int app_can_receive(app_can_msg_t *msg)
     return popped ? 0 : -1;
 }
 
-int app_can_add_filter(uint32_t id, uint32_t mask)
-{
+int app_can_add_filter(uint32_t id, uint32_t mask) {
     if (app_can_is_std_id_valid(id) && app_can_is_std_id_valid(mask)) {
         return app_can_add_std_filter((uint16_t)id, (uint16_t)mask);
     }
     return app_can_add_ext_filter(id, mask);
 }
 
-int app_can_add_std_filter(uint16_t id, uint16_t mask)
-{
+int app_can_add_std_filter(uint16_t id, uint16_t mask) {
     return app_can_add_filter_internal(id, false, mask);
 }
 
-int app_can_add_ext_filter(uint32_t id, uint32_t mask)
-{
+int app_can_add_ext_filter(uint32_t id, uint32_t mask) {
     return app_can_add_filter_internal(id, true, mask);
 }
 
-int app_can_get_status(intf_can_status_t *status)
-{
+int app_can_get_status(intf_can_status_t* status) {
     if (!s_initialized || status == NULL) {
         return -1;
     }
@@ -413,8 +440,7 @@ int app_can_get_status(intf_can_status_t *status)
     return 0;
 }
 
-int app_can_get_stats(app_can_stats_t *stats)
-{
+int app_can_get_stats(app_can_stats_t* stats) {
     uint32_t irq_state;
 
     if (stats == NULL) {
@@ -428,8 +454,7 @@ int app_can_get_stats(app_can_stats_t *stats)
     return 0;
 }
 
-void app_can_clear_stats(void)
-{
+void app_can_clear_stats(void) {
     uint32_t irq_state = can_critical_enter();
 
     memset(&s_stats, 0, sizeof(s_stats));
@@ -440,8 +465,7 @@ void app_can_clear_stats(void)
     }
 }
 
-bool app_can_is_bus_off(void)
-{
+bool app_can_is_bus_off(void) {
     intf_can_status_t status;
 
     if (app_can_get_status(&status) != 0) {
@@ -450,7 +474,4 @@ bool app_can_is_bus_off(void)
     return status.bus_off;
 }
 
-uint32_t app_can_get_clock_hz(void)
-{
-    return hpm_can_get_clock_freq(APP_CAN_INST);
-}
+uint32_t app_can_get_clock_hz(void) { return hpm_can_get_clock_freq(APP_CAN_INST); }

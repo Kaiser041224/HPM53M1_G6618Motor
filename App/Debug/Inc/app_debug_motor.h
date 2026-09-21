@@ -1,7 +1,9 @@
-/*
- * Debug Motor - 电机开环旋转自检（V/F）
+/**
+ * @file    app_debug_motor.h
+ * @brief   电机开环旋转自检（V/F）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 

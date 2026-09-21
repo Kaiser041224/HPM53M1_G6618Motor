@@ -1,10 +1,10 @@
-/*
- * IRQ Profiler Implementation - Low-intrusion ISR timing
+/**
+ * @file    irq_profiler.c
+ * @brief   IRQ Profiler 中断耗时分析实现（低侵入 ISR timing）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 Alliance HardWare Team
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
- *
- * Author: Kaiser
  */
 
 #include "irq_profiler.h"
@@ -26,37 +26,37 @@ static volatile uint8_t  s_irq_nest_depth;
 static volatile uint32_t s_irq_outer_t0;
 
 void irq_prof_nest_enter(void) {
-    uint32_t m = disable_global_irq(CSR_MSTATUS_MIE_MASK);
+    uint32_t mstatus = disable_global_irq(CSR_MSTATUS_MIE_MASK);
     if (s_irq_nest_depth == 0U) {
         s_irq_outer_t0 = irq_prof_read_cycle();
     }
     s_irq_nest_depth++;
-    restore_global_irq(m);
+    restore_global_irq(mstatus);
 }
 
 void irq_prof_nest_exit(void) {
-    uint32_t m = disable_global_irq(CSR_MSTATUS_MIE_MASK);
+    uint32_t mstatus = disable_global_irq(CSR_MSTATUS_MIE_MASK);
     if (s_irq_nest_depth > 0U) {
         s_irq_nest_depth--;
         if (s_irq_nest_depth == 0U) {
             g_irq_busy_cycles += (uint64_t)(irq_prof_read_cycle() - s_irq_outer_t0);
         }
     }
-    restore_global_irq(m);
+    restore_global_irq(mstatus);
 }
 
-static const char *g_labels[IRQ_PROF_MAX_SLOTS];
-static uint8_t     g_slot_count = 0;
-static irq_prof_cycle_t g_overhead_cycles = 0;
+static const char *s_irq_prof_labels[IRQ_PROF_MAX_SLOTS];
+static uint8_t     s_irq_prof_slot_count = 0;
+static irq_prof_cycle_t s_irq_prof_overhead_cycles = 0;
 
 irq_prof_id_t irq_prof_register(const char *label)
 {
-    if (g_slot_count >= IRQ_PROF_MAX_SLOTS) {
+    if (s_irq_prof_slot_count >= IRQ_PROF_MAX_SLOTS) {
         return UINT8_MAX;
     }
 
-    irq_prof_id_t id = g_slot_count++;
-    g_labels[id] = (label != NULL) ? label : "???";
+    irq_prof_id_t id = s_irq_prof_slot_count++;
+    s_irq_prof_labels[id] = (label != NULL) ? label : "???";
 
     memset((void *)&g_irq_prof_raw[id], 0, sizeof(irq_prof_raw_t));
     g_irq_prof_raw[id].min = UINT32_MAX;
@@ -77,13 +77,13 @@ irq_prof_cycle_t irq_prof_measure_overhead(void)
         }
     }
 
-    g_overhead_cycles = min_diff;
+    s_irq_prof_overhead_cycles = min_diff;
     return min_diff;
 }
 
 int irq_prof_get_result(irq_prof_id_t id, irq_prof_result_t *result)
 {
-    if (id >= g_slot_count || result == NULL) {
+    if (id >= s_irq_prof_slot_count || result == NULL) {
         return -1;
     }
 
@@ -103,22 +103,22 @@ int irq_prof_get_result(irq_prof_id_t id, irq_prof_result_t *result)
     result->avg_ns     = (valid_hits > 0) ? (uint32_t)(snapshot.total / valid_hits) : 0;
     result->hits       = snapshot.hits;
     result->outliers   = snapshot.outliers;
-    result->overhead_ns = g_overhead_cycles;
+    result->overhead_ns = s_irq_prof_overhead_cycles;
 
     return 0;
 }
 
 uint8_t irq_prof_get_slot_count(void)
 {
-    return g_slot_count;
+    return s_irq_prof_slot_count;
 }
 
 const char *irq_prof_get_label(irq_prof_id_t id)
 {
-    return (id < g_slot_count) ? g_labels[id] : "???";
+    return (id < s_irq_prof_slot_count) ? s_irq_prof_labels[id] : "???";
 }
 
 irq_prof_cycle_t irq_prof_get_overhead_cycles(void)
 {
-    return g_overhead_cycles;
+    return s_irq_prof_overhead_cycles;
 }

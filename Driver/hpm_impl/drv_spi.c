@@ -1,8 +1,7 @@
-/*
- * SPI Driver - HPM SPI 主机适配实现（风格 A：每实例设备对象）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    drv_spi.c
+ * @brief   SPI 驱动 - HPM SPI 主机适配（每实例设备对象）
+ * @author  Kaiser
  *
  * 实现策略：
  *   - 主机模式，轮询收发（快速单帧路径为主，SDK 路径兜底）
@@ -15,6 +14,9 @@
  *     timeout_ms 语义与 uart/can 一致：0=不等待 / UINT32_MAX=无限 / 毫秒
  *
  * 实例映射：bus 0..3 -> HPM_SPI0..SPI3（本板仅 SPI1/SPI3 引出）
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "intf_spi.h"
@@ -28,15 +30,18 @@
 /* 快速单帧路径轮询上限（约 0.4ms @480MHz；正常单帧 ~3µs） */
 #define SPI_FAST_RETRY_MAX (20000U)
 
+/**
+ * @brief SPI 实例上下文
+ */
 typedef struct {
-    SPI_Type    *base;
-    clock_name_t clock;
-    uint8_t      cs_en;      /* CS_EN 编码值（spi_cs_index_t） */
-    uint8_t      data_bits;  /* 每帧位数（init 时固定） */
-    bool         initialized;
+    SPI_Type    *base;       /**< SPI 寄存器基地址 */
+    clock_name_t clock;      /**< 外设时钟 */
+    uint8_t      cs_en;      /**< CS_EN 编码值（spi_cs_index_t） */
+    uint8_t      data_bits;  /**< 每帧位数（init 时固定） */
+    bool         initialized; /**< 是否已初始化 */
 } spi_ctx_t;
 
-static spi_ctx_t s_ctx[SPI_INSTANCE_COUNT] = {
+static spi_ctx_t s_spi_ctx[SPI_INSTANCE_COUNT] = {
     { .base = HPM_SPI0, .clock = clock_spi0 },
     { .base = HPM_SPI1, .clock = clock_spi1 },
     { .base = HPM_SPI2, .clock = clock_spi2 },
@@ -44,11 +49,23 @@ static spi_ctx_t s_ctx[SPI_INSTANCE_COUNT] = {
 };
 
 /* timeout_ms 语义：0 = 不等待；UINT32_MAX = 无限等待；其他 = 毫秒超时 */
+/**
+ * @brief 毫秒转 CPU cycle
+ * @param ms 毫秒数
+ * @return 对应 cycle 数
+ */
 static inline uint32_t spi_ms_to_cycles(uint32_t ms)
 {
     return (uint32_t)((uint64_t) ms * (intf_clock_get_cpu_freq() / 1000U));
 }
 
+/**
+ * @brief 判断超时是否到达
+ * @param start 起始 cycle
+ * @param timeout_cycles 超时 cycle
+ * @param timeout_ms 超时毫秒语义
+ * @return true = 已超时
+ */
 static inline bool spi_timeout_elapsed(uint32_t start, uint32_t timeout_cycles,
                                        uint32_t timeout_ms)
 {
@@ -72,6 +89,14 @@ static inline bool spi_timeout_elapsed(uint32_t start, uint32_t timeout_cycles,
  *       -> 等 RX -> 读 DATA -> 等 CS 释放。
  * 依据：SDK 文档 "the command value must be set before transmission"；
  *       IP 文档 "SPIActive becomes 1 after the SPI command register is written"。
+ */
+/**
+ * @brief 快速单帧传输（预置 TRANSCTRL/CS_EN，免去每帧复位开销）
+ * @param ctx 实例上下文
+ * @param tx 发送缓冲
+ * @param rx 接收缓冲
+ * @param data_bytes 数据字节数
+ * @return 0 = 成功；-1 = 超时
  */
 static int spi_frame_fast(spi_ctx_t *ctx, const uint8_t *tx, uint8_t *rx, uint8_t data_bytes)
 {
@@ -119,6 +144,12 @@ static int spi_frame_fast(spi_ctx_t *ctx, const uint8_t *tx, uint8_t *rx, uint8_
     return 0;
 }
 
+/**
+ * @brief 初始化指定 SPI 总线
+ * @param bus 总线号
+ * @param cfg SPI 配置
+ * @return 0 = 成功；-1 = 参数非法或分频失败
+ */
 static int spi_init_impl(uint8_t bus, const intf_spi_cfg_t *cfg)
 {
     spi_timing_config_t timing = { 0 };
@@ -130,7 +161,7 @@ static int spi_init_impl(uint8_t bus, const intf_spi_cfg_t *cfg)
         return -1;
     }
 
-    ctx = &s_ctx[bus];
+    ctx = &s_spi_ctx[bus];
 
     clock_add_to_group(ctx->clock, 0);
 
@@ -176,6 +207,15 @@ static int spi_init_impl(uint8_t bus, const intf_spi_cfg_t *cfg)
     return 0;
 }
 
+/**
+ * @brief SPI 传输（单帧走快速路径，否则 SDK 路径并按时序重试）
+ * @param bus 总线号
+ * @param tx 发送缓冲
+ * @param rx 接收缓冲
+ * @param frames 帧数
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 参数非法、未初始化或超时
+ */
 static int spi_transfer_impl(uint8_t bus, const void *tx, void *rx,
                              size_t frames, uint32_t timeout_ms)
 {
@@ -188,7 +228,7 @@ static int spi_transfer_impl(uint8_t bus, const void *tx, void *rx,
         return -1;
     }
 
-    ctx = &s_ctx[bus];
+    ctx = &s_spi_ctx[bus];
     if (!ctx->initialized) {
         return -1;
     }
@@ -214,14 +254,14 @@ static int spi_transfer_impl(uint8_t bus, const void *tx, void *rx,
     timeout_cycles = spi_ms_to_cycles(timeout_ms);
 
     for (;;) {
-        hpm_stat_t st = spi_transfer(ctx->base, &ctrl, NULL, NULL,
-                                     (uint8_t *) tx, (uint32_t) frames,
-                                     (uint8_t *) rx, (uint32_t) frames);
+        hpm_stat_t status = spi_transfer(ctx->base, &ctrl, NULL, NULL,
+                                         (uint8_t *) tx, (uint32_t) frames,
+                                         (uint8_t *) rx, (uint32_t) frames);
 
-        if (st == status_success) {
+        if (status == status_success) {
             return 0;
         }
-        if (st != status_spi_master_busy) {
+        if (status != status_spi_master_busy) {
             return -1; /* 参数错误 / 内部重试超时等 */
         }
         if (spi_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
@@ -230,15 +270,24 @@ static int spi_transfer_impl(uint8_t bus, const void *tx, void *rx,
     }
 }
 
+/**
+ * @brief 反初始化指定 SPI 总线
+ * @param bus 总线号
+ */
 static void spi_deinit_impl(uint8_t bus)
 {
     if (bus >= SPI_INSTANCE_COUNT) {
         return;
     }
-    s_ctx[bus].initialized = false;
+    s_spi_ctx[bus].initialized = false;
 }
 
 /* 诊断：回读分频寄存器计算实际 SCLK（0xff = 源频未分频） */
+/**
+ * @brief 回读分频寄存器计算实际 SCLK
+ * @param bus 总线号
+ * @return 实际 SCLK [Hz]；未初始化/越界返回 0
+ */
 static uint32_t spi_get_sclk_hz_impl(uint8_t bus)
 {
     spi_ctx_t *ctx;
@@ -249,7 +298,7 @@ static uint32_t spi_get_sclk_hz_impl(uint8_t bus)
         return 0U;
     }
 
-    ctx = &s_ctx[bus];
+    ctx = &s_spi_ctx[bus];
     if (!ctx->initialized) {
         return 0U;
     }
@@ -267,31 +316,123 @@ static uint32_t spi_get_sclk_hz_impl(uint8_t bus)
  * 每实例设备对象（风格 A）
  * ============================================================================ */
 
+/**
+ * @brief SPI0 初始化包装
+ * @param cfg SPI 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi0_init(const intf_spi_cfg_t *cfg) { return spi_init_impl(0U, cfg); }
+
+/**
+ * @brief SPI0 传输包装
+ * @param tx 发送缓冲
+ * @param rx 接收缓冲
+ * @param frames 帧数
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi0_transfer(const void *tx, void *rx, size_t frames, uint32_t timeout_ms)
 { return spi_transfer_impl(0U, tx, rx, frames, timeout_ms); }
+
+/**
+ * @brief SPI0 反初始化包装
+ */
 static void spi0_deinit(void) { spi_deinit_impl(0U); }
+
+/**
+ * @brief SPI0 读取实际 SCLK
+ * @return 实际 SCLK [Hz]
+ */
 static uint32_t spi0_get_sclk_hz(void) { return spi_get_sclk_hz_impl(0U); }
 
+/**
+ * @brief SPI1 初始化包装
+ * @param cfg SPI 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi1_init(const intf_spi_cfg_t *cfg) { return spi_init_impl(1U, cfg); }
+
+/**
+ * @brief SPI1 传输包装
+ * @param tx 发送缓冲
+ * @param rx 接收缓冲
+ * @param frames 帧数
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi1_transfer(const void *tx, void *rx, size_t frames, uint32_t timeout_ms)
 { return spi_transfer_impl(1U, tx, rx, frames, timeout_ms); }
+
+/**
+ * @brief SPI1 反初始化包装
+ */
 static void spi1_deinit(void) { spi_deinit_impl(1U); }
+
+/**
+ * @brief SPI1 读取实际 SCLK
+ * @return 实际 SCLK [Hz]
+ */
 static uint32_t spi1_get_sclk_hz(void) { return spi_get_sclk_hz_impl(1U); }
 
+/**
+ * @brief SPI2 初始化包装
+ * @param cfg SPI 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi2_init(const intf_spi_cfg_t *cfg) { return spi_init_impl(2U, cfg); }
+
+/**
+ * @brief SPI2 传输包装
+ * @param tx 发送缓冲
+ * @param rx 接收缓冲
+ * @param frames 帧数
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi2_transfer(const void *tx, void *rx, size_t frames, uint32_t timeout_ms)
 { return spi_transfer_impl(2U, tx, rx, frames, timeout_ms); }
+
+/**
+ * @brief SPI2 反初始化包装
+ */
 static void spi2_deinit(void) { spi_deinit_impl(2U); }
+
+/**
+ * @brief SPI2 读取实际 SCLK
+ * @return 实际 SCLK [Hz]
+ */
 static uint32_t spi2_get_sclk_hz(void) { return spi_get_sclk_hz_impl(2U); }
 
+/**
+ * @brief SPI3 初始化包装
+ * @param cfg SPI 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi3_init(const intf_spi_cfg_t *cfg) { return spi_init_impl(3U, cfg); }
+
+/**
+ * @brief SPI3 传输包装
+ * @param tx 发送缓冲
+ * @param rx 接收缓冲
+ * @param frames 帧数
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
 static int spi3_transfer(const void *tx, void *rx, size_t frames, uint32_t timeout_ms)
 { return spi_transfer_impl(3U, tx, rx, frames, timeout_ms); }
+
+/**
+ * @brief SPI3 反初始化包装
+ */
 static void spi3_deinit(void) { spi_deinit_impl(3U); }
+
+/**
+ * @brief SPI3 读取实际 SCLK
+ * @return 实际 SCLK [Hz]
+ */
 static uint32_t spi3_get_sclk_hz(void) { return spi_get_sclk_hz_impl(3U); }
 
-static const intf_spi_t spi0_dev = {
+static const intf_spi_t s_spi0_dev = {
     .instance_id = 0U,
     .init = spi0_init,
     .transfer = spi0_transfer,
@@ -299,7 +440,7 @@ static const intf_spi_t spi0_dev = {
     .get_sclk_hz = spi0_get_sclk_hz,
 };
 
-static const intf_spi_t spi1_dev = {
+static const intf_spi_t s_spi1_dev = {
     .instance_id = 1U,
     .init = spi1_init,
     .transfer = spi1_transfer,
@@ -307,7 +448,7 @@ static const intf_spi_t spi1_dev = {
     .get_sclk_hz = spi1_get_sclk_hz,
 };
 
-static const intf_spi_t spi2_dev = {
+static const intf_spi_t s_spi2_dev = {
     .instance_id = 2U,
     .init = spi2_init,
     .transfer = spi2_transfer,
@@ -315,7 +456,7 @@ static const intf_spi_t spi2_dev = {
     .get_sclk_hz = spi2_get_sclk_hz,
 };
 
-static const intf_spi_t spi3_dev = {
+static const intf_spi_t s_spi3_dev = {
     .instance_id = 3U,
     .init = spi3_init,
     .transfer = spi3_transfer,
@@ -329,8 +470,8 @@ static const intf_spi_t spi3_dev = {
 
 void hpm_spi_driver_register(void)
 {
-    intf_spi_register(&spi0_dev);
-    intf_spi_register(&spi1_dev);
-    intf_spi_register(&spi2_dev);
-    intf_spi_register(&spi3_dev);
+    intf_spi_register(&s_spi0_dev);
+    intf_spi_register(&s_spi1_dev);
+    intf_spi_register(&s_spi2_dev);
+    intf_spi_register(&s_spi3_dev);
 }

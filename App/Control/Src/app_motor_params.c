@@ -1,6 +1,9 @@
-/*
- * App Motor Params - 电机参数访问器（工厂常量来自 build/generated/params_generated.c）
- * Copyright (c) 2026 HPMicro
+/**
+ * @file    app_motor_params.c
+ * @brief   电机参数访问器实现（工厂常量来自 build/generated/params_generated.c）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 

@@ -1,3 +1,12 @@
+/**
+ * @file    app_debug_can.h
+ * @brief   CAN 自检（内部环回 + 经典 CAN 总线收发）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #ifndef APP_DEBUG_CAN_H
 #define APP_DEBUG_CAN_H
 
@@ -17,7 +26,7 @@ void app_debug_can_init(void);
 /**
  * @brief CAN 自检周期任务：
  *        1) 分发接收回调（主循环上下文）：打印 + **原样回显到总线**
- *        2) 每秒发送一帧经典 CAN（ID 取自 config/software.yaml → sw.can.tx_report_id，
+ *        2) 每秒发送一帧经典 CAN（ID 取自 config/software.yaml → software.can.tx_report_id，
  *           8 字节，首字节为递增计数）
  *        3) 每秒打印状态行（发送结果 / 错误计数 / bus off / 收包统计）
  */

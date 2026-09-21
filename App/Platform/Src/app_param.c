@@ -1,7 +1,9 @@
-/*
- * App Param - 片内 Flash 键值参数存储（通用，掉电保持）
+/**
+ * @file    app_param.c
+ * @brief   片内 Flash 键值参数存储（通用，掉电保持）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -14,22 +16,25 @@
 /* 驱动注册（App 层不含 hpm_* 头文件，沿用既有 extern 约定） */
 extern void hpm_flash_driver_register(void);
 
-#define APP_PARAM_MAGIC        (0x504D5048U) /* "HPMP" */
-#define APP_PARAM_VERSION      (1U)
-#define APP_PARAM_SLOT_SIZE    (128U)
-#define APP_PARAM_HDR_SIZE     (12U) /* magic + key + version + length */
-#define APP_PARAM_SLOT_MAX     (32U) /* 4KB 扇区 / 128B */
+#define APP_PARAM_MAGIC     (0x504D5048U) /* "HPMP" */
+#define APP_PARAM_VERSION   (1U)
+#define APP_PARAM_SLOT_SIZE (128U)
+#define APP_PARAM_HDR_SIZE  (12U)         /* magic + key + version + length */
+#define APP_PARAM_SLOT_MAX  (32U)         /* 4KB 扇区 / 128B */
 
+/**
+ * @brief 单个参数槽记录（头 + 数据 + CRC）
+ */
 typedef struct {
-    uint32_t magic;
-    uint32_t key;
-    uint16_t version;
-    uint16_t length; /* data 有效字节数 */
-    uint8_t  data[APP_PARAM_DATA_MAX];
-    uint32_t crc32; /* 覆盖 magic..data[length-1] */
+    uint32_t magic;                   /**< 魔数 "HPMP" */
+    uint32_t key;                     /**< 参数键 */
+    uint16_t version;                 /**< 记录版本 */
+    uint16_t length;                  /**< data 有效字节数 */
+    uint8_t data[APP_PARAM_DATA_MAX]; /**< 参数数据 */
+    uint32_t crc32;                   /**< 覆盖 magic..data[length-1] */
 } app_param_slot_t;
 
-static const intf_flash_t *s_flash;
+static const intf_flash_t* s_flash;
 static uint32_t s_sector_addr;
 static uint32_t s_slot_count;
 static bool s_ready;
@@ -37,9 +42,13 @@ static bool s_ready;
 /* 保存时的整扇区缓冲（仅 store 使用） */
 static app_param_slot_t s_slots[APP_PARAM_SLOT_MAX];
 
-/* CRC-32/ISO-HDLC（反射多项式 0xEDB88320） */
-static uint32_t param_crc32(const uint8_t *data, size_t len)
-{
+/**
+ * @brief CRC-32/ISO-HDLC 校验（反射多项式 0xEDB88320）
+ * @param data 数据指针
+ * @param len 数据长度
+ * @return CRC32 值
+ */
+static uint32_t param_crc32(const uint8_t* data, size_t len) {
     uint32_t crc = 0xFFFFFFFFU;
 
     for (size_t i = 0U; i < len; i++) {
@@ -51,19 +60,22 @@ static uint32_t param_crc32(const uint8_t *data, size_t len)
     return ~crc;
 }
 
-static bool param_slot_valid(const app_param_slot_t *slot)
-{
+/**
+ * @brief 校验参数槽：魔数、长度与 CRC
+ * @param slot 待校验槽
+ * @return true = 有效
+ */
+static bool param_slot_valid(const app_param_slot_t* slot) {
     if (slot->magic != APP_PARAM_MAGIC) {
         return false;
     }
     if (slot->length > APP_PARAM_DATA_MAX) {
         return false;
     }
-    return param_crc32((const uint8_t *) slot, APP_PARAM_HDR_SIZE + slot->length) == slot->crc32;
+    return param_crc32((const uint8_t*)slot, APP_PARAM_HDR_SIZE + slot->length) == slot->crc32;
 }
 
-int app_param_init(void)
-{
+int app_param_init(void) {
     uint32_t sector;
 
     hpm_flash_driver_register();
@@ -74,8 +86,8 @@ int app_param_init(void)
     }
 
     sector = s_flash->get_sector_size();
-    if ((sector == 0U) || (sector % APP_PARAM_SLOT_SIZE) != 0U ||
-        ((sector / APP_PARAM_SLOT_SIZE) > APP_PARAM_SLOT_MAX)) {
+    if ((sector == 0U) || (sector % APP_PARAM_SLOT_SIZE) != 0U
+        || ((sector / APP_PARAM_SLOT_SIZE) > APP_PARAM_SLOT_MAX)) {
         return -1; /* 扇区规格与槽布局不匹配 */
     }
 
@@ -87,13 +99,9 @@ int app_param_init(void)
     return 0;
 }
 
-bool app_param_is_ready(void)
-{
-    return s_ready;
-}
+bool app_param_is_ready(void) { return s_ready; }
 
-int app_param_load(uint32_t key, void *buf, size_t len)
-{
+int app_param_load(uint32_t key, void* buf, size_t len) {
     app_param_slot_t slot;
 
     if (!s_ready || (buf == NULL) || (len == 0U) || (len > APP_PARAM_DATA_MAX)) {
@@ -117,8 +125,7 @@ int app_param_load(uint32_t key, void *buf, size_t len)
     return -1; /* 未找到 */
 }
 
-int app_param_store(uint32_t key, const void *buf, size_t len)
-{
+int app_param_store(uint32_t key, const void* buf, size_t len) {
     app_param_slot_t verify;
     uint32_t target = s_slot_count;
 
@@ -155,10 +162,9 @@ int app_param_store(uint32_t key, const void *buf, size_t len)
     s_slots[target].magic = APP_PARAM_MAGIC;
     s_slots[target].key = key;
     s_slots[target].version = APP_PARAM_VERSION;
-    s_slots[target].length = (uint16_t) len;
+    s_slots[target].length = (uint16_t)len;
     memcpy(s_slots[target].data, buf, len);
-    s_slots[target].crc32 =
-        param_crc32((const uint8_t *) &s_slots[target], APP_PARAM_HDR_SIZE + len);
+    s_slots[target].crc32 = param_crc32((const uint8_t*)&s_slots[target], APP_PARAM_HDR_SIZE + len);
 
     /* 4) 擦除 + 整扇区写回 */
     if (s_flash->erase_sector(s_sector_addr) != 0) {
@@ -170,7 +176,8 @@ int app_param_store(uint32_t key, const void *buf, size_t len)
 
     /* 5) 回读校验（本槽） */
     memset(&verify, 0, sizeof(verify));
-    if (s_flash->read(s_sector_addr + (target * APP_PARAM_SLOT_SIZE), &verify, sizeof(verify)) != 0) {
+    if (s_flash->read(s_sector_addr + (target * APP_PARAM_SLOT_SIZE), &verify, sizeof(verify))
+        != 0) {
         return -1;
     }
     if (memcmp(&verify, &s_slots[target], sizeof(verify)) != 0) {

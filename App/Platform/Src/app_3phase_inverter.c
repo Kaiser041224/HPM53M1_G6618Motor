@@ -1,8 +1,7 @@
-/*
- * App 3-Phase Inverter - 三相逆变桥平台封装
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    app_3phase_inverter.c
+ * @brief   三相逆变桥平台封装
+ * @author  Kaiser
  *
  * 开关频率选型（2026-09-19，依据 G66-18 参数 + HPM53M1 能力）：
  *   电机：10 极对、Ls=0.1185mH、Rs=0.158Ω、额定 7A、母线 48V、3300rpm
@@ -14,13 +13,16 @@
  *   5) CPU：编码器读 7µs + FOC 估算 ~5µs ≈ 30% @480MHz（编码器 25kHz 已实测）
  *   6) 一致性：M1 已实测验证的控制环/编码器仿真即为 25kHz
  *   → 取 25kHz 为默认；20kHz 为降损备选
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "app_3phase_inverter.h"
 
 #include "app_gpio.h"
+#include "app_hardware_params.h"
 #include "app_hrpwm.h"
-#include "app_hw_params.h"
 #include "intf_clock.h"
 
 #include <stddef.h>
@@ -38,9 +40,13 @@ static const hrpwm_pair_t s_phase_pair[APP_3PHASE_COUNT] = {
 static bool s_enabled;
 static float s_duty[APP_3PHASE_COUNT];
 
-static float inverter_clamp_duty(float duty)
-{
-    if (duty != duty) { /* NaN（异常计算）→ 零电压矢量，避免输出危险矢量 */
+/**
+ * @brief 将占空比限制到 [0, 1]；NaN 视为零电压矢量
+ * @param duty 原始占空比
+ * @return 限制后的占空比
+ */
+static float inverter_clamp_duty(float duty) {
+    if (duty != duty) {                  /* NaN（异常计算）→ 零电压矢量，避免输出危险矢量 */
         return APP_3PHASE_INVERTER_DUTY_ZERO;
     }
     if (duty < 0.0f) {
@@ -52,26 +58,26 @@ static float inverter_clamp_duty(float duty)
     return duty;
 }
 
-void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
-{
-    app_hw_params_t hw;
-    app_3phase_inverter_cfg_t c;
+void app_3phase_inverter_init(const app_3phase_inverter_cfg_t* cfg) {
+    app_hardware_params_t hardware;
+    app_3phase_inverter_cfg_t cfg_effective;
 
-    app_hw_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
-    c = (app_3phase_inverter_cfg_t) {
-        .pwm_freq_hz = hw.inverter.pwm_freq_hz,
-        .deadtime_ns = hw.inverter.deadtime_ns,
+    app_hardware_params_load(&hardware); /* config/hardware.yaml（将来 flash 覆盖） */
+    cfg_effective = (app_3phase_inverter_cfg_t){
+        .pwm_freq_hz = hardware.inverter.pwm_freq_hz,
+        .deadtime_ns = hardware.inverter.deadtime_ns,
     };
 
     if (cfg != NULL) {
-        c = *cfg;
+        cfg_effective = *cfg;
     }
 
-    app_hrpwm_init(); /* 注册驱动 + 平台默认配对配置 */
+    app_hrpwm_init();                    /* 注册驱动 + 平台默认配对配置 */
 
     /* 按配置重配三相（频率/死区；来源 config/hardware.yaml） */
-    for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
-        (void) app_hrpwm_config_pair(s_phase_pair[i], c.pwm_freq_hz, c.deadtime_ns);
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
+        (void)app_hrpwm_config_pair(
+            s_phase_pair[i], cfg_effective.pwm_freq_hz, cfg_effective.deadtime_ns);
         s_duty[i] = APP_3PHASE_INVERTER_DUTY_ZERO;
         app_hrpwm_set_duty(s_phase_pair[i], s_duty[i]);
     }
@@ -80,8 +86,7 @@ void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
     s_enabled = false;
 }
 
-int app_3phase_inverter_enable(void)
-{
+int app_3phase_inverter_enable(void) {
     if (s_enabled) {
         return 0;
     }
@@ -90,7 +95,7 @@ int app_3phase_inverter_enable(void)
     app_gpio_set(PIN_GDRV_12V_EN, 1U);
     intf_clock_delay_ms(10U);
 
-    for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         app_hrpwm_start(s_phase_pair[i]);
     }
 
@@ -98,20 +103,18 @@ int app_3phase_inverter_enable(void)
     return 0;
 }
 
-void app_3phase_inverter_disable(void)
-{
-    for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
+void app_3phase_inverter_disable(void) {
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         app_hrpwm_stop(s_phase_pair[i]);
     }
     app_gpio_set(PIN_GDRV_12V_EN, 0U);
     s_enabled = false;
 }
 
-int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w)
-{
-    const float duty_in[APP_3PHASE_COUNT] = { duty_u, duty_v, duty_w };
+int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w) {
+    const float duty_in[APP_3PHASE_COUNT] = {duty_u, duty_v, duty_w};
 
-    for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         float duty = inverter_clamp_duty(duty_in[i]);
 
         app_hrpwm_set_duty(s_phase_pair[i], duty);
@@ -121,8 +124,7 @@ int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w)
     return 0;
 }
 
-int app_3phase_inverter_set_duty(app_3phase_id_t phase, float duty)
-{
+int app_3phase_inverter_set_duty(app_3phase_id_t phase, float duty) {
     if (phase >= APP_3PHASE_COUNT) {
         return -1;
     }
@@ -134,8 +136,7 @@ int app_3phase_inverter_set_duty(app_3phase_id_t phase, float duty)
     return 0;
 }
 
-int app_3phase_inverter_force_low(app_3phase_id_t phase)
-{
+int app_3phase_inverter_force_low(app_3phase_id_t phase) {
     if (phase >= APP_3PHASE_COUNT) {
         return -1;
     }
@@ -144,8 +145,7 @@ int app_3phase_inverter_force_low(app_3phase_id_t phase)
     return 0;
 }
 
-int app_3phase_inverter_release(app_3phase_id_t phase)
-{
+int app_3phase_inverter_release(app_3phase_id_t phase) {
     if (phase >= APP_3PHASE_COUNT) {
         return -1;
     }
@@ -154,29 +154,24 @@ int app_3phase_inverter_release(app_3phase_id_t phase)
     return 0;
 }
 
-void app_3phase_inverter_emergency_stop(void)
-{
+void app_3phase_inverter_emergency_stop(void) {
     /* 先归零电压矢量，再强制关断，避免再次使能时输出残留静态矢量 */
-    (void) app_3phase_inverter_set_duty_abc(APP_3PHASE_INVERTER_DUTY_ZERO,
-                                            APP_3PHASE_INVERTER_DUTY_ZERO,
-                                            APP_3PHASE_INVERTER_DUTY_ZERO);
-    for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
+    (void)app_3phase_inverter_set_duty_abc(
+        APP_3PHASE_INVERTER_DUTY_ZERO, APP_3PHASE_INVERTER_DUTY_ZERO,
+        APP_3PHASE_INVERTER_DUTY_ZERO);
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         app_hrpwm_force_low(s_phase_pair[i]);
     }
     app_gpio_set(PIN_GDRV_12V_EN, 0U);
     s_enabled = false;
 }
 
-bool app_3phase_inverter_is_enabled(void)
-{
-    return s_enabled;
-}
+bool app_3phase_inverter_is_enabled(void) { return s_enabled; }
 
-void app_3phase_inverter_get_duty_abc(float *duty_u, float *duty_v, float *duty_w)
-{
-    float *out[APP_3PHASE_COUNT] = { duty_u, duty_v, duty_w };
+void app_3phase_inverter_get_duty_abc(float* duty_u, float* duty_v, float* duty_w) {
+    float* out[APP_3PHASE_COUNT] = {duty_u, duty_v, duty_w};
 
-    for (uint8_t i = 0U; i < (uint8_t) APP_3PHASE_COUNT; i++) {
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         if (out[i] != NULL) {
             *out[i] = s_duty[i];
         }

@@ -1,5 +1,7 @@
-/*
- * GPTMR Platform API
+/**
+ * @file    app_gptmr.h
+ * @brief   GPTMR 外环定时器平台封装
+ * @author  Kaiser
  *
  * GPTMR1 外环定时器封装。
  * 使用与 PWM 相同的 AHB 时钟源 (120MHz)，保证频率一致性。
@@ -10,7 +12,7 @@
  *   CH1 — 功率外环 25kHz
  *   CH2 — 通用通道 10kHz
  *
- * Copyright (c) 2026 Alliance HardWare Team
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -24,24 +26,65 @@
 extern "C" {
 #endif
 
+/**
+ * @brief GPTMR 周期回调
+ */
 typedef void (*app_gptmr_callback_t)(void);
 
+/**
+ * @brief GPTMR 通道标识
+ */
 typedef enum {
-    APP_GPTMR_CH_0 = 0,   /* GPTMR1 CH0: 电压外环 */
-    APP_GPTMR_CH_1   = 1,   /* GPTMR1 CH1: 功率外环 */
-    APP_GPTMR_CH_2     = 2,   /* GPTMR1 CH2: 通用通道 */
+    APP_GPTMR_CH_0 = 0, /**< GPTMR1 CH0: 电压外环 */
+    APP_GPTMR_CH_1 = 1, /**< GPTMR1 CH1: 功率外环 */
+    APP_GPTMR_CH_2 = 2, /**< GPTMR1 CH2: 通用通道 */
     APP_GPTMR_CH_COUNT,
 } app_gptmr_ch_t;
 
+/**
+ * @brief 初始化 GPTMR 平台
+ */
 void app_gptmr_init(void);
 
-int  app_gptmr_start(app_gptmr_ch_t ch);
-int  app_gptmr_stop(app_gptmr_ch_t ch);
+/**
+ * @brief 启动指定通道
+ * @param ch 通道
+ * @return 0 = 成功；-1 = 失败
+ */
+int app_gptmr_start(app_gptmr_ch_t ch);
+
+/**
+ * @brief 停止指定通道
+ * @param ch 通道
+ * @return 0 = 成功；-1 = 失败
+ */
+int app_gptmr_stop(app_gptmr_ch_t ch);
+
+/**
+ * @brief 启动全部通道
+ */
 void app_gptmr_start_all(void);
+
+/**
+ * @brief 停止全部通道
+ */
 void app_gptmr_stop_all(void);
 
-int  app_gptmr_register_callback(app_gptmr_ch_t ch, app_gptmr_callback_t cb);
-int  app_gptmr_set_frequency(app_gptmr_ch_t ch, uint32_t frequency_hz);
+/**
+ * @brief 注册通道周期回调
+ * @param ch 通道
+ * @param cb 回调（NULL = 清除）
+ * @return 0 = 成功；-1 = 失败
+ */
+int app_gptmr_register_callback(app_gptmr_ch_t ch, app_gptmr_callback_t cb);
+
+/**
+ * @brief 设置通道频率
+ * @param ch 通道
+ * @param frequency_hz 频率 [Hz]
+ * @return 0 = 成功；-1 = 失败
+ */
+int app_gptmr_set_frequency(app_gptmr_ch_t ch, uint32_t frequency_hz);
 
 #ifdef __cplusplus
 }

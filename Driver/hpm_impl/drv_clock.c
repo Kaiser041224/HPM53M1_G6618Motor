@@ -1,3 +1,12 @@
+/**
+ * @file    drv_clock.c
+ * @brief   时钟驱动实现（系统时钟树初始化 + cycle 读数与延时）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "intf_clock.h"
 #include "hpm_clock_drv.h"
 #include "hpm_pllctlv2_drv.h"
@@ -68,6 +77,10 @@ void intf_clock_init(void)
  * 0xC00 (rdcycle) 与 MCHTMR 在本板实测存在异常（进入后跑飞），已由最小化验证移除。
  * mcycle 与 SuperCap 工程 / IrqProfiler 的用法一致。
  */
+/**
+ * @brief 读取核心 mcycle 计数
+ * @return mcycle [cycle]
+ */
 static inline uint64_t drv_clock_mcycle(void)
 {
     return hpm_csr_get_core_mcycle();
@@ -81,6 +94,11 @@ uint32_t intf_clock_get_cpu_freq(void)
 uint32_t intf_clock_get_ahb_freq(void)
 {
     return clock_get_frequency(clock_ahb);
+}
+
+uint32_t intf_clock_get_mot0_freq(void)
+{
+    return clock_get_frequency(clock_mot0);
 }
 
 uint32_t intf_clock_get_cycle(void)

@@ -1,5 +1,7 @@
-/*
- * MCAN Driver - HPM MCAN hardware implementation
+/**
+ * @file    drv_mcan.c
+ * @brief   MCAN 驱动 - HPM MCAN 硬件实现
+ * @author  Kaiser
  *
  * 最大化复用 HPM SDK 已有代码:
  * - mcan_get_default_config() → 填充完整默认配置
@@ -9,7 +11,7 @@
  * - mcan_set_filter_element() → 过滤器配置
  * - 复用 SDK demo 中的 can_info_t[] + ISR 模式
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -36,20 +38,25 @@
  * DLC 编码表: 字节数 → DLC 寄存器值 (CAN FD)
  * ============================================================================ */
 
-static const uint8_t dlc_encode_table[65] = {
+static const uint8_t s_dlc_encode_table[65] = {
     [0]  = 0,   [1]  = 1,   [2]  = 2,   [3]  = 3,
     [4]  = 4,   [5]  = 5,   [6]  = 6,   [7]  = 7,
     [8]  = 8,   [12] = 9,   [16] = 10,  [20] = 11,
     [24] = 12,  [32] = 13,  [48] = 14,  [64] = 15,
 };
 
+/**
+ * @brief 字节数编码为 CAN FD DLC 寄存器值
+ * @param byte_count 字节数
+ * @return DLC 值
+ */
 static uint8_t can_dlc_encode(uint8_t byte_count)
 {
     if (byte_count <= 8) {
         return byte_count;
     }
     if (byte_count <= 64) {
-        return dlc_encode_table[byte_count];
+        return s_dlc_encode_table[byte_count];
     }
     return 15;
 }
@@ -76,26 +83,37 @@ ATTR_PLACE_AT(".ahb_sram") static uint32_t mcan3_msg_buf[MCAN_MSG_BUF_SIZE_IN_WO
  * 实例管理结构体 (复用 SDK demo 的 can_info_t 模式)
  * ============================================================================ */
 
+/**
+ * @brief MCAN 实例管理结构
+ */
 typedef struct {
-    MCAN_Type    *base;
-    clock_name_t  clock_name;
-    uint32_t      irq_num;
-    uint32_t      ram_base;
-    uint32_t      ram_size;
-    uint8_t       std_filter_capacity;
-    uint8_t       ext_filter_capacity;
-    bool          initialized;
-    bool          canfd_enabled;
-    uint32_t      interrupt_mask;
-    intf_can_irq_callback_t irq_cb;
-    void         *irq_user_data;
+    MCAN_Type    *base;                /**< MCAN 寄存器基地址 */
+    clock_name_t  clock_name;          /**< 外设时钟 */
+    uint32_t      irq_num;             /**< 中断号 */
+    uint32_t      ram_base;            /**< 消息 RAM 基地址 */
+    uint32_t      ram_size;            /**< 消息 RAM 大小 */
+    uint8_t       std_filter_capacity; /**< 标准过滤器容量 */
+    uint8_t       ext_filter_capacity; /**< 扩展过滤器容量 */
+    bool          initialized;         /**< 是否已初始化 */
+    bool          canfd_enabled;       /**< 是否启用 CAN FD */
+    uint32_t      interrupt_mask;      /**< 事件中断掩码 */
+    intf_can_irq_callback_t irq_cb;    /**< 中断回调 */
+    void         *irq_user_data;       /**< 中断回调用户数据 */
 } mcan_instance_t;
 
+/**
+ * @brief 进入 CAN 临界区（保存并关闭全局中断）
+ * @return 保存的中断状态
+ */
 static uint32_t drv_can_enter_critical(void)
 {
     return read_clear_csr(CSR_MSTATUS, CSR_MSTATUS_MIE_MASK);
 }
 
+/**
+ * @brief 退出 CAN 临界区（恢复全局中断）
+ * @param irq_state 进入临界区时保存的中断状态
+ */
 static void drv_can_exit_critical(uint32_t irq_state)
 {
     write_csr(CSR_MSTATUS, irq_state);
@@ -107,11 +125,23 @@ static void drv_can_exit_critical(uint32_t irq_state)
  *   UINT32_MAX = 无限等待
  *   其他       = 毫秒级超时
  */
+/**
+ * @brief 毫秒转 CPU cycle
+ * @param ms 毫秒数
+ * @return 对应 cycle 数
+ */
 static uint32_t mcan_ms_to_cycles(uint32_t ms)
 {
     return (uint32_t)((uint64_t) ms * (intf_clock_get_cpu_freq() / 1000U));
 }
 
+/**
+ * @brief 判断超时是否到达
+ * @param start 起始 cycle
+ * @param timeout_cycles 超时 cycle
+ * @param timeout_ms 超时毫秒语义
+ * @return true = 已超时
+ */
 static bool mcan_timeout_elapsed(uint32_t start, uint32_t timeout_cycles, uint32_t timeout_ms)
 {
     if (timeout_ms == 0U) {
@@ -123,6 +153,11 @@ static bool mcan_timeout_elapsed(uint32_t start, uint32_t timeout_cycles, uint32
     return (uint32_t)(intf_clock_get_cycle() - start) >= timeout_cycles;
 }
 
+/**
+ * @brief 校验 CAN 帧 ID 是否合法
+ * @param frame CAN 帧
+ * @return true = 合法
+ */
 static bool mcan_frame_id_is_valid(const intf_can_frame_t *frame)
 {
     if (frame->is_ext_id) {
@@ -131,6 +166,12 @@ static bool mcan_frame_id_is_valid(const intf_can_frame_t *frame)
     return frame->id <= 0x7FFU;
 }
 
+/**
+ * @brief 校验 CAN 帧是否可发送（ID / 类型 / DLC）
+ * @param inst 实例
+ * @param frame CAN 帧
+ * @return true = 合法
+ */
 static bool mcan_frame_is_valid(const mcan_instance_t *inst,
                                 const intf_can_frame_t *frame)
 {
@@ -170,7 +211,7 @@ static bool mcan_frame_is_valid(const mcan_instance_t *inst,
     }
 }
 
-static mcan_instance_t mcan_instances[DRV_MCAN_INSTANCE_COUNT];
+static mcan_instance_t s_mcan_instances[DRV_MCAN_INSTANCE_COUNT];
 
 static void mcan_deinit_impl(uint8_t inst_id);
 
@@ -178,26 +219,41 @@ static void mcan_deinit_impl(uint8_t inst_id);
  * 获取实例基地址 (类似 drv_hrpwm.c 的 hrpwm_get_base)
  * ============================================================================ */
 
+/**
+ * @brief 获取实例基地址
+ * @param inst_id 实例号
+ * @return MCAN 基地址；越界返回 NULL
+ */
 static MCAN_Type *mcan_get_base(uint8_t inst_id)
 {
     if (inst_id >= DRV_MCAN_INSTANCE_COUNT) {
         return NULL;
     }
-    return mcan_instances[inst_id].base;
+    return s_mcan_instances[inst_id].base;
 }
 
+/**
+ * @brief 获取实例结构指针
+ * @param inst_id 实例号
+ * @return 实例指针；越界返回 NULL
+ */
 static mcan_instance_t *mcan_get_instance(uint8_t inst_id)
 {
     if (inst_id >= DRV_MCAN_INSTANCE_COUNT) {
         return NULL;
     }
-    return &mcan_instances[inst_id];
+    return &s_mcan_instances[inst_id];
 }
 
 /* ============================================================================
  * 事件掩码映射: intf_can_event_t → SDK MCAN_INT_* / MCAN_EVENT_*
  * ============================================================================ */
 
+/**
+ * @brief 接口事件掩码映射为 SDK 中断掩码
+ * @param intf_events 接口事件掩码
+ * @return SDK 中断掩码
+ */
 static uint32_t mcan_event_to_sdk_mask(uint32_t intf_events)
 {
     uint32_t sdk_mask = 0U;
@@ -231,6 +287,11 @@ static uint32_t mcan_event_to_sdk_mask(uint32_t intf_events)
     return sdk_mask;
 }
 
+/**
+ * @brief SDK 中断标志映射为接口事件掩码
+ * @param sdk_flags SDK 中断标志
+ * @return 接口事件掩码
+ */
 static uint32_t sdk_mask_to_mcan_event(uint32_t sdk_flags)
 {
     uint32_t intf_events = 0U;
@@ -267,6 +328,11 @@ static uint32_t sdk_mask_to_mcan_event(uint32_t sdk_flags)
  * 帧映射: intf_can_frame_t → mcan_tx_frame_t
  * ============================================================================ */
 
+/**
+ * @brief 接口帧映射为 SDK 发送帧
+ * @param src 接口帧
+ * @param dst SDK 发送帧输出
+ */
 static void frame_to_sdk_tx(const intf_can_frame_t *src, mcan_tx_frame_t *dst)
 {
     memset(dst, 0, sizeof(*dst));
@@ -290,6 +356,11 @@ static void frame_to_sdk_tx(const intf_can_frame_t *src, mcan_tx_frame_t *dst)
  * 帧映射: mcan_rx_message_t → intf_can_frame_t
  * ============================================================================ */
 
+/**
+ * @brief SDK 接收消息映射为接口帧
+ * @param src SDK 接收消息
+ * @param dst 接口帧输出
+ */
 static void sdk_rx_to_frame(const mcan_rx_message_t *src, intf_can_frame_t *dst)
 {
     uint8_t payload_size;
@@ -320,6 +391,11 @@ static void sdk_rx_to_frame(const mcan_rx_message_t *src, intf_can_frame_t *dst)
  * 接口实现 — init
  * ============================================================================ */
 
+/**
+ * @brief 接口过滤器元素映射为 SDK 过滤器元素
+ * @param src 接口过滤器元素
+ * @param dst SDK 过滤器元素输出
+ */
 static void filter_to_sdk(const intf_can_filter_elem_t *src, mcan_filter_elem_t *dst)
 {
     memset(dst, 0, sizeof(*dst));
@@ -361,9 +437,15 @@ static void filter_to_sdk(const intf_can_filter_elem_t *src, mcan_filter_elem_t 
  * 接口实现 — init
  * ============================================================================ */
 
+/**
+ * @brief 初始化 MCAN 实例
+ * @param inst_id 实例号
+ * @param cfg CAN 配置
+ * @return 0 = 成功；-1 = 参数非法或 SDK 初始化失败
+ */
 static int mcan_init_impl(uint8_t inst_id, const intf_can_cfg_t *cfg)
 {
-    mcan_instance_t *inst = &mcan_instances[inst_id];
+    mcan_instance_t *inst = &s_mcan_instances[inst_id];
 
     if (inst->base == NULL || cfg == NULL) {
         return -1;
@@ -382,8 +464,8 @@ static int mcan_init_impl(uint8_t inst_id, const intf_can_cfg_t *cfg)
     mcan_msg_buf_attr_t attr;
     attr.ram_base = inst->ram_base;
     attr.ram_size = inst->ram_size;
-    hpm_stat_t st = mcan_set_msg_buf_attr(inst->base, &attr);
-    if (st != status_success) {
+    hpm_stat_t status = mcan_set_msg_buf_attr(inst->base, &attr);
+    if (status != status_success) {
         return -1;
     }
 
@@ -438,8 +520,8 @@ static int mcan_init_impl(uint8_t inst_id, const intf_can_cfg_t *cfg)
     clock_add_to_group(inst->clock_name, 0);
 
     uint32_t clk_freq = clock_get_frequency(inst->clock_name);
-    st = mcan_init(inst->base, &sdk_cfg, clk_freq);
-    if (st != status_success) {
+    status = mcan_init(inst->base, &sdk_cfg, clk_freq);
+    if (status != status_success) {
         return -1;
     }
 
@@ -455,6 +537,10 @@ static int mcan_init_impl(uint8_t inst_id, const intf_can_cfg_t *cfg)
  * 接口实现 — deinit
  * ============================================================================ */
 
+/**
+ * @brief 反初始化 MCAN 实例
+ * @param inst_id 实例号
+ */
 static void mcan_deinit_impl(uint8_t inst_id)
 {
     mcan_instance_t *inst;
@@ -464,7 +550,7 @@ static void mcan_deinit_impl(uint8_t inst_id)
         return;
     }
 
-    inst = &mcan_instances[inst_id];
+    inst = &s_mcan_instances[inst_id];
 
     if (inst->base == NULL) {
         return;
@@ -491,6 +577,13 @@ static void mcan_deinit_impl(uint8_t inst_id)
  * 接口实现 — send (阻塞)
  * ============================================================================ */
 
+/**
+ * @brief 阻塞发送 CAN 帧（写入 TX FIFO）
+ * @param inst_id 实例号
+ * @param frame CAN 帧
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 参数非法或超时
+ */
 static int mcan_send_impl(uint8_t inst_id, const intf_can_frame_t *frame,
                           uint32_t timeout_ms)
 {
@@ -513,9 +606,9 @@ static int mcan_send_impl(uint8_t inst_id, const intf_can_frame_t *frame,
      */
     for (;;) {
         uint32_t put_index = 0;
-        hpm_stat_t st = mcan_transmit_via_txfifo_nonblocking(base, &tx, &put_index);
+        hpm_stat_t status = mcan_transmit_via_txfifo_nonblocking(base, &tx, &put_index);
 
-        if (st == status_success) {
+        if (status == status_success) {
             return 0;
         }
         if (mcan_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
@@ -528,6 +621,13 @@ static int mcan_send_impl(uint8_t inst_id, const intf_can_frame_t *frame,
  * 接口实现 — send_nonblocking
  * ============================================================================ */
 
+/**
+ * @brief 非阻塞发送 CAN 帧
+ * @param inst_id 实例号
+ * @param frame CAN 帧
+ * @param fifo_idx 发送 FIFO 索引输出
+ * @return 0 = 成功；-1 = 参数非法或 FIFO 满
+ */
 static int mcan_send_nonblocking_impl(uint8_t inst_id,
                                        const intf_can_frame_t *frame,
                                        uint8_t *fifo_idx)
@@ -542,17 +642,23 @@ static int mcan_send_nonblocking_impl(uint8_t inst_id,
     frame_to_sdk_tx(frame, &tx);
 
     uint32_t idx = 0;
-    hpm_stat_t st = mcan_transmit_via_txfifo_nonblocking(base, &tx, &idx);
-    if (st == status_success && fifo_idx != NULL) {
+    hpm_stat_t status = mcan_transmit_via_txfifo_nonblocking(base, &tx, &idx);
+    if (status == status_success && fifo_idx != NULL) {
         *fifo_idx = (uint8_t)idx;
     }
-    return (st == status_success) ? 0 : -1;
+    return (status == status_success) ? 0 : -1;
 }
 
 /* ============================================================================
  * 接口实现 — send_add_request
  * ============================================================================ */
 
+/**
+ * @brief 请求发送指定 FIFO 中的报文
+ * @param inst_id 实例号
+ * @param fifo_idx 发送 FIFO 索引
+ * @return 0 = 成功；-1 = 实例无效
+ */
 static int mcan_send_add_request_impl(uint8_t inst_id, uint8_t fifo_idx)
 {
     MCAN_Type *base = mcan_get_base(inst_id);
@@ -567,6 +673,13 @@ static int mcan_send_add_request_impl(uint8_t inst_id, uint8_t fifo_idx)
  * 接口实现 — receive (阻塞)
  * ============================================================================ */
 
+/**
+ * @brief 阻塞接收 CAN 帧（轮询 RXFIFO0）
+ * @param inst_id 实例号
+ * @param frame CAN 帧输出
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 参数非法或超时
+ */
 static int mcan_receive_impl(uint8_t inst_id, intf_can_frame_t *frame,
                               uint32_t timeout_ms)
 {
@@ -599,6 +712,12 @@ static int mcan_receive_impl(uint8_t inst_id, intf_can_frame_t *frame,
  * 接口实现 — receive_nonblocking
  * ============================================================================ */
 
+/**
+ * @brief 非阻塞接收 CAN 帧
+ * @param inst_id 实例号
+ * @param frame CAN 帧输出
+ * @return 0 = 成功；-1 = 参数非法或无数据
+ */
 static int mcan_receive_nonblocking_impl(uint8_t inst_id,
                                           intf_can_frame_t *frame)
 {
@@ -610,8 +729,8 @@ static int mcan_receive_nonblocking_impl(uint8_t inst_id,
     mcan_rx_message_t rx;
     memset(&rx, 0, sizeof(rx));
 
-    hpm_stat_t st = mcan_read_rxfifo(base, 0U, &rx);
-    if (st != status_success) {
+    hpm_stat_t status = mcan_read_rxfifo(base, 0U, &rx);
+    if (status != status_success) {
         return -1;
     }
     sdk_rx_to_frame(&rx, frame);
@@ -622,6 +741,13 @@ static int mcan_receive_nonblocking_impl(uint8_t inst_id,
  * 接口实现 — config_filter
  * ============================================================================ */
 
+/**
+ * @brief 配置过滤器（必要时临时进入配置模式）
+ * @param inst_id 实例号
+ * @param index 过滤器索引
+ * @param elem 过滤器元素
+ * @return 0 = 成功；-1 = 参数非法或 SDK 配置失败
+ */
 static int mcan_config_filter_impl(uint8_t inst_id, uint32_t index,
                                      const intf_can_filter_elem_t *elem)
 {
@@ -675,20 +801,26 @@ static int mcan_config_filter_impl(uint8_t inst_id, uint32_t index,
         base->CCCR |= MCAN_CCCR_CCE_MASK;
     }
 
-    hpm_stat_t st = mcan_set_filter_element(base, &sdk_elem, index);
+    hpm_stat_t status = mcan_set_filter_element(base, &sdk_elem, index);
 
     if (need_restore) {
         base->CCCR &= ~MCAN_CCCR_CCE_MASK;
         base->CCCR &= ~MCAN_CCCR_INIT_MASK;
     }
 
-    return (st == status_success) ? 0 : -1;
+    return (status == status_success) ? 0 : -1;
 }
 
 /* ============================================================================
  * 接口实现 — enable_interrupt / disable_interrupt
  * ============================================================================ */
 
+/**
+ * @brief 使能事件中断
+ * @param inst_id 实例号
+ * @param event_mask 事件掩码
+ * @return 0 = 成功；-1 = 实例无效
+ */
 static int mcan_enable_interrupt_impl(uint8_t inst_id, uint32_t event_mask)
 {
     mcan_instance_t *inst = mcan_get_instance(inst_id);
@@ -702,6 +834,12 @@ static int mcan_enable_interrupt_impl(uint8_t inst_id, uint32_t event_mask)
     return 0;
 }
 
+/**
+ * @brief 禁用事件中断
+ * @param inst_id 实例号
+ * @param event_mask 事件掩码
+ * @return 0 = 成功；-1 = 实例无效
+ */
 static int mcan_disable_interrupt_impl(uint8_t inst_id, uint32_t event_mask)
 {
     mcan_instance_t *inst = mcan_get_instance(inst_id);
@@ -719,6 +857,13 @@ static int mcan_disable_interrupt_impl(uint8_t inst_id, uint32_t event_mask)
  * 接口实现 — config_irq_callback
  * ============================================================================ */
 
+/**
+ * @brief 配置中断回调（临界区内更新并挂/摘 PLIC）
+ * @param inst_id 实例号
+ * @param cb 回调
+ * @param user_data 用户数据
+ * @return 0 = 成功；-1 = 实例无效
+ */
 static int mcan_config_irq_callback_impl(uint8_t inst_id,
                                            intf_can_irq_callback_t cb,
                                            void *user_data)
@@ -748,6 +893,12 @@ static int mcan_config_irq_callback_impl(uint8_t inst_id,
  * 接口实现 — get_status (复用 SDK mcan_parse_protocol_status!)
  * ============================================================================ */
 
+/**
+ * @brief 获取协议状态与错误计数
+ * @param inst_id 实例号
+ * @param status 状态输出
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int mcan_get_status_impl(uint8_t inst_id, intf_can_status_t *status)
 {
     MCAN_Type *base = mcan_get_base(inst_id);
@@ -776,6 +927,12 @@ static int mcan_get_status_impl(uint8_t inst_id, intf_can_status_t *status)
  * 接口实现 — read_tx_event
  * ============================================================================ */
 
+/**
+ * @brief 读取发送事件 FIFO
+ * @param inst_id 实例号
+ * @param tx_evt 发送事件输出
+ * @return 0 = 成功；-1 = 参数非法或 FIFO 空
+ */
 static int mcan_read_tx_event_impl(uint8_t inst_id, intf_can_tx_event_t *tx_evt)
 {
     MCAN_Type *base = mcan_get_base(inst_id);
@@ -784,8 +941,8 @@ static int mcan_read_tx_event_impl(uint8_t inst_id, intf_can_tx_event_t *tx_evt)
     }
 
     mcan_tx_event_fifo_elem_t sdk_evt;
-    hpm_stat_t st = mcan_read_tx_evt_fifo(base, &sdk_evt);
-    if (st != status_success) {
+    hpm_stat_t status = mcan_read_tx_evt_fifo(base, &sdk_evt);
+    if (status != status_success) {
         return -1;
     }
 
@@ -802,6 +959,13 @@ static int mcan_read_tx_event_impl(uint8_t inst_id, intf_can_tx_event_t *tx_evt)
  * 接口实现 — get_timestamp
  * ============================================================================ */
 
+/**
+ * @brief 从发送事件中提取时间戳
+ * @param inst_id 实例号（未使用）
+ * @param tx_evt 发送事件
+ * @param ts 时间戳输出
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int mcan_get_timestamp_impl(uint8_t inst_id,
                                     const intf_can_tx_event_t *tx_evt,
                                     intf_can_timestamp_t *ts)
@@ -820,9 +984,13 @@ static int mcan_get_timestamp_impl(uint8_t inst_id,
  * ISR 处理 (复用 SDK demo 模式)
  * ============================================================================ */
 
+/**
+ * @brief MCAN 中断处理：映射事件并触发回调
+ * @param inst_id 实例号
+ */
 static void mcan_isr_handler(uint8_t inst_id)
 {
-    mcan_instance_t *inst = &mcan_instances[inst_id];
+    mcan_instance_t *inst = &s_mcan_instances[inst_id];
     if (inst->base == NULL) {
         return;
     }
@@ -865,6 +1033,9 @@ void isr_mcan3(void) { mcan_isr_handler(3); }
  * 实例信息表初始化
  * ============================================================================ */
 
+/**
+ * @brief 初始化实例信息表（基地址/时钟/中断号，幂等）
+ */
 static void mcan_init_instance_table(void)
 {
     static bool table_initialized = false;
@@ -874,35 +1045,35 @@ static void mcan_init_instance_table(void)
     table_initialized = true;
 
 #if defined(HPM_MCAN0)
-    mcan_instances[0].base = HPM_MCAN0;
-    mcan_instances[0].clock_name = clock_can0;
-    mcan_instances[0].irq_num = IRQn_MCAN0;
-    mcan_instances[0].ram_base = (uint32_t)&mcan0_msg_buf;
-    mcan_instances[0].ram_size = sizeof(mcan0_msg_buf);
+    s_mcan_instances[0].base = HPM_MCAN0;
+    s_mcan_instances[0].clock_name = clock_can0;
+    s_mcan_instances[0].irq_num = IRQn_MCAN0;
+    s_mcan_instances[0].ram_base = (uint32_t)&mcan0_msg_buf;
+    s_mcan_instances[0].ram_size = sizeof(mcan0_msg_buf);
 #endif
 
 #if defined(HPM_MCAN1)
-    mcan_instances[1].base = HPM_MCAN1;
-    mcan_instances[1].clock_name = clock_can1;
-    mcan_instances[1].irq_num = IRQn_MCAN1;
-    mcan_instances[1].ram_base = (uint32_t)&mcan1_msg_buf;
-    mcan_instances[1].ram_size = sizeof(mcan1_msg_buf);
+    s_mcan_instances[1].base = HPM_MCAN1;
+    s_mcan_instances[1].clock_name = clock_can1;
+    s_mcan_instances[1].irq_num = IRQn_MCAN1;
+    s_mcan_instances[1].ram_base = (uint32_t)&mcan1_msg_buf;
+    s_mcan_instances[1].ram_size = sizeof(mcan1_msg_buf);
 #endif
 
 #if defined(HPM_MCAN2)
-    mcan_instances[2].base = HPM_MCAN2;
-    mcan_instances[2].clock_name = clock_can2;
-    mcan_instances[2].irq_num = IRQn_MCAN2;
-    mcan_instances[2].ram_base = (uint32_t)&mcan2_msg_buf;
-    mcan_instances[2].ram_size = sizeof(mcan2_msg_buf);
+    s_mcan_instances[2].base = HPM_MCAN2;
+    s_mcan_instances[2].clock_name = clock_can2;
+    s_mcan_instances[2].irq_num = IRQn_MCAN2;
+    s_mcan_instances[2].ram_base = (uint32_t)&mcan2_msg_buf;
+    s_mcan_instances[2].ram_size = sizeof(mcan2_msg_buf);
 #endif
 
 #if defined(HPM_MCAN3)
-    mcan_instances[3].base = HPM_MCAN3;
-    mcan_instances[3].clock_name = clock_can3;
-    mcan_instances[3].irq_num = IRQn_MCAN3;
-    mcan_instances[3].ram_base = (uint32_t)&mcan3_msg_buf;
-    mcan_instances[3].ram_size = sizeof(mcan3_msg_buf);
+    s_mcan_instances[3].base = HPM_MCAN3;
+    s_mcan_instances[3].clock_name = clock_can3;
+    s_mcan_instances[3].irq_num = IRQn_MCAN3;
+    s_mcan_instances[3].ram_base = (uint32_t)&mcan3_msg_buf;
+    s_mcan_instances[3].ram_size = sizeof(mcan3_msg_buf);
 #endif
 }
 
@@ -911,22 +1082,109 @@ static void mcan_init_instance_table(void)
  * ============================================================================ */
 
 #if defined(HPM_MCAN0)
+/**
+ * @brief MCAN0 初始化包装
+ * @param cfg CAN 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int mcan0_init(const intf_can_cfg_t *cfg) { return mcan_init_impl(0, cfg); }
-static void mcan0_deinit(void) { mcan_deinit_impl(0); }
-static int mcan0_send(const intf_can_frame_t *f, uint32_t t) { return mcan_send_impl(0, f, t); }
-static int mcan0_send_nb(const intf_can_frame_t *f, uint8_t *idx) { return mcan_send_nonblocking_impl(0, f, idx); }
-static int mcan0_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(0, idx); }
-static int mcan0_receive(intf_can_frame_t *f, uint32_t t) { return mcan_receive_impl(0, f, t); }
-static int mcan0_receive_nb(intf_can_frame_t *f) { return mcan_receive_nonblocking_impl(0, f); }
-static int mcan0_cfg_filter(uint32_t i, const intf_can_filter_elem_t *e) { return mcan_config_filter_impl(0, i, e); }
-static int mcan0_enable_int(uint32_t m) { return mcan_enable_interrupt_impl(0, m); }
-static int mcan0_disable_int(uint32_t m) { return mcan_disable_interrupt_impl(0, m); }
-static int mcan0_cfg_irq_cb(intf_can_irq_callback_t cb, void *d) { return mcan_config_irq_callback_impl(0, cb, d); }
-static int mcan0_get_status(intf_can_status_t *s) { return mcan_get_status_impl(0, s); }
-static int mcan0_read_tx_evt(intf_can_tx_event_t *e) { return mcan_read_tx_event_impl(0, e); }
-static int mcan0_get_ts(const intf_can_tx_event_t *e, intf_can_timestamp_t *t) { return mcan_get_timestamp_impl(0, e, t); }
 
-static const intf_can_t mcan0_ops = {
+/**
+ * @brief MCAN0 反初始化包装
+ */
+static void mcan0_deinit(void) { mcan_deinit_impl(0); }
+
+/**
+ * @brief MCAN0 阻塞发送包装
+ * @param frame CAN 帧
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_send(const intf_can_frame_t *frame, uint32_t timeout) { return mcan_send_impl(0, frame, timeout); }
+
+/**
+ * @brief MCAN0 非阻塞发送包装
+ * @param frame CAN 帧
+ * @param idx 发送 FIFO 索引输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_send_nb(const intf_can_frame_t *frame, uint8_t *idx) { return mcan_send_nonblocking_impl(0, frame, idx); }
+
+/**
+ * @brief MCAN0 发送请求包装
+ * @param idx 发送 FIFO 索引
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(0, idx); }
+
+/**
+ * @brief MCAN0 阻塞接收包装
+ * @param frame CAN 帧输出
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_receive(intf_can_frame_t *frame, uint32_t timeout) { return mcan_receive_impl(0, frame, timeout); }
+
+/**
+ * @brief MCAN0 非阻塞接收包装
+ * @param frame CAN 帧输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_receive_nb(intf_can_frame_t *frame) { return mcan_receive_nonblocking_impl(0, frame); }
+
+/**
+ * @brief MCAN0 过滤器配置包装
+ * @param index 过滤器索引
+ * @param elem 过滤器元素
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_cfg_filter(uint32_t index, const intf_can_filter_elem_t *elem) { return mcan_config_filter_impl(0, index, elem); }
+
+/**
+ * @brief MCAN0 使能中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_enable_int(uint32_t mask) { return mcan_enable_interrupt_impl(0, mask); }
+
+/**
+ * @brief MCAN0 禁用中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_disable_int(uint32_t mask) { return mcan_disable_interrupt_impl(0, mask); }
+
+/**
+ * @brief MCAN0 配置中断回调包装
+ * @param cb 回调
+ * @param user_data 用户数据
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_cfg_irq_cb(intf_can_irq_callback_t cb, void *user_data) { return mcan_config_irq_callback_impl(0, cb, user_data); }
+
+/**
+ * @brief MCAN0 获取状态包装
+ * @param status 状态输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_get_status(intf_can_status_t *status) { return mcan_get_status_impl(0, status); }
+
+/**
+ * @brief MCAN0 读取发送事件包装
+ * @param tx_evt 发送事件输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_read_tx_evt(intf_can_tx_event_t *tx_evt) { return mcan_read_tx_event_impl(0, tx_evt); }
+
+/**
+ * @brief MCAN0 获取时间戳包装
+ * @param tx_evt 发送事件
+ * @param timestamp 时间戳输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan0_get_ts(const intf_can_tx_event_t *tx_evt, intf_can_timestamp_t *timestamp) { return mcan_get_timestamp_impl(0, tx_evt, timestamp); }
+
+static const intf_can_t s_mcan0_ops = {
     .instance_id = 0,
     .init = mcan0_init,
     .deinit = mcan0_deinit,
@@ -946,22 +1204,109 @@ static const intf_can_t mcan0_ops = {
 #endif
 
 #if defined(HPM_MCAN1)
+/**
+ * @brief MCAN1 初始化包装
+ * @param cfg CAN 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int mcan1_init(const intf_can_cfg_t *cfg) { return mcan_init_impl(1, cfg); }
-static void mcan1_deinit(void) { mcan_deinit_impl(1); }
-static int mcan1_send(const intf_can_frame_t *f, uint32_t t) { return mcan_send_impl(1, f, t); }
-static int mcan1_send_nb(const intf_can_frame_t *f, uint8_t *idx) { return mcan_send_nonblocking_impl(1, f, idx); }
-static int mcan1_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(1, idx); }
-static int mcan1_receive(intf_can_frame_t *f, uint32_t t) { return mcan_receive_impl(1, f, t); }
-static int mcan1_receive_nb(intf_can_frame_t *f) { return mcan_receive_nonblocking_impl(1, f); }
-static int mcan1_cfg_filter(uint32_t i, const intf_can_filter_elem_t *e) { return mcan_config_filter_impl(1, i, e); }
-static int mcan1_enable_int(uint32_t m) { return mcan_enable_interrupt_impl(1, m); }
-static int mcan1_disable_int(uint32_t m) { return mcan_disable_interrupt_impl(1, m); }
-static int mcan1_cfg_irq_cb(intf_can_irq_callback_t cb, void *d) { return mcan_config_irq_callback_impl(1, cb, d); }
-static int mcan1_get_status(intf_can_status_t *s) { return mcan_get_status_impl(1, s); }
-static int mcan1_read_tx_evt(intf_can_tx_event_t *e) { return mcan_read_tx_event_impl(1, e); }
-static int mcan1_get_ts(const intf_can_tx_event_t *e, intf_can_timestamp_t *t) { return mcan_get_timestamp_impl(1, e, t); }
 
-static const intf_can_t mcan1_ops = {
+/**
+ * @brief MCAN1 反初始化包装
+ */
+static void mcan1_deinit(void) { mcan_deinit_impl(1); }
+
+/**
+ * @brief MCAN1 阻塞发送包装
+ * @param frame CAN 帧
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_send(const intf_can_frame_t *frame, uint32_t timeout) { return mcan_send_impl(1, frame, timeout); }
+
+/**
+ * @brief MCAN1 非阻塞发送包装
+ * @param frame CAN 帧
+ * @param idx 发送 FIFO 索引输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_send_nb(const intf_can_frame_t *frame, uint8_t *idx) { return mcan_send_nonblocking_impl(1, frame, idx); }
+
+/**
+ * @brief MCAN1 发送请求包装
+ * @param idx 发送 FIFO 索引
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(1, idx); }
+
+/**
+ * @brief MCAN1 阻塞接收包装
+ * @param frame CAN 帧输出
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_receive(intf_can_frame_t *frame, uint32_t timeout) { return mcan_receive_impl(1, frame, timeout); }
+
+/**
+ * @brief MCAN1 非阻塞接收包装
+ * @param frame CAN 帧输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_receive_nb(intf_can_frame_t *frame) { return mcan_receive_nonblocking_impl(1, frame); }
+
+/**
+ * @brief MCAN1 过滤器配置包装
+ * @param index 过滤器索引
+ * @param elem 过滤器元素
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_cfg_filter(uint32_t index, const intf_can_filter_elem_t *elem) { return mcan_config_filter_impl(1, index, elem); }
+
+/**
+ * @brief MCAN1 使能中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_enable_int(uint32_t mask) { return mcan_enable_interrupt_impl(1, mask); }
+
+/**
+ * @brief MCAN1 禁用中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_disable_int(uint32_t mask) { return mcan_disable_interrupt_impl(1, mask); }
+
+/**
+ * @brief MCAN1 配置中断回调包装
+ * @param cb 回调
+ * @param user_data 用户数据
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_cfg_irq_cb(intf_can_irq_callback_t cb, void *user_data) { return mcan_config_irq_callback_impl(1, cb, user_data); }
+
+/**
+ * @brief MCAN1 获取状态包装
+ * @param status 状态输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_get_status(intf_can_status_t *status) { return mcan_get_status_impl(1, status); }
+
+/**
+ * @brief MCAN1 读取发送事件包装
+ * @param tx_evt 发送事件输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_read_tx_evt(intf_can_tx_event_t *tx_evt) { return mcan_read_tx_event_impl(1, tx_evt); }
+
+/**
+ * @brief MCAN1 获取时间戳包装
+ * @param tx_evt 发送事件
+ * @param timestamp 时间戳输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan1_get_ts(const intf_can_tx_event_t *tx_evt, intf_can_timestamp_t *timestamp) { return mcan_get_timestamp_impl(1, tx_evt, timestamp); }
+
+static const intf_can_t s_mcan1_ops = {
     .instance_id = 1,
     .init = mcan1_init,
     .deinit = mcan1_deinit,
@@ -981,22 +1326,109 @@ static const intf_can_t mcan1_ops = {
 #endif
 
 #if defined(HPM_MCAN2)
+/**
+ * @brief MCAN2 初始化包装
+ * @param cfg CAN 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int mcan2_init(const intf_can_cfg_t *cfg) { return mcan_init_impl(2, cfg); }
-static void mcan2_deinit(void) { mcan_deinit_impl(2); }
-static int mcan2_send(const intf_can_frame_t *f, uint32_t t) { return mcan_send_impl(2, f, t); }
-static int mcan2_send_nb(const intf_can_frame_t *f, uint8_t *idx) { return mcan_send_nonblocking_impl(2, f, idx); }
-static int mcan2_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(2, idx); }
-static int mcan2_receive(intf_can_frame_t *f, uint32_t t) { return mcan_receive_impl(2, f, t); }
-static int mcan2_receive_nb(intf_can_frame_t *f) { return mcan_receive_nonblocking_impl(2, f); }
-static int mcan2_cfg_filter(uint32_t i, const intf_can_filter_elem_t *e) { return mcan_config_filter_impl(2, i, e); }
-static int mcan2_enable_int(uint32_t m) { return mcan_enable_interrupt_impl(2, m); }
-static int mcan2_disable_int(uint32_t m) { return mcan_disable_interrupt_impl(2, m); }
-static int mcan2_cfg_irq_cb(intf_can_irq_callback_t cb, void *d) { return mcan_config_irq_callback_impl(2, cb, d); }
-static int mcan2_get_status(intf_can_status_t *s) { return mcan_get_status_impl(2, s); }
-static int mcan2_read_tx_evt(intf_can_tx_event_t *e) { return mcan_read_tx_event_impl(2, e); }
-static int mcan2_get_ts(const intf_can_tx_event_t *e, intf_can_timestamp_t *t) { return mcan_get_timestamp_impl(2, e, t); }
 
-static const intf_can_t mcan2_ops = {
+/**
+ * @brief MCAN2 反初始化包装
+ */
+static void mcan2_deinit(void) { mcan_deinit_impl(2); }
+
+/**
+ * @brief MCAN2 阻塞发送包装
+ * @param frame CAN 帧
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_send(const intf_can_frame_t *frame, uint32_t timeout) { return mcan_send_impl(2, frame, timeout); }
+
+/**
+ * @brief MCAN2 非阻塞发送包装
+ * @param frame CAN 帧
+ * @param idx 发送 FIFO 索引输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_send_nb(const intf_can_frame_t *frame, uint8_t *idx) { return mcan_send_nonblocking_impl(2, frame, idx); }
+
+/**
+ * @brief MCAN2 发送请求包装
+ * @param idx 发送 FIFO 索引
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(2, idx); }
+
+/**
+ * @brief MCAN2 阻塞接收包装
+ * @param frame CAN 帧输出
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_receive(intf_can_frame_t *frame, uint32_t timeout) { return mcan_receive_impl(2, frame, timeout); }
+
+/**
+ * @brief MCAN2 非阻塞接收包装
+ * @param frame CAN 帧输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_receive_nb(intf_can_frame_t *frame) { return mcan_receive_nonblocking_impl(2, frame); }
+
+/**
+ * @brief MCAN2 过滤器配置包装
+ * @param index 过滤器索引
+ * @param elem 过滤器元素
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_cfg_filter(uint32_t index, const intf_can_filter_elem_t *elem) { return mcan_config_filter_impl(2, index, elem); }
+
+/**
+ * @brief MCAN2 使能中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_enable_int(uint32_t mask) { return mcan_enable_interrupt_impl(2, mask); }
+
+/**
+ * @brief MCAN2 禁用中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_disable_int(uint32_t mask) { return mcan_disable_interrupt_impl(2, mask); }
+
+/**
+ * @brief MCAN2 配置中断回调包装
+ * @param cb 回调
+ * @param user_data 用户数据
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_cfg_irq_cb(intf_can_irq_callback_t cb, void *user_data) { return mcan_config_irq_callback_impl(2, cb, user_data); }
+
+/**
+ * @brief MCAN2 获取状态包装
+ * @param status 状态输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_get_status(intf_can_status_t *status) { return mcan_get_status_impl(2, status); }
+
+/**
+ * @brief MCAN2 读取发送事件包装
+ * @param tx_evt 发送事件输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_read_tx_evt(intf_can_tx_event_t *tx_evt) { return mcan_read_tx_event_impl(2, tx_evt); }
+
+/**
+ * @brief MCAN2 获取时间戳包装
+ * @param tx_evt 发送事件
+ * @param timestamp 时间戳输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan2_get_ts(const intf_can_tx_event_t *tx_evt, intf_can_timestamp_t *timestamp) { return mcan_get_timestamp_impl(2, tx_evt, timestamp); }
+
+static const intf_can_t s_mcan2_ops = {
     .instance_id = 2,
     .init = mcan2_init,
     .deinit = mcan2_deinit,
@@ -1016,22 +1448,109 @@ static const intf_can_t mcan2_ops = {
 #endif
 
 #if defined(HPM_MCAN3)
+/**
+ * @brief MCAN3 初始化包装
+ * @param cfg CAN 配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int mcan3_init(const intf_can_cfg_t *cfg) { return mcan_init_impl(3, cfg); }
-static void mcan3_deinit(void) { mcan_deinit_impl(3); }
-static int mcan3_send(const intf_can_frame_t *f, uint32_t t) { return mcan_send_impl(3, f, t); }
-static int mcan3_send_nb(const intf_can_frame_t *f, uint8_t *idx) { return mcan_send_nonblocking_impl(3, f, idx); }
-static int mcan3_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(3, idx); }
-static int mcan3_receive(intf_can_frame_t *f, uint32_t t) { return mcan_receive_impl(3, f, t); }
-static int mcan3_receive_nb(intf_can_frame_t *f) { return mcan_receive_nonblocking_impl(3, f); }
-static int mcan3_cfg_filter(uint32_t i, const intf_can_filter_elem_t *e) { return mcan_config_filter_impl(3, i, e); }
-static int mcan3_enable_int(uint32_t m) { return mcan_enable_interrupt_impl(3, m); }
-static int mcan3_disable_int(uint32_t m) { return mcan_disable_interrupt_impl(3, m); }
-static int mcan3_cfg_irq_cb(intf_can_irq_callback_t cb, void *d) { return mcan_config_irq_callback_impl(3, cb, d); }
-static int mcan3_get_status(intf_can_status_t *s) { return mcan_get_status_impl(3, s); }
-static int mcan3_read_tx_evt(intf_can_tx_event_t *e) { return mcan_read_tx_event_impl(3, e); }
-static int mcan3_get_ts(const intf_can_tx_event_t *e, intf_can_timestamp_t *t) { return mcan_get_timestamp_impl(3, e, t); }
 
-static const intf_can_t mcan3_ops = {
+/**
+ * @brief MCAN3 反初始化包装
+ */
+static void mcan3_deinit(void) { mcan_deinit_impl(3); }
+
+/**
+ * @brief MCAN3 阻塞发送包装
+ * @param frame CAN 帧
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_send(const intf_can_frame_t *frame, uint32_t timeout) { return mcan_send_impl(3, frame, timeout); }
+
+/**
+ * @brief MCAN3 非阻塞发送包装
+ * @param frame CAN 帧
+ * @param idx 发送 FIFO 索引输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_send_nb(const intf_can_frame_t *frame, uint8_t *idx) { return mcan_send_nonblocking_impl(3, frame, idx); }
+
+/**
+ * @brief MCAN3 发送请求包装
+ * @param idx 发送 FIFO 索引
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_send_add_req(uint8_t idx) { return mcan_send_add_request_impl(3, idx); }
+
+/**
+ * @brief MCAN3 阻塞接收包装
+ * @param frame CAN 帧输出
+ * @param timeout 超时毫秒语义
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_receive(intf_can_frame_t *frame, uint32_t timeout) { return mcan_receive_impl(3, frame, timeout); }
+
+/**
+ * @brief MCAN3 非阻塞接收包装
+ * @param frame CAN 帧输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_receive_nb(intf_can_frame_t *frame) { return mcan_receive_nonblocking_impl(3, frame); }
+
+/**
+ * @brief MCAN3 过滤器配置包装
+ * @param index 过滤器索引
+ * @param elem 过滤器元素
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_cfg_filter(uint32_t index, const intf_can_filter_elem_t *elem) { return mcan_config_filter_impl(3, index, elem); }
+
+/**
+ * @brief MCAN3 使能中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_enable_int(uint32_t mask) { return mcan_enable_interrupt_impl(3, mask); }
+
+/**
+ * @brief MCAN3 禁用中断包装
+ * @param mask 事件掩码
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_disable_int(uint32_t mask) { return mcan_disable_interrupt_impl(3, mask); }
+
+/**
+ * @brief MCAN3 配置中断回调包装
+ * @param cb 回调
+ * @param user_data 用户数据
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_cfg_irq_cb(intf_can_irq_callback_t cb, void *user_data) { return mcan_config_irq_callback_impl(3, cb, user_data); }
+
+/**
+ * @brief MCAN3 获取状态包装
+ * @param status 状态输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_get_status(intf_can_status_t *status) { return mcan_get_status_impl(3, status); }
+
+/**
+ * @brief MCAN3 读取发送事件包装
+ * @param tx_evt 发送事件输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_read_tx_evt(intf_can_tx_event_t *tx_evt) { return mcan_read_tx_event_impl(3, tx_evt); }
+
+/**
+ * @brief MCAN3 获取时间戳包装
+ * @param tx_evt 发送事件
+ * @param timestamp 时间戳输出
+ * @return 0 = 成功；-1 = 失败
+ */
+static int mcan3_get_ts(const intf_can_tx_event_t *tx_evt, intf_can_timestamp_t *timestamp) { return mcan_get_timestamp_impl(3, tx_evt, timestamp); }
+
+static const intf_can_t s_mcan3_ops = {
     .instance_id = 3,
     .init = mcan3_init,
     .deinit = mcan3_deinit,
@@ -1059,16 +1578,16 @@ void hpm_can_driver_register(void)
     mcan_init_instance_table();
 
 #if defined(HPM_MCAN0)
-    intf_can_register(&mcan0_ops);
+    intf_can_register(&s_mcan0_ops);
 #endif
 #if defined(HPM_MCAN1)
-    intf_can_register(&mcan1_ops);
+    intf_can_register(&s_mcan1_ops);
 #endif
 #if defined(HPM_MCAN2)
-    intf_can_register(&mcan2_ops);
+    intf_can_register(&s_mcan2_ops);
 #endif
 #if defined(HPM_MCAN3)
-    intf_can_register(&mcan3_ops);
+    intf_can_register(&s_mcan3_ops);
 #endif
 }
 
@@ -1081,8 +1600,8 @@ uint32_t hpm_can_get_clock_freq(uint8_t inst_id)
     if (inst_id >= DRV_MCAN_INSTANCE_COUNT) {
         return 0U;
     }
-    if (mcan_instances[inst_id].base == NULL) {
+    if (s_mcan_instances[inst_id].base == NULL) {
         return 0U;
     }
-    return clock_get_frequency(mcan_instances[inst_id].clock_name);
+    return clock_get_frequency(s_mcan_instances[inst_id].clock_name);
 }

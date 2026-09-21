@@ -1,3 +1,12 @@
+/**
+ * @file    drv_gpio.c
+ * @brief   GPIO 驱动 - HPM GPIO 适配（方向/电平/中断）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "intf_gpio.h"
 #include "hpm_gpio_drv.h"
 #include "hpm_gpiom_drv.h"
@@ -21,12 +30,22 @@
 #define GPIO_PIN_COUNT (GPIO_PORT_COUNT * GPIO_PINS_PER_PORT)
 
 /* HPM5361 has single GPIO controller */
+/**
+ * @brief 获取 GPIO 控制器基地址（HPM53M1 仅单控制器）
+ * @param port 端口号
+ * @return GPIO 控制器基地址
+ */
 static GPIO_Type *get_gpio_base(uint8_t port)
 {
     (void)port;
     return HPM_GPIO0;
 }
 
+/**
+ * @brief 获取 GPIO 端口寄存器索引
+ * @param port 端口号
+ * @return 端口寄存器索引
+ */
 static uint32_t get_gpio_port_index(uint8_t port)
 {
     switch (port) {
@@ -39,6 +58,11 @@ static uint32_t get_gpio_port_index(uint8_t port)
     }
 }
 
+/**
+ * @brief 获取 GPIO 端口中断号
+ * @param port 端口号
+ * @return 中断号；-1 = 无效端口
+ */
 static int get_gpio_port_irq(uint8_t port)
 {
     switch (port) {
@@ -60,8 +84,12 @@ typedef struct {
     void *user_data;
 } irq_entry_t;
 
-static irq_entry_t irq_table[64];
+static irq_entry_t s_irq_table[64];
 
+/**
+ * @brief GPIO 端口中断服务：扫描并派发引脚回调
+ * @param port 端口号
+ */
 static void gpio_port_isr(uint8_t port)
 {
     GPIO_Type *base = HPM_GPIO0;
@@ -71,8 +99,8 @@ static void gpio_port_isr(uint8_t port)
         if (gpio_check_pin_interrupt_flag(base, port_index, i)) {
             intf_gpio_pin_t pin = (intf_gpio_pin_t)((port << 5) | i);
             gpio_clear_pin_interrupt_flag(base, port_index, i);
-            if (irq_table[pin].cb != NULL) {
-                irq_table[pin].cb(pin, irq_table[pin].user_data);
+            if (s_irq_table[pin].cb != NULL) {
+                s_irq_table[pin].cb(pin, s_irq_table[pin].user_data);
             }
         }
     }
@@ -96,6 +124,11 @@ void isr_gpio0_b(void)
  * HPM GPIO Implementation
  * ============================================================================ */
 
+/**
+ * @brief 初始化 GPIO 引脚（方向 / 可选中断）
+ * @param cfg 引脚配置
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int hpm_gpio_init(const intf_gpio_cfg_t *cfg)
 {
     if (cfg == NULL) return -1;
@@ -136,8 +169,8 @@ static int hpm_gpio_init(const intf_gpio_cfg_t *cfg)
         default: return -1;
         }
 
-        irq_table[cfg->pin].cb = cfg->irq_cb;
-        irq_table[cfg->pin].user_data = cfg->irq_user_data;
+        s_irq_table[cfg->pin].cb = cfg->irq_cb;
+        s_irq_table[cfg->pin].user_data = cfg->irq_user_data;
 
         gpio_config_pin_interrupt(base, port_index, idx, trigger);
         gpio_clear_pin_interrupt_flag(base, port_index, idx);
@@ -153,6 +186,12 @@ static int hpm_gpio_init(const intf_gpio_cfg_t *cfg)
     return 0;
 }
 
+/**
+ * @brief 设置 GPIO 输出电平
+ * @param pin 引脚号
+ * @param level 输出电平
+ * @return 0 = 成功；-1 = 引脚越界
+ */
 static int hpm_gpio_set_level(intf_gpio_pin_t pin, intf_gpio_level_t level)
 {
     if (pin >= GPIO_PIN_COUNT) {
@@ -167,6 +206,12 @@ static int hpm_gpio_set_level(intf_gpio_pin_t pin, intf_gpio_level_t level)
     return 0;
 }
 
+/**
+ * @brief 读取 GPIO 输入电平
+ * @param pin 引脚号
+ * @param level 输出电平
+ * @return 0 = 成功；-1 = 引脚越界或 level 为 NULL
+ */
 static int hpm_gpio_get_level(intf_gpio_pin_t pin, intf_gpio_level_t *level)
 {
     if ((level == NULL) || (pin >= GPIO_PIN_COUNT)) {
@@ -182,6 +227,11 @@ static int hpm_gpio_get_level(intf_gpio_pin_t pin, intf_gpio_level_t *level)
     return 0;
 }
 
+/**
+ * @brief 翻转 GPIO 输出电平
+ * @param pin 引脚号
+ * @return 0 = 成功；-1 = 引脚越界
+ */
 static int hpm_gpio_toggle(intf_gpio_pin_t pin)
 {
     if (pin >= GPIO_PIN_COUNT) {
@@ -200,7 +250,7 @@ static int hpm_gpio_toggle(intf_gpio_pin_t pin)
  * Operations Structure & Registration
  * ============================================================================ */
 
-static const intf_gpio_t hpm_gpio_ops = {
+static const intf_gpio_t s_hpm_gpio_ops = {
     .init      = hpm_gpio_init,
     .set_level = hpm_gpio_set_level,
     .get_level = hpm_gpio_get_level,
@@ -209,5 +259,5 @@ static const intf_gpio_t hpm_gpio_ops = {
 
 void hpm_gpio_driver_register(void)
 {
-    intf_gpio_register(&hpm_gpio_ops);
+    intf_gpio_register(&s_hpm_gpio_ops);
 }

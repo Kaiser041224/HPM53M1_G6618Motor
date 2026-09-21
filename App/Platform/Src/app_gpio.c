@@ -1,3 +1,12 @@
+/**
+ * @file    app_gpio.c
+ * @brief   GPIO 平台封装（板级引脚使能/读取）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "app_gpio.h"
 #include "intf_gpio.h"
 
@@ -25,8 +34,7 @@ void app_gpio_set(uint16_t pin, uint8_t on) {
 }
 
 void app_gpio_toggle(uint16_t pin) { intf_gpio_toggle(pin); }
-uint8_t app_gpio_read(uint16_t pin)
-{
+uint8_t app_gpio_read(uint16_t pin) {
     intf_gpio_level_t level;
     intf_gpio_get_level(pin, &level);
     return (level == INTF_GPIO_LEVEL_HIGH) ? 1 : 0;

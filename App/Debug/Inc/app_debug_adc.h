@@ -1,7 +1,9 @@
-/*
- * Debug ADC - 采样链调试（配置打印 / 通道 dump / 诊断统计）
+/**
+ * @file    app_debug_adc.h
+ * @brief   采样链调试（配置打印 / 通道 dump / 诊断统计）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -15,14 +17,14 @@
  * 每个 25kHz 控制周期由 app_debug_adc_update() 刷新
  * ============================================================================ */
 
-extern volatile float    g_adc_i_u_a;      /* U 相电流 [A] */
-extern volatile float    g_adc_i_v_a;      /* V 相电流 [A] */
-extern volatile float    g_adc_i_w_a;      /* W 相电流 [A] */
-extern volatile float    g_adc_v_bus_v;    /* 母线电压 [V] */
-extern volatile float    g_adc_r_ntc0_ohm; /* NTC0 电阻 [Ω] */
-extern volatile float    g_adc_r_ntc1_ohm; /* NTC1 电阻 [Ω] */
+extern volatile float g_adc_i_u_a;                /* U 相电流 [A] */
+extern volatile float g_adc_i_v_a;                /* V 相电流 [A] */
+extern volatile float g_adc_i_w_a;                /* W 相电流 [A] */
+extern volatile float g_adc_v_bus_v;              /* 母线电压 [V] */
+extern volatile float g_adc_r_ntc0_ohm;           /* NTC0 电阻 [Ω] */
+extern volatile float g_adc_r_ntc1_ohm;           /* NTC1 电阻 [Ω] */
 extern volatile uint16_t g_adc_raw[ADC_CH_COUNT]; /* 原始码（顺序同 adc_channel_t） */
-extern volatile uint32_t g_adc_sequence;   /* 电流帧序号（判断新数据） */
+extern volatile uint32_t g_adc_sequence;          /* 电流帧序号（判断新数据） */
 
 #ifdef __cplusplus
 extern "C" {

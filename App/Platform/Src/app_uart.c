@@ -1,3 +1,12 @@
+/**
+ * @file    app_uart.c
+ * @brief   UART 平台封装（控制台上位机调参 + ISP）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "app_uart.h"
 
 #include "intf_uart.h"
@@ -8,10 +17,9 @@
 extern void hpm_uart_driver_register(void);
 
 /* 控制台设备对象（init 时解析并缓存，热路径无注册表查表） */
-static const intf_uart_t *s_console;
+static const intf_uart_t* s_console;
 
-int app_uart_init(void)
-{
+int app_uart_init(void) {
     intf_uart_cfg_t cfg = {
         .baudrate = 115200U,
         .data_bits = 8U,
@@ -30,21 +38,16 @@ int app_uart_init(void)
     return s_console->init(&cfg);
 }
 
-int app_uart_write(const uint8_t *data, size_t len)
-{
+int app_uart_write(const uint8_t* data, size_t len) {
     if (s_console == NULL) {
         return -1;
     }
     return s_console->transmit(data, len, 100U);
 }
 
-int app_uart_write_str(const char *str)
-{
-    return app_uart_write((const uint8_t *) str, strlen(str));
-}
+int app_uart_write_str(const char* str) { return app_uart_write((const uint8_t*)str, strlen(str)); }
 
-int app_uart_read(uint8_t *data, size_t len, uint32_t timeout_ms)
-{
+int app_uart_read(uint8_t* data, size_t len, uint32_t timeout_ms) {
     if (s_console == NULL) {
         return -1;
     }

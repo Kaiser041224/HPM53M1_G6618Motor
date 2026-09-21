@@ -1,8 +1,7 @@
-/*
- * App 3-Phase Inverter - 三相逆变桥平台封装（PWM1 → 合封预驱 → 三相半桥）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    app_3phase_inverter.h
+ * @brief   三相逆变桥平台封装（PWM1 → 合封预驱 → 三相半桥）
+ * @author  Kaiser
  *
  * 相映射（与板级 pinmux 一致）：
  *   U = PWM1 ch4/5（PA20/21 → HIN1/LIN1）
@@ -18,6 +17,9 @@
  *   - disable：先停 PWM → 再关 +12V
  *   - emergency_stop：三相强制关断（force low）+ 关 +12V
  *   - force_low 与占空比更新互不干扰（独立 force 通路），可安全用于保护
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef APP_3PHASE_INVERTER_H
@@ -30,28 +32,32 @@
 extern "C" {
 #endif
 
+/**
+ * @brief 三相桥臂标识
+ */
 typedef enum {
-    APP_3PHASE_U = 0,
-    APP_3PHASE_V,
-    APP_3PHASE_W,
+    APP_3PHASE_U = 0, /**< U 相 */
+    APP_3PHASE_V,     /**< V 相 */
+    APP_3PHASE_W,     /**< W 相 */
     APP_3PHASE_COUNT
 } app_3phase_id_t;
 
-/*
- * 初始化配置（默认值来源 config/hardware.yaml → app_hw_params.inverter）
- *   更换 MOS/驱动电路后调整 YAML 中的 deadtime_ns
+/**
+ * @brief 初始化配置
+ *
+ * 默认值来源 config/hardware.yaml → app_hardware_params.inverter；
+ * 更换 MOS/驱动电路后调整 YAML 中的 deadtime_ns。
  */
-
 typedef struct {
-    uint32_t pwm_freq_hz; /* 开关频率 [Hz]（YAML: inverter.pwm_freq_hz） */
-    uint32_t deadtime_ns; /* 死区 [ns]（YAML: inverter.deadtime_ns） */
+    uint32_t pwm_freq_hz; /**< 开关频率 [Hz]（YAML: inverter.pwm_freq_hz） */
+    uint32_t deadtime_ns; /**< 死区 [ns]（YAML: inverter.deadtime_ns） */
 } app_3phase_inverter_cfg_t;
 
 /**
  * @brief 初始化三相逆变桥：按配置设置三相 PWM（频率/死区/中心对齐），输出保持关闭。
- * @param cfg 配置；NULL = 使用默认值（config/hardware.yaml → app_hw_params.inverter）
+ * @param cfg 配置；NULL = 使用默认值（config/hardware.yaml → app_hardware_params.inverter）
  */
-void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg);
+void app_3phase_inverter_init(const app_3phase_inverter_cfg_t* cfg);
 
 /**
  * @brief 使能输出（+12V 先开 → 启动三相 PWM）。
@@ -101,7 +107,7 @@ bool app_3phase_inverter_is_enabled(void);
 /**
  * @brief 读取当前三相占空比（可为 NULL 跳过对应相）。
  */
-void app_3phase_inverter_get_duty_abc(float *duty_u, float *duty_v, float *duty_w);
+void app_3phase_inverter_get_duty_abc(float* duty_u, float* duty_v, float* duty_w);
 
 #ifdef __cplusplus
 }

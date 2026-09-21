@@ -1,7 +1,10 @@
-/*
- * Copyright (c) 2024 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    board.c
+ * @brief   HPM53M1_G6618Motor_board 板级初始化
+ * @author  Kaiser
  *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "board.h"
@@ -70,6 +73,9 @@ __attribute__ ((section(".nor_cfg_option"), used)) const uint32_t option[4] = {0
 ATTR_PLACE_AT(".uf2_signature") __attribute__((used)) const uint32_t uf2_signature = BOARD_UF2_SIGNATURE;
 #endif
 
+/**
+ * @brief 关闭 USB PHY DP/DM 内部下拉（临时使能 USB0 时钟后恢复）
+ */
 static void board_disable_usb_phy_dp_dm_pulldown(void)
 {
     if (!clock_check_in_group(clock_usb0, 0)) {
@@ -82,14 +88,18 @@ static void board_disable_usb_phy_dp_dm_pulldown(void)
     }
 }
 
+/**
+ * @brief 板级初始化（关闭 USB PHY 下拉 + 配置引脚复用）
+ */
 void board_init(void)
 {
     board_disable_usb_phy_dp_dm_pulldown();
     init_pins();
 }
 
-/*
- * USB0 板级初始化（时钟就绪后调用）：
+/**
+ * @brief USB0 板级初始化（时钟就绪后调用）
+ *
  *   - HPM53M1 的 USB_DP/USB_DM 为专用引脚（封装 pin48/49），无 IOMUX 配置项
  *   - QFN80 无 USB0_VBUS 检测引脚（原理图亦未引出），PHY 使用内部 VBUS
  *   - DP/DM 45Ω 下拉已在 board_init() 关闭，此处时钟就绪后再确认一次
@@ -101,6 +111,9 @@ void board_init_usb(void)
     usb_phy_using_internal_vbus(HPM_USB0);
 }
 
+/**
+ * @brief 从核初始化（HPM53M1 单核，空实现）
+ */
 void board_init_core1(void)
 {
 }

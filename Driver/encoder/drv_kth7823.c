@@ -1,8 +1,7 @@
-/*
- * KTH7823 Driver - 磁编码器协议实现（风格 A：每实例设备对象）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    drv_kth7823.c
+ * @brief   KTH7823 磁编码器驱动（SPI 协议，每实例设备对象）
+ * @author  Kaiser
  *
  * 协议要点（依据 KTH7823 数据手册）：
  *   - SPI mode3（CPOL=1/CPHA=1），16bit 帧，MSB first，SCK ≤10MHz（TSCK≥100ns）
@@ -18,6 +17,9 @@
  *       零点（Z，0x00/0x01）与方向（RD，0x09 bit7）配置各消耗 1~2 次 MTP 写。
  *
  * 实例：双编码器设计（0 = 转子 / 1 = 出轴，由平台层映射总线）
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "intf_encoder.h"
@@ -41,30 +43,38 @@
 #define KTH7823_REG_RD_BIT   (0x80U)
 #define KTH7823_REG_ADDR_MAX (0x3FU) /* 6bit 地址 */
 
+/**
+ * @brief KTH7823 实例上下文
+ */
 typedef struct {
-    const intf_spi_t *spi; /* 总线设备对象（init 时解析并缓存） */
-    uint32_t error_count;
-    bool initialized;
+    const intf_spi_t *spi;      /**< 总线设备对象（init 时解析并缓存） */
+    uint32_t error_count;       /**< 通信错误累计 */
+    bool initialized;           /**< 是否已初始化 */
 } kth7823_ctx_t;
 
-static kth7823_ctx_t s_ctx[KTH7823_INSTANCE_COUNT];
+static kth7823_ctx_t s_kth7823_ctx[KTH7823_INSTANCE_COUNT];
 
 /* ============================================================================
  * 帧级收发
  * ============================================================================ */
 
-/* 发送一帧并接收一帧（一个 CS 周期）；失败累计错误计数 */
-static int kth7823_frame(kth7823_ctx_t *ctx, uint16_t tx, uint16_t *rx)
+/**
+ * @brief 发送一帧并接收一帧（一个 CS 周期）；失败累计错误计数
+ * @param ctx 实例上下文
+ * @param tx_word 发送字
+ * @param rx_word 接收字输出
+ * @return 0 = 成功；-1 = SPI 传输失败
+ */
+static int kth7823_frame(kth7823_ctx_t *ctx, uint16_t tx_word, uint16_t *rx_word)
 {
-    uint16_t tx_word = tx;
-    uint16_t rx_word = 0U;
+    uint16_t received_word;
 
-    if (ctx->spi->transfer(&tx_word, &rx_word, 1U, KTH7823_SPI_TIMEOUT_MS) != 0) {
+    if (ctx->spi->transfer(&tx_word, &received_word, 1U, KTH7823_SPI_TIMEOUT_MS) != 0) {
         ctx->error_count++;
         return -1;
     }
+    *rx_word = received_word;
 
-    *rx = rx_word;
     return 0;
 }
 
@@ -72,6 +82,12 @@ static int kth7823_frame(kth7823_ctx_t *ctx, uint16_t tx, uint16_t *rx)
  * 实现（按实例）
  * ============================================================================ */
 
+/**
+ * @brief 初始化指定编码器实例
+ * @param id 实例号
+ * @param cfg 编码器配置
+ * @return 0 = 成功；-1 = 参数非法或总线未注册
+ */
 static int kth7823_init_impl(uint8_t id, const intf_encoder_cfg_t *cfg)
 {
     intf_spi_cfg_t spi_cfg;
@@ -84,7 +100,7 @@ static int kth7823_init_impl(uint8_t id, const intf_encoder_cfg_t *cfg)
         return -1; /* 超出器件上限 */
     }
 
-    ctx = &s_ctx[id];
+    ctx = &s_kth7823_ctx[id];
     ctx->spi = intf_spi_get(cfg->bus);
     if ((ctx->spi == NULL) || (ctx->spi->init == NULL) || (ctx->spi->transfer == NULL)) {
         return -1; /* 总线未注册 */
@@ -106,14 +122,24 @@ static int kth7823_init_impl(uint8_t id, const intf_encoder_cfg_t *cfg)
     return 0;
 }
 
+/**
+ * @brief 反初始化指定编码器实例
+ * @param id 实例号
+ */
 static void kth7823_deinit_impl(uint8_t id)
 {
     if (id >= KTH7823_INSTANCE_COUNT) {
         return;
     }
-    s_ctx[id].initialized = false;
+    s_kth7823_ctx[id].initialized = false;
 }
 
+/**
+ * @brief 读取原始角度（两帧重叠协议）
+ * @param id 实例号
+ * @param raw 原始角度输出
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
 static int kth7823_read_raw_impl(uint8_t id, uint16_t *raw)
 {
     kth7823_ctx_t *ctx;
@@ -123,7 +149,7 @@ static int kth7823_read_raw_impl(uint8_t id, uint16_t *raw)
         return -1;
     }
 
-    ctx = &s_ctx[id];
+    ctx = &s_kth7823_ctx[id];
     if (!ctx->initialized) {
         return -1;
     }
@@ -140,6 +166,13 @@ static int kth7823_read_raw_impl(uint8_t id, uint16_t *raw)
     return 0;
 }
 
+/**
+ * @brief 读取寄存器
+ * @param id 实例号
+ * @param addr 寄存器地址
+ * @param val 寄存器值输出
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
 static int kth7823_read_reg_impl(uint8_t id, uint8_t addr, uint8_t *val)
 {
     kth7823_ctx_t *ctx;
@@ -149,7 +182,7 @@ static int kth7823_read_reg_impl(uint8_t id, uint8_t addr, uint8_t *val)
         return -1;
     }
 
-    ctx = &s_ctx[id];
+    ctx = &s_kth7823_ctx[id];
     if (!ctx->initialized) {
         return -1;
     }
@@ -166,6 +199,13 @@ static int kth7823_read_reg_impl(uint8_t id, uint8_t addr, uint8_t *val)
     return 0;
 }
 
+/**
+ * @brief 写寄存器（烧写 MTP，帧间等待 ≥20ms）
+ * @param id 实例号
+ * @param addr 寄存器地址
+ * @param val 写入值
+ * @return 0 = 成功；-1 = 参数非法、未初始化或确认帧不匹配
+ */
 static int kth7823_write_reg_impl(uint8_t id, uint8_t addr, uint8_t val)
 {
     kth7823_ctx_t *ctx;
@@ -175,7 +215,7 @@ static int kth7823_write_reg_impl(uint8_t id, uint8_t addr, uint8_t val)
         return -1;
     }
 
-    ctx = &s_ctx[id];
+    ctx = &s_kth7823_ctx[id];
     if (!ctx->initialized) {
         return -1;
     }
@@ -197,7 +237,12 @@ static int kth7823_write_reg_impl(uint8_t id, uint8_t addr, uint8_t val)
     return ((uint8_t)(response >> 8) == val) ? 0 : -1;
 }
 
-/* 零点：Z(15:0) 跨 0x00/0x01 两个寄存器，各消耗一次 MTP 写 */
+/**
+ * @brief 设置零点（Z 跨两个寄存器，各消耗一次 MTP 写）
+ * @param id 实例号
+ * @param zero 零点原始值
+ * @return 0 = 成功；-1 = 写入失败
+ */
 static int kth7823_set_zero_impl(uint8_t id, uint16_t zero)
 {
     if (kth7823_write_reg_impl(id, KTH7823_REG_Z_LOW, (uint8_t)(zero & 0xFFU)) != 0) {
@@ -206,6 +251,12 @@ static int kth7823_set_zero_impl(uint8_t id, uint16_t zero)
     return kth7823_write_reg_impl(id, KTH7823_REG_Z_HIGH, (uint8_t)(zero >> 8));
 }
 
+/**
+ * @brief 设置旋转方向
+ * @param id 实例号
+ * @param cw_increasing true = 顺时针角度增加
+ * @return 0 = 成功；-1 = 写入失败
+ */
 static int kth7823_set_direction_impl(uint8_t id, bool cw_increasing)
 {
     /* RD 位于寄存器 0x09 的 bit7：1 = 俯视顺时针（CW）角度增加（出厂默认 0x80） */
@@ -213,6 +264,12 @@ static int kth7823_set_direction_impl(uint8_t id, bool cw_increasing)
                                   cw_increasing ? KTH7823_REG_RD_BIT : 0x00U);
 }
 
+/**
+ * @brief 获取编码器信息（分辨率、寄存器支持）
+ * @param id 实例号
+ * @param info 信息输出
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int kth7823_get_info_impl(uint8_t id, intf_encoder_info_t *info)
 {
     if ((id >= KTH7823_INSTANCE_COUNT) || (info == NULL)) {
@@ -224,39 +281,148 @@ static int kth7823_get_info_impl(uint8_t id, intf_encoder_info_t *info)
     return 0;
 }
 
+/**
+ * @brief 获取通信错误累计计数
+ * @param id 实例号
+ * @return 错误计数；实例越界返回 0
+ */
 static uint32_t kth7823_get_error_count_impl(uint8_t id)
 {
     if (id >= KTH7823_INSTANCE_COUNT) {
         return 0U;
     }
-    return s_ctx[id].error_count;
+    return s_kth7823_ctx[id].error_count;
 }
 
 /* ============================================================================
  * 每实例设备对象（风格 A）
  * ============================================================================ */
 
+/**
+ * @brief 编码器实例 0 初始化包装
+ * @param cfg 编码器配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_init(const intf_encoder_cfg_t *cfg) { return kth7823_init_impl(0U, cfg); }
+
+/**
+ * @brief 编码器实例 0 反初始化包装
+ */
 static void enc0_deinit(void) { kth7823_deinit_impl(0U); }
+
+/**
+ * @brief 编码器实例 0 读取原始角度
+ * @param raw 原始角度输出
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_read_raw(uint16_t *raw) { return kth7823_read_raw_impl(0U, raw); }
+
+/**
+ * @brief 编码器实例 0 读取寄存器
+ * @param addr 寄存器地址
+ * @param val 寄存器值输出
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_read_reg(uint8_t addr, uint8_t *val) { return kth7823_read_reg_impl(0U, addr, val); }
+
+/**
+ * @brief 编码器实例 0 写寄存器
+ * @param addr 寄存器地址
+ * @param val 写入值
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_write_reg(uint8_t addr, uint8_t val) { return kth7823_write_reg_impl(0U, addr, val); }
+
+/**
+ * @brief 编码器实例 0 设置零点
+ * @param zero 零点原始值
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_set_zero(uint16_t zero) { return kth7823_set_zero_impl(0U, zero); }
+
+/**
+ * @brief 编码器实例 0 设置方向
+ * @param cw 顺时针角度增加
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_set_direction(bool cw) { return kth7823_set_direction_impl(0U, cw); }
+
+/**
+ * @brief 编码器实例 0 获取信息
+ * @param info 信息输出
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc0_get_info(intf_encoder_info_t *info) { return kth7823_get_info_impl(0U, info); }
+
+/**
+ * @brief 编码器实例 0 获取错误计数
+ * @return 错误计数
+ */
 static uint32_t enc0_get_error_count(void) { return kth7823_get_error_count_impl(0U); }
 
+/**
+ * @brief 编码器实例 1 初始化包装
+ * @param cfg 编码器配置
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_init(const intf_encoder_cfg_t *cfg) { return kth7823_init_impl(1U, cfg); }
+
+/**
+ * @brief 编码器实例 1 反初始化包装
+ */
 static void enc1_deinit(void) { kth7823_deinit_impl(1U); }
+
+/**
+ * @brief 编码器实例 1 读取原始角度
+ * @param raw 原始角度输出
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_read_raw(uint16_t *raw) { return kth7823_read_raw_impl(1U, raw); }
+
+/**
+ * @brief 编码器实例 1 读取寄存器
+ * @param addr 寄存器地址
+ * @param val 寄存器值输出
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_read_reg(uint8_t addr, uint8_t *val) { return kth7823_read_reg_impl(1U, addr, val); }
+
+/**
+ * @brief 编码器实例 1 写寄存器
+ * @param addr 寄存器地址
+ * @param val 写入值
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_write_reg(uint8_t addr, uint8_t val) { return kth7823_write_reg_impl(1U, addr, val); }
+
+/**
+ * @brief 编码器实例 1 设置零点
+ * @param zero 零点原始值
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_set_zero(uint16_t zero) { return kth7823_set_zero_impl(1U, zero); }
+
+/**
+ * @brief 编码器实例 1 设置方向
+ * @param cw 顺时针角度增加
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_set_direction(bool cw) { return kth7823_set_direction_impl(1U, cw); }
+
+/**
+ * @brief 编码器实例 1 获取信息
+ * @param info 信息输出
+ * @return 0 = 成功；-1 = 失败
+ */
 static int enc1_get_info(intf_encoder_info_t *info) { return kth7823_get_info_impl(1U, info); }
+
+/**
+ * @brief 编码器实例 1 获取错误计数
+ * @return 错误计数
+ */
 static uint32_t enc1_get_error_count(void) { return kth7823_get_error_count_impl(1U); }
 
-static const intf_encoder_t enc0_dev = {
+static const intf_encoder_t s_enc0_dev = {
     .instance_id = 0U,
     .init = enc0_init,
     .deinit = enc0_deinit,
@@ -269,7 +435,7 @@ static const intf_encoder_t enc0_dev = {
     .get_error_count = enc0_get_error_count,
 };
 
-static const intf_encoder_t enc1_dev = {
+static const intf_encoder_t s_enc1_dev = {
     .instance_id = 1U,
     .init = enc1_init,
     .deinit = enc1_deinit,
@@ -288,6 +454,6 @@ static const intf_encoder_t enc1_dev = {
 
 void hpm_kth7823_driver_register(void)
 {
-    intf_encoder_register(&enc0_dev);
-    intf_encoder_register(&enc1_dev);
+    intf_encoder_register(&s_enc0_dev);
+    intf_encoder_register(&s_enc1_dev);
 }

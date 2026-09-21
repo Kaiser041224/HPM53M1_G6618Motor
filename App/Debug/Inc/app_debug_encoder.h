@@ -1,7 +1,9 @@
-/*
- * Debug Encoder - 编码器自检 + 25kHz 采样仿真（双 KTH7823）
+/**
+ * @file    app_debug_encoder.h
+ * @brief   编码器自检 + 25kHz 采样仿真（双 KTH7823）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -21,12 +23,12 @@ extern "C" {
  */
 extern volatile uint16_t g_enc_rotor_raw;      /* 转子编码器 16bit 原始值 */
 extern volatile uint16_t g_enc_output_raw;     /* 出轴编码器 16bit 原始值 */
-extern volatile float    g_enc_rotor_deg;      /* 转子机械角 [deg]（零点修正后），0..360 */
-extern volatile float    g_enc_output_deg;     /* 出轴机械角 [deg]（零点修正后），0..360 */
+extern volatile float g_enc_rotor_deg;         /* 转子机械角 [deg]（零点修正后），0..360 */
+extern volatile float g_enc_output_deg;        /* 出轴机械角 [deg]（零点修正后），0..360 */
 extern volatile uint32_t g_enc_rotor_read_us;  /* 转子单次读耗时 [us] */
 extern volatile uint32_t g_enc_output_read_us; /* 出轴单次读耗时 [us] */
 extern volatile uint32_t g_enc_loop_late_us;   /* 最近一次节拍迟到 [us]，0 = 未迟到 */
-extern volatile int32_t  g_enc_ratio_x10000;   /* 游标比值累计 ×10000（1kHz 成对采样） */
+extern volatile int32_t g_enc_ratio_x10000;    /* 游标比值累计 ×10000（1kHz 成对采样） */
 
 /**
  * @brief 初始化编码器自检：注册驱动 + 初始化双路 + 在线/寄存器检查 + 耗时实测。

@@ -1,7 +1,9 @@
-/*
- * System Driver Implementation (HPM SDK)
+/**
+ * @file    drv_sys.c
+ * @brief   System 驱动实现（复位状态查询 + 全局中断临界区）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 

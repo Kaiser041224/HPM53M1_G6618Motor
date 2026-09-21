@@ -1,7 +1,9 @@
-/*
- * Debug RTT - SEGGER RTT wrapper for debug output
+/**
+ * @file    app_debug_rtt.h
+ * @brief   SEGGER RTT 调试输出封装
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -17,10 +19,16 @@
  * 用法：在 CMakeLists.txt 或编译命令行定义 -DAPP_DEBUG_PERIODIC_PRINT=1 打开
  * ============================================================================ */
 #ifndef APP_DEBUG_PERIODIC_PRINT
-#define APP_DEBUG_PERIODIC_PRINT (0)
+# define APP_DEBUG_PERIODIC_PRINT (0)
 #endif
 
-int app_debug_printf(const char *fmt, ...);
+/**
+ * @brief  格式化输出到 RTT 上行缓冲（printf 风格）。
+ * @param  fmt  格式字符串
+ * @param  ...  可变参数
+ * @return 已写入的字符数；缓冲不足时返回负值
+ */
+int app_debug_printf(const char* fmt, ...);
 
 /**
  * @brief 获取 RTT 写入成功次数。

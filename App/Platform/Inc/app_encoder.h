@@ -1,8 +1,7 @@
-/*
- * App Encoder - 编码器平台封装（双 KTH7823）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    app_encoder.h
+ * @brief   编码器平台封装（双 KTH7823）
+ * @author  Kaiser
  *
  * 板级映射：
  *   APP_ENCODER_ROTOR  -> SPI3（PA10-13），转子 1:1
@@ -10,6 +9,9 @@
  *
  * 实时性：read_raw 为阻塞短操作（标称 ~5µs），无打印/动态分配；
  *         每实例单所有者，不可在多上下文并发调用。
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef APP_ENCODER_H
@@ -22,9 +24,12 @@
 extern "C" {
 #endif
 
+/**
+ * @brief 编码器实例标识
+ */
 typedef enum {
-    APP_ENCODER_ROTOR = 0, /* 转子编码器：SPI3 */
-    APP_ENCODER_OUTPUT,    /* 出轴编码器：SPI1 */
+    APP_ENCODER_ROTOR = 0, /**< 转子编码器：SPI3 */
+    APP_ENCODER_OUTPUT,    /**< 出轴编码器：SPI1 */
     APP_ENCODER_COUNT
 } app_encoder_id_t;
 
@@ -38,31 +43,31 @@ int app_encoder_init(void);
  * @brief 读取单圈绝对位置原始值（16bit 原码，未修正）。
  * @return 0 成功，-1 失败（累计于 get_error_count）
  */
-int app_encoder_read_raw(app_encoder_id_t id, uint16_t *raw);
+int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw);
 
 /**
  * @brief 读取零点修正后的单圈位置：(raw − zero) & 0xFFFF。
  * @return 0 成功，-1 失败
  */
-int app_encoder_read_position(app_encoder_id_t id, uint16_t *pos);
+int app_encoder_read_position(app_encoder_id_t id, uint16_t* pos);
 
 /**
  * @brief 读取机械角，单位 rad，范围 [0, 2π)。
  * @return 0 成功，-1 失败
  */
-int app_encoder_read_rad(app_encoder_id_t id, float *rad);
+int app_encoder_read_rad(app_encoder_id_t id, float* rad);
 
 /**
  * @brief 读取机械角，单位 deg，范围 [0, 360)。
  * @return 0 成功，-1 失败
  */
-int app_encoder_read_deg(app_encoder_id_t id, float *deg);
+int app_encoder_read_deg(app_encoder_id_t id, float* deg);
 
 /**
  * @brief 读寄存器（诊断；如 0x09 = RD，出厂默认 1）。
  * @return 0 成功，-1 失败
  */
-int app_encoder_read_reg(app_encoder_id_t id, uint8_t addr, uint8_t *val);
+int app_encoder_read_reg(app_encoder_id_t id, uint8_t addr, uint8_t* val);
 
 /*
  * 零点（软件方案，推荐）：
@@ -87,7 +92,7 @@ int app_encoder_clear_zero(app_encoder_id_t id);
  * @brief 读取当前软件零点偏移。
  * @return 0 成功，-1 失败
  */
-int app_encoder_get_zero(app_encoder_id_t id, uint16_t *zero);
+int app_encoder_get_zero(app_encoder_id_t id, uint16_t* zero);
 
 /**
  * @brief 是否已从 flash 加载到有效的编码器参数记录（false = 使用默认值）。

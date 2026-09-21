@@ -1,7 +1,9 @@
-/*
- * Debug Cmd - 调试控制台单字符命令（UART / USB 共用）
+/**
+ * @file    app_debug_cmd.h
+ * @brief   调试控制台单字符命令（UART / USB 共用）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -24,7 +26,7 @@ extern "C" {
  *   c = 清除两路零点
  *   i = 打印零点与当前位置
  */
-void app_debug_cmd_handle(const uint8_t *data, size_t len);
+void app_debug_cmd_handle(const uint8_t* data, size_t len);
 
 #ifdef __cplusplus
 }

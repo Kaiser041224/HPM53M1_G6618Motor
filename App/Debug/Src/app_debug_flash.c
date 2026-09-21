@@ -1,8 +1,7 @@
-/*
- * Debug Flash - XPI NOR 自检
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    app_debug_flash.c
+ * @brief   XPI NOR 自检
+ * @author  Kaiser
  *
  * 测试内容：
  *   1) 初始化（auto_config）+ 属性打印（基址 / 容量 / 扇区大小）
@@ -13,6 +12,9 @@
  * 安全：
  *   - 绝不触碰固件区与参数扇区（测试地址 = 末尾扇区，且擦除前要求其为空白）
  *   - 擦/写由驱动关闭全局中断（ms 级），本测试仅在启动阶段执行一次
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "app_debug_flash.h"
@@ -37,14 +39,20 @@ extern void hpm_flash_driver_register(void);
 static uint8_t s_wbuf[FLASH_TEST_BUF_SIZE] __attribute__((aligned(4)));
 static uint8_t s_rbuf[FLASH_TEST_BUF_SIZE] __attribute__((aligned(4)));
 
-/* 测试图案（用于重复运行时识别测试区） */
-static uint8_t flash_test_pattern(size_t i)
-{
-    return (uint8_t) (i ^ 0x5AU);
-}
+/**
+ * @brief 测试图案生成（用于重复运行时识别测试区）
+ * @param i 字节偏移
+ * @return 该偏移处的期望字节
+ */
+static uint8_t flash_test_pattern(size_t i) { return (uint8_t)(i ^ 0x5AU); }
 
-static bool flash_buf_is_erased(const uint8_t *buf, size_t len)
-{
+/**
+ * @brief 判断缓冲区是否全为擦除态（0xFF）
+ * @param buf 待检查缓冲区
+ * @param len 长度 [字节]
+ * @return true = 全为 0xFF
+ */
+static bool flash_buf_is_erased(const uint8_t* buf, size_t len) {
     for (size_t i = 0U; i < len; i++) {
         if (buf[i] != FLASH_ERASED_BYTE) {
             return false;
@@ -53,12 +61,14 @@ static bool flash_buf_is_erased(const uint8_t *buf, size_t len)
     return true;
 }
 
-/*
- * 安全判据：允许擦除的内容 = 空白（首次使用）或上次测试图案（重复运行）。
- * 出现其他内容（如固件数据）说明该扇区不属于保留区 → 拒绝擦除。
+/**
+ * @brief 安全判据：允许擦除的内容 = 空白（首次使用）或上次测试图案（重复运行）。
+ *        出现其他内容（如固件数据）说明该扇区不属于保留区 → 拒绝擦除。
+ * @param buf 待检查缓冲区
+ * @param len 长度 [字节]
+ * @return true = 属于测试区（可安全擦写）
  */
-static bool flash_sector_is_test_area(const uint8_t *buf, size_t len)
-{
+static bool flash_sector_is_test_area(const uint8_t* buf, size_t len) {
     for (size_t i = 0U; i < len; i++) {
         if ((buf[i] != FLASH_ERASED_BYTE) && (buf[i] != flash_test_pattern(i))) {
             return false;
@@ -67,8 +77,13 @@ static bool flash_sector_is_test_area(const uint8_t *buf, size_t len)
     return true;
 }
 
-static bool flash_test_sector(const intf_flash_t *flash, uint32_t addr)
-{
+/**
+ * @brief 对指定扇区执行破坏性读写测试（空白校验 → 擦除 → 写图案 → 回读比对）
+ * @param flash flash 设备对象
+ * @param addr 测试扇区地址
+ * @return true = 全部步骤通过
+ */
+static bool flash_test_sector(const intf_flash_t* flash, uint32_t addr) {
     /* 1) 擦除前安全检查：仅允许空白或上次测试图案（保护固件/参数区） */
     memset(s_rbuf, 0, sizeof(s_rbuf));
     if (flash->read(addr, s_rbuf, sizeof(s_rbuf)) != 0) {
@@ -86,8 +101,8 @@ static bool flash_test_sector(const intf_flash_t *flash, uint32_t addr)
         return false;
     }
     memset(s_rbuf, 0, sizeof(s_rbuf));
-    if ((flash->read(addr, s_rbuf, sizeof(s_rbuf)) != 0) ||
-        !flash_buf_is_erased(s_rbuf, sizeof(s_rbuf))) {
+    if ((flash->read(addr, s_rbuf, sizeof(s_rbuf)) != 0)
+        || !flash_buf_is_erased(s_rbuf, sizeof(s_rbuf))) {
         app_debug_printf("[FLASH] blank check FAILED\r\n");
         return false;
     }
@@ -114,9 +129,8 @@ static bool flash_test_sector(const intf_flash_t *flash, uint32_t addr)
     return true;
 }
 
-void app_debug_flash_init(void)
-{
-    const intf_flash_t *flash;
+void app_debug_flash_init(void) {
+    const intf_flash_t* flash;
     uint32_t base, size, sector, test_addr, param_addr;
     uint8_t head[16];
 
@@ -136,8 +150,9 @@ void app_debug_flash_init(void)
         app_debug_printf("[FLASH] invalid properties\r\n");
         return;
     }
-    app_debug_printf("[FLASH] base=0x%08X size=%u KB sector=%u B\r\n",
-                     (unsigned) base, (unsigned) (size / 1024U), (unsigned) sector);
+    app_debug_printf(
+        "[FLASH] base=0x%08X size=%u KB sector=%u B\r\n", (unsigned)base, (unsigned)(size / 1024U),
+        (unsigned)sector);
 
     test_addr = base + size - sector;         /* 最后 1 个扇区（测试用） */
     param_addr = base + size - (2U * sector); /* 倒数第 2 个扇区（参数区，只读预览） */
@@ -145,7 +160,7 @@ void app_debug_flash_init(void)
     /* 参数扇区只读预览（不擦写） */
     memset(head, 0, sizeof(head));
     if (flash->read(param_addr, head, sizeof(head)) == 0) {
-        app_debug_printf("[FLASH] param sector @0x%08X head:", (unsigned) param_addr);
+        app_debug_printf("[FLASH] param sector @0x%08X head:", (unsigned)param_addr);
         for (uint32_t i = 0U; i < sizeof(head); i++) {
             app_debug_printf(" %02X", head[i]);
         }
@@ -154,11 +169,11 @@ void app_debug_flash_init(void)
 
     /* 破坏性读写测试（仅测试扇区） */
 #if FLASH_RUN_DESTRUCTIVE_TEST
-    app_debug_printf("[FLASH] test sector @0x%08X ...\r\n", (unsigned) test_addr);
-    app_debug_printf("[FLASH] read/write test: %s\r\n",
-                     flash_test_sector(flash, test_addr) ? "PASS" : "FAIL");
+    app_debug_printf("[FLASH] test sector @0x%08X ...\r\n", (unsigned)test_addr);
+    app_debug_printf(
+        "[FLASH] read/write test: %s\r\n", flash_test_sector(flash, test_addr) ? "PASS" : "FAIL");
 #else
-    (void) test_addr;
+    (void)test_addr;
     app_debug_printf("[FLASH] destructive test disabled\r\n");
 #endif
 }

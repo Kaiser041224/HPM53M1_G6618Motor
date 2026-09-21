@@ -46,8 +46,8 @@ config/software.yaml ──┘        （构建期：求值/校验）      build
                                                               ▼
    ┌────────────────────────────────────────────────────────────────┐
    │ App/Control/app_motor_params.{h,c}   app_motor_params_t        │ ← FOC（后续）
-   │ App/Platform/app_hw_params.{h,c}     app_hw_params_t           │ ← app_analog_signal / app_adc / app_3phase_inverter
-   │ App/Platform/app_sw_params.{h,c}     app_sw_params_t           │ ← app_fault / app_can / FOC（后续）
+   │ App/Platform/app_hardware_params.{h,c}     app_hardware_params_t           │ ← app_analog_signal / app_adc / app_3phase_inverter
+   │ App/Platform/app_software_params.{h,c}     app_software_params_t           │ ← app_fault / app_can / FOC（后续）
    └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -63,13 +63,13 @@ config/software.yaml ──┘        （构建期：求值/校验）      build
 | `build/generated/params_generated.c` | ✗ | 生成物：工厂实例定义（计算后字面量） |
 | `build/generated/params_report.txt` | ✗ | 生成物：全参数 = 值/表达式 对照表（审查用） |
 | `App/Control/app_motor_params.{h,c}` | ✓ | 类型 + 访问器（手写） |
-| `App/Platform/app_hw_params.{h,c}` | ✓ | 类型 + 访问器（手写） |
-| `App/Platform/app_sw_params.{h,c}` | ✓ | 类型 + 访问器（手写） |
+| `App/Platform/app_hardware_params.{h,c}` | ✓ | 类型 + 访问器（手写） |
+| `App/Platform/app_software_params.{h,c}` | ✓ | 类型 + 访问器（手写） |
 
 ### 2.2 分层与依赖
 
 - `app_motor_params` → **App/Control**（消费者是 FOC；Platform 不需要机械参数）；
-- `app_hw_params` / `app_sw_params` → **App/Platform**（Platform 模块直接消费；Control/Debug 向下可达）；
+- `app_hardware_params` / `app_software_params` → **App/Platform**（Platform 模块直接消费；Control/Debug 向下可达）；
 - 生成头 `params_generated.h` **只被三个 params 模块的 .c 引用**，不对外扩散；
 - 三个 params 模块无 init 依赖（纯常量数据）；将来 flash 叠加在 `*_load()` 内检测 `app_param_is_ready()`。
 
@@ -302,11 +302,11 @@ control:
 #ifndef PARAMS_GENERATED_H
 #define PARAMS_GENERATED_H
 #include "app_motor_params.h"
-#include "app_hw_params.h"
-#include "app_sw_params.h"
+#include "app_hardware_params.h"
+#include "app_software_params.h"
 extern const app_motor_params_t g_motor_params_factory;
-extern const app_hw_params_t    g_hw_params_factory;
-extern const app_sw_params_t    g_sw_params_factory;
+extern const app_hardware_params_t    g_hardware_params_factory;
+extern const app_software_params_t    g_software_params_factory;
 #endif
 ```
 
@@ -314,7 +314,7 @@ extern const app_sw_params_t    g_sw_params_factory;
 
 ```c
 #include "params_generated.h"
-const app_sw_params_t g_sw_params_factory = {
+const app_software_params_t g_software_params_factory = {
     .fault.oc_trip_a = 72.9f,   /* = 3 * motor.i_peak_10s_a */
     .fault.vbus_ov_v = 36.0f,
     .fault.vbus_uv_v = 9.0f,
@@ -378,30 +378,30 @@ typedef struct {
     app_motor_encoder_t encoder;
 } app_motor_params_t;
 
-/* App/Platform/app_hw_params.h */
-typedef struct { float shunt_ohm; float amp_gain; float a_per_volt; float bias_v; } app_hw_current_sense_t;
-typedef struct { uint32_t divider_high_ohm; uint32_t divider_low_ohm; float v_per_volt; } app_hw_vbus_sense_t;
-typedef struct { uint32_t pullup_ohm; float r25_ohm; float b_value_k; float max_ohm; } app_hw_ntc_t;
-typedef struct { uint8_t levels; } app_hw_canid_t;
-typedef struct { uint8_t sample_cycle; uint32_t trigger_delay_ns; } app_hw_adc_t;
-typedef struct { uint32_t pwm_freq_hz; uint32_t deadtime_ns; } app_hw_inverter_t;
+/* App/Platform/app_hardware_params.h */
+typedef struct { float shunt_ohm; float amp_gain; float a_per_volt; float bias_v; } app_hardware_current_sense_t;
+typedef struct { uint32_t divider_high_ohm; uint32_t divider_low_ohm; float v_per_volt; } app_hardware_vbus_sense_t;
+typedef struct { uint32_t pullup_ohm; float r25_ohm; float b_value_k; float max_ohm; } app_hardware_ntc_t;
+typedef struct { uint8_t levels; } app_hardware_canid_t;
+typedef struct { uint8_t sample_cycle; uint32_t trigger_delay_ns; } app_hardware_adc_t;
+typedef struct { uint32_t pwm_freq_hz; uint32_t deadtime_ns; } app_hardware_inverter_t;
 
 typedef struct {
-    app_hw_current_sense_t current_sense;
-    app_hw_vbus_sense_t    vbus_sense;
-    app_hw_ntc_t           ntc;
-    app_hw_canid_t         canid_dip;
-    app_hw_adc_t           adc;
-    app_hw_inverter_t      inverter;
-} app_hw_params_t;
+    app_hardware_current_sense_t current_sense;
+    app_hardware_vbus_sense_t    vbus_sense;
+    app_hardware_ntc_t           ntc;
+    app_hardware_canid_t         canid_dip;
+    app_hardware_adc_t           adc;
+    app_hardware_inverter_t      inverter;
+} app_hardware_params_t;
 
-/* App/Platform/app_sw_params.h */
+/* App/Platform/app_software_params.h */
 typedef struct {
     uint32_t baudrate;        /* CAN 波特率 [bps] */
     uint8_t  node_id_default; /* 默认节点号（占位：DIP 解码未实现；与 CAN ID 的派生关系待协议定稿） */
     uint32_t rx_control_id;   /* 接收控制帧 CAN ID（占位：待协议定稿） */
     uint32_t tx_report_id;    /* 参数回报帧 CAN ID（占位：待协议定稿） */
-} app_sw_can_t;
+} app_software_can_t;
 typedef struct {
     float    oc_trip_a;
     float    vbus_ov_v;
@@ -409,16 +409,16 @@ typedef struct {
     uint16_t slow_debounce;
     uint16_t adc_stall_ms;
     uint8_t  enc_err_delta;
-} app_sw_fault_t;
-typedef struct { float kp; float ki; } app_sw_pid_t;
-typedef struct { float i_q_max_a; float duty_max; } app_sw_limits_t;
-typedef struct { app_sw_pid_t current_loop; app_sw_pid_t speed_loop; app_sw_limits_t limits; } app_sw_control_t;
+} app_software_fault_t;
+typedef struct { float kp; float ki; } app_software_pid_t;
+typedef struct { float i_q_max_a; float duty_max; } app_software_limits_t;
+typedef struct { app_software_pid_t current_loop; app_software_pid_t speed_loop; app_software_limits_t limits; } app_software_control_t;
 
 typedef struct {
-    app_sw_can_t     can;
-    app_sw_fault_t   fault;
-    app_sw_control_t control;
-} app_sw_params_t;
+    app_software_can_t     can;
+    app_software_fault_t   fault;
+    app_software_control_t control;
+} app_software_params_t;
 ```
 
 ### 6.2 访问器 API（三域统一形态）
@@ -428,7 +428,7 @@ typedef struct {
 const app_motor_params_t *app_motor_params_default(void);
 /** @brief 加载参数：工厂默认 +（将来）flash 覆盖；无失败路径 */
 void app_motor_params_load(app_motor_params_t *out);
-/* app_hw_params_default / app_hw_params_load、app_sw_params_default / app_sw_params_load 同构 */
+/* app_hardware_params_default / app_hardware_params_load、app_software_params_default / app_software_params_load 同构 */
 ```
 
 ### 6.3 消费接线
@@ -462,10 +462,10 @@ void app_motor_params_load(app_motor_params_t *out);
 ## 7. flash 覆盖预留（v2，不实现）
 
 ```c
-/* App/Platform/app_sw_params.c */
-void app_sw_params_load(app_sw_params_t *out) {
-    *out = g_sw_params_factory;
-    /* TODO(v2): app_param_is_ready() → app_param_load(APP_PARAM_KEY_SW, &overlay)
+/* App/Platform/app_software_params.c */
+void app_software_params_load(app_software_params_t *out) {
+    *out = g_software_params_factory;
+    /* TODO(v2): app_param_is_ready() → app_param_load(APP_PARAM_KEY_SOFTWARE, &overlay)
      *           → 字段级叠加（整定/自校准结果） */
 }
 ```

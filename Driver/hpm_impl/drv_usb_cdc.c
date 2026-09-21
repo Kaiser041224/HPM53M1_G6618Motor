@@ -1,8 +1,7 @@
-/*
- * USB CDC ACM Driver - HPM USB0 虚拟串口（基于 SDK CherryUSB 设备栈）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    drv_usb_cdc.c
+ * @brief   USB CDC ACM 驱动 - HPM USB0 虚拟串口（CherryUSB 设备栈）
+ * @author  Kaiser
  *
  * 实现说明：
  *   - 复用 SDK 中间件 CherryUSB（middleware/cherryusb）：设备栈 + CDC ACM 类 + HPM 端口
@@ -14,6 +13,9 @@
  *
  * 约束：单次 write ≤ USB_CDC_TX_BUF_SIZE（512B）
  * timeout_ms 语义（write）：0 = 不等待、UINT32_MAX = 无限、其他 = 毫秒
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "intf_usb_cdc.h"
@@ -79,12 +81,22 @@ static const char *s_string_descriptors[] = {
     "0002",                       /* Serial Number（变更以刷新 Windows 设备名缓存） */
 };
 
+/**
+ * @brief 获取设备描述符
+ * @param speed USB 速度（忽略）
+ * @return 设备描述符
+ */
 static const uint8_t *device_descriptor_callback(uint8_t speed)
 {
     (void) speed;
     return s_device_descriptor;
 }
 
+/**
+ * @brief 按速度获取配置描述符
+ * @param speed USB 速度
+ * @return 高速/全速配置描述符；其他速度返回 NULL
+ */
 static const uint8_t *config_descriptor_callback(uint8_t speed)
 {
     if (speed == USB_SPEED_HIGH) {
@@ -95,12 +107,22 @@ static const uint8_t *config_descriptor_callback(uint8_t speed)
     return NULL;
 }
 
+/**
+ * @brief 获取设备限定描述符
+ * @param speed USB 速度（忽略）
+ * @return 设备限定描述符
+ */
 static const uint8_t *device_quality_descriptor_callback(uint8_t speed)
 {
     (void) speed;
     return s_device_quality_descriptor;
 }
 
+/**
+ * @brief 按速度获取其他速度配置描述符
+ * @param speed USB 速度
+ * @return 高速/全速其他速度配置描述符；其他速度返回 NULL
+ */
 static const uint8_t *other_speed_config_descriptor_callback(uint8_t speed)
 {
     if (speed == USB_SPEED_HIGH) {
@@ -111,6 +133,12 @@ static const uint8_t *other_speed_config_descriptor_callback(uint8_t speed)
     return NULL;
 }
 
+/**
+ * @brief 按索引获取字符串描述符
+ * @param speed USB 速度（忽略）
+ * @param index 字符串索引
+ * @return 字符串描述符；越界返回 NULL
+ */
 static const char *string_descriptor_callback(uint8_t speed, uint8_t index)
 {
     (void) speed;
@@ -147,6 +175,10 @@ static uint8_t s_rx_ring[USB_CDC_RX_RING_SIZE];
 static volatile uint16_t s_rx_head;
 static volatile uint16_t s_rx_tail;
 
+/**
+ * @brief 向 SPSC 环形缓冲压入一个字节（满则丢弃）
+ * @param byte 待压入字节
+ */
 static inline void usb_cdc_ring_push(uint8_t byte)
 {
     uint16_t next = (uint16_t) ((s_rx_head + 1U) & USB_CDC_RX_RING_MASK);
@@ -158,6 +190,11 @@ static inline void usb_cdc_ring_push(uint8_t byte)
     s_rx_head = next;
 }
 
+/**
+ * @brief 从 SPSC 环形缓冲弹出一个字节
+ * @param byte 输出字节
+ * @return true = 取到数据
+ */
 static inline bool usb_cdc_ring_pop(uint8_t *byte)
 {
     if (s_rx_head == s_rx_tail) {
@@ -169,11 +206,23 @@ static inline bool usb_cdc_ring_pop(uint8_t *byte)
 }
 
 /* timeout_ms 语义：0 = 不等待；UINT32_MAX = 无限；其他 = 毫秒 */
+/**
+ * @brief 毫秒转 CPU cycle
+ * @param ms 毫秒数
+ * @return 对应 cycle 数
+ */
 static uint32_t usb_cdc_ms_to_cycles(uint32_t ms)
 {
     return (uint32_t) ((uint64_t) ms * (intf_clock_get_cpu_freq() / 1000U));
 }
 
+/**
+ * @brief 判断超时是否到达
+ * @param start 起始 cycle
+ * @param timeout_cycles 超时 cycle
+ * @param timeout_ms 超时毫秒语义
+ * @return true = 已超时
+ */
 static bool usb_cdc_timeout_elapsed(uint32_t start, uint32_t timeout_cycles, uint32_t timeout_ms)
 {
     if (timeout_ms == 0U) {
@@ -189,6 +238,11 @@ static bool usb_cdc_timeout_elapsed(uint32_t start, uint32_t timeout_cycles, uin
  * USB 回调（中断上下文）
  * ============================================================================ */
 
+/**
+ * @brief USB 设备事件处理（中断上下文）
+ * @param busid 总线 ID
+ * @param event 事件码
+ */
 static void usbd_event_handler(uint8_t busid, uint8_t event)
 {
     switch (event) {
@@ -255,6 +309,10 @@ static struct usbd_interface s_cdc_intf1;
  * 接口实现
  * ============================================================================ */
 
+/**
+ * @brief 初始化 USB CDC 设备栈（幂等）
+ * @return 0 = 成功
+ */
 static int hpm_usb_cdc_init(void)
 {
     if (s_initialized) {
@@ -284,6 +342,13 @@ static int hpm_usb_cdc_init(void)
     return 0;
 }
 
+/**
+ * @brief 发送数据（单次 ≤ USB_CDC_TX_BUF_SIZE）
+ * @param data 发送缓冲
+ * @param len 长度 [byte]
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 参数非法、未就绪或超时
+ */
 static int hpm_usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_ms)
 {
     uint32_t start;
@@ -322,31 +387,49 @@ static int hpm_usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_m
     return 0;
 }
 
+/**
+ * @brief 从环形缓冲读取数据
+ * @param data 接收缓冲
+ * @param len 期望长度 [byte]
+ * @return 实际接收字节数；-1 = 参数非法
+ */
 static int hpm_usb_cdc_read(uint8_t *data, size_t len)
 {
-    size_t n = 0U;
+    size_t count = 0U;
 
     if ((data == NULL) || (len == 0U)) {
         return -1;
     }
 
-    while ((n < len) && usb_cdc_ring_pop(&data[n])) {
-        n++;
+    while ((count < len) && usb_cdc_ring_pop(&data[count])) {
+        count++;
     }
-    return (int) n;
+    return (int) count;
 }
 
+/**
+ * @brief 注册接收回调
+ * @param cb 回调（中断上下文执行）
+ * @return 0 = 成功
+ */
 static int hpm_usb_cdc_register_rx_callback(intf_usb_cdc_rx_cb_t cb)
 {
     s_rx_cb = cb;
     return 0;
 }
 
+/**
+ * @brief 查询 DTR 状态（上位机是否打开串口）
+ * @return true = DTR 置位
+ */
 static bool hpm_usb_cdc_is_dtr(void)
 {
     return s_dtr;
 }
 
+/**
+ * @brief 反初始化 USB CDC 设备栈
+ */
 static void hpm_usb_cdc_deinit(void)
 {
     if (!s_initialized) {
@@ -364,7 +447,7 @@ static void hpm_usb_cdc_deinit(void)
  * 单实例设备对象（风格 A）
  * ============================================================================ */
 
-static const intf_usb_cdc_t usb_cdc_dev = {
+static const intf_usb_cdc_t s_usb_cdc_dev = {
     .instance_id = 0U,
     .init = hpm_usb_cdc_init,
     .write = hpm_usb_cdc_write,
@@ -376,5 +459,5 @@ static const intf_usb_cdc_t usb_cdc_dev = {
 
 void hpm_usb_cdc_driver_register(void)
 {
-    intf_usb_cdc_register(&usb_cdc_dev);
+    intf_usb_cdc_register(&s_usb_cdc_dev);
 }

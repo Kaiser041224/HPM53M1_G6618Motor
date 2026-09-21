@@ -1,8 +1,7 @@
-/*
- * Debug Motor - 电机开环旋转自检（V/F）
- *
- * Copyright (c) 2026 HPMicro
- * SPDX-License-Identifier: BSD-3-Clause
+/**
+ * @file    app_debug_motor.c
+ * @brief   电机开环旋转自检（V/F）
+ * @author  Kaiser
  *
  * 目的：在不依赖电流采样/闭环的前提下，验证"逆变桥 + 电机 + 编码器"完整链路。
  *
@@ -19,6 +18,9 @@
  *   - 启动前需逆变桥使能（本模块自动调用，含 +12V 顺序）
  *   - 停止/急停即关输出 + 关 12V；命令 '0' 亦会停止旋转
  *   - 建议限流电源 + 低压起步（m 从小到大）
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "app_debug_motor.h"
@@ -26,50 +28,53 @@
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
 #include "app_debug_rtt.h"
-#include "app_hw_params.h"
+#include "app_hardware_params.h"
 #include "intf_clock.h"
 
 #include <math.h>
 #include <stdbool.h>
 
-#define MOTOR_TWO_PI       (6.283185307179586f)
-#define MOTOR_PHASE_120    (2.0943951023931953f) /* 2π/3 */
+#define MOTOR_TWO_PI    (6.283185307179586f)
+#define MOTOR_PHASE_120 (2.0943951023931953f) /* 2π/3 */
 
 #define MOTOR_TEST_FREQ_DEFAULT (1.0f)
 #define MOTOR_TEST_FREQ_MIN     (0.5f)
 #define MOTOR_TEST_FREQ_MAX     (10.0f)
 #define MOTOR_TEST_FREQ_STEP    (0.5f)
 
-#define MOTOR_TEST_MOD_DEFAULT  (0.03f) /* 3%：24V 母线时相电流约 2.3A */
-#define MOTOR_TEST_MOD_MIN      (0.01f)
-#define MOTOR_TEST_MOD_MAX      (0.10f)
-#define MOTOR_TEST_MOD_STEP     (0.01f)
+#define MOTOR_TEST_MOD_DEFAULT (0.03f)        /* 3%：24V 母线时相电流约 2.3A */
+#define MOTOR_TEST_MOD_MIN     (0.01f)
+#define MOTOR_TEST_MOD_MAX     (0.10f)
+#define MOTOR_TEST_MOD_STEP    (0.01f)
 
-static bool     s_running;
-static float    s_freq_hz;
-static float    s_mod;
-static float    s_theta;
+static bool s_running;
+static float s_freq_hz;
+static float s_mod;
+static float s_theta;
 static uint32_t s_last_cycle;
 
-static void motor_print_state(void)
-{
-    app_debug_printf("[MOTOR] rotation=%s f=%.2f Hz mod=%.1f%% (Vamp=%.2f V @24V)\r\n",
-                     s_running ? "ON" : "OFF", (double) s_freq_hz, (double) (s_mod * 100.0f),
-                     (double) (s_mod * 24.0f * 0.5f));
+/**
+ * @brief 打印当前旋转状态（启停 / 电频率 / 调制比）
+ */
+static void motor_print_state(void) {
+    app_debug_printf(
+        "[MOTOR] rotation=%s f=%.2f Hz mod=%.1f%% (Vamp=%.2f V @24V)\r\n", s_running ? "ON" : "OFF",
+        (double)s_freq_hz, (double)(s_mod * 100.0f), (double)(s_mod * 24.0f * 0.5f));
 }
 
-/* 按当前角度输出三相占空比（θ 弧度） */
-static void motor_apply(float theta)
-{
+/**
+ * @brief 按给定旋转矢量角输出三相占空比（SPWM）
+ * @param theta 旋转矢量角 [rad]
+ */
+static void motor_apply(float theta) {
     float half_mod = s_mod * 0.5f;
 
-    (void) app_3phase_inverter_set_duty_abc(0.5f + half_mod * sinf(theta),
-                                            0.5f + half_mod * sinf(theta - MOTOR_PHASE_120),
-                                            0.5f + half_mod * sinf(theta + MOTOR_PHASE_120));
+    (void)app_3phase_inverter_set_duty_abc(
+        0.5f + half_mod * sinf(theta), 0.5f + half_mod * sinf(theta - MOTOR_PHASE_120),
+        0.5f + half_mod * sinf(theta + MOTOR_PHASE_120));
 }
 
-void app_debug_motor_init(void)
-{
+void app_debug_motor_init(void) {
     s_running = false;
     s_freq_hz = MOTOR_TEST_FREQ_DEFAULT;
     s_mod = MOTOR_TEST_MOD_DEFAULT;
@@ -80,8 +85,7 @@ void app_debug_motor_init(void)
     motor_print_state();
 }
 
-void app_debug_motor_run_once(void)
-{
+void app_debug_motor_run_once(void) {
     uint32_t now;
     uint32_t dt_cycles;
     float dt_s;
@@ -94,7 +98,7 @@ void app_debug_motor_run_once(void)
     dt_cycles = now - s_last_cycle;
     s_last_cycle = now;
 
-    dt_s = (float) dt_cycles / (float) intf_clock_get_cpu_freq();
+    dt_s = (float)dt_cycles / (float)intf_clock_get_cpu_freq();
     s_theta += MOTOR_TWO_PI * s_freq_hz * dt_s;
     if (s_theta >= MOTOR_TWO_PI) {
         s_theta -= MOTOR_TWO_PI;
@@ -103,8 +107,7 @@ void app_debug_motor_run_once(void)
     motor_apply(s_theta);
 }
 
-void app_debug_motor_rotation_toggle(void)
-{
+void app_debug_motor_rotation_toggle(void) {
     if (s_running) {
         app_debug_motor_stop();
         app_debug_printf("[MOTOR] rotation STOP\r\n");
@@ -114,13 +117,13 @@ void app_debug_motor_rotation_toggle(void)
     /* 防御：占空比开始每周期更新前，重新武装 ADC 触发比较器（on_modify 单次写生效），
      * 避免 PWM 影子寄存器交互导致触发点被扰动（曾观测到 228kHz 触发突发）。 */
     {
-        app_hw_params_t hw;
+        app_hardware_params_t hardware;
 
-        app_hw_params_load(&hw); /* config/hardware.yaml */
-        (void) app_adc_set_trigger_delay_ns(hw.adc.trigger_delay_ns);
+        app_hardware_params_load(&hardware); /* config/hardware.yaml */
+        (void)app_adc_set_trigger_delay_ns(hardware.adc.trigger_delay_ns);
     }
 
-    (void) app_3phase_inverter_enable();
+    (void)app_3phase_inverter_enable();
     s_theta = 0.0f;
     s_last_cycle = intf_clock_get_cycle();
     s_running = true;
@@ -129,8 +132,7 @@ void app_debug_motor_rotation_toggle(void)
     motor_print_state();
 }
 
-void app_debug_motor_freq_step(int8_t dir)
-{
+void app_debug_motor_freq_step(int8_t dir) {
     if (dir > 0) {
         s_freq_hz += MOTOR_TEST_FREQ_STEP;
     } else {
@@ -147,8 +149,7 @@ void app_debug_motor_freq_step(int8_t dir)
     motor_print_state();
 }
 
-void app_debug_motor_mod_step(int8_t dir)
-{
+void app_debug_motor_mod_step(int8_t dir) {
     if (dir > 0) {
         s_mod += MOTOR_TEST_MOD_STEP;
     } else {
@@ -165,12 +166,11 @@ void app_debug_motor_mod_step(int8_t dir)
     motor_print_state();
 }
 
-void app_debug_motor_stop(void)
-{
+void app_debug_motor_stop(void) {
     s_running = false;
 
     /* 先归零电压矢量（0.5/0.5/0.5）再关断，避免残留静态矢量在再次使能时
        产生直流电流 */
-    (void) app_3phase_inverter_set_duty_abc(0.5f, 0.5f, 0.5f);
+    (void)app_3phase_inverter_set_duty_abc(0.5f, 0.5f, 0.5f);
     app_3phase_inverter_disable();
 }

@@ -1,13 +1,13 @@
-/*
- * IRQ Profiler - Low-intrusion ISR timing analysis
+/**
+ * @file    irq_profiler.h
+ * @brief   IRQ Profiler 中断耗时分析（低侵入 ISR timing）
+ * @author  Kaiser
  *
  * Designed for 200kHz/400kHz PWM/ADC fast-loop control on HPM RISC-V MCU.
  * ISR overhead: ~10 cycles (2 reads + 2 writes + 1 branch).
  *
- * Copyright (c) 2026 Alliance HardWare Team
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
- *
- * Author: Kaiser
  */
 
 #ifndef IRQ_PROFILER_H
@@ -48,42 +48,69 @@ extern "C" {
  * Types - keep minimal for fast ISR writes
  * ============================================================================ */
 
+/**
+ * @brief 测量槽位 ID（0..IRQ_PROF_MAX_SLOTS-1；UINT8_MAX = 注册失败）
+ */
 typedef uint8_t  irq_prof_id_t;
+
+/**
+ * @brief 周期计数类型（CPU cycle）
+ */
 typedef uint32_t irq_prof_cycle_t;
 
 /* Raw stat stored in ISR context - no float, no conversion */
+
+/**
+ * @brief ISR 上下文原始统计（无浮点、无换算）
+ */
 typedef struct {
-    irq_prof_cycle_t last;
-    irq_prof_cycle_t min;
-    irq_prof_cycle_t max;
-    uint64_t         total;
-    uint32_t         hits;
-    uint32_t         outliers;
+    irq_prof_cycle_t last;     /**< 最近一次耗时 [cycle] */
+    irq_prof_cycle_t min;      /**< 最小耗时 [cycle] */
+    irq_prof_cycle_t max;      /**< 最大耗时 [cycle] */
+    uint64_t         total;    /**< 有效样本累计 [cycle] */
+    uint32_t         hits;     /**< 命中次数 */
+    uint32_t         outliers; /**< 离群次数（> IRQ_PROF_OUTLIER_CYCLES） */
 } irq_prof_raw_t;
 
 /* Converted result for dump context only */
+
+/**
+ * @brief 主上下文换算结果（单位 ns）
+ */
 typedef struct {
-    uint32_t last_ns;
-    uint32_t min_ns;
-    uint32_t max_ns;
-    uint32_t avg_ns;
-    uint32_t hits;
-    uint32_t outliers;
-    uint32_t overhead_ns;
+    uint32_t last_ns;     /**< 最近耗时 [ns] */
+    uint32_t min_ns;      /**< 最小耗时 [ns] */
+    uint32_t max_ns;      /**< 最大耗时 [ns] */
+    uint32_t avg_ns;      /**< 平均耗时 [ns] */
+    uint32_t hits;        /**< 命中次数 */
+    uint32_t outliers;    /**< 离群次数 */
+    uint32_t overhead_ns; /**< 测量开销 [ns] */
 } irq_prof_result_t;
 
 /* ============================================================================
  * Hardware abstraction - weak hooks for GPIO observation
  * ============================================================================ */
 
-/* User implements these in board layer for oscilloscope verification */
+/**
+ * @brief GPIO 置高钩子（示波器观测，板级实现，弱符号）
+ * @param slot_id 槽位 ID
+ */
 void irq_prof_gpio_set(uint8_t slot_id)   __attribute__((weak));
+
+/**
+ * @brief GPIO 拉低钩子（示波器观测，板级实现，弱符号）
+ * @param slot_id 槽位 ID
+ */
 void irq_prof_gpio_clear(uint8_t slot_id) __attribute__((weak));
 
 /* ============================================================================
  * Core API - must be inline for minimal ISR overhead
  * ============================================================================ */
 
+/**
+ * @brief 读取当前 CPU cycle 计数（mcycle CSR）
+ * @return 当前 mcycle 值
+ */
 static inline irq_prof_cycle_t irq_prof_read_cycle(void)
 {
     irq_prof_cycle_t val;
@@ -91,10 +118,17 @@ static inline irq_prof_cycle_t irq_prof_read_cycle(void)
     return val;
 }
 
-/* Registration - call from main context */
+/**
+ * @brief 注册测量槽位
+ * @param label 槽位标签（NULL 存为 "???"）
+ * @return 槽位 ID；UINT8_MAX = 槽位耗尽
+ */
 irq_prof_id_t irq_prof_register(const char *label);
 
-/* ISR context - minimal operations */
+/**
+ * @brief ISR 进入：记录起始 cycle
+ * @param id 槽位 ID
+ */
 static inline void irq_prof_enter(irq_prof_id_t id)
 {
     extern volatile irq_prof_cycle_t g_irq_prof_stamp[IRQ_PROF_MAX_SLOTS];
@@ -103,6 +137,10 @@ static inline void irq_prof_enter(irq_prof_id_t id)
     }
 }
 
+/**
+ * @brief ISR 退出：累加耗时统计（离群样本单列）
+ * @param id 槽位 ID
+ */
 static inline void irq_prof_exit(irq_prof_id_t id)
 {
     extern volatile irq_prof_raw_t   g_irq_prof_raw[IRQ_PROF_MAX_SLOTS];
@@ -132,7 +170,10 @@ static inline void irq_prof_exit(irq_prof_id_t id)
     }
 }
 
-/* GPIO hooks for oscilloscope - inline no-op if disabled */
+/**
+ * @brief GPIO 置高（示波器观测；未启用时为空操作）
+ * @param id 槽位 ID
+ */
 static inline void irq_prof_gpio_high(irq_prof_id_t id)
 {
 #if IRQ_PROF_GPIO_ENABLED
@@ -145,6 +186,10 @@ static inline void irq_prof_gpio_high(irq_prof_id_t id)
 #endif
 }
 
+/**
+ * @brief GPIO 拉低（示波器观测；未启用时为空操作）
+ * @param id 槽位 ID
+ */
 static inline void irq_prof_gpio_low(irq_prof_id_t id)
 {
 #if IRQ_PROF_GPIO_ENABLED
@@ -157,19 +202,51 @@ static inline void irq_prof_gpio_low(irq_prof_id_t id)
 #endif
 }
 
-/* Main context - snapshot + conversion */
+/**
+ * @brief 读取槽位测量结果快照并换算为 ns
+ * @param id 槽位 ID
+ * @param result 输出结果（不可为 NULL）
+ * @return 0 = 成功；-1 = 槽位越界或 result 为 NULL
+ */
 int  irq_prof_get_result(irq_prof_id_t id, irq_prof_result_t *result);
+
+/**
+ * @brief 获取已注册槽位数量
+ * @return 槽位数量
+ */
 uint8_t irq_prof_get_slot_count(void);
+
+/**
+ * @brief 获取槽位标签
+ * @param id 槽位 ID
+ * @return 标签字符串（未注册返回 "???"）
+ */
 const char *irq_prof_get_label(irq_prof_id_t id);
+
+/**
+ * @brief 获取测量开销（cycle）
+ * @return 测量开销 [cycle]
+ */
 irq_prof_cycle_t irq_prof_get_overhead_cycles(void);
 
-/* Measurement overhead calibration */
+/**
+ * @brief 标定测量开销（取 100 次连续读取的最小差值）
+ * @return 测量开销 [cycle]
+ */
 irq_prof_cycle_t irq_prof_measure_overhead(void);
 
 /* [TEMP DIAG] 嵌套感知的中断总占用测量。每个 ISR 最外层入口调 enter、出口调 exit，
  * 内层嵌套自动不重复计。g_irq_busy_cycles = CPU 处于中断态的真实墙钟 cycle。 */
 extern volatile uint64_t g_irq_busy_cycles;
+
+/**
+ * @brief 嵌套感知中断占用：最外层 ISR 进入
+ */
 void irq_prof_nest_enter(void);
+
+/**
+ * @brief 嵌套感知中断占用：最外层 ISR 退出
+ */
 void irq_prof_nest_exit(void);
 
 /* ============================================================================

@@ -96,8 +96,8 @@ DOC_ONLY = {
 }
 
 C_TYPE_RANGE = {"u8": (0, 255), "u16": (0, 65535), "u32": (0, 4294967295)}
-STRUCT_NAMES = {"motor": "app_motor_params_t", "hardware": "app_hw_params_t", "software": "app_sw_params_t"}
-CONST_NAMES = {"motor": "g_motor_params_factory", "hardware": "g_hw_params_factory", "software": "g_sw_params_factory"}
+STRUCT_NAMES = {"motor": "app_motor_params_t", "hardware": "app_hardware_params_t", "software": "app_software_params_t"}
+CONST_NAMES = {"motor": "g_motor_params_factory", "hardware": "g_hardware_params_factory", "software": "g_software_params_factory"}
 
 ALLOWED_FUNCS = {"sqrt": math.sqrt, "sin": math.sin, "cos": math.cos,
                  "atan2": math.atan2, "min": min, "max": max, "abs": abs}
@@ -454,12 +454,12 @@ def gen_header() -> str:
 #define PARAMS_GENERATED_H
 
 #include "app_motor_params.h"
-#include "app_hw_params.h"
-#include "app_sw_params.h"
+#include "app_hardware_params.h"
+#include "app_software_params.h"
 
 extern const app_motor_params_t g_motor_params_factory;
-extern const app_hw_params_t    g_hw_params_factory;
-extern const app_sw_params_t    g_sw_params_factory;
+extern const app_hardware_params_t    g_hardware_params_factory;
+extern const app_software_params_t    g_software_params_factory;
 
 #endif /* PARAMS_GENERATED_H */
 """

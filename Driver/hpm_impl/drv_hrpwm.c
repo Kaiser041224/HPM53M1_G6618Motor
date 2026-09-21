@@ -1,7 +1,9 @@
-/*
- * HRPWM Driver - HPM PWM hardware implementation
+/**
+ * @file    drv_hrpwm.c
+ * @brief   HRPWM 驱动 - HPM PWM 硬件实现（移相/死区/故障保护/触发比较）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -66,61 +68,79 @@ static_assert(
     (HRPWM_CMP_START_INDEX(PWM_SOC_PWM_MAX_COUNT - 1U) + 1U) < PWM_SOC_CMP_MAX_COUNT,
     "HRPWM compare mapping exceeds PWM compare resource count");
 
+/**
+ * @brief HRPWM 逻辑通道到物理通道的映射
+ */
 typedef struct {
-    intf_hrpwm_ch_t channel;
-    uint8_t instance;
-    uint8_t pair;      /* 实例内配对序号 */
-    uint8_t pwm_index; /* 物理通道起始索引（偶数） */
-    uint8_t cmp_start_index;
+    intf_hrpwm_ch_t channel; /**< 逻辑通道号 */
+    uint8_t instance;        /**< 实例号 */
+    uint8_t pair;            /**< 实例内配对序号 */
+    uint8_t pwm_index;       /**< 物理通道起始索引（偶数） */
+    uint8_t cmp_start_index; /**< CMP 起始索引 */
 } hrpwm_channel_map_t;
 
+/**
+ * @brief HRPWM 通道状态
+ */
 typedef struct {
-    bool configured;
-    bool started;
-    float duty;
-    uint32_t reload;
-    uint8_t ex_reload;
-    uint8_t jitter_cmp;
-    intf_hrpwm_align_t align;
-    bool invert_high_side;
-    bool invert_low_side;
+    bool configured;          /**< 是否已配置 */
+    bool started;             /**< 是否已启动输出 */
+    float duty;               /**< 占空比 [0.0-1.0] */
+    uint32_t reload;          /**< 重载值 */
+    uint8_t ex_reload;        /**< 扩展重载值 */
+    uint8_t jitter_cmp;       /**< 抖动比较值 */
+    intf_hrpwm_align_t align; /**< 对齐方式 */
+    bool invert_high_side;    /**< 高边反相 */
+    bool invert_low_side;     /**< 低边反相 */
 } hrpwm_channel_state_t;
 
+/**
+ * @brief HRPWM 移相状态
+ */
 typedef struct {
-    bool active;
-    uint8_t ref_pair;
-    uint8_t target_pair;
-    float phase_deg;
-    uint32_t phase_count;
+    bool active;          /**< 是否启用移相 */
+    uint8_t ref_pair;     /**< 参考配对 */
+    uint8_t target_pair;  /**< 目标配对 */
+    float phase_deg;      /**< 移相角 [deg] */
+    uint32_t phase_count; /**< 移相计数值 */
 } hrpwm_phase_state_t;
 
+/**
+ * @brief HRPWM 移相限值
+ */
 typedef struct {
-    float max_phase_deg;
-    float max_duty_ref;
-    float max_duty_target;
+    float max_phase_deg;   /**< 最大移相角 [deg] */
+    float max_duty_ref;    /**< 参考配对最大占空比 */
+    float max_duty_target; /**< 目标配对最大占空比 */
 } hrpwm_phase_limit_t;
 
+/**
+ * @brief HRPWM 实例状态
+ */
 typedef struct {
-    PWM_Type* base;
-    clock_name_t clock_name;
-    uint32_t frequency_hz;
-    uint32_t reload;
-    uint8_t ex_reload;
-    bool fault_configured;
-    uint8_t force_mask;
-    hrpwm_channel_state_t channels[HRPWM_OUTPUTS_PER_INST];
-    hrpwm_phase_state_t phase;
-    hrpwm_phase_limit_t phase_limit;
+    PWM_Type* base;                                         /**< PWM 寄存器基地址 */
+    clock_name_t clock_name;                                /**< 外设时钟 */
+    uint32_t frequency_hz;                                  /**< 频率 [Hz] */
+    uint32_t reload;                                        /**< 重载值 */
+    uint8_t ex_reload;                                      /**< 扩展重载值 */
+    bool fault_configured;                                  /**< 是否已配置故障保护 */
+    uint8_t force_mask;                                     /**< 强制输出通道掩码 */
+    hrpwm_channel_state_t channels[HRPWM_OUTPUTS_PER_INST]; /**< 各通道状态 */
+    hrpwm_phase_state_t phase;                              /**< 移相状态 */
+    hrpwm_phase_limit_t phase_limit;                        /**< 移相限值 */
 } hrpwm_instance_state_t;
 
-ATTR_PLACE_AT_FAST_RAM_BSS static hrpwm_instance_state_t hrpwm_instances[HRPWM_INSTANCE_COUNT];
+ATTR_PLACE_AT_FAST_RAM_BSS static hrpwm_instance_state_t s_hrpwm_instances[HRPWM_INSTANCE_COUNT];
 
+/**
+ * @brief HRPWM 比较值对
+ */
 typedef struct {
-    uint32_t cmp_begin;
-    uint32_t cmp_end;
+    uint32_t cmp_begin; /**< 起始比较值 */
+    uint32_t cmp_end;   /**< 结束比较值 */
 } hrpwm_cmp_pair_t;
 
-ATTR_PLACE_AT_FAST_RAM_INIT static const hrpwm_channel_map_t hrpwm_channel_maps[] = {
+ATTR_PLACE_AT_FAST_RAM_INIT static const hrpwm_channel_map_t s_hrpwm_channel_maps[] = {
     {
      .channel = BOARD_APP_HRPWM_PWM0_PAIR0_OUT,
      .instance = 0,
@@ -159,73 +179,119 @@ ATTR_PLACE_AT_FAST_RAM_INIT static const hrpwm_channel_map_t hrpwm_channel_maps[
      },
 };
 
+/**
+ * @brief 取实例完整重载值（24bit + 4bit 扩展）
+ * @param inst 实例号
+ * @return 完整重载值
+ */
 ATTR_RAMFUNC
 static inline uint32_t hrpwm_get_full_reload(uint8_t inst) {
 #if HRPWM_USE_EXTENDED_COUNTER
-    return ((uint32_t)hrpwm_instances[inst].ex_reload << 24U) | hrpwm_instances[inst].reload;
+    return ((uint32_t)s_hrpwm_instances[inst].ex_reload << 24U) | s_hrpwm_instances[inst].reload;
 #else
-    return hrpwm_instances[inst].reload;
+    return s_hrpwm_instances[inst].reload;
 #endif
 }
 
 static int hrpwm_apply_duty(const hrpwm_channel_map_t* map);
 
+/**
+ * @brief 初始化实例静态信息（基地址/时钟/移相限值，幂等）
+ */
 static void hrpwm_init_instances(void) {
-    hrpwm_instances[0].base = BOARD_APP_HRPWM0;
-    hrpwm_instances[0].clock_name = BOARD_APP_HRPWM_CLOCK_NAME;
-    hrpwm_instances[0].ex_reload = 0U;
-    hrpwm_instances[0].phase_limit.max_phase_deg = 180.0f;
-    hrpwm_instances[0].phase_limit.max_duty_ref = 1.0f;
-    hrpwm_instances[0].phase_limit.max_duty_target = 1.0f;
+    s_hrpwm_instances[0].base = BOARD_APP_HRPWM0;
+    s_hrpwm_instances[0].clock_name = BOARD_APP_HRPWM_CLOCK_NAME;
+    s_hrpwm_instances[0].ex_reload = 0U;
+    s_hrpwm_instances[0].phase_limit.max_phase_deg = 180.0f;
+    s_hrpwm_instances[0].phase_limit.max_duty_ref = 1.0f;
+    s_hrpwm_instances[0].phase_limit.max_duty_target = 1.0f;
 
-    hrpwm_instances[1].base = BOARD_APP_HRPWM1;
-    hrpwm_instances[1].clock_name = BOARD_APP_HRPWM_CLOCK_NAME;
-    hrpwm_instances[1].ex_reload = 0U;
-    hrpwm_instances[1].phase_limit.max_phase_deg = 180.0f;
-    hrpwm_instances[1].phase_limit.max_duty_ref = 1.0f;
-    hrpwm_instances[1].phase_limit.max_duty_target = 1.0f;
+    s_hrpwm_instances[1].base = BOARD_APP_HRPWM1;
+    s_hrpwm_instances[1].clock_name = BOARD_APP_HRPWM_CLOCK_NAME;
+    s_hrpwm_instances[1].ex_reload = 0U;
+    s_hrpwm_instances[1].phase_limit.max_phase_deg = 180.0f;
+    s_hrpwm_instances[1].phase_limit.max_duty_ref = 1.0f;
+    s_hrpwm_instances[1].phase_limit.max_duty_target = 1.0f;
 }
 
+/**
+ * @brief 获取实例 PWM 基地址
+ * @param inst 实例号
+ * @return PWM 基地址；越界返回 NULL
+ */
 ATTR_RAMFUNC
 static inline PWM_Type* hrpwm_get_base(uint8_t inst) {
-    return (inst < HRPWM_INSTANCE_COUNT) ? hrpwm_instances[inst].base : NULL;
+    return (inst < HRPWM_INSTANCE_COUNT) ? s_hrpwm_instances[inst].base : NULL;
 }
 
+/**
+ * @brief 按实例与配对序号查找通道映射
+ * @param inst 实例号
+ * @param pair 配对序号
+ * @return 通道映射；未找到返回 NULL
+ */
 static const hrpwm_channel_map_t* hrpwm_get_pair_map(uint8_t inst, uint8_t pair) {
-    for (size_t i = 0; i < sizeof(hrpwm_channel_maps) / sizeof(hrpwm_channel_maps[0]); i++) {
-        if ((hrpwm_channel_maps[i].instance == inst) && (hrpwm_channel_maps[i].pair == pair)) {
-            return &hrpwm_channel_maps[i];
+    for (size_t i = 0; i < sizeof(s_hrpwm_channel_maps) / sizeof(s_hrpwm_channel_maps[0]); i++) {
+        if ((s_hrpwm_channel_maps[i].instance == inst) && (s_hrpwm_channel_maps[i].pair == pair)) {
+            return &s_hrpwm_channel_maps[i];
         }
     }
     return NULL;
 }
 
+/**
+ * @brief 按逻辑通道号查找通道映射（同 pair 两通道映射到同一条目）
+ * @param ch 逻辑通道号
+ * @return 通道映射；未找到返回 NULL
+ */
 ATTR_RAMFUNC
 static const hrpwm_channel_map_t* hrpwm_get_channel_map(intf_hrpwm_ch_t ch) {
     intf_hrpwm_ch_t pair_channel = (intf_hrpwm_ch_t)(ch & (uint8_t)~1U);
 
-    for (size_t i = 0; i < sizeof(hrpwm_channel_maps) / sizeof(hrpwm_channel_maps[0]); i++) {
-        if (hrpwm_channel_maps[i].channel == pair_channel) {
-            return &hrpwm_channel_maps[i];
+    for (size_t i = 0; i < sizeof(s_hrpwm_channel_maps) / sizeof(s_hrpwm_channel_maps[0]); i++) {
+        if (s_hrpwm_channel_maps[i].channel == pair_channel) {
+            return &s_hrpwm_channel_maps[i];
         }
     }
     return NULL;
 }
 
+/**
+ * @brief 校验占空比是否合法
+ * @param duty 占空比
+ * @return true = 合法（非 NaN 且 [0,1]）
+ */
 ATTR_RAMFUNC
 static bool hrpwm_is_valid_duty(float duty) {
     return (duty == duty) && (duty >= 0.0f) && (duty <= 1.0f);
 }
 
+/**
+ * @brief 校验对齐方式是否合法
+ * @param align 对齐方式
+ * @return true = 合法
+ */
 static bool hrpwm_is_valid_align(intf_hrpwm_align_t align) {
     return (align == INTF_HRPWM_ALIGN_EDGE) || (align == INTF_HRPWM_ALIGN_CENTER);
 }
 
+/**
+ * @brief 占空比转换为比较计数值
+ * @param reload 重载值
+ * @param duty 占空比
+ * @return 比较计数值
+ */
 ATTR_RAMFUNC
 static uint32_t hrpwm_duty_to_cmp_count(uint32_t reload, float duty) {
     return (uint32_t)((float)reload * duty);
 }
 
+/**
+ * @brief 计算中心对齐比较值对
+ * @param reload 重载值
+ * @param duty 占空比
+ * @return 比较值对（cmp_begin/cmp_end）
+ */
 ATTR_RAMFUNC
 static hrpwm_cmp_pair_t hrpwm_calc_center_aligned_cmp(uint32_t reload, float duty) {
     hrpwm_cmp_pair_t cmp;
@@ -274,6 +340,12 @@ static hrpwm_cmp_pair_t hrpwm_calc_center_aligned_cmp(uint32_t reload, float dut
     return cmp;
 }
 
+/**
+ * @brief 计算边沿对齐比较值对
+ * @param reload 重载值
+ * @param duty 占空比
+ * @return 比较值对（cmp_begin/cmp_end）
+ */
 ATTR_RAMFUNC
 static hrpwm_cmp_pair_t hrpwm_calc_edge_aligned_cmp(uint32_t reload, float duty) {
     hrpwm_cmp_pair_t cmp;
@@ -307,6 +379,13 @@ static hrpwm_cmp_pair_t hrpwm_calc_edge_aligned_cmp(uint32_t reload, float duty)
     return cmp;
 }
 
+/**
+ * @brief 按对齐方式计算比较值对
+ * @param reload 重载值
+ * @param duty 占空比
+ * @param align 对齐方式
+ * @return 比较值对
+ */
 ATTR_RAMFUNC
 static hrpwm_cmp_pair_t hrpwm_calc_cmp_pair(uint32_t reload, float duty, intf_hrpwm_align_t align) {
     if (align == INTF_HRPWM_ALIGN_CENTER) {
@@ -316,6 +395,12 @@ static hrpwm_cmp_pair_t hrpwm_calc_cmp_pair(uint32_t reload, float duty, intf_hr
     return hrpwm_calc_edge_aligned_cmp(reload, duty);
 }
 
+/**
+ * @brief 写入一对 CMP 值（含扩展位），并解锁影子寄存器
+ * @param base PWM 基地址
+ * @param cmp_start_index CMP 起始索引
+ * @param cmp 比较值对
+ */
 ATTR_RAMFUNC
 static void
     hrpwm_write_cmp_pair(PWM_Type* base, uint8_t cmp_start_index, const hrpwm_cmp_pair_t* cmp) {
@@ -335,6 +420,12 @@ static void
 #endif
 }
 
+/**
+ * @brief 设置配对高/低边输出反相（含移相窗口反相）
+ * @param base PWM 基地址
+ * @param map 通道映射
+ * @param invert_window 是否反相移相窗口
+ */
 ATTR_RAMFUNC
 static void hrpwm_set_pair_output_invert(
     PWM_Type* base, const hrpwm_channel_map_t* map, bool invert_window) {
@@ -345,7 +436,7 @@ static void hrpwm_set_pair_output_invert(
         return;
     }
 
-    channel = &hrpwm_instances[map->instance].channels[map->pwm_index];
+    channel = &s_hrpwm_instances[map->instance].channels[map->pwm_index];
 
     ch_cfg.cmp_start_index = map->cmp_start_index;
     ch_cfg.cmp_end_index = map->cmp_start_index + 1U;
@@ -357,6 +448,12 @@ static void hrpwm_set_pair_output_invert(
     pwm_config_output_channel(base, map->pwm_index + 1U, &ch_cfg);
 }
 
+/**
+ * @brief 判断给定物理通道是否为移相目标
+ * @param inst 实例号
+ * @param pwm_index 物理通道索引
+ * @return true = 是当前移相目标
+ */
 static bool hrpwm_phase_targets_channel(uint8_t inst, uint8_t pwm_index) {
     hrpwm_phase_state_t* phase;
 
@@ -364,7 +461,7 @@ static bool hrpwm_phase_targets_channel(uint8_t inst, uint8_t pwm_index) {
         return false;
     }
 
-    phase = &hrpwm_instances[inst].phase;
+    phase = &s_hrpwm_instances[inst].phase;
     if (!phase->active) {
         return false;
     }
@@ -376,6 +473,11 @@ static bool hrpwm_phase_targets_channel(uint8_t inst, uint8_t pwm_index) {
     return pwm_index == (uint8_t)(inst * 4U + 2U);
 }
 
+/**
+ * @brief 判断实例是否有配对已启动（移相运行时判定）
+ * @param inst 实例号
+ * @return true = 有配对在运行
+ */
 static bool hrpwm_phase_is_running(uint8_t inst) {
     const hrpwm_channel_map_t* ref_map;
     const hrpwm_channel_map_t* target_map;
@@ -385,7 +487,7 @@ static bool hrpwm_phase_is_running(uint8_t inst) {
         return false;
     }
 
-    phase = &hrpwm_instances[inst].phase;
+    phase = &s_hrpwm_instances[inst].phase;
     if (!phase->active) {
         return false;
     }
@@ -396,10 +498,16 @@ static bool hrpwm_phase_is_running(uint8_t inst) {
         return false;
     }
 
-    return hrpwm_instances[inst].channels[ref_map->pwm_index].started
-        || hrpwm_instances[inst].channels[target_map->pwm_index].started;
+    return s_hrpwm_instances[inst].channels[ref_map->pwm_index].started
+        || s_hrpwm_instances[inst].channels[target_map->pwm_index].started;
 }
 
+/**
+ * @brief 判断给定物理通道是否为移相参考
+ * @param inst 实例号
+ * @param pwm_index 物理通道索引
+ * @return true = 是当前移相参考
+ */
 static bool hrpwm_phase_refs_channel(uint8_t inst, uint8_t pwm_index) {
     hrpwm_phase_state_t* phase;
 
@@ -407,7 +515,7 @@ static bool hrpwm_phase_refs_channel(uint8_t inst, uint8_t pwm_index) {
         return false;
     }
 
-    phase = &hrpwm_instances[inst].phase;
+    phase = &s_hrpwm_instances[inst].phase;
     if (!phase->active) {
         return false;
     }
@@ -419,6 +527,12 @@ static bool hrpwm_phase_refs_channel(uint8_t inst, uint8_t pwm_index) {
     return pwm_index == (uint8_t)(inst * 4U + 2U);
 }
 
+/**
+ * @brief 恢复指定配对的常规波形（取消反相并重算占空比）
+ * @param inst 实例号
+ * @param pair 配对序号
+ * @return 0 = 成功；-1 = 映射或基地址无效
+ */
 static int hrpwm_restore_pair_waveform(uint8_t inst, uint8_t pair) {
     PWM_Type* base;
     const hrpwm_channel_map_t* map;
@@ -437,6 +551,11 @@ static int hrpwm_restore_pair_waveform(uint8_t inst, uint8_t pair) {
     return hrpwm_apply_duty(map);
 }
 
+/**
+ * @brief 按当前移相状态更新目标配对波形
+ * @param inst 实例号
+ * @return 0 = 成功；-1 = 状态/参数无效
+ */
 static int hrpwm_apply_phase(uint8_t inst) {
     hrpwm_instance_state_t* inst_state;
     const hrpwm_channel_map_t* ref_map;
@@ -456,7 +575,7 @@ static int hrpwm_apply_phase(uint8_t inst) {
         return -1;
     }
 
-    inst_state = &hrpwm_instances[inst];
+    inst_state = &s_hrpwm_instances[inst];
     if (!inst_state->phase.active) {
         return 0;
     }
@@ -511,6 +630,11 @@ static int hrpwm_apply_phase(uint8_t inst) {
     return 0;
 }
 
+/**
+ * @brief 按通道状态重算并写入比较值
+ * @param map 通道映射
+ * @return 0 = 成功；-1 = 映射或基地址无效
+ */
 ATTR_RAMFUNC
 static int hrpwm_apply_duty(const hrpwm_channel_map_t* map) {
     PWM_Type* base;
@@ -527,7 +651,7 @@ static int hrpwm_apply_duty(const hrpwm_channel_map_t* map) {
         return -1;
     }
 
-    channel = &hrpwm_instances[map->instance].channels[map->pwm_index];
+    channel = &s_hrpwm_instances[map->instance].channels[map->pwm_index];
 
     full_reload = hrpwm_get_full_reload(map->instance);
 
@@ -538,6 +662,12 @@ static int hrpwm_apply_duty(const hrpwm_channel_map_t* map) {
     return 0;
 }
 
+/**
+ * @brief 设置实例频率（重载值）并刷新已配置通道波形
+ * @param inst 实例号
+ * @param frequency_hz 频率 [Hz]
+ * @return 0 = 成功；-1 = 参数非法或频率超范围
+ */
 static int hrpwm_apply_frequency(uint8_t inst, uint32_t frequency_hz) {
     uint32_t clock_hz;
     uint32_t reload;
@@ -548,7 +678,7 @@ static int hrpwm_apply_frequency(uint8_t inst, uint32_t frequency_hz) {
         return -1;
     }
 
-    clock_name = hrpwm_instances[inst].clock_name;
+    clock_name = s_hrpwm_instances[inst].clock_name;
     clock_add_to_group(clock_name, 0);
     clock_hz = clock_get_frequency(clock_name);
     if (clock_hz <= frequency_hz) {
@@ -560,28 +690,28 @@ static int hrpwm_apply_frequency(uint8_t inst, uint32_t frequency_hz) {
         return -1;
     }
 
-    hrpwm_instances[inst].frequency_hz = frequency_hz;
-    hrpwm_instances[inst].reload = reload;
-    hrpwm_instances[inst].ex_reload = 0U;
+    s_hrpwm_instances[inst].frequency_hz = frequency_hz;
+    s_hrpwm_instances[inst].reload = reload;
+    s_hrpwm_instances[inst].ex_reload = 0U;
 
 #if HRPWM_USE_EXTENDED_COUNTER
     if (reload > HRPWM_RELOAD_MAX_24BIT) {
-        hrpwm_instances[inst].ex_reload = (uint8_t)((reload >> 24U) & 0x0FU);
-        hrpwm_instances[inst].reload = reload & HRPWM_RELOAD_MAX_24BIT;
+        s_hrpwm_instances[inst].ex_reload = (uint8_t)((reload >> 24U) & 0x0FU);
+        s_hrpwm_instances[inst].reload = reload & HRPWM_RELOAD_MAX_24BIT;
     }
 #endif
 
     pwm_shadow_register_unlock(base);
-    pwm_set_reload(base, hrpwm_instances[inst].ex_reload, hrpwm_instances[inst].reload);
+    pwm_set_reload(base, s_hrpwm_instances[inst].ex_reload, s_hrpwm_instances[inst].reload);
     pwm_set_start_count(base, 0, 0);
     pwm_issue_shadow_register_lock_event(base);
 
-    for (size_t i = 0; i < sizeof(hrpwm_channel_maps) / sizeof(hrpwm_channel_maps[0]); i++) {
-        const hrpwm_channel_map_t* map = &hrpwm_channel_maps[i];
-        if ((map->instance == inst) && hrpwm_instances[inst].channels[map->pwm_index].configured) {
-            hrpwm_instances[inst].channels[map->pwm_index].reload = hrpwm_instances[inst].reload;
-            hrpwm_instances[inst].channels[map->pwm_index].ex_reload =
-                hrpwm_instances[inst].ex_reload;
+    for (size_t i = 0; i < sizeof(s_hrpwm_channel_maps) / sizeof(s_hrpwm_channel_maps[0]); i++) {
+        const hrpwm_channel_map_t* map = &s_hrpwm_channel_maps[i];
+        if ((map->instance == inst) && s_hrpwm_instances[inst].channels[map->pwm_index].configured) {
+            s_hrpwm_instances[inst].channels[map->pwm_index].reload = s_hrpwm_instances[inst].reload;
+            s_hrpwm_instances[inst].channels[map->pwm_index].ex_reload =
+                s_hrpwm_instances[inst].ex_reload;
             if (hrpwm_apply_duty(map) != 0) {
                 return -1;
             }
@@ -595,12 +725,24 @@ static int hrpwm_apply_frequency(uint8_t inst, uint32_t frequency_hz) {
     return 0;
 }
 
+/**
+ * @brief 死区时间（ns）转换为半周期计数值（四舍五入）
+ * @param inst 实例号
+ * @param deadtime_ns 死区时间 [ns]
+ * @return 半周期计数值
+ */
 static uint32_t hrpwm_ns_to_deadtime_cycles(uint8_t inst, uint32_t deadtime_ns) {
-    uint32_t clock_hz = clock_get_frequency(hrpwm_instances[inst].clock_name);
+    uint32_t clock_hz = clock_get_frequency(s_hrpwm_instances[inst].clock_name);
     uint32_t clock_period_ns = 1000000000U / clock_hz;
     return (deadtime_ns + clock_period_ns / 2) / clock_period_ns;
 }
 
+/**
+ * @brief 初始化一对 PWM 通道（频率/死区/反相/比较值）
+ * @param ch 逻辑通道号
+ * @param cfg 配对配置
+ * @return 0 = 成功；-1 = 参数非法或 SDK 配置失败
+ */
 static int hrpwm_init_pair(intf_hrpwm_ch_t ch, const intf_hrpwm_pair_cfg_t* cfg) {
     const hrpwm_channel_map_t* map;
     uint8_t inst;
@@ -638,20 +780,20 @@ static int hrpwm_init_pair(intf_hrpwm_ch_t ch, const intf_hrpwm_pair_cfg_t* cfg)
 
     cmp_config[0].mode = pwm_cmp_mode_output_compare;
 #if HRPWM_USE_EXTENDED_COUNTER
-    cmp_config[0].cmp = hrpwm_instances[inst].reload;
-    cmp_config[0].enable_ex_cmp = (hrpwm_instances[inst].ex_reload > 0U);
-    cmp_config[0].ex_cmp = hrpwm_instances[inst].ex_reload;
+    cmp_config[0].cmp = s_hrpwm_instances[inst].reload;
+    cmp_config[0].enable_ex_cmp = (s_hrpwm_instances[inst].ex_reload > 0U);
+    cmp_config[0].ex_cmp = s_hrpwm_instances[inst].ex_reload;
 #else
-    cmp_config[0].cmp = hrpwm_instances[inst].reload + 1;
+    cmp_config[0].cmp = s_hrpwm_instances[inst].reload + 1;
 #endif
     cmp_config[0].jitter_cmp = cfg->jitter_cmp;
     cmp_config[0].update_trigger = pwm_shadow_register_update_on_modify;
 
     cmp_config[1].mode = pwm_cmp_mode_output_compare;
-    cmp_config[1].cmp = hrpwm_instances[inst].reload;
+    cmp_config[1].cmp = s_hrpwm_instances[inst].reload;
 #if HRPWM_USE_EXTENDED_COUNTER
-    cmp_config[1].enable_ex_cmp = (hrpwm_instances[inst].ex_reload > 0U);
-    cmp_config[1].ex_cmp = hrpwm_instances[inst].ex_reload;
+    cmp_config[1].enable_ex_cmp = (s_hrpwm_instances[inst].ex_reload > 0U);
+    cmp_config[1].ex_cmp = s_hrpwm_instances[inst].ex_reload;
 #endif
     cmp_config[1].jitter_cmp = cfg->jitter_cmp;
     cmp_config[1].update_trigger = pwm_shadow_register_update_on_modify;
@@ -662,18 +804,24 @@ static int hrpwm_init_pair(intf_hrpwm_ch_t ch, const intf_hrpwm_pair_cfg_t* cfg)
         return -1;
     }
 
-    hrpwm_instances[inst].channels[map->pwm_index].configured = true;
-    hrpwm_instances[inst].channels[map->pwm_index].duty = cfg->duty;
-    hrpwm_instances[inst].channels[map->pwm_index].reload = hrpwm_instances[inst].reload;
-    hrpwm_instances[inst].channels[map->pwm_index].ex_reload = hrpwm_instances[inst].ex_reload;
-    hrpwm_instances[inst].channels[map->pwm_index].jitter_cmp = cfg->jitter_cmp;
-    hrpwm_instances[inst].channels[map->pwm_index].align = cfg->align;
-    hrpwm_instances[inst].channels[map->pwm_index].invert_high_side = cfg->invert_high_side;
-    hrpwm_instances[inst].channels[map->pwm_index].invert_low_side = cfg->invert_low_side;
+    s_hrpwm_instances[inst].channels[map->pwm_index].configured = true;
+    s_hrpwm_instances[inst].channels[map->pwm_index].duty = cfg->duty;
+    s_hrpwm_instances[inst].channels[map->pwm_index].reload = s_hrpwm_instances[inst].reload;
+    s_hrpwm_instances[inst].channels[map->pwm_index].ex_reload = s_hrpwm_instances[inst].ex_reload;
+    s_hrpwm_instances[inst].channels[map->pwm_index].jitter_cmp = cfg->jitter_cmp;
+    s_hrpwm_instances[inst].channels[map->pwm_index].align = cfg->align;
+    s_hrpwm_instances[inst].channels[map->pwm_index].invert_high_side = cfg->invert_high_side;
+    s_hrpwm_instances[inst].channels[map->pwm_index].invert_low_side = cfg->invert_low_side;
 
     return hrpwm_apply_duty(map);
 }
 
+/**
+ * @brief 设置占空比（拒绝移相目标通道，联动更新移相参考）
+ * @param ch 逻辑通道号
+ * @param duty 占空比
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 ATTR_RAMFUNC
 static int hrpwm_set_duty(intf_hrpwm_ch_t ch, float duty) {
     const hrpwm_channel_map_t* map;
@@ -684,7 +832,7 @@ static int hrpwm_set_duty(intf_hrpwm_ch_t ch, float duty) {
         return -1;
     }
 
-    inst_state = &hrpwm_instances[map->instance];
+    inst_state = &s_hrpwm_instances[map->instance];
 
     if (!inst_state->channels[map->pwm_index].configured) {
         return -1;
@@ -707,6 +855,12 @@ static int hrpwm_set_duty(intf_hrpwm_ch_t ch, float duty) {
     return 0;
 }
 
+/**
+ * @brief 直接设置占空比（不做移相联动）
+ * @param ch 逻辑通道号
+ * @param duty 占空比
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 ATTR_RAMFUNC
 static int hrpwm_set_duty_direct(intf_hrpwm_ch_t ch, float duty) {
     const hrpwm_channel_map_t* map;
@@ -717,7 +871,7 @@ static int hrpwm_set_duty_direct(intf_hrpwm_ch_t ch, float duty) {
         return -1;
     }
 
-    inst_state = &hrpwm_instances[map->instance];
+    inst_state = &s_hrpwm_instances[map->instance];
 
     if (!inst_state->channels[map->pwm_index].configured) {
         return -1;
@@ -727,6 +881,14 @@ static int hrpwm_set_duty_direct(intf_hrpwm_ch_t ch, float duty) {
     return hrpwm_apply_duty(map);
 }
 
+/**
+ * @brief 同实例内一次性直接更新两路占空比（合并影子寄存器解锁）
+ * @param ch_a 通道 A
+ * @param duty_a 占空比 A
+ * @param ch_b 通道 B
+ * @param duty_b 占空比 B
+ * @return 0 = 成功；-1 = 参数非法或跨实例
+ */
 ATTR_RAMFUNC
 static int hrpwm_set_duty_direct_dual(
     intf_hrpwm_ch_t ch_a, float duty_a,
@@ -750,7 +912,7 @@ static int hrpwm_set_duty_direct_dual(
         return -1;
     }
 
-    hrpwm_instance_state_t* inst = &hrpwm_instances[map_a->instance];
+    hrpwm_instance_state_t* inst = &s_hrpwm_instances[map_a->instance];
     if (!inst->channels[map_a->pwm_index].configured
         || !inst->channels[map_b->pwm_index].configured) {
         return -1;
@@ -788,14 +950,30 @@ static int hrpwm_set_duty_direct_dual(
     return 0;
 }
 
+/**
+ * @brief 设置 PWM0 频率
+ * @param frequency_hz 频率 [Hz]
+ * @return 0 = 成功；-1 = 失败
+ */
 static int hrpwm_set_frequency_pwm0(uint32_t frequency_hz) {
     return hrpwm_apply_frequency(0, frequency_hz);
 }
 
+/**
+ * @brief 设置 PWM1 频率
+ * @param frequency_hz 频率 [Hz]
+ * @return 0 = 成功；-1 = 失败
+ */
 static int hrpwm_set_frequency_pwm1(uint32_t frequency_hz) {
     return hrpwm_apply_frequency(1, frequency_hz);
 }
 
+/**
+ * @brief 设置通道抖动比较值
+ * @param ch 逻辑通道号
+ * @param jitter_cmp 抖动比较值
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 static int hrpwm_set_jitter(intf_hrpwm_ch_t ch, uint8_t jitter_cmp) {
     const hrpwm_channel_map_t* map;
     PWM_Type* base;
@@ -810,18 +988,23 @@ static int hrpwm_set_jitter(intf_hrpwm_ch_t ch, uint8_t jitter_cmp) {
         return -1;
     }
 
-    if (!hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
+    if (!s_hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
         return -1;
     }
 
     pwm_shadow_register_unlock(base);
     pwm_cmp_update_jitter_value(base, map->cmp_start_index, jitter_cmp);
     pwm_cmp_update_jitter_value(base, map->cmp_start_index + 1U, jitter_cmp);
-    hrpwm_instances[map->instance].channels[map->pwm_index].jitter_cmp = jitter_cmp;
+    s_hrpwm_instances[map->instance].channels[map->pwm_index].jitter_cmp = jitter_cmp;
 
     return hrpwm_apply_duty(map);
 }
 
+/**
+ * @brief 启动通道：使能配对输出并启动计数器
+ * @param ch 逻辑通道号
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 static int hrpwm_start(intf_hrpwm_ch_t ch) {
     const hrpwm_channel_map_t* map;
     PWM_Type* base;
@@ -836,7 +1019,7 @@ static int hrpwm_start(intf_hrpwm_ch_t ch) {
         return -1;
     }
 
-    if (!hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
+    if (!s_hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
         return -1;
     }
 
@@ -844,12 +1027,17 @@ static int hrpwm_start(intf_hrpwm_ch_t ch) {
     pwm_enable_output(base, map->pwm_index + 1U);
     pwm_start_counter(base);
     pwm_issue_shadow_register_lock_event(base);
-    hrpwm_instances[map->instance].channels[map->pwm_index].started = true;
+    s_hrpwm_instances[map->instance].channels[map->pwm_index].started = true;
     return 0;
 }
 
 /* 仅启动计数器 (CEN)，不使能任何通道的物理输出。CEN 置位对 pwm_x->GCR 幂等，
  * 后续 hrpwm_start() 补充使能输出时无需关心是否已启动过计数器。 */
+/**
+ * @brief 仅启动计数器（不使能物理输出）
+ * @param inst 实例号
+ * @return 0 = 成功；-1 = 基地址无效
+ */
 static int hrpwm_start_counter_only_impl(uint8_t inst) {
     PWM_Type* base = hrpwm_get_base(inst);
     if (base == NULL) {
@@ -860,9 +1048,53 @@ static int hrpwm_start_counter_only_impl(uint8_t inst) {
     return 0;
 }
 
+/**
+ * @brief PWM0 仅启动计数器包装
+ * @return 0 = 成功；-1 = 失败
+ */
 static int hrpwm_start_counter_only_pwm0(void) { return hrpwm_start_counter_only_impl(0); }
+
+/**
+ * @brief PWM1 仅启动计数器包装
+ * @return 0 = 成功；-1 = 失败
+ */
 static int hrpwm_start_counter_only_pwm1(void) { return hrpwm_start_counter_only_impl(1); }
 
+/**
+ * @brief 读取 PWM0 重装载值（原始寄存器值）
+ * @return 重装载值
+ */
+static uint32_t hrpwm_get_reload_pwm0(void) { return pwm_get_reload_val(HPM_PWM0); }
+
+/**
+ * @brief 读取 PWM1 重装载值（原始寄存器值）
+ * @return 重装载值
+ */
+static uint32_t hrpwm_get_reload_pwm1(void) { return pwm_get_reload_val(HPM_PWM1); }
+
+/**
+ * @brief 读取 PWM0 比较器值（原始寄存器值）
+ * @param cmp_index 比较器索引
+ * @return 比较值
+ */
+static uint32_t hrpwm_get_cmp_value_pwm0(uint8_t cmp_index) {
+    return pwm_cmp_get_cmp_value(HPM_PWM0, cmp_index);
+}
+
+/**
+ * @brief 读取 PWM1 比较器值（原始寄存器值）
+ * @param cmp_index 比较器索引
+ * @return 比较值
+ */
+static uint32_t hrpwm_get_cmp_value_pwm1(uint8_t cmp_index) {
+    return pwm_cmp_get_cmp_value(HPM_PWM1, cmp_index);
+}
+
+/**
+ * @brief 停止通道：禁用配对输出
+ * @param ch 逻辑通道号
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 static int hrpwm_stop(intf_hrpwm_ch_t ch) {
     const hrpwm_channel_map_t* map;
     PWM_Type* base;
@@ -877,16 +1109,21 @@ static int hrpwm_stop(intf_hrpwm_ch_t ch) {
         return -1;
     }
 
-    if (!hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
+    if (!s_hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
         return -1;
     }
 
     pwm_disable_output(base, map->pwm_index);
     pwm_disable_output(base, map->pwm_index + 1U);
-    hrpwm_instances[map->instance].channels[map->pwm_index].started = false;
+    s_hrpwm_instances[map->instance].channels[map->pwm_index].started = false;
     return 0;
 }
 
+/**
+ * @brief 软件强制通道输出低电平
+ * @param ch 逻辑通道号
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 static int hrpwm_force_low(intf_hrpwm_ch_t ch) {
     const hrpwm_channel_map_t* map;
     PWM_Type* base;
@@ -901,7 +1138,7 @@ static int hrpwm_force_low(intf_hrpwm_ch_t ch) {
         return -1;
     }
 
-    if (!hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
+    if (!s_hrpwm_instances[map->instance].channels[map->pwm_index].configured) {
         return -1;
     }
 
@@ -911,12 +1148,17 @@ static int hrpwm_force_low(intf_hrpwm_ch_t ch) {
     pwm_set_force_output(
         base, PWM_FORCE_OUTPUT(map->pwm_index, pwm_output_0)
                   | PWM_FORCE_OUTPUT((map->pwm_index + 1U), pwm_output_0));
-    hrpwm_instances[map->instance].force_mask |=
+    s_hrpwm_instances[map->instance].force_mask |=
         (uint8_t)((1U << map->pwm_index) | (1U << (map->pwm_index + 1U)));
     pwm_enable_sw_force(base);
     return 0;
 }
 
+/**
+ * @brief 解除软件强制输出
+ * @param ch 逻辑通道号
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int hrpwm_force_release(intf_hrpwm_ch_t ch) {
     const hrpwm_channel_map_t* map;
     PWM_Type* base;
@@ -933,14 +1175,19 @@ static int hrpwm_force_release(intf_hrpwm_ch_t ch) {
 
     pwm_disable_pwm_sw_force_output(base, map->pwm_index);
     pwm_disable_pwm_sw_force_output(base, map->pwm_index + 1U);
-    hrpwm_instances[map->instance].force_mask &=
+    s_hrpwm_instances[map->instance].force_mask &=
         (uint8_t)~((1U << map->pwm_index) | (1U << (map->pwm_index + 1U)));
-    if (hrpwm_instances[map->instance].force_mask == 0U) {
+    if (s_hrpwm_instances[map->instance].force_mask == 0U) {
         pwm_disable_sw_force(base);
     }
     return 0;
 }
 
+/**
+ * @brief 配置故障保护（模式/恢复方式/触发源，应用到全部实例）
+ * @param cfg 故障配置
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int hrpwm_config_fault(const intf_hrpwm_fault_cfg_t* cfg) {
     pwm_fault_source_config_t fault_config = {0};
     pwm_fault_mode_t fault_mode;
@@ -1013,12 +1260,16 @@ static int hrpwm_config_fault(const intf_hrpwm_fault_cfg_t* cfg) {
         }
 
         pwm_config_fault_source(base, &fault_config);
-        hrpwm_instances[inst].fault_configured = true;
+        s_hrpwm_instances[inst].fault_configured = true;
     }
 
     return 0;
 }
 
+/**
+ * @brief 清除全部实例的故障与状态标志
+ * @return 0 = 成功
+ */
 static int hrpwm_clear_fault(void) {
     for (uint8_t inst = 0; inst < HRPWM_INSTANCE_COUNT; inst++) {
         PWM_Type* base = hrpwm_get_base(inst);
@@ -1029,7 +1280,7 @@ static int hrpwm_clear_fault(void) {
 }
 
 /* 中断回调函数指针数组 */
-static intf_hrpwm_irq_callback_t hrpwm_reload_callback[HRPWM_INSTANCE_COUNT] = {NULL};
+static intf_hrpwm_irq_callback_t s_hrpwm_reload_callback[HRPWM_INSTANCE_COUNT] = {NULL};
 
 /* PWM0中断处理函数 */
 #if defined(IRQn_PWM0)
@@ -1038,8 +1289,8 @@ void isr_pwm0(void) {
     uint32_t status = pwm_get_status(BOARD_APP_HRPWM0);
     pwm_clear_status(BOARD_APP_HRPWM0, status);
 
-    if ((status & PWM_IRQ_RELOAD) && (hrpwm_reload_callback[0] != NULL)) {
-        hrpwm_reload_callback[0]();
+    if ((status & PWM_IRQ_RELOAD) && (s_hrpwm_reload_callback[0] != NULL)) {
+        s_hrpwm_reload_callback[0]();
     }
 }
 #endif
@@ -1051,18 +1302,27 @@ void isr_pwm1(void) {
     uint32_t status = pwm_get_status(BOARD_APP_HRPWM1);
     pwm_clear_status(BOARD_APP_HRPWM1, status);
 
-    if ((status & PWM_IRQ_RELOAD) && (hrpwm_reload_callback[1] != NULL)) {
-        hrpwm_reload_callback[1]();
+    if ((status & PWM_IRQ_RELOAD) && (s_hrpwm_reload_callback[1] != NULL)) {
+        s_hrpwm_reload_callback[1]();
     }
 }
 #endif
 
 /* PWM0中断配置函数 */
+/**
+ * @brief PWM0 配置重载中断回调
+ * @param callback 回调
+ * @return 0 = 成功
+ */
 static int hrpwm_config_reload_irq_pwm0(intf_hrpwm_irq_callback_t callback) {
-    hrpwm_reload_callback[0] = callback;
+    s_hrpwm_reload_callback[0] = callback;
     return 0;
 }
 
+/**
+ * @brief PWM0 使能重载中断
+ * @return 0 = 成功；-1 = 基地址无效
+ */
 static int hrpwm_enable_reload_irq_pwm0(void) {
     PWM_Type* base = hrpwm_get_base(0);
     if (base == NULL) {
@@ -1074,6 +1334,10 @@ static int hrpwm_enable_reload_irq_pwm0(void) {
     return 0;
 }
 
+/**
+ * @brief PWM0 禁用重载中断
+ * @return 0 = 成功；-1 = 基地址无效
+ */
 static int hrpwm_disable_reload_irq_pwm0(void) {
     PWM_Type* base = hrpwm_get_base(0);
     if (base == NULL) {
@@ -1085,11 +1349,20 @@ static int hrpwm_disable_reload_irq_pwm0(void) {
 }
 
 /* PWM1中断配置函数 */
+/**
+ * @brief PWM1 配置重载中断回调
+ * @param callback 回调
+ * @return 0 = 成功
+ */
 static int hrpwm_config_reload_irq_pwm1(intf_hrpwm_irq_callback_t callback) {
-    hrpwm_reload_callback[1] = callback;
+    s_hrpwm_reload_callback[1] = callback;
     return 0;
 }
 
+/**
+ * @brief PWM1 使能重载中断
+ * @return 0 = 成功；-1 = 基地址无效
+ */
 static int hrpwm_enable_reload_irq_pwm1(void) {
     PWM_Type* base = hrpwm_get_base(1);
     if (base == NULL) {
@@ -1101,6 +1374,10 @@ static int hrpwm_enable_reload_irq_pwm1(void) {
     return 0;
 }
 
+/**
+ * @brief PWM1 禁用重载中断
+ * @return 0 = 成功；-1 = 基地址无效
+ */
 static int hrpwm_disable_reload_irq_pwm1(void) {
     PWM_Type* base = hrpwm_get_base(1);
     if (base == NULL) {
@@ -1112,6 +1389,11 @@ static int hrpwm_disable_reload_irq_pwm1(void) {
 }
 
 /* 移相功能实现 - 通过CMP值偏移实现同一PWM实例内不同pair之间的移相 */
+/**
+ * @brief 设置实例内两配对间的移相角
+ * @param cfg 移相配置
+ * @return 0 = 成功；-1 = 参数非法或未配置
+ */
 static int hrpwm_set_phase(const intf_hrpwm_phase_cfg_t* cfg) {
     uint8_t prev_target_pair;
     bool restore_prev_target = false;
@@ -1124,7 +1406,7 @@ static int hrpwm_set_phase(const intf_hrpwm_phase_cfg_t* cfg) {
         return -1;
     }
 
-    hrpwm_instance_state_t* inst_state = &hrpwm_instances[cfg->inst];
+    hrpwm_instance_state_t* inst_state = &s_hrpwm_instances[cfg->inst];
     float max_phase = inst_state->phase_limit.max_phase_deg;
 
     if (!isfinite(cfg->phase_deg) || !isfinite(max_phase) || cfg->phase_deg < 0.0f
@@ -1185,6 +1467,11 @@ static int hrpwm_set_phase(const intf_hrpwm_phase_cfg_t* cfg) {
     return hrpwm_apply_phase(cfg->inst);
 }
 
+/**
+ * @brief 配置移相限值（应用到全部实例）
+ * @param limit 移相限值
+ * @return 0 = 成功；-1 = 参数非法
+ */
 static int hrpwm_config_phase_limit(const intf_hrpwm_phase_limit_t* limit) {
     if (limit == NULL) {
         return -1;
@@ -1198,9 +1485,9 @@ static int hrpwm_config_phase_limit(const intf_hrpwm_phase_limit_t* limit) {
     }
 
     for (uint8_t inst = 0; inst < HRPWM_INSTANCE_COUNT; inst++) {
-        hrpwm_instances[inst].phase_limit.max_phase_deg = limit->max_phase_deg;
-        hrpwm_instances[inst].phase_limit.max_duty_ref = limit->max_duty_ref;
-        hrpwm_instances[inst].phase_limit.max_duty_target = limit->max_duty_target;
+        s_hrpwm_instances[inst].phase_limit.max_phase_deg = limit->max_phase_deg;
+        s_hrpwm_instances[inst].phase_limit.max_duty_ref = limit->max_duty_ref;
+        s_hrpwm_instances[inst].phase_limit.max_duty_target = limit->max_duty_target;
     }
 
     return 0;
@@ -1208,12 +1495,25 @@ static int hrpwm_config_phase_limit(const intf_hrpwm_phase_limit_t* limit) {
 
 /* 触发比较器：比较值 = 计数谷底（回卷点）+ delay_ns。
  * tick = f_pwm_clk × delay_ns / 1e9 —— 只依赖时钟，与 PWM 频率解耦。 */
+/**
+ * @brief 延时（ns）转换为 PWM 时钟 tick
+ * @param inst 实例号
+ * @param delay_ns 延时 [ns]
+ * @return tick 数
+ */
 static uint32_t hrpwm_delay_ns_to_ticks(uint8_t inst, uint32_t delay_ns) {
-    uint32_t clock_hz = clock_get_frequency(hrpwm_instances[inst].clock_name);
+    uint32_t clock_hz = clock_get_frequency(s_hrpwm_instances[inst].clock_name);
 
     return (uint32_t)(((uint64_t) clock_hz * (uint64_t) delay_ns) / 1000000000ULL);
 }
 
+/**
+ * @brief 配置触发比较器与窄脉冲输出（CHxREF → TRGM）
+ * @param inst 实例号
+ * @param cmp_index CMP 索引
+ * @param delay_ns 相对计数谷底的延时 [ns]
+ * @return 0 = 成功；-1 = 参数非法或超周期
+ */
 static int hrpwm_config_trigger_cmp_impl(uint8_t inst, uint8_t cmp_index, uint32_t delay_ns) {
     PWM_Type* base;
     uint32_t ticks;
@@ -1253,6 +1553,13 @@ static int hrpwm_config_trigger_cmp_impl(uint8_t inst, uint8_t cmp_index, uint32
     return 0;
 }
 
+/**
+ * @brief 直接写 CMP 工作寄存器设置触发延时（调试期扫描用）
+ * @param inst 实例号
+ * @param cmp_index CMP 索引
+ * @param delay_ns 延时 [ns]
+ * @return 0 = 成功；-1 = 参数非法
+ */
 ATTR_RAMFUNC
 static int hrpwm_set_trigger_cmp_delay_impl(uint8_t inst, uint8_t cmp_index, uint32_t delay_ns) {
     PWM_Type* base;
@@ -1275,25 +1582,49 @@ static int hrpwm_set_trigger_cmp_delay_impl(uint8_t inst, uint8_t cmp_index, uin
     return 0;
 }
 
+/**
+ * @brief PWM0 配置触发比较器包装
+ * @param cmp_index CMP 索引
+ * @param delay_ns 延时 [ns]
+ * @return 0 = 成功；-1 = 失败
+ */
 static int hrpwm_config_trigger_cmp_pwm0(uint8_t cmp_index, uint32_t delay_ns) {
     return hrpwm_config_trigger_cmp_impl(0, cmp_index, delay_ns);
 }
 
+/**
+ * @brief PWM1 配置触发比较器包装
+ * @param cmp_index CMP 索引
+ * @param delay_ns 延时 [ns]
+ * @return 0 = 成功；-1 = 失败
+ */
 static int hrpwm_config_trigger_cmp_pwm1(uint8_t cmp_index, uint32_t delay_ns) {
     return hrpwm_config_trigger_cmp_impl(1, cmp_index, delay_ns);
 }
 
+/**
+ * @brief PWM0 设置触发延时装包
+ * @param cmp_index CMP 索引
+ * @param delay_ns 延时 [ns]
+ * @return 0 = 成功；-1 = 失败
+ */
 ATTR_RAMFUNC
 static int hrpwm_set_trigger_cmp_delay_pwm0(uint8_t cmp_index, uint32_t delay_ns) {
     return hrpwm_set_trigger_cmp_delay_impl(0, cmp_index, delay_ns);
 }
 
+/**
+ * @brief PWM1 设置触发延时装包
+ * @param cmp_index CMP 索引
+ * @param delay_ns 延时 [ns]
+ * @return 0 = 成功；-1 = 失败
+ */
 ATTR_RAMFUNC
 static int hrpwm_set_trigger_cmp_delay_pwm1(uint8_t cmp_index, uint32_t delay_ns) {
     return hrpwm_set_trigger_cmp_delay_impl(1, cmp_index, delay_ns);
 }
 
-static const intf_hrpwm_t hrpwm_ops_pwm0 = {
+static const intf_hrpwm_t s_hrpwm_ops_pwm0 = {
     .instance_id = 0,
     .init_pair = hrpwm_init_pair,
     .set_duty = hrpwm_set_duty,
@@ -1315,9 +1646,11 @@ static const intf_hrpwm_t hrpwm_ops_pwm0 = {
     .config_trigger_cmp = hrpwm_config_trigger_cmp_pwm0,
     .set_trigger_cmp_delay = hrpwm_set_trigger_cmp_delay_pwm0,
     .start_counter_only = hrpwm_start_counter_only_pwm0,
+    .get_reload = hrpwm_get_reload_pwm0,
+    .get_cmp_value = hrpwm_get_cmp_value_pwm0,
 };
 
-static const intf_hrpwm_t hrpwm_ops_pwm1 = {
+static const intf_hrpwm_t s_hrpwm_ops_pwm1 = {
     .instance_id = 1,
     .init_pair = hrpwm_init_pair,
     .set_duty = hrpwm_set_duty,
@@ -1339,10 +1672,12 @@ static const intf_hrpwm_t hrpwm_ops_pwm1 = {
     .config_trigger_cmp = hrpwm_config_trigger_cmp_pwm1,
     .set_trigger_cmp_delay = hrpwm_set_trigger_cmp_delay_pwm1,
     .start_counter_only = hrpwm_start_counter_only_pwm1,
+    .get_reload = hrpwm_get_reload_pwm1,
+    .get_cmp_value = hrpwm_get_cmp_value_pwm1,
 };
 
 void hpm_hrpwm_driver_register(void) {
     hrpwm_init_instances();
-    intf_hrpwm_register(&hrpwm_ops_pwm0);
-    intf_hrpwm_register(&hrpwm_ops_pwm1);
+    intf_hrpwm_register(&s_hrpwm_ops_pwm0);
+    intf_hrpwm_register(&s_hrpwm_ops_pwm1);
 }

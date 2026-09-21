@@ -4,7 +4,7 @@
 
 **Goal:** 把散落的参数常量迁移到 `config/*.yaml`（三域），构建期由生成器求值 + 校验 → 类型化 C 参数结构体（方案 B），为将来 flash 覆盖（在线辨识/整定）预留 `*_load()` API。
 
-**Architecture:** `config/{motor,hardware,software}.yaml` →（configure 期，Python/PyYAML）→ `build/generated/params_generated.{h,c}` + 报告 → 三个手写 params 模块（`app_motor_params` / `app_hw_params` / `app_sw_params`，提供 `default()/load()`）→ 现有模块在 init 时加载（保持"NULL = 默认"语义）。
+**Architecture:** `config/{motor,hardware,software}.yaml` →（configure 期，Python/PyYAML）→ `build/generated/params_generated.{h,c}` + 报告 → 三个手写 params 模块（`app_motor_params` / `app_hardware_params` / `app_software_params`，提供 `default()/load()`）→ 现有模块在 init 时加载（保持"NULL = 默认"语义）。
 
 **Tech Stack:** C17、CMake 3.13+、Python 3 + PyYAML 6.0.3（环境已具备）、HPM SDK。
 
@@ -21,8 +21,8 @@
 | Create | `config/software.yaml` | 软件参数（保护阈值 + CAN + FOC 预留） |
 | Create | `scripts/gen_params.py` | 生成器：模式/表达式/跨域校验 + 生成 C/报告 |
 | Create | `App/Control/Inc/app_motor_params.h` / `Src/app_motor_params.c` | 机械参数类型 + 访问器 |
-| Create | `App/Platform/Inc/app_hw_params.h` / `Src/app_hw_params.c` | 硬件参数类型 + 访问器 |
-| Create | `App/Platform/Inc/app_sw_params.h` / `Src/app_sw_params.c` | 软件参数类型 + 访问器 |
+| Create | `App/Platform/Inc/app_hardware_params.h` / `Src/app_hardware_params.c` | 硬件参数类型 + 访问器 |
+| Create | `App/Platform/Inc/app_software_params.h` / `Src/app_software_params.c` | 软件参数类型 + 访问器 |
 | Modify | `CMakeLists.txt` | configure 期生成 + 生成源/头进构建 |
 | Modify | `App/Control/Src/app_fault.c` | 阈值默认 → sw/hw 参数 |
 | Modify | `App/Platform/Src/app_analog_signal.c` + `Inc/app_analog_signal.h` | 换算常数 → hw 参数；删 `APP_ANALOG_I_AMP_PER_VOLT` |
@@ -288,8 +288,8 @@ DOC_ONLY = {
 }
 
 C_TYPE_RANGE = {"u8": (0, 255), "u16": (0, 65535), "u32": (0, 4294967295)}
-STRUCT_NAMES = {"motor": "app_motor_params_t", "hardware": "app_hw_params_t", "software": "app_sw_params_t"}
-CONST_NAMES = {"motor": "g_motor_params_factory", "hardware": "g_hw_params_factory", "software": "g_sw_params_factory"}
+STRUCT_NAMES = {"motor": "app_motor_params_t", "hardware": "app_hardware_params_t", "software": "app_software_params_t"}
+CONST_NAMES = {"motor": "g_motor_params_factory", "hardware": "g_hardware_params_factory", "software": "g_software_params_factory"}
 
 ALLOWED_FUNCS = {"sqrt": math.sqrt, "sin": math.sin, "cos": math.cos,
                  "atan2": math.atan2, "min": min, "max": max, "abs": abs}
@@ -646,12 +646,12 @@ def gen_header() -> str:
 #define PARAMS_GENERATED_H
 
 #include "app_motor_params.h"
-#include "app_hw_params.h"
-#include "app_sw_params.h"
+#include "app_hardware_params.h"
+#include "app_software_params.h"
 
 extern const app_motor_params_t g_motor_params_factory;
-extern const app_hw_params_t    g_hw_params_factory;
-extern const app_sw_params_t    g_sw_params_factory;
+extern const app_hardware_params_t    g_hardware_params_factory;
+extern const app_software_params_t    g_software_params_factory;
 
 #endif /* PARAMS_GENERATED_H */
 """
@@ -829,8 +829,8 @@ git commit -m "feat(params): 参数生成器（表达式求值/跨文件引用/�
 
 **Files:**
 - Create: `App/Control/Inc/app_motor_params.h`, `App/Control/Src/app_motor_params.c`
-- Create: `App/Platform/Inc/app_hw_params.h`, `App/Platform/Src/app_hw_params.c`
-- Create: `App/Platform/Inc/app_sw_params.h`, `App/Platform/Src/app_sw_params.c`
+- Create: `App/Platform/Inc/app_hardware_params.h`, `App/Platform/Src/app_hardware_params.c`
+- Create: `App/Platform/Inc/app_software_params.h`, `App/Platform/Src/app_software_params.c`
 
 - [ ] **Step 1: 写入 `App/Control/Inc/app_motor_params.h`**
 
@@ -919,7 +919,7 @@ void app_motor_params_load(app_motor_params_t *out) {
 }
 ```
 
-- [ ] **Step 3: 写入 `App/Platform/Inc/app_hw_params.h`**
+- [ ] **Step 3: 写入 `App/Platform/Inc/app_hardware_params.h`**
 
 ```c
 /*
@@ -944,49 +944,49 @@ typedef struct {
     float amp_gain;   /* 运放增益 */
     float a_per_volt; /* 电流标度 [A/V]（= 1/(shunt×gain)，派生） */
     float bias_v;     /* 零电流偏置 [V]（= vref/2，派生） */
-} app_hw_current_sense_t;
+} app_hardware_current_sense_t;
 
 typedef struct {
     uint32_t divider_high_ohm; /* 分压上臂 [Ω] */
     uint32_t divider_low_ohm;  /* 分压下臂 [Ω] */
     float    v_per_volt;       /* 母线标度 [V/V]（派生） */
-} app_hw_vbus_sense_t;
+} app_hardware_vbus_sense_t;
 
 typedef struct {
     uint32_t pullup_ohm; /* 板上上拉 [Ω] */
     float    r25_ohm;    /* NTC 25°C 阻值 [Ω]（占位，待选型） */
     float    b_value_k;  /* B 常数 [K]（占位，待选型） */
     float    max_ohm;    /* 开路/超量程替代值 [Ω] */
-} app_hw_ntc_t;
+} app_hardware_ntc_t;
 
 typedef struct {
     uint8_t levels; /* 拨码档数（占位；解码未实现） */
-} app_hw_canid_t;
+} app_hardware_canid_t;
 
 typedef struct {
     uint8_t  sample_cycle;    /* 采样窗口 [ADC 时钟数]（SDK 最小 10，勿低于） */
     uint32_t trigger_delay_ns;/* 谷底后触发延时 [ns] */
-} app_hw_adc_t;
+} app_hardware_adc_t;
 
 typedef struct {
     uint32_t pwm_freq_hz; /* 开关频率 [Hz] */
     uint32_t deadtime_ns; /* HPM 侧死区 [ns] */
-} app_hw_inverter_t;
+} app_hardware_inverter_t;
 
 typedef struct {
-    app_hw_current_sense_t current_sense;
-    app_hw_vbus_sense_t    vbus_sense;
-    app_hw_ntc_t           ntc;
-    app_hw_canid_t         canid_dip;
-    app_hw_adc_t           adc;
-    app_hw_inverter_t      inverter;
-} app_hw_params_t;
+    app_hardware_current_sense_t current_sense;
+    app_hardware_vbus_sense_t    vbus_sense;
+    app_hardware_ntc_t           ntc;
+    app_hardware_canid_t         canid_dip;
+    app_hardware_adc_t           adc;
+    app_hardware_inverter_t      inverter;
+} app_hardware_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */
-const app_hw_params_t *app_hw_params_default(void);
+const app_hardware_params_t *app_hardware_params_default(void);
 
 /** @brief 加载参数：工厂默认 +（将来）flash 覆盖 */
-void app_hw_params_load(app_hw_params_t *out);
+void app_hardware_params_load(app_hardware_params_t *out);
 
 #ifdef __cplusplus
 }
@@ -995,7 +995,7 @@ void app_hw_params_load(app_hw_params_t *out);
 #endif /* APP_HW_PARAMS_H */
 ```
 
-- [ ] **Step 4: 写入 `App/Platform/Src/app_hw_params.c`**
+- [ ] **Step 4: 写入 `App/Platform/Src/app_hardware_params.c`**
 
 ```c
 /*
@@ -1004,26 +1004,26 @@ void app_hw_params_load(app_hw_params_t *out);
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "app_hw_params.h"
+#include "app_hardware_params.h"
 
 #include "params_generated.h"
 
 #include <stddef.h>
 
-const app_hw_params_t *app_hw_params_default(void) {
-    return &g_hw_params_factory;
+const app_hardware_params_t *app_hardware_params_default(void) {
+    return &g_hardware_params_factory;
 }
 
-void app_hw_params_load(app_hw_params_t *out) {
+void app_hardware_params_load(app_hardware_params_t *out) {
     if (out == NULL) {
         return;
     }
-    *out = g_hw_params_factory;
-    /* TODO(v2): flash 覆盖 —— app_param_is_ready() → app_param_load(APP_PARAM_KEY_HW, ...) */
+    *out = g_hardware_params_factory;
+    /* TODO(v2): flash 覆盖 —— app_param_is_ready() → app_param_load(APP_PARAM_KEY_HARDWARE, ...) */
 }
 ```
 
-- [ ] **Step 5: 写入 `App/Platform/Inc/app_sw_params.h`**
+- [ ] **Step 5: 写入 `App/Platform/Inc/app_software_params.h`**
 
 ```c
 /*
@@ -1048,7 +1048,7 @@ typedef struct {
     uint8_t  node_id_default; /* 默认节点号（占位：DIP 解码未实现；与 CAN ID 的派生关系待协议定稿） */
     uint32_t rx_control_id;   /* 接收控制帧 CAN ID（占位：待协议定稿） */
     uint32_t tx_report_id;    /* 参数回报帧 CAN ID（占位：待协议定稿） */
-} app_sw_can_t;
+} app_software_can_t;
 
 typedef struct {
     float    oc_trip_a;     /* 过流阈值 [A] */
@@ -1057,35 +1057,35 @@ typedef struct {
     uint16_t slow_debounce; /* L2/L3 去抖次数（1kHz） */
     uint16_t adc_stall_ms;  /* PMT 帧停滞超时 [ms] */
     uint8_t  enc_err_delta; /* 编码器错误增量阈值 */
-} app_sw_fault_t;
+} app_software_fault_t;
 
 typedef struct {
     float kp;
     float ki;
-} app_sw_pid_t;
+} app_software_pid_t;
 
 typedef struct {
     float i_q_max_a; /* 电流限幅 [A]（RMS 口径；FOC 预留，未消费） */
     float duty_max;  /* 占空比上限（FOC 预留，未消费） */
-} app_sw_limits_t;
+} app_software_limits_t;
 
 typedef struct {
-    app_sw_pid_t    current_loop; /* 电流环（FOC 预留） */
-    app_sw_pid_t    speed_loop;   /* 速度环（FOC 预留） */
-    app_sw_limits_t limits;
-} app_sw_control_t;
+    app_software_pid_t    current_loop; /* 电流环（FOC 预留） */
+    app_software_pid_t    speed_loop;   /* 速度环（FOC 预留） */
+    app_software_limits_t limits;
+} app_software_control_t;
 
 typedef struct {
-    app_sw_can_t     can;
-    app_sw_fault_t   fault;
-    app_sw_control_t control;
-} app_sw_params_t;
+    app_software_can_t     can;
+    app_software_fault_t   fault;
+    app_software_control_t control;
+} app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */
-const app_sw_params_t *app_sw_params_default(void);
+const app_software_params_t *app_software_params_default(void);
 
 /** @brief 加载参数：工厂默认 +（将来）flash 覆盖（整定/自校准结果） */
-void app_sw_params_load(app_sw_params_t *out);
+void app_software_params_load(app_software_params_t *out);
 
 #ifdef __cplusplus
 }
@@ -1094,7 +1094,7 @@ void app_sw_params_load(app_sw_params_t *out);
 #endif /* APP_SW_PARAMS_H */
 ```
 
-- [ ] **Step 6: 写入 `App/Platform/Src/app_sw_params.c`**
+- [ ] **Step 6: 写入 `App/Platform/Src/app_software_params.c`**
 
 ```c
 /*
@@ -1103,22 +1103,22 @@ void app_sw_params_load(app_sw_params_t *out);
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "app_sw_params.h"
+#include "app_software_params.h"
 
 #include "params_generated.h"
 
 #include <stddef.h>
 
-const app_sw_params_t *app_sw_params_default(void) {
-    return &g_sw_params_factory;
+const app_software_params_t *app_software_params_default(void) {
+    return &g_software_params_factory;
 }
 
-void app_sw_params_load(app_sw_params_t *out) {
+void app_software_params_load(app_software_params_t *out) {
     if (out == NULL) {
         return;
     }
-    *out = g_sw_params_factory;
-    /* TODO(v2): flash 覆盖 —— app_param_is_ready() → app_param_load(APP_PARAM_KEY_SW, ...)（整定/阈值微调） */
+    *out = g_software_params_factory;
+    /* TODO(v2): flash 覆盖 —— app_param_is_ready() → app_param_load(APP_PARAM_KEY_SOFTWARE, ...)（整定/阈值微调） */
 }
 ```
 
@@ -1126,8 +1126,8 @@ void app_sw_params_load(app_sw_params_t *out) {
 
 ```bash
 git add App/Control/Inc/app_motor_params.h App/Control/Src/app_motor_params.c \
-        App/Platform/Inc/app_hw_params.h App/Platform/Src/app_hw_params.c \
-        App/Platform/Inc/app_sw_params.h App/Platform/Src/app_sw_params.c
+        App/Platform/Inc/app_hardware_params.h App/Platform/Src/app_hardware_params.c \
+        App/Platform/Inc/app_software_params.h App/Platform/Src/app_software_params.c
 git commit -m "feat(params): 三域参数模块（类型 + default/load 访问器，flash 覆盖预留）"
 ```
 
@@ -1167,8 +1167,8 @@ sdk_app_src(${PARAMS_GEN_DIR}/params_generated.c)
 - [ ] **Step 2: Platform 段（`app_can.c` 行后）增加两行**
 
 ```cmake
-sdk_app_src(App/Platform/Src/app_hw_params.c)
-sdk_app_src(App/Platform/Src/app_sw_params.c)
+sdk_app_src(App/Platform/Src/app_hardware_params.c)
+sdk_app_src(App/Platform/Src/app_software_params.c)
 ```
 
 - [ ] **Step 3: Control 段（`app_fault.c` 行后）增加一行**
@@ -1207,8 +1207,8 @@ git commit -m "build(params): configure 期生成参数并加入构建（含 CON
 在 `#include "app_encoder.h"` 之后新增两行：
 
 ```c
-#include "app_hw_params.h"
-#include "app_sw_params.h"
+#include "app_hardware_params.h"
+#include "app_software_params.h"
 ```
 
 将 `.c` 头部注释第 8 行：
@@ -1220,7 +1220,7 @@ git commit -m "build(params): configure 期生成参数并加入构建（含 CON
 改为：
 
 ```c
- * 阈值默认值来源：config/software.yaml（经 app_sw_params 加载）。
+ * 阈值默认值来源：config/software.yaml（经 app_software_params 加载）。
 ```
 
 - [ ] **Step 2: 删除 `app_fault.h` 6 个默认宏**
@@ -1247,7 +1247,7 @@ git commit -m "build(params): configure 期生成参数并加入构建（含 CON
 
 ```c
 /* ============================================================================
- * 阈值默认值来源：config/software.yaml（app_sw_params.fault，app_fault_init 加载）
+ * 阈值默认值来源：config/software.yaml（app_software_params.fault，app_fault_init 加载）
  * 以下为内部时序量（待 FOC 时序体系定义后接入 YAML，见参数管线设计 §10）
  * ============================================================================ */
 #define APP_FAULT_RMS_WINDOW_DEFAULT    (250U) /* 10ms @25kHz */
@@ -1269,8 +1269,8 @@ void app_fault_init(const app_fault_cfg_t *cfg) {
 ```c
 void app_fault_init(const app_fault_cfg_t *cfg) {
     algo_rms_cfg_t rms_cfg;
-    app_hw_params_t hw;
-    app_sw_params_t sw;
+    app_hardware_params_t hw;
+    app_software_params_t sw;
     float dev_v;
 ```
 
@@ -1278,8 +1278,8 @@ void app_fault_init(const app_fault_cfg_t *cfg) {
 
 ```c
     /* 工厂默认参数（config/software.yaml + config/hardware.yaml；将来 flash 覆盖） */
-    app_hw_params_load(&hw);
-    app_sw_params_load(&sw);
+    app_hardware_params_load(&hw);
+    app_software_params_load(&sw);
 ```
 
 将 6 处默认值宏替换（`oc_fast_a` / `oc_slow_a` / `vbus_ov_v` / `vbus_uv_v` / `slow_debounce` / `adc_stall_ms` / `enc_err_delta` 的 `: APP_FAULT_*_DEFAULT;` 分支）：
@@ -1337,7 +1337,7 @@ git commit -m "refactor(fault): 阈值与电流标度改从 sw/hw 参数加载�
 
 - [ ] **Step 1: 头文件 include + 常量块替换 + 残留常量清理**
 
-在 `#include "app_analog_signal.h"` 之后新增 `#include "app_hw_params.h"`。
+在 `#include "app_analog_signal.h"` 之后新增 `#include "app_hardware_params.h"`。
 
 将换算常数块及其分区头（第 17~27 行附近）：
 
@@ -1362,7 +1362,7 @@ git commit -m "refactor(fault): 阈值与电流标度改从 sw/hw 参数加载�
  * 硬件换算参数（来源 config/hardware.yaml，init 时加载）
  * ============================================================================ */
 
-static app_hw_params_t s_hw;
+static app_hardware_params_t s_hw;
 
 /* 零点标定过程参数（不随 YAML，标定流程专用） */
 ```
@@ -1435,7 +1435,7 @@ void app_analog_signal_init(void) {
 →
 ```c
 void app_analog_signal_init(void) {
-    app_hw_params_load(&s_hw); /* config/hardware.yaml（将来 flash 覆盖） */
+    app_hardware_params_load(&s_hw); /* config/hardware.yaml（将来 flash 覆盖） */
 
     for (uint8_t i = 0U; i < APP_ANALOG_CURRENT_COUNT; i++) {
         s_zero_volts[i] = s_hw.current_sense.bias_v;
@@ -1456,7 +1456,7 @@ void app_analog_signal_init(void) {
 #define APP_ANALOG_I_AMP_PER_VOLT (66.6667f)
 ```
 
-并把文件顶部注释改为符号化公式（系数名对应 `app_hw_params` 字段，避免写死数字随
+并把文件顶部注释改为符号化公式（系数名对应 `app_hardware_params` 字段，避免写死数字随
 YAML 漂移）：
 
 ```c
@@ -1504,12 +1504,12 @@ git commit -m "refactor(analog): 换算常数改从 hw 参数加载，删除 APP
 
 - [ ] **Step 1: `app_adc.c` 默认值改从 hw 参数**
 
-include 区新增 `#include "app_hw_params.h"`（放在 `#include "app_adc.h"` 之后）。
+include 区新增 `#include "app_hardware_params.h"`（放在 `#include "app_adc.h"` 之后）。
 
-`app_adc_init` 局部变量区新增 `app_hw_params_t hw;`，并在 `s_cfg = (app_adc_cfg_t) {` 之前插入：
+`app_adc_init` 局部变量区新增 `app_hardware_params_t hw;`，并在 `s_cfg = (app_adc_cfg_t) {` 之前插入：
 
 ```c
-    app_hw_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
+    app_hardware_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
 ```
 
 将：
@@ -1557,12 +1557,12 @@ include 区新增 `#include "app_hw_params.h"`（放在 `#include "app_adc.h"` �
 替换为：
 
 ```c
-/* 默认配置来源：config/hardware.yaml（app_hw_params.adc） */
+/* 默认配置来源：config/hardware.yaml（app_hardware_params.adc） */
 ```
 
 - [ ] **Step 3: `app_3phase_inverter.c` 默认值改从 hw 参数**
 
-include 区新增 `#include "app_hw_params.h"`。
+include 区新增 `#include "app_hardware_params.h"`。
 
 `app_3phase_inverter_init`：
 
@@ -1582,10 +1582,10 @@ void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
 ```c
 void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
 {
-    app_hw_params_t hw;
+    app_hardware_params_t hw;
     app_3phase_inverter_cfg_t c;
 
-    app_hw_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
+    app_hardware_params_load(&hw); /* config/hardware.yaml（将来 flash 覆盖） */
     c = (app_3phase_inverter_cfg_t) {
         .pwm_freq_hz = hw.inverter.pwm_freq_hz,
         .deadtime_ns = hw.inverter.deadtime_ns,
@@ -1616,7 +1616,7 @@ void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
 
 ```c
 /*
- * 初始化配置（默认值来源 config/hardware.yaml → app_hw_params.inverter）
+ * 初始化配置（默认值来源 config/hardware.yaml → app_hardware_params.inverter）
  *   更换 MOS/驱动电路后调整 YAML 中的 deadtime_ns
  */
 ```
@@ -1625,7 +1625,7 @@ void app_3phase_inverter_init(const app_3phase_inverter_cfg_t *cfg)
 
 - [ ] **Step 5: `app_debug_inverter.c` 打印改读 hw 参数**
 
-include 区新增 `#include "app_hw_params.h"`。
+include 区新增 `#include "app_hardware_params.h"`。
 
 ```c
 void app_debug_inverter_init(void)
@@ -1640,9 +1640,9 @@ void app_debug_inverter_init(void)
 void app_debug_inverter_init(void)
 {
 #if INVERTER_TEST_ENABLE
-    app_hw_params_t hw;
+    app_hardware_params_t hw;
 
-    app_hw_params_load(&hw); /* config/hardware.yaml */
+    app_hardware_params_load(&hw); /* config/hardware.yaml */
     app_debug_printf("\r\n[3PH] 三相逆变桥输出自检：%u Hz / %u%% / 持续\r\n",
                      (unsigned) hw.inverter.pwm_freq_hz,
                      (unsigned) (INVERTER_TEST_DUTY * 100.0f));
@@ -1650,7 +1650,7 @@ void app_debug_inverter_init(void)
 
 - [ ] **Step 6: `app_debug_motor.c` 触发延时复位改读 hw 参数**
 
-include 区新增 `#include "app_hw_params.h"`。
+include 区新增 `#include "app_hardware_params.h"`。
 
 ```c
     (void) app_adc_set_trigger_delay_ns(APP_ADC_TRIGGER_DELAY_NS_DEFAULT);
@@ -1658,9 +1658,9 @@ include 区新增 `#include "app_hw_params.h"`。
 →
 ```c
     {
-        app_hw_params_t hw;
+        app_hardware_params_t hw;
 
-        app_hw_params_load(&hw); /* config/hardware.yaml */
+        app_hardware_params_load(&hw); /* config/hardware.yaml */
         (void) app_adc_set_trigger_delay_ns(hw.adc.trigger_delay_ns);
     }
 ```
@@ -1680,7 +1680,7 @@ Expected: `BUILD OK`；计数 `0`
 
 1. `App/Platform/Inc/app_3phase_inverter.h`
    `@param ... NULL = 使用默认值（APP_3PHASE_INVERTER_*_DEFAULT）`
-   → `@param ... NULL = 使用默认值（config/hardware.yaml → app_hw_params.inverter）`（悬空宏引用）
+   → `@param ... NULL = 使用默认值（config/hardware.yaml → app_hardware_params.inverter）`（悬空宏引用）
 2. `App/Platform/Inc/app_adc.h` doxygen
    `@param cfg 配置；NULL = 默认（500ns 延时、16bit、sample_cycle=10）`
    → `@param cfg 配置；NULL = 默认（trigger_delay/sample_cycle 取自 config/hardware.yaml；resolution=16bit）`
@@ -1727,7 +1727,7 @@ git commit -m "refactor(adc,inverter): 默认值改从 hw 参数加载，删除 
 #define APP_CAN_INST      (3U)
 ```
 
-include 区新增 `#include "app_sw_params.h"`。
+include 区新增 `#include "app_software_params.h"`。
 
 `app_can_init` 内（`app_can_reset_state();` 之后）：
 
@@ -1739,9 +1739,9 @@ include 区新增 `#include "app_sw_params.h"`。
 →
 ```c
     {
-        app_sw_params_t sw;
+        app_software_params_t sw;
 
-        app_sw_params_load(&sw); /* config/software.yaml（将来 flash 覆盖） */
+        app_software_params_load(&sw); /* config/software.yaml（将来 flash 覆盖） */
         intf_can_cfg_t cfg = {
             .baudrate     = sw.can.baudrate,
 ```
@@ -1777,9 +1777,9 @@ git commit -m "refactor(can): 波特率改从 sw 参数加载，删除 APP_CAN_B
 include 区（`#include "app_fault.h"` 附近）新增：
 
 ```c
-#include "app_hw_params.h"
+#include "app_hardware_params.h"
 #include "app_motor_params.h"
-#include "app_sw_params.h"
+#include "app_software_params.h"
 ```
 
 在 `app_init()` 的 boot 打印块之后（`rst_status` 打印结束后）插入：
@@ -1788,12 +1788,12 @@ include 区（`#include "app_fault.h"` 附近）新增：
     /* 0b. 参数摘要（验证 YAML 参数管线端到端：config/{motor,hardware,software}.yaml → 生成 → 加载） */
     {
         app_motor_params_t mp;
-        app_hw_params_t hw;
-        app_sw_params_t sw;
+        app_hardware_params_t hw;
+        app_software_params_t sw;
 
         app_motor_params_load(&mp);
-        app_hw_params_load(&hw);
-        app_sw_params_load(&sw);
+        app_hardware_params_load(&hw);
+        app_software_params_load(&sw);
         app_debug_printf(
             "params: pp=%u rs=%.4f ls=%g | a/v=%.4f vbus/v=%.4f | oc=%.1f ov=%.1f uv=%.1f | pwm=%u/%u\r\n",
             (unsigned) mp.pole_pairs, (double) mp.rs_ohm, (double) mp.ls_h,
@@ -1808,11 +1808,11 @@ include 区（`#include "app_fault.h"` 附近）新增：
 
 ```c
 void app_run(void) {
-    app_hw_params_t hw;
+    app_hardware_params_t hw;
     uint32_t cpu_freq;
     uint32_t loop_cycles;
 
-    app_hw_params_load(&hw); /* 控制节拍 = 半桥开关频率（config/hardware.yaml） */
+    app_hardware_params_load(&hw); /* 控制节拍 = 半桥开关频率（config/hardware.yaml） */
     cpu_freq = intf_clock_get_cpu_freq();
     loop_cycles = cpu_freq / hw.inverter.pwm_freq_hz;
 
@@ -1910,7 +1910,7 @@ Expected：与迁移前行为一致（阈值来源改变，逻辑不变）。
 ## 评审期变更（2026-09-20，Kaiser 评审反馈）
 
 1. **默认 CAN ID 字段加入**：`software.yaml` can 节新增 `rx_control_id` / `tx_report_id`
-   （占位；十六进制表达式保留溯源）；SCHEMA、`app_sw_can_t`、spec/plan 同步；参数总数 50 → 52。
+   （占位；十六进制表达式保留溯源）；SCHEMA、`app_software_can_t`、spec/plan 同步；参数总数 50 → 52。
 2. **CAN 自检周期帧接线**：`app_debug_can.c` 的 1Hz 总线发送帧 ID 由旧自检常量 (0x114)
    改为 `sw.can.tx_report_id`；init 打印改为输出总线实际波特率与回报 ID；
    环回自检保留内部常量（测试隔离）；`rx_control_id` 暂无消费者（待协议逻辑）。

@@ -1,7 +1,9 @@
-/*
- * Debug Inverter - 三相逆变桥输出自检（PWM1 → 合封预驱）
+/**
+ * @file    app_debug_inverter.h
+ * @brief   三相逆变桥输出自检（PWM1 → 合封预驱）
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 

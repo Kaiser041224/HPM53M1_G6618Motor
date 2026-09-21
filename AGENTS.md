@@ -216,3 +216,33 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   （`templates/hpm5361-4layer`）。
 - 排查提示：GPTMR 输出异常时优先核对 `CMP0/CMP1/RLD`（注意 CMP 值位于寄存器
   bit[27:4]，即"值 << 4"）与 `CNT` 是否推进。
+
+### 代码风格统一（2026-09-20）
+
+- **版权头**（SDK 原生文件除外——`Board/hpm5301evklite_board/**`、`linkers/**` 保持 HPMicro）：
+  统一为组织 `Alliance HardwareGroup`、作者 `Kaiser`，格式：
+
+  ```c
+  /**
+   * @file    app_fault.h
+   * @brief   故障保护与错误处理（v1：纯判断）
+   * @author  Kaiser
+   *
+   * <原有说明文字保留>
+   *
+   * Copyright (c) 2026 Alliance HardwareGroup
+   * SPDX-License-Identifier: BSD-3-Clause
+   */
+  ```
+
+- **Doxygen 注释**：文件头 `@file/@brief/@author`；公开函数 `@brief/@param/@return`；
+  类型 `@brief` + 字段行尾 `/**< 说明 */`；`.c` 内部静态函数 `@brief`；
+  函数体内说明性注释保持 `/* */` 不变。
+- **命名**：
+  - 文件级静态：`s_` + 完整语义名；跨文件/调试观测全局：`g_`；无前缀静态补前缀；
+  - **禁止缩写**：`hw`→`hardware`、`sw`→`software`；禁止 `s_f`/`s_cfg`/`s_ctx`（无模块限定）
+    等过度省略名；
+  - 局部变量：单字母仅 `i/j/k`（循环）与 `x/y`（数学）；`ok/rc/id/ch` 等语义明确者保留；
+  - 既有改名基准：`s_f`→`s_fault_ctx`、`s_hw`→`s_hardware_params`、`s_sw`→`s_software_params`、
+    `s_cfg`→`s_adc_cfg`、`s_ctx`→`s_spi_ctx`/`s_uart_ctx`/`s_kth7823_ctx`；
+    模块 `app_hw_params`→`app_hardware_params`、`app_sw_params`→`app_software_params`。

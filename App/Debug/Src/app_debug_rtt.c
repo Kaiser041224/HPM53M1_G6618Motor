@@ -1,7 +1,9 @@
-/*
- * Debug RTT - SEGGER RTT wrapper for debug output
+/**
+ * @file    app_debug_rtt.c
+ * @brief   SEGGER RTT 调试输出封装
+ * @author  Kaiser
  *
- * Copyright (c) 2026 HPMicro
+ * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
@@ -12,8 +14,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-int app_debug_printf(const char *fmt, ...)
-{
+int app_debug_printf(const char* fmt, ...) {
     char buf[256];
     va_list ap;
     int len;

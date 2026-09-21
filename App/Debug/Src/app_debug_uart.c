@@ -1,3 +1,12 @@
+/**
+ * @file    app_debug_uart.c
+ * @brief   UART0 自检（RX 回显 / TX 状态行）
+ * @author  Kaiser
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "app_debug_uart.h"
 
 #include "app_debug_cmd.h"
@@ -15,8 +24,7 @@ static uint32_t s_tick;
 static uint32_t s_rx_total;
 static uint32_t s_last_tx_cycle;
 
-void app_debug_uart_init(void)
-{
+void app_debug_uart_init(void) {
     int ret;
 
     ret = app_uart_init();
@@ -27,40 +35,41 @@ void app_debug_uart_init(void)
     app_debug_printf("[UART] tx self-test: ret=%d\r\n", ret);
 }
 
-void app_debug_uart_run_once(void)
-{
+void app_debug_uart_run_once(void) {
     uint8_t buf[UART_TEST_RX_BUF_SIZE];
     uint32_t now;
     uint32_t period_cycles;
-    int n;
+    int rx_len;
 
     /* 1) RX：排空环形缓冲 -> 原样回显 + RTT 记录 */
-    n = app_uart_read(buf, sizeof(buf), 0U);
-    if (n > 0) {
-        uint8_t last = buf[n - 1];
-        char printable = ((last >= 0x20U) && (last < 0x7FU)) ? (char) last : '.';
+    rx_len = app_uart_read(buf, sizeof(buf), 0U);
+    if (rx_len > 0) {
+        uint8_t last = buf[rx_len - 1];
+        char printable = ((last >= 0x20U) && (last < 0x7FU)) ? (char)last : '.';
 
-        s_rx_total += (uint32_t) n;
-        (void) app_uart_write(buf, (size_t) n);
-        app_debug_printf("[UART] rx n=%d total=%u last=0x%02X ('%c')\r\n", n,
-                         (unsigned) s_rx_total, (unsigned) last, printable);
-        app_debug_cmd_handle(buf, (size_t) n);
+        s_rx_total += (uint32_t)rx_len;
+        (void)app_uart_write(buf, (size_t)rx_len);
+        app_debug_printf(
+            "[UART] rx n=%d total=%u last=0x%02X ('%c')\r\n", rx_len, (unsigned)s_rx_total,
+            (unsigned)last, printable);
+        app_debug_cmd_handle(buf, (size_t)rx_len);
     }
 
     /* 2) TX：每秒发送一行状态 */
     now = intf_clock_get_cycle();
     period_cycles = (intf_clock_get_cpu_freq() / 1000U) * UART_TEST_TX_PERIOD_MS;
-    if ((uint32_t) (now - s_last_tx_cycle) >= period_cycles) {
+    if ((uint32_t)(now - s_last_tx_cycle) >= period_cycles) {
         char line[96];
         int len;
 
         s_last_tx_cycle = now;
         s_tick++;
-        len = snprintf(line, sizeof(line), "uart: tick=%u rx_total=%u\r\n", (unsigned) s_tick,
-                       (unsigned) s_rx_total);
+        len = snprintf(
+            line, sizeof(line), "uart: tick=%u rx_total=%u\r\n", (unsigned)s_tick,
+            (unsigned)s_rx_total);
         if (len > 0) {
-            if (app_uart_write((const uint8_t *) line, (size_t) len) != 0) {
-                app_debug_printf("[UART] tx FAILED (tick=%u)\r\n", (unsigned) s_tick);
+            if (app_uart_write((const uint8_t*)line, (size_t)len) != 0) {
+                app_debug_printf("[UART] tx FAILED (tick=%u)\r\n", (unsigned)s_tick);
             }
         }
     }
