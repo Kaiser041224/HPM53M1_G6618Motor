@@ -12,6 +12,7 @@
  *
  * 安全联锁（设计文档 §8）：
  *   驱动类命令要求无故障锁存；先停旋转；标定要求电机停止。
+ *   inv 使能 / cal current 与 FOC 互斥（需先 'foc off'）；inv off 始终允许。
  *   命令本体快速返回，不阻塞控制环。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -217,6 +218,10 @@ static int cmd_inv(int argc, char** argv) {
         if (!app_terminal_cmd_require_no_fault(csh)) {
             return -1;
         }
+        if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+            csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
+            return -1;
+        }
     }
 
     app_terminal_cmd_capture_begin();
@@ -386,6 +391,10 @@ static int cmd_cal(int argc, char** argv) {
         return -1;
     }
     if (!app_terminal_cmd_require_no_fault(csh)) {
+        return -1;
+    }
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        csh_printf(csh, "ERR: FOC enabled (use 'foc off' first)\r\n");
         return -1;
     }
 

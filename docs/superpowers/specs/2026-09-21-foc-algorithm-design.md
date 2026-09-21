@@ -609,3 +609,4 @@ control:
 | 日期 | 变更 | 说明 |
 | :--- | :--- | :--- |
 | 2026-09-21 | 初稿 | 决策记录见 §0（Kaiser）；V1 范围 = 电流环 + 电角度辨识；R/L/Ke 与无感后置 |
+| 2026-09-21 | V1 实施 | P1a~P1d 落地：Algorithm/FOC（foc_math/foc_angle/foc_current/foc_modulation/id_encoder）+ Control（app_foc/app_foc_current/app_motor_identify）+ Terminal（foc/motor iq/cal encoder）+ 参数登记；主机自测 252 用例；台架见 §9 记录 |

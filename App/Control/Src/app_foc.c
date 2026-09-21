@@ -199,6 +199,10 @@ int app_foc_enable(void) {
     /* 注：app_3phase_inverter_enable() 内含 +12V 栅极供电稳定等待（约 10ms 阻塞）。
      * 该窗口内桥处于关闭态（PWM 未启动），无电流风险；但 25kHz 环与 L2/L3 保护暂停。
      * 与既有 V/F 启动路径同构；非阻塞桥使能为 v2 项（spec §10）。 */
+    /* 清除调试 inv 可能遗留的逐相强制关断（否则该相输出被屏蔽） */
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
+        (void)app_3phase_inverter_release((app_3phase_id_t)i);
+    }
     if (app_3phase_inverter_enable() != 0) {
         return -1;
     }
