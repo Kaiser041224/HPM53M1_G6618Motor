@@ -52,6 +52,8 @@ void app_foc_current_reset(void) {
     }
 }
 
+bool app_foc_current_is_ready(void) { return s_ready; }
+
 void app_foc_current_zero_vector(void) {
     (void)app_3phase_inverter_set_duty_abc(0.5f, 0.5f, 0.5f);
     g_foc_current_snapshot.duty_u = 0.5f;

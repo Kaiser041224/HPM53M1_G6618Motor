@@ -332,7 +332,7 @@ void app_foc_get_snapshot(app_foc_snapshot_t* out); /* θe/ωe/id/iq/vd/vq/duty/
 
 | 参数 | 来源 | 语义 |
 | :--- | :--- | :--- |
-| `motor.pole_pairs` | motor 域 | 电角度换算 |
+| `motor.pole_pairs` | motor 域 | 电角度换算（**init 期消费**；运行中修改需重新 `app_foc_init()`） |
 | `motor.encoder.electrical_offset_rad` / `direction` | motor 域（新增） | 辨识结果（V1 RAM，flash V2） |
 | `control.current_loop.kp` / `ki` | software 域（live） | 电流环增益（在线可调） |
 | `control.current_loop.bandwidth_rad_s` | software 域（新增，live） | 目标带宽（V1 仅文档/自整定用） |
@@ -351,7 +351,7 @@ void app_foc_get_snapshot(app_foc_snapshot_t* out); /* θe/ωe/id/iq/vd/vq/duty/
 | FOC vs `cal current`（电流零点标定） | 标定要求桥静止/零矢量：FOC 非 OFF 时拒绝标定；标定中 FOC 拒绝使能 |
 | FOC vs `inv` 命令（逐相调试） | `inv` 命令要求 FOC OFF |
 | Terminal 命令执行时间 | FOC 已启用时，命令单次处理仍 ≤200µs 预算（既有约束）；辨识走 job，不阻塞 |
-| 参数写入（`param set`） | 增益类 live 参数允许运行中写；`pole_pairs/duty_max` 运行中写只影响下一拍（记录提示） |
+| 参数写入（`param set`） | 增益类 live 参数允许运行中写；`duty_max` 下一拍生效；`pole_pairs` 为 init 期消费（运行中写需重新 `app_foc_init()`） |
 
 ---
 

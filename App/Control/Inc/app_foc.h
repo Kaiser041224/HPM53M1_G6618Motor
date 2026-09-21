@@ -72,26 +72,34 @@ int app_foc_set_iq_ref(float i_q_a);
 
 /**
  * @brief 设置 d 轴给定（辨识/调试；默认 0）
+ * @param i_d_a d 轴给定 [A]（不做单独限幅：内部电流矢量限幅兜底）
+ * @return 0 = 成功；-1 = 状态不允许/参数非法
  */
 int app_foc_set_id_ref(float i_d_a);
 
 /**
  * @brief 设置角度来源与强制角
+ * @param src 角度来源（编码器 / 强制）
+ * @param theta_e_rad 强制电角度 [rad]（src = ENCODER 时忽略）
+ * @return 0 = 成功；-1 = 枚举非法/非有限值/状态不允许
  */
 int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad);
 
 /**
  * @brief 当前状态
+ * @return 状态枚举
  */
 app_foc_state_t app_foc_get_state(void);
 
 /**
  * @brief 是否活动（!= OFF；供 Debug/Comm 互斥判断）
+ * @return true = 活动
  */
 bool app_foc_is_active(void);
 
 /**
  * @brief 读取电流环快照
+ * @param out 输出快照（不可为 NULL）
  */
 void app_foc_get_snapshot(app_foc_current_snapshot_t* out);
 
@@ -108,6 +116,9 @@ void app_foc_exit_calib(void);
 
 /**
  * @brief 辨识模式每拍更新激励（app_motor_identify 调用）
+ * @param theta_e_rad 强制电角度 [rad]
+ * @param i_d_ref d 轴电流给定 [A]
+ * @param i_q_ref q 轴电流给定 [A]
  */
 void app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref);
 

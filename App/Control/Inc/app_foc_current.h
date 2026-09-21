@@ -58,6 +58,12 @@ void app_foc_current_init(void);
 void app_foc_current_reset(void);
 
 /**
+ * @brief 电流环是否初始化就绪（参数非法时为 false）
+ * @return true = 就绪
+ */
+bool app_foc_current_is_ready(void);
+
+/**
  * @brief 25kHz 执行：读电流/母线 → 电流环 → 调制 → 写三相占空比。
  * @param theta_e_rad 电角度 [rad]
  * @param omega_e_rad_s 电角速度 [rad/s]

@@ -29,12 +29,14 @@ static float s_i_d_ref;
 static float s_i_q_ref;
 static uint32_t s_rotor_seq_last; /**< 上一拍采样序号 */
 static bool s_rotor_seq_valid;    /**< 序号已建立 */
-static bool s_initialized;
+static bool s_angle_ready;        /**< 角度链初始化成功 */
+static bool s_initialized;        /**< app_foc_init 已执行 */
 
 /**
  * @brief 电角度链初始化（参数来源 motor 域）
+ * @return 0 = 成功；-1 = 参数非法（角度链不可用，enable 将拒绝）
  */
-static void app_foc_angle_init(void) {
+static int app_foc_angle_init(void) {
     const app_motor_params_t* motor = app_motor_params_current();
     foc_angle_cfg_t cfg;
 
@@ -45,7 +47,7 @@ static void app_foc_angle_init(void) {
     cfg.sample_time_s = 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
 
     foc_angle_ctor(&s_angle);
-    (void)s_angle.init(&s_angle, &cfg);
+    return s_angle.init(&s_angle, &cfg);
 }
 
 void app_foc_init(void) {
@@ -54,7 +56,7 @@ void app_foc_init(void) {
     s_forced_theta = 0.0f;
     s_i_d_ref = 0.0f;
     s_i_q_ref = 0.0f;
-    app_foc_angle_init();
+    s_angle_ready = (app_foc_angle_init() == 0);
     app_foc_current_init();
     s_initialized = true;
 }
@@ -89,22 +91,20 @@ void app_foc_run_once(void) {
     float theta_e = 0.0f;
     float omega_e = 0.0f;
     float theta_m;
-    float duty[3];
 
     if (!s_initialized) {
         return;
     }
 
-    /* 故障门控：活动状态下 fault != NORMAL → FAULT */
-    if (s_state != APP_FOC_STATE_OFF) {
-        if (app_fault_get_state() != APP_FAULT_STATE_NORMAL) {
-            app_foc_current_zero_vector();
-            app_3phase_inverter_disable();
-            s_state = APP_FOC_STATE_FAULT;
-            return;
-        }
-    }
+    /* 故障门控：活动状态下 fault != NORMAL → FAULT（仅迁移时动作一次） */
     if (s_state == APP_FOC_STATE_FAULT) {
+        return;
+    }
+    if ((s_state != APP_FOC_STATE_OFF)
+        && (app_fault_get_state() != APP_FAULT_STATE_NORMAL)) {
+        app_foc_current_zero_vector();
+        app_3phase_inverter_disable();
+        s_state = APP_FOC_STATE_FAULT;
         return;
     }
 
@@ -126,7 +126,7 @@ void app_foc_run_once(void) {
     }
 
     /* 电流环 */
-    (void)app_foc_current_run(theta_e, omega_e, s_i_d_ref, s_i_q_ref, duty, NULL);
+    (void)app_foc_current_run(theta_e, omega_e, s_i_d_ref, s_i_q_ref, NULL, NULL);
 
     if ((s_state == APP_FOC_STATE_READY) && ((s_i_d_ref != 0.0f) || (s_i_q_ref != 0.0f))) {
         s_state = APP_FOC_STATE_RUN;
@@ -141,6 +141,9 @@ int app_foc_enable(void) {
 
     if (!s_initialized) {
         return -1;
+    }
+    if (!s_angle_ready || !app_foc_current_is_ready()) {
+        return -1; /* 角度链/电流环初始化失败：禁止使能 */
     }
     if (s_state == APP_FOC_STATE_FAULT) {
         return -1; /* 需先 app_foc_disable() 回 OFF */
@@ -163,6 +166,9 @@ int app_foc_enable(void) {
     }
     /* direction 元数据范围 [-1,1] 无法表达"仅 ±1"：运行期显式校验 */
     if ((motor->encoder.direction != 1.0f) && (motor->encoder.direction != -1.0f)) {
+        return -1;
+    }
+    if (!foc_finite(motor->encoder.electrical_offset_rad)) {
         return -1;
     }
 
@@ -203,6 +209,9 @@ int app_foc_set_iq_ref(float i_q_a) {
         return -1;
     }
     limit = app_software_params_current()->control.limits.i_q_max_a;
+    if (!foc_finite(limit) || (limit <= 0.0f)) {
+        return -1; /* 限幅值非法：拒绝（防 NaN 穿透/负值反号） */
+    }
     if (i_q_a > limit) {
         i_q_a = limit;
     } else if (i_q_a < -limit) {
@@ -225,6 +234,13 @@ int app_foc_set_id_ref(float i_d_a) {
 
 int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad) {
     if ((src != APP_FOC_ANGLE_ENCODER) && (src != APP_FOC_ANGLE_FORCED)) {
+        return -1;
+    }
+    if (!foc_finite(theta_e_rad)) {
+        return -1;
+    }
+    if ((s_state != APP_FOC_STATE_READY) && (s_state != APP_FOC_STATE_RUN)
+        && (s_state != APP_FOC_STATE_CALIB)) {
         return -1;
     }
     s_angle_src = src;
