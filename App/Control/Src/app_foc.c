@@ -139,6 +139,12 @@ static void app_foc_run_body(void) {
         return;
     }
 
+    /* 开环电压诊断（vtest）：优先于电流环；由 app_foc_current 自行调制输出 */
+    if (app_foc_current_vtest_active()) {
+        (void)app_foc_current_vtest_step();
+        return;
+    }
+
     /* 辨识模式：由辨识模块提供激励（强制角 + 电流给定） */
     if (s_state == APP_FOC_STATE_CALIB) {
         (void)app_motor_identify_fast_step();

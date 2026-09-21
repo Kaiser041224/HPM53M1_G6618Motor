@@ -18,12 +18,25 @@
 #include "foc_math.h"
 #include "foc_modulation.h"
 
+#include <math.h>
+
 #define APP_FOC_V_BUS_MIN_V (9.0f) /**< 最低母线电压 [V]（低于则拒绝输出，零矢量） */
 
 static foc_current_t s_current;
 static bool s_ready;
 static uint8_t s_trip_count; /**< 连续超限拍数 */
 static bool s_tripped;       /**< 跳闸锁存（reset 清除） */
+
+/* 开环电压诊断（vtest） */
+static bool s_vtest_active;
+static float s_vtest_v;
+static float s_vtest_theta;
+static float s_vtest_left_s;
+
+/* 波形捕获（trace） */
+static app_foc_trace_sample_t s_trace[APP_FOC_TRACE_MAX];
+static uint16_t s_trace_count;
+static bool s_trace_armed;
 
 /* Ozone 观测（.noncacheable.bss：启动清零 + 调试器直读，不受 D-Cache 影响） */
 app_foc_current_snapshot_t g_foc_current_snapshot
@@ -55,6 +68,148 @@ void app_foc_current_reset(void) {
     s_trip_count = 0U;
     s_tripped = false;
     g_foc_current_snapshot.tripped = false;
+    s_vtest_active = false;
+    s_vtest_left_s = 0.0f;
+}
+
+int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s) {
+    if (!s_ready || !foc_finite(volts) || !foc_finite(theta_e_rad) || !foc_finite(duration_s)) {
+        return -1;
+    }
+    if (volts < 0.0f) {
+        volts = 0.0f;
+    } else if (volts > 2.0f) {
+        volts = 2.0f; /* 诊断限幅：I ≈ v/R，2V/0.158Ω ≈ 12.7A（跳闸兜底） */
+    }
+    if (duration_s < 0.05f) {
+        duration_s = 0.05f;
+    } else if (duration_s > 5.0f) {
+        duration_s = 5.0f;
+    }
+    s_vtest_v = volts;
+    s_vtest_theta = theta_e_rad;
+    s_vtest_left_s = duration_s;
+    s_vtest_active = true;
+    return 0;
+}
+
+void app_foc_current_vtest_stop(void) {
+    s_vtest_active = false;
+    s_vtest_left_s = 0.0f;
+}
+
+bool app_foc_current_vtest_active(void) { return s_vtest_active; }
+
+int app_foc_current_vtest_step(void) {
+    const app_software_params_t* software = app_software_params_current();
+    const app_hardware_params_t* hardware = app_hardware_params_current();
+    app_analog_values_t values;
+    foc_modulation_cfg_t mod_cfg;
+    float v_bus, s, c, va, vb, duty[3];
+
+    if (!s_vtest_active) {
+        return -1;
+    }
+
+    s_vtest_left_s -= 1.0f / (float)hardware->inverter.pwm_freq_hz;
+    v_bus = app_analog_signal_read(ADC_CH_V_VBUS);
+    if (!foc_finite(v_bus) || (v_bus < APP_FOC_V_BUS_MIN_V) || (s_vtest_left_s <= 0.0f)) {
+        app_foc_current_vtest_stop();
+        app_foc_current_zero_vector();
+        return -1;
+    }
+
+    foc_sincos(s_vtest_theta, &s, &c);
+    va = s_vtest_v * c;
+    vb = s_vtest_v * s;
+    mod_cfg.duty_max = software->control.limits.duty_max;
+    mod_cfg.v_bus_min = APP_FOC_V_BUS_MIN_V;
+    if (foc_modulation_step(&mod_cfg, va, vb, v_bus, duty, NULL) != 0) {
+        app_foc_current_vtest_stop();
+        app_foc_current_zero_vector();
+        return -1;
+    }
+    (void)app_3phase_inverter_set_duty_abc(duty[0], duty[1], duty[2]);
+
+    /* 快照：命令电压 + 按命令角度换算的 d/q 测量（供符号/映射/标度核对） */
+    if (app_analog_signal_read_all(&values)) {
+        float i_alpha, i_beta;
+
+        foc_clarke(values.i_u_a, values.i_v_a, values.i_w_a, &i_alpha, &i_beta);
+        foc_park_sc(i_alpha, i_beta, s, c, &g_foc_current_snapshot.i_d_a,
+                    &g_foc_current_snapshot.i_q_a);
+        g_foc_current_snapshot.theta_e_rad = s_vtest_theta;
+        g_foc_current_snapshot.omega_e_rad_s = 0.0f;
+        g_foc_current_snapshot.i_d_ref_a = 0.0f;
+        g_foc_current_snapshot.i_q_ref_a = 0.0f;
+        g_foc_current_snapshot.v_d_v = s_vtest_v;
+        g_foc_current_snapshot.v_q_v = 0.0f;
+        g_foc_current_snapshot.v_bus_v = v_bus;
+        g_foc_current_snapshot.duty_u = duty[0];
+        g_foc_current_snapshot.duty_v = duty[1];
+        g_foc_current_snapshot.duty_w = duty[2];
+        g_foc_current_snapshot.v_scale = 1.0f;
+        g_foc_current_snapshot.saturated = false;
+        g_foc_current_snapshot.valid = true;
+        g_foc_current_snapshot.run_count++;
+
+        /* 过流保护（与电流环一致）：|i_dq| 超限 → 跳闸停机 */
+        {
+            float i_trip = software->control.limits.i_trip_a;
+            float mag2 = (g_foc_current_snapshot.i_d_a * g_foc_current_snapshot.i_d_a)
+                         + (g_foc_current_snapshot.i_q_a * g_foc_current_snapshot.i_q_a);
+
+            if (foc_finite(i_trip) && (i_trip > 0.0f) && (mag2 > (i_trip * i_trip))) {
+                s_tripped = true;
+                g_foc_current_snapshot.tripped = true;
+                app_foc_current_vtest_stop();
+                app_foc_current_protect();
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+int app_foc_trace_arm(void) {
+    if (!s_ready) {
+        return -1;
+    }
+    s_trace_count = 0U;
+    s_trace_armed = true;
+    return 0;
+}
+
+const app_foc_trace_sample_t* app_foc_trace_data(uint16_t* count) {
+    if (count != NULL) {
+        *count = s_trace_count;
+    }
+    return s_trace;
+}
+
+void app_foc_trace_reset(void) {
+    s_trace_count = 0U;
+    s_trace_armed = false;
+}
+
+/**
+ * @brief 捕获单拍样本（trace 用）
+ */
+static void app_foc_trace_capture(void) {
+    if (!s_trace_armed) {
+        return;
+    }
+    if (s_trace_count < APP_FOC_TRACE_MAX) {
+        s_trace[s_trace_count].i_d_a = g_foc_current_snapshot.i_d_a;
+        s_trace[s_trace_count].i_q_a = g_foc_current_snapshot.i_q_a;
+        s_trace[s_trace_count].v_d_v = g_foc_current_snapshot.v_d_v;
+        s_trace[s_trace_count].v_q_v = g_foc_current_snapshot.v_q_v;
+        s_trace[s_trace_count].theta_e_rad = g_foc_current_snapshot.theta_e_rad;
+        s_trace_count++;
+    }
+    if (s_trace_count >= APP_FOC_TRACE_MAX) {
+        s_trace_armed = false;
+    }
 }
 
 bool app_foc_current_is_tripped(void) { return s_tripped; }
@@ -207,6 +362,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     if (g_foc_current_snapshot.valid) {
         g_foc_current_snapshot.run_count++;
     }
+    app_foc_trace_capture();
     return 0;
 }
 

@@ -27,9 +27,9 @@ fault:
 control:
   # FOC 电流环（V1 落地；增益 = 手册 R/L + 极点对消初值，V2 自整定更新）
   current_loop:
-    kp: 0.745                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×1kHz）
-    ki: 992.7                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
-    bandwidth_rad_s: 6283.2  # 目标带宽 [rad/s]（自整定用）
+    kp: 0.372                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×1kHz）
+    ki: 496.4                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
+    bandwidth_rad_s: 3141.6  # 目标带宽 [rad/s]（自整定用）
     decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
   speed_loop:
     kp: 0.0                  # 速度环 PID（目标带宽 50Hz；V2）

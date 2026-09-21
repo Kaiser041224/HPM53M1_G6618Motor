@@ -83,6 +83,63 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);
 
 /**
+ * @brief 开环电压矢量诊断（vtest）：不经电流环，按给定电压/角度直接调制输出。
+ *        用于核实电流采样符号/相序映射/标度与电机直流增益（I ≈ v/R）。
+ * @param volts 相电压峰值 [V]（内部限幅 0~2V）
+ * @param theta_e_rad 电角度 [rad]
+ * @param duration_s 持续时间 [s]（内部限幅 0.05~5s）
+ * @return 0 = 成功；-1 = 状态不允许/参数非法
+ */
+int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s);
+
+/**
+ * @brief 停止 vtest（零矢量）
+ */
+void app_foc_current_vtest_stop(void);
+
+/**
+ * @brief vtest 是否进行中
+ * @return true = 进行中
+ */
+bool app_foc_current_vtest_active(void);
+
+/**
+ * @brief vtest 单拍执行（由 app_foc 在 READY/RUN 状态调用）
+ * @return 0 = 已执行；-1 = 已结束/失败
+ */
+int app_foc_current_vtest_step(void);
+
+/** 波形捕获最大样本数（25kHz × 128 ≈ 5.1ms） */
+#define APP_FOC_TRACE_MAX (128U)
+
+/**
+ * @brief 捕获样本（d/q 电流、电压、电角度）
+ */
+typedef struct {
+    float i_d_a, i_q_a;   /**< d/q 电流 [A] */
+    float v_d_v, v_q_v;   /**< d/q 电压 [V] */
+    float theta_e_rad;    /**< 电角度 [rad] */
+} app_foc_trace_sample_t;
+
+/**
+ * @brief 布置捕获（下一拍开始；采满 APP_FOC_TRACE_MAX 后自动停止）
+ * @return 0 = 成功；-1 = 参数/状态错误
+ */
+int app_foc_trace_arm(void);
+
+/**
+ * @brief 读取捕获数据
+ * @param count 输出已捕获样本数
+ * @return 数据指针（长度 ≥ count）
+ */
+const app_foc_trace_sample_t* app_foc_trace_data(uint16_t* count);
+
+/**
+ * @brief 清空捕获缓冲
+ */
+void app_foc_trace_reset(void);
+
+/**
  * @brief 快速过流是否已跳闸（|i_dq| 连续超限）
  * @return true = 已跳闸
  */

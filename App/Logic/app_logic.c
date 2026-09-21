@@ -203,14 +203,17 @@ void app_run(void) {
             app_gpio_toggle(PIN_LED_STATUS);
 
 #if APP_DEBUG_PERIODIC_PRINT
-            {
+            /* FOC 活动期间跳过 RTT 打印：打印停顿（可达 ms 级）会使电流环采样间隔
+             * 远超 40µs，相位裕度不足 → 零给定下电流缓增/抖动（台架实测）。
+             * FOC OFF 时打印照常。 */
+            if (!app_foc_is_active()) {
                 uint32_t c0 = intf_clock_get_cycle();
                 app_debug_printf(
                     "hb=%u led=%u printf_cyc=%u\r\n", (unsigned)heartbeat,
                     (unsigned)app_gpio_read(PIN_LED_STATUS), (unsigned)last_printf_cycles);
                 last_printf_cycles = intf_clock_get_cycle() - c0;
+                app_debug_encoder_print_stats();
             }
-            app_debug_encoder_print_stats();
 #else
             (void)last_printf_cycles;
             (void)heartbeat;
