@@ -83,8 +83,15 @@ void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);
 
 /**
  * @brief 输出零矢量（duty = 0.5/0.5/0.5），不改变算法状态
+ * @note 命令式零矢量（使能/关闭/待机）：不改变 valid/fault_count
  */
 void app_foc_current_zero_vector(void);
+
+/**
+ * @brief 保护式零矢量：零矢量 + 快照 valid=false + fault_count++
+ * @note 供保护路径使用（电流环内部失败 / 换相数据停摆等）
+ */
+void app_foc_current_protect(void);
 
 #ifdef __cplusplus
 }

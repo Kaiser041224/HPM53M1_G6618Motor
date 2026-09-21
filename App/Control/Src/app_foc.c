@@ -126,7 +126,7 @@ static void app_foc_run_body(void) {
         omega_e = 0.0f;
     } else {
         if (!app_foc_read_rotor_rad(&theta_m)) {
-            app_foc_current_zero_vector();
+            app_foc_current_protect(); /* 换相数据停摆/无效：保护式零矢量 */
             return;
         }
         theta_e = s_angle.step(&s_angle, theta_m, &omega_e);

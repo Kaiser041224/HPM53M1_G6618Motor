@@ -5,7 +5,6 @@
  *
  * 命令：
  *   motor start | stop | freq <+|-> | mod <+|->   （开环 V/F 自检）
- *   motor iq [<A>]                               （FOC 转矩给定/查询）
  *   motor iq [<A>]                               （FOC 转矩给定；无参 = 查询）
  *   inv <u|v|w|all|off>                          （三相逆变桥逐相输出）
  *   cal current                                  （电流零点标定）

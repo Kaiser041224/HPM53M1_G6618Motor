@@ -69,7 +69,7 @@ void app_foc_current_zero_vector(void) {
 /**
  * @brief 保护式零矢量：输出零矢量 + 标记数据不可信 + 故障计数
  */
-static void app_foc_current_protect(void) {
+void app_foc_current_protect(void) {
     app_foc_current_zero_vector();
     g_foc_current_snapshot.valid = false;
     g_foc_current_snapshot.fault_count++;
