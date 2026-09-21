@@ -216,6 +216,54 @@ void test_id_encoder(void) {
         CHECK(out7.fail_reason == ID_ENCODER_FAIL_QUALITY);
     }
 
+    /* 总超时：正常跟随但超时极短 → FAILED(TIMEOUT) */
+    {
+        id_encoder_t id9;
+        id_encoder_cfg_t cfg9 = cfg;
+        id_encoder_in_t in;
+        id_encoder_out_t out9;
+        cfg9.lockin_ms = 10.0f;
+        cfg9.dir_ms = 10.0f;
+        cfg9.timeout_ms = 50.0f; /* 扫描需 180×5ms，必然超时 */
+        id_encoder_ctor(&id9);
+        CHECK(id9.init(&id9, &cfg9) == 0);
+        id9.reset(&id9);
+        out9 = (id_encoder_out_t){0};
+        for (int n = 0; n < 300000; n++) {
+            in.theta_m_raw_rad = foc_wrap_2pi((out9.theta_e_cmd + 1.234f) / 10.0f);
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id9.step(&id9, &in, &out9);
+            if (out9.done || out9.failed) {
+                break;
+            }
+        }
+        CHECK(out9.failed);
+        CHECK(out9.fail_reason == ID_ENCODER_FAIL_TIMEOUT);
+        CHECK_NEAR(out9.i_d_ref, 0.0f, 1e-6f);
+    }
+
+    /* 未初始化调用：安全默认（零给定 + FAILED(CONFIG)） */
+    {
+        id_encoder_t id10;
+        id_encoder_in_t in = {
+            .theta_m_raw_rad = 0.0f,
+            .i_d_a = 0.0f,
+            .i_q_a = 0.0f,
+            .v_bus_v = 24.0f,
+            .dt_s = 1.0f / 25000.0f,
+        };
+        id_encoder_out_t out10;
+        id_encoder_ctor(&id10);
+        out10 = (id_encoder_out_t){0};
+        id10.step(&id10, &in, &out10);
+        CHECK(out10.failed);
+        CHECK(out10.fail_reason == ID_ENCODER_FAIL_CONFIG);
+        CHECK_NEAR(out10.i_d_ref, 0.0f, 1e-6f);
+    }
+
     /* 极对数校验失败：扫描后 30% 转子打滑（行程不足）→ FAILED(RATIO) */
     {
         id_encoder_t id8;

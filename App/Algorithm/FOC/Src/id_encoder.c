@@ -11,6 +11,9 @@
 
 #define ID_ENCODER_TS_FALLBACK (1.0f / 25000.0f) /**< 非法 dt 时的兜底步长 [s] */
 
+/* 方向判定最小跟随幅度：|Δθm| 低于期望位移的该比例 → 判定转子未跟随 */
+#define ID_ENCODER_DIR_MIN_RATIO (0.2f)
+
 /**
  * @brief 初始化
  */
@@ -76,22 +79,27 @@ static bool id_encoder_sweep_step(id_encoder_t* self, const id_encoder_in_t* in,
 
     /* 机械位移累计（wrap-safe；仅正向扫描累计，用于极对数校验）。
      * 仅在首个采样点之后累计：DIR 段结束时强制角由 dir_step_rad 回落至 0，
-     * 转子随之回退的瞬态不属于正向扫描行程，须排除。 */
-    if (fwd && self->_theta_m_prev_valid && (self->_acc_n > 0U)) {
-        self->_mech_travel += foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_prev);
+     * 转子随之回退的瞬态不属于正向扫描行程，须排除。
+     * 非有限样本完全跳过（不更新 prev / 不累加），由 step() 的样本计数兜底。 */
+    if (foc_finite(in->theta_m_raw_rad)) {
+        if (fwd && self->_theta_m_prev_valid && (self->_acc_n > 0U)) {
+            self->_mech_travel += foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_prev);
+        }
+        self->_theta_m_prev = in->theta_m_raw_rad;
+        self->_theta_m_prev_valid = true;
     }
-    self->_theta_m_prev = in->theta_m_raw_rad;
-    self->_theta_m_prev_valid = true;
 
-    /* 每步驻留结束采样一次（转子已稳定） */
+    /* 每步驻留结束采样一次（转子已稳定）；样本无效则跳过累加但推进步索引 */
     if (self->_t_ms >= self->_cfg.sweep_step_ms) {
-        float p = (float)self->_cfg.pole_pairs;
-        float delta = foc_wrap_pm_pi(self->_theta_cmd - p * self->_direction * in->theta_m_raw_rad);
+        if (foc_finite(in->theta_m_raw_rad)) {
+            float p = (float)self->_cfg.pole_pairs;
+            float delta =
+                foc_wrap_pm_pi(self->_theta_cmd - p * self->_direction * in->theta_m_raw_rad);
 
-        self->_s_sum += sinf(delta);
-        self->_c_sum += cosf(delta);
-        self->_acc_n++;
-
+            self->_s_sum += sinf(delta);
+            self->_c_sum += cosf(delta);
+            self->_acc_n++;
+        }
         self->_t_ms = 0.0f;
         self->_step_idx++;
     }
@@ -191,7 +199,7 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
             float delta = foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_start);
             float expected = self->_cfg.dir_step_rad / (float)self->_cfg.pole_pairs;
 
-            if (fabsf(delta) < (0.2f * expected)) {
+            if (fabsf(delta) < (ID_ENCODER_DIR_MIN_RATIO * expected)) {
                 /* 转子未跟随（摩擦/电流不足/编码器异常）：明确失败 */
                 self->_fail = ID_ENCODER_FAIL_DIR;
                 self->_phase = ID_ENCODER_PHASE_FAILED;
