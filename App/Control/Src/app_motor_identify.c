@@ -52,13 +52,12 @@ static bool s_rotor_seq_valid;    /**< 序号已建立 */
  * @brief 读取转子机械角（未加软件零点）[rad]
  */
 static bool identify_read_theta_m(float* theta_m_rad) {
-    uint16_t raw;
     bool valid;
 
     {
         uint32_t seq;
 
-        if ((app_encoder_get_rotor_raw(&raw, &valid, &seq) != 0) || !valid) {
+        if ((app_encoder_get_rotor_rad(theta_m_rad, &valid, &seq) != 0) || !valid) {
             return false;
         }
         if (s_rotor_seq_valid && (seq == s_rotor_seq_last)) {
@@ -67,7 +66,6 @@ static bool identify_read_theta_m(float* theta_m_rad) {
         s_rotor_seq_last = seq;
         s_rotor_seq_valid = true;
     }
-    *theta_m_rad = (float)raw * (FOC_TWO_PI_F / 65536.0f);
     return true;
 }
 

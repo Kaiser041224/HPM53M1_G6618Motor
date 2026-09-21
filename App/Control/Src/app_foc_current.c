@@ -40,7 +40,7 @@ void app_foc_current_init(void) {
     cfg.decoupling_en = software->control.current_loop.decoupling_en;
     cfg.l_d = motor->ls_h;
     cfg.l_q = motor->ls_h;
-    cfg.lambda = motor->ke_vs_per_rad;
+    cfg.lambda = motor->flux_linkage_wb; /* 磁链（电角度·相峰值口径；勿用机械角·线 RMS 的 ke） */
     cfg.aw_decay = 0.99f;
 
     foc_current_ctor(&s_current);

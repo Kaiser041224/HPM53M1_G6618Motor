@@ -39,6 +39,7 @@ SCHEMA = {
         ("rs_ohm", "rs_ohm", "f32", 0.0, None),
         ("ls_h", "ls_h", "f32", 0.0, None),
         ("ke_vs_per_rad", "ke_vs_per_rad", "f32", 0.0, None),
+        ("flux_linkage_wb", "flux_linkage_wb", "f32", 0.0, None),
         ("kt_nm_per_a", "kt_nm_per_a", "f32", 0.0, None),
         ("i_rated_a", "i_rated_a", "f32", 0.0, None),
         ("i_peak_10s_a", "i_peak_10s_a", "f32", 0.0, None),
@@ -97,6 +98,7 @@ SCHEMA = {
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
         ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.501, 1.0),
         ("control.limits.i_trip_a", "control.limits.i_trip_a", "f32", 0.0, None),
+        ("control.limits.speed_max_rad_s", "control.limits.speed_max_rad_s", "f32", 0.0, None),
     ],
 }
 

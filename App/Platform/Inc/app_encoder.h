@@ -53,6 +53,15 @@ int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw);
 int app_encoder_sample_rotor(void);
 
 /**
+ * @brief 读取转子共享采样缓存并换算为机械角（按器件分辨率；无 I/O）。
+ * @param rad 输出机械角（未加软件零点）[rad]，范围 [0, 2π)
+ * @param valid 输出缓存有效性
+ * @param seq 输出采样序号（每次成功采样 +1；可为 NULL）
+ * @return 0 = 成功；-1 = 参数错误
+ */
+int app_encoder_get_rotor_rad(float* rad, bool* valid, uint32_t* seq);
+
+/**
  * @brief 读取转子共享采样缓存（无 I/O）。
  * @param raw 输出原始值（未加软件零点）
  * @param valid 输出缓存有效性

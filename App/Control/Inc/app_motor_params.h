@@ -39,7 +39,8 @@ typedef struct {
     uint8_t  pole_pairs;         /**< 极对数 */
     float    rs_ohm;             /**< 相电阻 [Ω] */
     float    ls_h;               /**< 相电感 [H] */
-    float    ke_vs_per_rad;      /**< 反电动势系数 [V·s/rad] */
+    float    ke_vs_per_rad;      /**< 反电动势系数 [V·s/rad]（机械角·线电压 RMS 口径） */
+    float    flux_linkage_wb;    /**< 磁链 [Wb]（电角度·相电压峰值口径；FOC 用） */
     float    kt_nm_per_a;        /**< 转矩系数 [N·m/A] */
     float    i_rated_a;          /**< 额定电流 [A]（RMS，105°C） */
     float    i_peak_10s_a;       /**< 峰值电流 10s [A]（峰值） */

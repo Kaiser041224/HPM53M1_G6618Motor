@@ -129,6 +129,19 @@ int app_encoder_sample_rotor(void) {
     return rc;
 }
 
+int app_encoder_get_rotor_rad(float* rad, bool* valid, uint32_t* seq) {
+    uint16_t raw;
+
+    if (rad == NULL) {
+        return -1;
+    }
+    if (app_encoder_get_rotor_raw(&raw, valid, seq) != 0) {
+        return -1;
+    }
+    *rad = (float)raw * s_rad_scale[APP_ENCODER_ROTOR];
+    return 0;
+}
+
 int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid, uint32_t* seq) {
     if ((raw == NULL) || (valid == NULL)) {
         return -1;

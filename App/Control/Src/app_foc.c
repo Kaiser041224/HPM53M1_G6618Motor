@@ -28,7 +28,8 @@ static foc_angle_t s_angle;
 static app_foc_angle_source_t s_angle_src;
 static float s_forced_theta;
 static float s_i_d_ref;
-static float s_i_q_ref;
+static float s_i_q_ref_cmd; /**< 操作员 q 轴给定 [A]（未限速） */
+static float s_i_q_ref;     /**< 生效 q 轴给定 [A]（含转矩模式限速） */
 static uint32_t s_rotor_seq_last; /**< 上一拍采样序号 */
 static bool s_rotor_seq_valid;    /**< 序号已建立 */
 static bool s_angle_ready;        /**< 角度链初始化成功 */
@@ -60,6 +61,7 @@ void app_foc_init(void) {
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_forced_theta = 0.0f;
     s_i_d_ref = 0.0f;
+    s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_angle_ready = (app_foc_angle_init() == 0);
     app_foc_current_init();
@@ -72,11 +74,11 @@ void app_foc_init(void) {
  * @note 序号未推进（采样停摆）→ 视为无效，调用方应输出零矢量
  */
 static bool app_foc_read_rotor_rad(float* theta_m_rad) {
-    uint16_t raw;
     bool valid;
     uint32_t seq;
 
-    if (app_encoder_get_rotor_raw(&raw, &valid, &seq) != 0) {
+    /* 按器件分辨率的原始机械角（未加软件零点；不硬编码 16bit） */
+    if (app_encoder_get_rotor_rad(theta_m_rad, &valid, &seq) != 0) {
         return false;
     }
     if (!valid) {
@@ -88,7 +90,6 @@ static bool app_foc_read_rotor_rad(float* theta_m_rad) {
     s_rotor_seq_last = seq;
     s_rotor_seq_valid = true;
 
-    *theta_m_rad = (float)raw * (FOC_TWO_PI_F / 65536.0f);
     return true;
 }
 
@@ -155,10 +156,22 @@ static void app_foc_run_body(void) {
         theta_e = s_angle.step(&s_angle, theta_m, &omega_e);
     }
 
+    /* 转矩模式限速（保护，不锁存）：|ωe| 超限 → 生效给定置零，速度回落自动恢复。
+     * CALIB 由辨识模块直接给激励（calib_set_excitation），不受限速影响。 */
+    if (s_state != APP_FOC_STATE_CALIB) {
+        float speed_max = app_software_params_current()->control.limits.speed_max_rad_s;
+
+        s_i_q_ref = s_i_q_ref_cmd;
+        if (foc_finite(speed_max) && (speed_max > 0.0f) && (fabsf(omega_e) > speed_max)) {
+            s_i_q_ref = 0.0f;
+        }
+    }
+
     /* 电流环 */
     (void)app_foc_current_run(theta_e, omega_e, s_i_d_ref, s_i_q_ref, NULL, NULL);
 
-    if ((s_state == APP_FOC_STATE_READY) && ((s_i_d_ref != 0.0f) || (s_i_q_ref != 0.0f))) {
+    if ((s_state == APP_FOC_STATE_READY)
+        && ((s_i_d_ref != 0.0f) || (s_i_q_ref_cmd != 0.0f))) {
         s_state = APP_FOC_STATE_RUN;
     }
 }
@@ -228,6 +241,7 @@ int app_foc_enable(void) {
     s_rotor_seq_valid = false; /* 重新建立采样序号基准 */
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_i_d_ref = 0.0f;
+    s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     app_foc_current_zero_vector();
     s_state = APP_FOC_STATE_READY;
@@ -239,6 +253,7 @@ void app_foc_disable(void) {
     app_3phase_inverter_disable();
     app_foc_current_reset(); /* 清除积分器与过流跳闸锁存 */
     s_i_d_ref = 0.0f;
+    s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_state = APP_FOC_STATE_OFF;
@@ -262,7 +277,7 @@ int app_foc_set_iq_ref(float i_q_a) {
     } else if (i_q_a < -limit) {
         i_q_a = -limit;
     }
-    s_i_q_ref = i_q_a;
+    s_i_q_ref_cmd = i_q_a;
     return 0;
 }
 
@@ -293,7 +308,7 @@ int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad) {
     return 0;
 }
 
-float app_foc_get_iq_ref(void) { return s_i_q_ref; }
+float app_foc_get_iq_ref(void) { return s_i_q_ref_cmd; }
 
 app_foc_state_t app_foc_get_state(void) { return s_state; }
 
@@ -309,6 +324,7 @@ int app_foc_enter_calib(void) {
     s_angle_src = APP_FOC_ANGLE_FORCED;
     s_forced_theta = 0.0f;
     s_i_d_ref = 0.0f;
+    s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_state = APP_FOC_STATE_CALIB;
     return 0;
@@ -318,6 +334,7 @@ void app_foc_exit_calib(void) {
     if (s_state == APP_FOC_STATE_CALIB) {
         s_angle_src = APP_FOC_ANGLE_ENCODER;
         s_i_d_ref = 0.0f;
+        s_i_q_ref_cmd = 0.0f;
         s_i_q_ref = 0.0f;
         s_angle.reset(&s_angle);
         s_state = APP_FOC_STATE_READY;

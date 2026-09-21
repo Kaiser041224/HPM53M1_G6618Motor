@@ -37,4 +37,5 @@ control:
   limits:
     i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3
     i_trip_a: 10.0                     # 快速过流跳闸 [A]（0 = 关闭）
+    speed_max_rad_s: 2500.0            # 转矩模式限速 [rad/s 电角]（0 = 关闭）
     duty_max: 0.885                    # 调制上限（有效域 (0.5, 1.0]；0.885 = 三电阻采样窗口约束，ADC spec §4）
