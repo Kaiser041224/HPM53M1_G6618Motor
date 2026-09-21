@@ -3,6 +3,11 @@
  * @brief   FOC 纯数学层主机自测入口
  * @author  Kaiser
  *
+ * 约定（重要）：每新增一个 test_*.c，必须在此追加：
+ *   1) 文件顶部的 `void test_xxx(void);` 声明；
+ *   2) main() 内的 `test_xxx();` 调用。
+ *   run.sh 不自动发现测试函数；漏接线会导致"假绿"。
+ *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
