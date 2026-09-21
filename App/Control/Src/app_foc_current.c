@@ -10,7 +10,6 @@
 #include "app_foc_current.h"
 
 #include "app_3phase_inverter.h"
-#include "app_adc.h"
 #include "app_analog_signal.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
@@ -22,8 +21,11 @@
 #define APP_FOC_V_BUS_MIN_V (9.0f) /**< 最低母线电压 [V]（低于则拒绝输出，零矢量） */
 
 static foc_current_t s_current;
-static app_foc_current_snapshot_t s_snapshot;
 static bool s_ready;
+
+/* Ozone 观测（.noncacheable.bss：启动清零 + 调试器直读，不受 D-Cache 影响） */
+app_foc_current_snapshot_t g_foc_current_snapshot
+    __attribute__((section(".noncacheable.bss")));
 
 void app_foc_current_init(void) {
     const app_software_params_t* software = app_software_params_current();
@@ -41,7 +43,7 @@ void app_foc_current_init(void) {
 
     foc_current_ctor(&s_current);
     s_ready = (s_current.init(&s_current, &cfg) == 0);
-    s_snapshot = (app_foc_current_snapshot_t){0};
+    g_foc_current_snapshot = (app_foc_current_snapshot_t){0};
 }
 
 void app_foc_current_reset(void) {
@@ -52,13 +54,15 @@ void app_foc_current_reset(void) {
 
 void app_foc_current_zero_vector(void) {
     (void)app_3phase_inverter_set_duty_abc(0.5f, 0.5f, 0.5f);
-    s_snapshot.duty_u = 0.5f;
-    s_snapshot.duty_v = 0.5f;
-    s_snapshot.duty_w = 0.5f;
-    s_snapshot.v_d_v = 0.0f;
-    s_snapshot.v_q_v = 0.0f;
-    s_snapshot.saturated = false;
-    s_snapshot.v_scale = 1.0f;
+    g_foc_current_snapshot.duty_u = 0.5f;
+    g_foc_current_snapshot.duty_v = 0.5f;
+    g_foc_current_snapshot.duty_w = 0.5f;
+    g_foc_current_snapshot.v_d_v = 0.0f;
+    g_foc_current_snapshot.v_q_v = 0.0f;
+    g_foc_current_snapshot.saturated = false;
+    g_foc_current_snapshot.v_scale = 1.0f;
+    g_foc_current_snapshot.valid = false; /* 保护路径：数据不可信（保持上一拍） */
+    g_foc_current_snapshot.fault_count++;
 }
 
 int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
@@ -88,9 +92,10 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
 
     duty_max = software->control.limits.duty_max;
 
-    /* 增益热更新（live 参数） */
+    /* 增益/前馈热更新（live 参数） */
     s_current.set_gains(&s_current, software->control.current_loop.kp,
                         software->control.current_loop.ki);
+    s_current.set_decoupling(&s_current, software->control.current_loop.decoupling_en);
 
     /* Clarke → Park（同一 θ 的 sincos 复用于反 Park） */
     foc_clarke(values.i_u_a, values.i_v_a, values.i_w_a, &i_alpha, &i_beta);
@@ -100,6 +105,8 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     in.i_d_ref = i_d_ref;
     in.i_q_ref = i_q_ref;
     in.v_bus_v = v_bus;
+    /* 圆形电压限幅：三相平衡时相电压峰值 A 对应占空比跨度 1.5·A/v_bus，
+     * 故 A_max = (2·duty_max − 1)·v_bus / 1.5（与 foc_modulation 的 span 限幅一致） */
     in.v_max = (2.0f * duty_max - 1.0f) * v_bus / 1.5f;
     in.i_max = software->control.limits.i_q_max_a;
     in.omega_e_rad_s = omega_e_rad_s;
@@ -132,26 +139,36 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         *saturated_out = out.saturated;
     }
 
-    s_snapshot.theta_e_rad = theta_e_rad;
-    s_snapshot.omega_e_rad_s = omega_e_rad_s;
-    s_snapshot.i_d_a = in.i_d_a;
-    s_snapshot.i_q_a = in.i_q_a;
-    s_snapshot.i_d_ref_a = out.i_d_ref_lim;
-    s_snapshot.i_q_ref_a = out.i_q_ref_lim;
-    s_snapshot.v_d_v = out.v_d;
-    s_snapshot.v_q_v = out.v_q;
-    s_snapshot.duty_u = duty[0];
-    s_snapshot.duty_v = duty[1];
-    s_snapshot.duty_w = duty[2];
-    s_snapshot.v_bus_v = v_bus;
-    s_snapshot.v_scale = v_scale;
-    s_snapshot.saturated = out.saturated;
-    s_snapshot.run_count++;
+    /* 反馈非有限：控制已按"反馈不可信"零电压处理，快照标记不可信并计故障 */
+    {
+        bool fb_ok = foc_finite(in.i_d_a) && foc_finite(in.i_q_a);
+
+        g_foc_current_snapshot.valid = fb_ok;
+        if (!fb_ok) {
+            g_foc_current_snapshot.fault_count++;
+        }
+    }
+
+    g_foc_current_snapshot.theta_e_rad = theta_e_rad;
+    g_foc_current_snapshot.omega_e_rad_s = omega_e_rad_s;
+    g_foc_current_snapshot.i_d_a = foc_finite(in.i_d_a) ? in.i_d_a : 0.0f;
+    g_foc_current_snapshot.i_q_a = foc_finite(in.i_q_a) ? in.i_q_a : 0.0f;
+    g_foc_current_snapshot.i_d_ref_a = out.i_d_ref_lim;
+    g_foc_current_snapshot.i_q_ref_a = out.i_q_ref_lim;
+    g_foc_current_snapshot.v_d_v = out.v_d;
+    g_foc_current_snapshot.v_q_v = out.v_q;
+    g_foc_current_snapshot.duty_u = duty[0];
+    g_foc_current_snapshot.duty_v = duty[1];
+    g_foc_current_snapshot.duty_w = duty[2];
+    g_foc_current_snapshot.v_bus_v = v_bus;
+    g_foc_current_snapshot.v_scale = v_scale;
+    g_foc_current_snapshot.saturated = out.saturated;
+    g_foc_current_snapshot.run_count++;
     return 0;
 }
 
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out) {
     if (out != NULL) {
-        *out = s_snapshot;
+        *out = g_foc_current_snapshot;
     }
 }

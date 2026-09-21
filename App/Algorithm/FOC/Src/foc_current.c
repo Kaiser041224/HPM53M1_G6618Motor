@@ -71,6 +71,16 @@ static void foc_current_set_gains(foc_current_t* self, float kp, float ki) {
 }
 
 /**
+ * @brief 运行中开关解耦前馈
+ */
+static void foc_current_set_decoupling(foc_current_t* self, uint8_t enable) {
+    if (self == NULL) {
+        return;
+    }
+    self->_decouple = (enable != 0U) ? 1U : 0U;
+}
+
+/**
  * @brief 单步
  */
 FOC_ATTR_RAMFUNC
@@ -188,6 +198,7 @@ void foc_current_ctor(foc_current_t* self) {
     self->step = foc_current_step;
     self->reset = foc_current_reset;
     self->set_gains = foc_current_set_gains;
+    self->set_decoupling = foc_current_set_decoupling;
     self->_kp = 0.0f;
     self->_ki = 0.0f;
     self->_ts = 1.0f;

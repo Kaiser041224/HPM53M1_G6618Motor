@@ -28,13 +28,27 @@ typedef struct {
     float v_d_v, v_q_v;           /**< d/q 电压 [V] */
     float duty_u, duty_v, duty_w; /**< 三相占空比 */
     float v_bus_v;                /**< 母线电压 [V] */
-    float v_scale;                /**< 调制缩放（1.0 = 未限幅） */
-    bool  saturated;              /**< 电压饱和 */
-    uint32_t run_count;           /**< 执行计数 */
+    float v_scale;                /**< 调制缩放（1.0 = 未限幅；不含逐相钳位） */
+    bool  saturated;              /**< PI 圆形电压限幅触发（不含调制限幅） */
+    bool  valid;                  /**< 本拍数据可信（false = 保护路径：零矢量/输入无效） */
+    uint32_t run_count;           /**< 成功执行计数（仅成功拍递增） */
+    uint32_t fault_count;         /**< 保护路径计数（零矢量/无效输入） */
 } app_foc_current_snapshot_t;
 
 /**
+ * Ozone 观测快照（.noncacheable.bss：启动清零 + 调试器直读，不受 D-Cache 影响）。
+ * 每拍更新；与 app_foc_current_get_snapshot() 同一数据源。
+ */
+extern app_foc_current_snapshot_t g_foc_current_snapshot;
+
+/**
  * @brief 初始化（构造算法对象；不使能桥）
+ *
+ * 参数生效语义：
+ *   - 每拍 live：kp/ki（set_gains）、decoupling_en（set_decoupling）、
+ *     duty_max、i_q_max_a（每拍经 app_*_params_current 读取）
+ *   - init 期固定：sample_time_s（= 1/pwm_freq_hz）、l_d/l_q/lambda（motor 域手册值）
+ *     修改后需重新调用 app_foc_current_init()
  */
 void app_foc_current_init(void);
 

@@ -169,6 +169,35 @@ void test_foc_current(void) {
         CHECK_NEAR(out_off.v_q, -2.235f, 1e-3f);
     }
 
+    /* set_decoupling：运行中开启后与 init 开启等效（对照关闭值） */
+    {
+        foc_current_t c13;
+        foc_current_cfg_t c13cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 0.0f, .i_q_ref = 0.0f,
+            .i_d_a = 2.0f, .i_q_a = 3.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f,
+            .omega_e_rad_s = 100.0f,
+        };
+        c13cfg.decoupling_en = 0U;
+        c13cfg.l_d = 1.0e-4f;
+        c13cfg.l_q = 1.0e-4f;
+        c13cfg.lambda = 0.1f;
+        foc_current_ctor(&c13);
+        CHECK(c13.init(&c13, &c13cfg) == 0);
+        CHECK(c13.step(&c13, &in, &out) == 0);
+        CHECK_NEAR(out.v_q, -2.235f, 1e-3f); /* 前馈关闭 */
+        c13.reset(&c13); /* 隔离积分器，仅比较前馈效果 */
+        c13.set_decoupling(&c13, 1U);
+        CHECK(c13.step(&c13, &in, &out) == 0);
+        CHECK_NEAR(out.v_q, 7.785f, 1e-2f); /* 前馈开启（与 init 开启等效） */
+        c13.reset(&c13);
+        c13.set_decoupling(&c13, 0U);
+        CHECK(c13.step(&c13, &in, &out) == 0);
+        CHECK_NEAR(out.v_q, -2.235f, 1e-3f); /* 再次关闭 */
+    }
+
     /* 前馈开启 + 非有限 ωe → 按 0 处理，输出仍有限 */
     {
         foc_current_t c9;

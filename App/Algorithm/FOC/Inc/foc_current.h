@@ -77,6 +77,11 @@ typedef void (*foc_current_reset_fn)(foc_current_t* self);
  * @brief 运行中更新增益
  */
 typedef void (*foc_current_set_gains_fn)(foc_current_t* self, float kp, float ki);
+/**
+ * @brief 运行中开关解耦前馈
+ * @param enable 0 = 关闭；非 0 = 开启
+ */
+typedef void (*foc_current_set_decoupling_fn)(foc_current_t* self, uint8_t enable);
 
 /**
  * @brief 电流调节器对象
@@ -86,7 +91,8 @@ struct foc_current {
         foc_current_init_fn init;           /**< 初始化 */
         foc_current_step_fn step;           /**< 单步 */
         foc_current_reset_fn reset;         /**< 复位 */
-        foc_current_set_gains_fn set_gains; /**< 更新增益 */
+        foc_current_set_gains_fn set_gains;             /**< 更新增益 */
+        foc_current_set_decoupling_fn set_decoupling;   /**< 开关解耦前馈 */
     };
 
     float _kp, _ki;    /**< 增益 */
