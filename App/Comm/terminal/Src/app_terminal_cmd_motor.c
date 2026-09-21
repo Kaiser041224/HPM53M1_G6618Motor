@@ -140,8 +140,8 @@ static int cmd_motor(int argc, char** argv) {
         }
         /* 回显实际生效给定（getter）与最新测量；快照为上一拍数据 */
         app_foc_get_snapshot(&snap);
-        csh_printf(csh, "foc iq: ref=%.3f A  meas=%.3f A\r\n", (double)app_foc_get_iq_ref(),
-                   (double)snap.i_q_a);
+        csh_printf(csh, "foc iq: ref=%.3f A  avg=%.3f A  now=%.3f A\r\n",
+                   (double)app_foc_get_iq_ref(), (double)snap.i_q_avg_a, (double)snap.i_q_a);
         return 0;
     }
 
@@ -338,6 +338,8 @@ static void cal_encoder_tick(uint32_t now_ms) {
         app_terminal_cmd_emit("\r\nFAIL: encoder identify (%s)  q=%.3f  ratio_err=%+.1f%%\r\n",
                               cal_encoder_fail_name(result.fail_reason),
                               (double)result.quality, (double)(result.ratio_err * 100.0f));
+        app_terminal_cmd_emit("      verify: mean=%.2f deg  max=%.2f deg (limit 15/45)\r\n",
+                              (double)result.verify_mean_deg, (double)result.verify_max_deg);
         app_terminal_cmd_emit("      check: free rotation / I_cal enough / encoder mounting / "
                               "pole_pairs\r\n");
     }

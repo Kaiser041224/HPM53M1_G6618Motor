@@ -22,8 +22,13 @@
 #define APP_IDENTIFY_RUN_TICK_MAX  (30000U) /**< 编排侧 RUN 超时 [1kHz tick]（30s 兜底） */
 #define APP_IDENTIFY_SETTLE_TICKS  (50U)    /**< 验证起始静默 [tick]（排除残余速度） */
 #define APP_IDENTIFY_VERIFY_MS     (500.0f) /**< 验证时长 [ms] */
-#define APP_IDENTIFY_VERIFY_MEAN_DEG (5.0f) /**< 验证残差均值上限 [deg] */
-#define APP_IDENTIFY_VERIFY_MAX_DEG  (15.0f) /**< 验证残差峰值上限 [deg] */
+/* 验证判据：i_d 锁定后转子应停在扫描终点（0）。
+ * 残差均值 = 零点误差的直接度量（> 15° 时 FOC 转矩误差 > 3%，且转矩角误差会
+ * 驱动转子持续爬行/飞转）；残差峰值用于兜底"飞转"（真零点错误 → 恒转矩 →
+ * 角度斜坡 → 峰值冲到 180°）。机械回差/摩擦会造成有界振荡（±7~14° 电角），
+ * 不影响 FOC（转矩误差 cos(7°)=0.7%），故峰值门限放宽到 45°。 */
+#define APP_IDENTIFY_VERIFY_MEAN_DEG (15.0f) /**< 验证残差均值上限 [deg] */
+#define APP_IDENTIFY_VERIFY_MAX_DEG  (45.0f) /**< 验证残差峰值上限 [deg]（兜底飞转） */
 
 typedef enum {
     APP_IDENTIFY_STATE_IDLE = 0,

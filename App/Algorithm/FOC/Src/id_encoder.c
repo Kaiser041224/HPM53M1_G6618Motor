@@ -90,8 +90,12 @@ static bool id_encoder_sweep_step(id_encoder_t* self, const id_encoder_in_t* in,
     /* 步进阶段：目标角按步索引分档（FWD 0→2π；REV 2π→0），
      * 每步驻留结束采样一次（转子已稳定）；样本无效则跳过累加但推进步索引 */
     if (self->_step_idx < steps) {
+        /* FWD: 0 → 2π·(steps-1)/steps；REV: 2π·(steps-1)/steps → 0
+         * （REV 终点精确为 0：验证阶段以 0 为参考角，转子停在终点） */
         frac = (float)self->_step_idx / (float)steps;
-        self->_theta_cmd = fwd ? (FOC_TWO_PI_F * frac) : (FOC_TWO_PI_F * (1.0f - frac));
+        self->_theta_cmd = fwd ? (FOC_TWO_PI_F * frac)
+                               : (FOC_TWO_PI_F
+                                  * (1.0f - (float)(self->_step_idx + 1U) / (float)steps));
 
         if (self->_t_ms >= self->_cfg.sweep_step_ms) {
             if (foc_finite(in->theta_m_raw_rad)) {

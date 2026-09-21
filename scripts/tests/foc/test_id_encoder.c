@@ -64,6 +64,7 @@ void test_id_encoder(void) {
     CHECK(run_identify(&id, offset_true, 1.0f, ts, &out));
     CHECK(out.done);
     CHECK(!out.failed);
+    CHECK_NEAR(out.theta_e_cmd, 0.0f, 0.001f); /* REV 终点 = 0：验证阶段以 0 为参考 */
     CHECK_NEAR(out.direction, 1.0f, 1e-6f);
     CHECK_NEAR(out.offset_rad, offset_true, 0.02f);
     CHECK(out.quality > 0.95f);

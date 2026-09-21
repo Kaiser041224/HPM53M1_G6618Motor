@@ -23,6 +23,13 @@
 #define APP_FOC_V_BUS_MIN_V (9.0f) /**< 最低母线电压 [V]（低于则拒绝输出，零矢量） */
 
 static foc_current_t s_current;
+/** 电流慢平均系数（25kHz → ~32Hz 一阶低通） */
+#define APP_FOC_CURRENT_AVG_ALPHA (0.002f)
+
+/** d/q 反馈慢平均状态 [A] */
+static float s_i_d_avg;
+static float s_i_q_avg;
+
 static bool s_ready;
 static uint8_t s_trip_count; /**< 连续超限拍数 */
 static bool s_tripped;       /**< 跳闸锁存（reset 清除） */
@@ -70,6 +77,8 @@ void app_foc_current_reset(void) {
     g_foc_current_snapshot.tripped = false;
     s_vtest_active = false;
     s_vtest_left_s = 0.0f;
+    s_i_d_avg = 0.0f; /* 慢平均清零：避免上次运行的陈旧值 */
+    s_i_q_avg = 0.0f;
 }
 
 int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s) {
@@ -349,6 +358,11 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     g_foc_current_snapshot.omega_e_rad_s = omega_e_rad_s;
     g_foc_current_snapshot.i_d_a = foc_finite(in.i_d_a) ? in.i_d_a : 0.0f;
     g_foc_current_snapshot.i_q_a = foc_finite(in.i_q_a) ? in.i_q_a : 0.0f;
+    /* 慢平均（~32Hz @25kHz）：终端单拍瞬时值无意义（PI 尚未响应） */
+    s_i_d_avg += APP_FOC_CURRENT_AVG_ALPHA * (g_foc_current_snapshot.i_d_a - s_i_d_avg);
+    s_i_q_avg += APP_FOC_CURRENT_AVG_ALPHA * (g_foc_current_snapshot.i_q_a - s_i_q_avg);
+    g_foc_current_snapshot.i_d_avg_a = s_i_d_avg;
+    g_foc_current_snapshot.i_q_avg_a = s_i_q_avg;
     g_foc_current_snapshot.i_d_ref_a = out.i_d_ref_lim;
     g_foc_current_snapshot.i_q_ref_a = out.i_q_ref_lim;
     g_foc_current_snapshot.v_d_v = out.v_d;

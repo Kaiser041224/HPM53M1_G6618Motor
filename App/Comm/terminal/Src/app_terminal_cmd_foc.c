@@ -39,9 +39,9 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
                app_terminal_cmd_foc_state_name(app_foc_get_state()),
                (double)(snap.theta_e_rad * APP_TERMINAL_FOC_DEG_PER_RAD),
                (double)snap.omega_e_rad_s);
-    csh_printf(csh, "     i_d=%.3f/%.3f A  i_q=%.3f/%.3f A  (ref/meas)\r\n",
-               (double)snap.i_d_ref_a, (double)snap.i_d_a, (double)snap.i_q_ref_a,
-               (double)snap.i_q_a);
+    csh_printf(csh, "     i_d=%.3f/%.3f/%.3f A  i_q=%.3f/%.3f/%.3f A  (ref/avg/now)\r\n",
+               (double)snap.i_d_ref_a, (double)snap.i_d_avg_a, (double)snap.i_d_a,
+               (double)snap.i_q_ref_a, (double)snap.i_q_avg_a, (double)snap.i_q_a);
     csh_printf(csh, "     v_d=%.3f V  v_q=%.3f V  vbus=%.2f V  sat=%u scale=%.3f\r\n",
                (double)snap.v_d_v, (double)snap.v_q_v, (double)snap.v_bus_v,
                (unsigned)snap.saturated, (double)snap.v_scale);

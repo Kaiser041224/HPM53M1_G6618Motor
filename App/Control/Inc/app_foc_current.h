@@ -23,7 +23,8 @@ extern "C" {
 typedef struct {
     float theta_e_rad;            /**< 本拍电角度 [rad] */
     float omega_e_rad_s;          /**< 本拍电角速度 [rad/s] */
-    float i_d_a, i_q_a;           /**< d/q 反馈 [A] */
+    float i_d_a, i_q_a;           /**< d/q 反馈 [A]（瞬时，单拍） */
+    float i_d_avg_a, i_q_avg_a;   /**< d/q 反馈慢平均 [A]（~32Hz 一阶低通，供终端观测） */
     float i_d_ref_a, i_q_ref_a;   /**< d/q 给定（限幅后）[A] */
     float v_d_v, v_q_v;           /**< d/q 电压 [V] */
     float duty_u, duty_v, duty_w; /**< 三相占空比 */
