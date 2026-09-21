@@ -240,7 +240,7 @@ void app_debug_encoder_sample(void) {
         }
         g_enc_rotor_read_us = cycles_to_us(cycles);
         s_read_count[APP_ENCODER_ROTOR]++;
-        if ((ret_rotor == 0) && (app_encoder_get_rotor_raw(&raw, &valid) == 0) && valid) {
+        if ((ret_rotor == 0) && (app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
             uint16_t zero = 0U;
 
             g_enc_rotor_raw = raw;
@@ -255,8 +255,8 @@ void app_debug_encoder_sample(void) {
     if ((s_sample_index % ENC_OUTPUT_SAMPLE_DIV) == 0U) {
         int ret_output = encoder_sample_one(APP_ENCODER_OUTPUT);
 
-        if ((ret_rotor == 0) && (ret_output == 0) && (app_encoder_get_rotor_raw(&raw, &valid) == 0)
-            && valid) {
+        if ((ret_rotor == 0) && (ret_output == 0)
+            && (app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
             ratio_accumulate(raw, g_enc_output_raw);
         }
     }

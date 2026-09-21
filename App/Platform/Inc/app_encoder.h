@@ -56,9 +56,13 @@ int app_encoder_sample_rotor(void);
  * @brief 读取转子共享采样缓存（无 I/O）。
  * @param raw 输出原始值（未加软件零点）
  * @param valid 输出缓存有效性
+ * @param seq 输出采样序号（每次成功采样 +1；可为 NULL）。
+ *            消费方（如 FOC）应比对相邻节拍序号是否推进，以检测采样停摆。
  * @return 0 = 成功；-1 = 参数错误
+ * @note 采样所有者：25kHz 节拍调用 app_encoder_sample_rotor() 的一方
+ *       （当前为 app_debug_encoder_sample()）；消费方只读缓存。
  */
-int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid);
+int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid, uint32_t* seq);
 
 /**
  * @brief 读取零点修正后的单圈位置：(raw − zero) & 0xFFFF。
