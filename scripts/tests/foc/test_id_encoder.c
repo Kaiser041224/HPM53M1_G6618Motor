@@ -107,12 +107,153 @@ void test_id_encoder(void) {
         CHECK(out3.failed);
     }
 
-    /* 非法配置 */
+    /* 非法配置（含非有限字段） */
     {
         id_encoder_t id4;
         id_encoder_cfg_t bad = cfg;
-        bad.sweep_steps = 4U;
         id_encoder_ctor(&id4);
+        bad.sweep_steps = 4U;
         CHECK(id4.init(&id4, &bad) == -1);
+        bad = cfg;
+        bad.timeout_ms = NAN;
+        CHECK(id4.init(&id4, &bad) == -1);
+        bad = cfg;
+        bad.dir_step_rad = 0.0f;
+        CHECK(id4.init(&id4, &bad) == -1);
+        bad = cfg;
+        bad.quality_min = 1.5f;
+        CHECK(id4.init(&id4, &bad) == -1);
+        bad = cfg;
+        bad.ratio_tol = -0.1f;
+        CHECK(id4.init(&id4, &bad) == -1);
+    }
+
+    /* 方向判定无效：转子始终不动 → FAILED(DIR) */
+    {
+        id_encoder_t id5;
+        id_encoder_in_t in;
+        id_encoder_out_t out5;
+        id_encoder_ctor(&id5);
+        CHECK(id5.init(&id5, &cfg) == 0);
+        id5.reset(&id5);
+        out5 = (id_encoder_out_t){0};
+        out5.progress = 777.0f; /* 验证超时/失败路径会写 progress */
+        for (int n = 0; n < 100000; n++) {
+            in.theta_m_raw_rad = 0.0f;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id5.step(&id5, &in, &out5);
+            if (out5.done || out5.failed) {
+                break;
+            }
+        }
+        CHECK(out5.failed);
+        CHECK(out5.fail_reason == ID_ENCODER_FAIL_DIR);
+        CHECK(out5.progress != 777.0f);
+        CHECK_NEAR(out5.i_d_ref, 0.0f, 1e-6f); /* 终止态零给定 */
+    }
+
+    /* 非有限测量样本 > 3 → FAILED(NONFINITE) */
+    {
+        id_encoder_t id6;
+        id_encoder_in_t in;
+        id_encoder_out_t out6;
+        id_encoder_ctor(&id6);
+        CHECK(id6.init(&id6, &cfg) == 0);
+        id6.reset(&id6);
+        out6 = (id_encoder_out_t){0};
+        for (int n = 0; n < 10; n++) {
+            in.theta_m_raw_rad = NAN;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id6.step(&id6, &in, &out6);
+            if (out6.done || out6.failed) {
+                break;
+            }
+        }
+        CHECK(out6.failed);
+        CHECK(out6.fail_reason == ID_ENCODER_FAIL_NONFINITE);
+        CHECK_NEAR(out6.i_d_ref, 0.0f, 1e-6f);
+    }
+
+    /* 质量不足：转子在扫描段不跟随 → FAILED(QUALITY) */
+    {
+        id_encoder_t id7;
+        id_encoder_in_t in;
+        id_encoder_out_t out7;
+        float hold_theta_m = 0.0f;
+        bool sweep_started = false;
+        id_encoder_ctor(&id7);
+        CHECK(id7.init(&id7, &cfg) == 0);
+        id7.reset(&id7);
+        out7 = (id_encoder_out_t){0};
+        for (int n = 0; n < 300000; n++) {
+            float theta_m;
+            if (out7.phase >= ID_ENCODER_PHASE_SWEEP_FWD) {
+                if (!sweep_started) {
+                    hold_theta_m = foc_wrap_2pi((out7.theta_e_cmd + 1.234f) / 10.0f);
+                    sweep_started = true;
+                }
+                theta_m = hold_theta_m; /* 转子卡住不跟随 */
+            } else {
+                theta_m = foc_wrap_2pi((out7.theta_e_cmd + 1.234f) / 10.0f);
+            }
+            in.theta_m_raw_rad = theta_m;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id7.step(&id7, &in, &out7);
+            if (out7.done || out7.failed) {
+                break;
+            }
+        }
+        CHECK(out7.failed);
+        CHECK(out7.fail_reason == ID_ENCODER_FAIL_QUALITY);
+    }
+
+    /* 极对数校验失败：扫描后 30% 转子打滑（行程不足）→ FAILED(RATIO) */
+    {
+        id_encoder_t id8;
+        id_encoder_cfg_t cfg8 = cfg;
+        id_encoder_in_t in;
+        id_encoder_out_t out8;
+        float hold_theta_m = 0.0f;
+        bool slipped = false;
+        cfg8.quality_min = 0.3f; /* 放低质量门限以隔离 RATIO 判定 */
+        id_encoder_ctor(&id8);
+        CHECK(id8.init(&id8, &cfg8) == 0);
+        id8.reset(&id8);
+        out8 = (id_encoder_out_t){0};
+        for (int n = 0; n < 300000; n++) {
+            float theta_m;
+            bool in_sweep = (out8.phase == ID_ENCODER_PHASE_SWEEP_FWD);
+            bool late_sweep = in_sweep && (out8.progress > 0.35f);
+
+            if (late_sweep) {
+                if (!slipped) {
+                    hold_theta_m = foc_wrap_2pi((out8.theta_e_cmd + 1.234f) / 10.0f);
+                    slipped = true;
+                }
+                theta_m = hold_theta_m; /* 打滑：停止跟随 */
+            } else {
+                theta_m = foc_wrap_2pi((out8.theta_e_cmd + 1.234f) / 10.0f);
+            }
+            in.theta_m_raw_rad = theta_m;
+            in.i_d_a = 2.0f;
+            in.i_q_a = 0.0f;
+            in.v_bus_v = 24.0f;
+            in.dt_s = ts;
+            id8.step(&id8, &in, &out8);
+            if (out8.done || out8.failed) {
+                break;
+            }
+        }
+        CHECK(out8.failed);
+        CHECK(out8.fail_reason == ID_ENCODER_FAIL_RATIO);
     }
 }

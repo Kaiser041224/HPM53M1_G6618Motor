@@ -18,9 +18,16 @@ static int id_encoder_init(id_encoder_t* self, const id_encoder_cfg_t* cfg) {
     if ((self == NULL) || (cfg == NULL)) {
         return -1;
     }
+    if (!foc_finite(cfg->i_cal_a) || !foc_finite(cfg->lockin_ms) || !foc_finite(cfg->dir_ms)
+        || !foc_finite(cfg->dir_step_rad) || !foc_finite(cfg->sweep_step_ms)
+        || !foc_finite(cfg->quality_min) || !foc_finite(cfg->ratio_tol)
+        || !foc_finite(cfg->timeout_ms)) {
+        return -1;
+    }
     if ((cfg->pole_pairs == 0U) || (cfg->sweep_steps < 8U) || (cfg->sweep_step_ms <= 0.0f)
         || (cfg->i_cal_a <= 0.0f) || (cfg->lockin_ms <= 0.0f) || (cfg->dir_ms <= 0.0f)
-        || (cfg->timeout_ms <= 0.0f)) {
+        || (cfg->timeout_ms <= 0.0f) || (cfg->dir_step_rad <= 0.0f)
+        || (cfg->quality_min <= 0.0f) || (cfg->quality_min > 1.0f) || (cfg->ratio_tol < 0.0f)) {
         return -1;
     }
     self->_cfg = *cfg;
@@ -51,6 +58,8 @@ static void id_encoder_reset(id_encoder_t* self) {
     self->_direction = 1.0f;
     self->_quality = 0.0f;
     self->_mech_ratio_err = 0.0f;
+    self->_fail = ID_ENCODER_FAIL_NONE;
+    self->_bad_samples = 0U;
 }
 
 /**
@@ -98,32 +107,71 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     float dt_ms;
 
     if ((self == NULL) || (in == NULL) || (out == NULL) || !self->_inited) {
+        if (out != NULL) {
+            *out = (id_encoder_out_t){0}; /* 未初始化：安全默认（零给定、FAILED） */
+            out->failed = true;
+            out->fail_reason = ID_ENCODER_FAIL_CONFIG;
+        }
         return;
     }
 
-    dt_ms = (in->dt_s > 0.0f) ? (in->dt_s * 1000.0f)
-                              : (ID_ENCODER_TS_FALLBACK * 1000.0f);
+    /* 非有限测量样本：跳过（不更新 prev / 不累加），过多则判失败 */
+    if (!foc_finite(in->theta_m_raw_rad)) {
+        self->_bad_samples++;
+        if (self->_bad_samples > 3U) {
+            self->_fail = ID_ENCODER_FAIL_NONFINITE;
+            self->_phase = ID_ENCODER_PHASE_FAILED;
+        }
+    } else {
+        self->_bad_samples = 0U;
+    }
+
+    dt_ms = (foc_finite(in->dt_s) && (in->dt_s > 0.0f)) ? (in->dt_s * 1000.0f)
+                                                        : (ID_ENCODER_TS_FALLBACK * 1000.0f);
     self->_t_ms += dt_ms;
     self->_elapsed_ms += dt_ms;
 
-    /* 默认输出（激励请求 + 当前结果） */
-    out->theta_e_cmd = self->_theta_cmd;
-    out->i_d_ref = self->_cfg.i_cal_a;
-    out->i_q_ref = 0.0f;
+    /* 默认输出（激励请求 + 当前结果）；终止态零给定（消费方无需额外断电） */
+    {
+        bool terminal = ((self->_phase == ID_ENCODER_PHASE_DONE)
+                         || (self->_phase == ID_ENCODER_PHASE_FAILED));
+
+        out->theta_e_cmd = self->_theta_cmd;
+        out->i_d_ref = terminal ? 0.0f : self->_cfg.i_cal_a;
+        out->i_q_ref = 0.0f;
+    }
     out->phase = self->_phase;
     out->offset_rad = self->_offset_rad;
     out->direction = self->_direction;
     out->quality = self->_quality;
     out->mech_ratio_err = self->_mech_ratio_err;
+    out->fail_reason = self->_fail;
     out->done = false;
     out->failed = false;
+    out->progress = 0.0f;
+
+    /* 非有限样本超限：立即失败（已在开头置位） */
+    if (self->_phase == ID_ENCODER_PHASE_FAILED) {
+        out->phase = self->_phase;
+        out->fail_reason = self->_fail;
+        out->failed = true;
+        out->i_d_ref = 0.0f;
+        out->i_q_ref = 0.0f;
+        out->progress = 0.95f;
+        return;
+    }
 
     /* 总超时 */
     if ((self->_phase != ID_ENCODER_PHASE_DONE) && (self->_phase != ID_ENCODER_PHASE_FAILED)
         && (self->_elapsed_ms > self->_cfg.timeout_ms)) {
+        self->_fail = ID_ENCODER_FAIL_TIMEOUT;
         self->_phase = ID_ENCODER_PHASE_FAILED;
         out->phase = self->_phase;
+        out->fail_reason = self->_fail;
         out->failed = true;
+        out->progress = 0.95f;
+        out->i_d_ref = 0.0f;
+        out->i_q_ref = 0.0f;
         return;
     }
 
@@ -141,7 +189,14 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     case ID_ENCODER_PHASE_DIR:
         if (self->_t_ms >= self->_cfg.dir_ms) {
             float delta = foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_start);
+            float expected = self->_cfg.dir_step_rad / (float)self->_cfg.pole_pairs;
 
+            if (fabsf(delta) < (0.2f * expected)) {
+                /* 转子未跟随（摩擦/电流不足/编码器异常）：明确失败 */
+                self->_fail = ID_ENCODER_FAIL_DIR;
+                self->_phase = ID_ENCODER_PHASE_FAILED;
+                break;
+            }
             self->_direction = (delta >= 0.0f) ? 1.0f : -1.0f;
             self->_phase = ID_ENCODER_PHASE_SWEEP_FWD;
             self->_t_ms = 0.0f;
@@ -175,7 +230,9 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     case ID_ENCODER_PHASE_COMPUTE:
         if (self->_acc_n > 0U) {
             float p = (float)self->_cfg.pole_pairs;
-            float expected_travel = FOC_TWO_PI_F / p; /* 一个电周期对应机械位移 */
+            float steps = (float)self->_cfg.sweep_steps;
+            /* 扫描覆盖 (steps−1)/steps 个电周期（首驻留点即 0，末点未采） */
+            float expected_travel = (FOC_TWO_PI_F / p) * ((steps - 1.0f) / steps);
 
             self->_offset_rad = foc_wrap_2pi(-atan2f(self->_s_sum, self->_c_sum));
             self->_quality =
@@ -186,15 +243,22 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
                     ? ((fabsf(self->_mech_travel) - expected_travel) / expected_travel)
                     : 0.0f;
 
-            if (self->_quality < self->_cfg.quality_min) {
+            if (!foc_finite(self->_offset_rad) || !foc_finite(self->_quality)
+                || !foc_finite(self->_mech_ratio_err)) {
+                self->_fail = ID_ENCODER_FAIL_NONFINITE;
+                self->_phase = ID_ENCODER_PHASE_FAILED;
+            } else if (self->_quality < self->_cfg.quality_min) {
+                self->_fail = ID_ENCODER_FAIL_QUALITY;
                 self->_phase = ID_ENCODER_PHASE_FAILED;
             } else if ((self->_mech_ratio_err > self->_cfg.ratio_tol)
                        || (self->_mech_ratio_err < -self->_cfg.ratio_tol)) {
+                self->_fail = ID_ENCODER_FAIL_RATIO;
                 self->_phase = ID_ENCODER_PHASE_FAILED;
             } else {
                 self->_phase = ID_ENCODER_PHASE_DONE;
             }
         } else {
+            self->_fail = ID_ENCODER_FAIL_NONFINITE;
             self->_phase = ID_ENCODER_PHASE_FAILED;
         }
         break;
@@ -206,8 +270,13 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     }
 
     /* 结果与状态回填 */
+    if ((self->_phase == ID_ENCODER_PHASE_DONE) || (self->_phase == ID_ENCODER_PHASE_FAILED)) {
+        out->i_d_ref = 0.0f; /* 终止态零给定 */
+        out->i_q_ref = 0.0f;
+    }
     out->theta_e_cmd = self->_theta_cmd;
     out->phase = self->_phase;
+    out->fail_reason = self->_fail;
     out->offset_rad = self->_offset_rad;
     out->direction = self->_direction;
     out->quality = self->_quality;
@@ -249,5 +318,7 @@ void id_encoder_ctor(id_encoder_t* self) {
     self->_direction = 1.0f;
     self->_quality = 0.0f;
     self->_mech_ratio_err = 0.0f;
+    self->_fail = ID_ENCODER_FAIL_NONE;
+    self->_bad_samples = 0U;
     self->_inited = false;
 }

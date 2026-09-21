@@ -6,6 +6,12 @@
  * 阶段（spec §5.2）：IDLE → LOCK_IN → DIR → SWEEP_FWD → SWEEP_REV → COMPUTE → DONE/FAILED
  * 输出：电角度零点 offset_rad、方向 direction、质量 quality、极对数校验 mech_ratio_err
  *
+ * 说明：
+ *   - 终止态（DONE/FAILED）输出 i_d_ref/i_q_ref = 0（消费方无需额外断电）；
+ *   - 机械位移仅累计正向扫描（排除 DIR→FWD 回摆瞬态），期望值按 (steps−1)/steps 补偿；
+ *   - 总超时（V1）；非有限测量样本 > 3 → FAILED(NONFINITE)；
+ *   - 失败原因经 fail_reason 区分（超时/方向/质量/极对数/非有限）。
+ *
  * 符号约定（spec §5.1）：θe_true = p·dir·θm − offset；辨识期间 θe_true = θapplied
  *   → δ = θapplied − p·dir·θm = −offset → offset = −atan2(Σsin δ, Σcos δ)
  *
@@ -63,12 +69,25 @@ typedef struct {
 } id_encoder_in_t;
 
 /**
+ * @brief 失败原因
+ */
+typedef enum {
+    ID_ENCODER_FAIL_NONE = 0,  /**< 无失败 */
+    ID_ENCODER_FAIL_TIMEOUT,   /**< 总超时 */
+    ID_ENCODER_FAIL_DIR,       /**< 方向判定无效（转子未跟随） */
+    ID_ENCODER_FAIL_QUALITY,   /**< 质量不足 */
+    ID_ENCODER_FAIL_RATIO,     /**< 极对数/传动比校验失败 */
+    ID_ENCODER_FAIL_NONFINITE, /**< 非有限测量样本过多 */
+    ID_ENCODER_FAIL_CONFIG,    /**< 配置非法 */
+} id_encoder_fail_t;
+
+/**
  * @brief 单步输出（激励请求 + 结果）
  */
 typedef struct {
     float theta_e_cmd;        /**< 强制电角度 [rad] */
-    float i_d_ref;            /**< d 轴电流给定 [A] */
-    float i_q_ref;            /**< q 轴电流给定 [A] */
+    float i_d_ref;            /**< d 轴电流给定 [A]（终止态为 0） */
+    float i_q_ref;            /**< q 轴电流给定 [A]（终止态为 0） */
     id_encoder_phase_t phase; /**< 当前阶段 */
     float progress;           /**< 进度 0~1 */
     float offset_rad;         /**< 结果：电角度零点 [rad] */
@@ -77,6 +96,7 @@ typedef struct {
     float mech_ratio_err;     /**< 结果：极对数校验偏差（相对） */
     bool done;                /**< 完成 */
     bool failed;              /**< 失败 */
+    id_encoder_fail_t fail_reason; /**< 失败原因 */
 } id_encoder_out_t;
 
 typedef struct id_encoder id_encoder_t;
@@ -122,6 +142,8 @@ struct id_encoder {
     float _direction;          /**< 结果：方向 */
     float _quality;            /**< 结果：质量 */
     float _mech_ratio_err;     /**< 结果：极对数偏差 */
+    id_encoder_fail_t _fail;   /**< 失败原因 */
+    uint8_t _bad_samples;      /**< 非有限测量样本计数 */
     bool _inited;              /**< 初始化标志 */
 };
 
