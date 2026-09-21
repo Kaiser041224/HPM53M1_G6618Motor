@@ -6,6 +6,7 @@
  * θe = wrap_2pi(p · dir · θm_raw − offset_rad)
  *   - θm_raw 为**未加软件零点**的编码器机械角 [0, 2π)
  *   - ωe 由 θe 差分 + 一阶低通（自动含方向符号）
+ *   - ωe 差分混叠上限 |ωe| < π/ts（25kHz → ≈78.5 krad/s）；超限不可用于控制
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -52,6 +53,8 @@ typedef float (*foc_angle_step_fn)(foc_angle_t* self, float theta_m_raw_rad, flo
 typedef void (*foc_angle_reset_fn)(foc_angle_t* self);
 /**
  * @brief 运行中更新零点/方向（辨识结果写入路径）
+ * @note 内部重新起算 ωe 差分（清除历史），避免零点跳变注入 ωe 尖峰；
+ *       非有限 offset 或非法方向（非 ±1.0）被忽略
  */
 typedef void (*foc_angle_set_offset_fn)(foc_angle_t* self, float offset_rad, float direction);
 
@@ -71,6 +74,7 @@ struct foc_angle {
     float _offset;       /**< 电角度零点 [rad] */
     float _alpha;        /**< ωe 低通系数 */
     float _ts;           /**< 采样周期 [s] */
+    float _inv_ts;       /**< 1/采样周期 [1/s]（热路径避免除法） */
     float _theta_e_prev; /**< 上拍电角度 [rad] */
     float _omega_e;      /**< 电角速度 [rad/s] */
     bool _primed;        /**< 差分已初始化 */

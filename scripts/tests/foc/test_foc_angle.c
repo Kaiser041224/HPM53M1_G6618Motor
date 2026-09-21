@@ -41,7 +41,7 @@ void test_foc_angle(void) {
             theta_m += (omega_true / 10.0f) * cfg.sample_time_s;
             (void)ang.step(&ang, theta_m, &omega);
         }
-        CHECK_NEAR(omega, omega_true, 5.0f);
+        CHECK_NEAR(omega, omega_true, 0.5f);
     }
 
     /* 方向 −1：θe = −p·θm（归一化后） */
@@ -76,7 +76,7 @@ void test_foc_angle(void) {
         foc_angle_ctor(&a4);
         CHECK(a4.init(&a4, &cfg) == 0);
         t1 = a4.step(&a4, 0.05f, &omega);
-        t2 = a4.step(&a4, 0.0f / 0.0f, &omega);
+        t2 = a4.step(&a4, NAN, &omega);
         CHECK_NEAR(t2, t1, 1e-6f);
     }
 
@@ -92,12 +92,78 @@ void test_foc_angle(void) {
         CHECK_NEAR(theta_e, FOC_PI_F, 1e-5f);
     }
 
-    /* 非法配置 */
+    /* 方向 −1：θe 差分自动给出负 ωe */
+    {
+        foc_angle_t a7;
+        foc_angle_cfg_t c7 = cfg;
+        float omega = 0.0f;
+        float theta_m = 0.0f;
+        c7.direction = -1.0f;
+        foc_angle_ctor(&a7);
+        CHECK(a7.init(&a7, &c7) == 0);
+        for (int i = 0; i < 2000; i++) {
+            theta_m += (100.0f / 10.0f) * cfg.sample_time_s; /* 机械角正向 */
+            (void)a7.step(&a7, theta_m, &omega);
+        }
+        CHECK_NEAR(omega, -100.0f, 0.5f);
+    }
+
+    /* reset 后重新起算：下一拍 ωe = 0（大跳变不产生尖峰） */
+    {
+        foc_angle_t a8;
+        float omega = 0.0f;
+        float theta_m = 0.0f;
+        foc_angle_ctor(&a8);
+        CHECK(a8.init(&a8, &cfg) == 0);
+        for (int i = 0; i < 100; i++) {
+            theta_m += 0.004f;
+            (void)a8.step(&a8, theta_m, &omega);
+        }
+        CHECK(fabsf(omega) > 1.0f); /* 已有速度估计 */
+        a8.reset(&a8);
+        (void)a8.step(&a8, theta_m + 0.5f, &omega); /* 大跳变 */
+        CHECK_NEAR(omega, 0.0f, 1e-6f);
+    }
+
+    /* set_offset 运行中调用：重新起算（ωe=0）且 θe 反映新零点 */
+    {
+        foc_angle_t a9;
+        float omega = 0.0f;
+        float theta_m = 0.0f;
+        float theta_e;
+        foc_angle_ctor(&a9);
+        CHECK(a9.init(&a9, &cfg) == 0);
+        for (int i = 0; i < 100; i++) {
+            theta_m += 0.004f;
+            (void)a9.step(&a9, theta_m, &omega);
+        }
+        a9.set_offset(&a9, FOC_PI_F, 1.0f);
+        theta_e = a9.step(&a9, theta_m, &omega);
+        CHECK_NEAR(omega, 0.0f, 1e-6f); /* 重起算，无尖峰 */
+        CHECK_NEAR(theta_e, 4.0f - FOC_PI_F, 1e-3f); /* p·θm − π */
+    }
+
+    /* 非法配置：极点数为 0 / 非有限 / 负滤波 / 方向非法 */
     {
         foc_angle_t a6;
         foc_angle_cfg_t bad = cfg;
-        bad.pole_pairs = 0U;
         foc_angle_ctor(&a6);
+        bad.pole_pairs = 0U;
+        CHECK(a6.init(&a6, &bad) == -1);
+        bad = cfg;
+        bad.sample_time_s = 0.0f;
+        CHECK(a6.init(&a6, &bad) == -1);
+        bad = cfg;
+        bad.sample_time_s = NAN;
+        CHECK(a6.init(&a6, &bad) == -1);
+        bad = cfg;
+        bad.speed_lpf_hz = -1.0f;
+        CHECK(a6.init(&a6, &bad) == -1);
+        bad = cfg;
+        bad.offset_rad = NAN;
+        CHECK(a6.init(&a6, &bad) == -1);
+        bad = cfg;
+        bad.direction = 0.5f;
         CHECK(a6.init(&a6, &bad) == -1);
     }
 }
