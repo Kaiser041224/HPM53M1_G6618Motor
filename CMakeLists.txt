@@ -93,6 +93,7 @@ sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Interface)
 
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Logic)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Algorithm/Inc)
+sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Algorithm/FOC/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Platform/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Control/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Comm/terminal/Inc)
@@ -145,6 +146,9 @@ sdk_app_src(App/Algorithm/Src/algo_pid.c)
 sdk_app_src(App/Algorithm/Src/algo_pll.c)
 sdk_app_src(App/Algorithm/Src/algo_ramp.c)
 sdk_app_src(App/Algorithm/Src/algo_rms.c)
+sdk_app_src(App/Algorithm/FOC/Src/foc_angle.c)
+sdk_app_src(App/Algorithm/FOC/Src/foc_current.c)
+sdk_app_src(App/Algorithm/FOC/Src/foc_modulation.c)
 
 # ============================================================================
 # Platform Layer
@@ -170,6 +174,7 @@ sdk_app_src(App/Platform/Src/app_software_params.c)
 
 sdk_app_src(App/Control/Src/app_fault.c)
 sdk_app_src(App/Control/Src/app_motor_params.c)
+sdk_app_src(App/Control/Src/app_foc_current.c)
 
 # ============================================================================
 # Comm Layer（通讯：终端 / CAN 协议）
