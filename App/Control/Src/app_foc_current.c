@@ -149,6 +149,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         }
     }
 
+
     g_foc_current_snapshot.theta_e_rad = theta_e_rad;
     g_foc_current_snapshot.omega_e_rad_s = omega_e_rad_s;
     g_foc_current_snapshot.i_d_a = foc_finite(in.i_d_a) ? in.i_d_a : 0.0f;
@@ -163,7 +164,9 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     g_foc_current_snapshot.v_bus_v = v_bus;
     g_foc_current_snapshot.v_scale = v_scale;
     g_foc_current_snapshot.saturated = out.saturated;
-    g_foc_current_snapshot.run_count++;
+    if (g_foc_current_snapshot.valid) {
+        g_foc_current_snapshot.run_count++;
+    }
     return 0;
 }
 

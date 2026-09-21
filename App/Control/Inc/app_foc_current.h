@@ -31,7 +31,7 @@ typedef struct {
     float v_scale;                /**< 调制缩放（1.0 = 未限幅；不含逐相钳位） */
     bool  saturated;              /**< PI 圆形电压限幅触发（不含调制限幅） */
     bool  valid;                  /**< 本拍数据可信（false = 保护路径：零矢量/输入无效） */
-    uint32_t run_count;           /**< 成功执行计数（仅成功拍递增） */
+    uint32_t run_count;           /**< 健康拍计数（valid=true 时递增） */
     uint32_t fault_count;         /**< 保护路径计数（零矢量/无效输入） */
 } app_foc_current_snapshot_t;
 
