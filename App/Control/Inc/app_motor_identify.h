@@ -27,12 +27,15 @@ extern "C" {
  */
 typedef enum {
     APP_IDENTIFY_REASON_NONE = 0,   /**< 无失败 */
-    APP_IDENTIFY_REASON_TIMEOUT,    /**< 超时 */
+    APP_IDENTIFY_REASON_TIMEOUT,    /**< 超时（辨识或编排） */
+    APP_IDENTIFY_REASON_DIR,        /**< 方向判定无效（转子未跟随） */
     APP_IDENTIFY_REASON_QUALITY,    /**< 质量不足 */
     APP_IDENTIFY_REASON_RATIO,      /**< 极对数/传动比校验失败 */
+    APP_IDENTIFY_REASON_NONFINITE,  /**< 非有限测量样本过多 */
     APP_IDENTIFY_REASON_VERIFY,     /**< 闭环验证失败 */
     APP_IDENTIFY_REASON_ENCODER,    /**< 编码器读失败/错误计数增长 */
     APP_IDENTIFY_REASON_FAULT,      /**< 故障 */
+    APP_IDENTIFY_REASON_STATE,      /**< FOC 状态异常退出（非 CALIB） */
 } app_identify_fail_t;
 
 /**

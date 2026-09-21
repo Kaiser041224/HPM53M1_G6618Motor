@@ -267,6 +267,27 @@ static app_terminal_job_t s_cal_job = {
 };
 
 /**
+ * @brief 辨识失败原因名称
+ * @param reason 原因枚举
+ * @return 名称；越界返回 "?"
+ */
+static const char* cal_encoder_fail_name(app_identify_fail_t reason) {
+    switch (reason) {
+    case APP_IDENTIFY_REASON_NONE: return "none";
+    case APP_IDENTIFY_REASON_TIMEOUT: return "timeout";
+    case APP_IDENTIFY_REASON_DIR: return "rotor not following (dir)";
+    case APP_IDENTIFY_REASON_QUALITY: return "quality low";
+    case APP_IDENTIFY_REASON_RATIO: return "pole-pair/ratio mismatch";
+    case APP_IDENTIFY_REASON_NONFINITE: return "non-finite samples";
+    case APP_IDENTIFY_REASON_VERIFY: return "verify failed";
+    case APP_IDENTIFY_REASON_ENCODER: return "encoder error";
+    case APP_IDENTIFY_REASON_FAULT: return "fault";
+    case APP_IDENTIFY_REASON_STATE: return "state changed";
+    default: return "?";
+    }
+}
+
+/**
  * @brief cal encoder job：1kHz 推进辨识编排（进度/验证/结果打印）
  * @param now_ms 系统毫秒计数
  */
@@ -281,20 +302,21 @@ static void cal_encoder_tick(uint32_t now_ms) {
     /* 结束：由 Comm 层读取 Control 结果并打印（分层：Comm → Control） */
     app_motor_identify_get_result(&result);
     if (result.done) {
-        app_terminal_cmd_emit("\r\nOK: encoder identify  offset=%.4f rad (%.2f deg)  dir=%+.0f  q=%.3f\r\n",
+        app_terminal_cmd_emit("\r\nOK: encoder identify  offset=%.4f rad (%.2f deg)  dir=%+.0f  "
+                              "q=%.3f (tracking quality)\r\n",
                               (double)result.offset_rad,
                               (double)(result.offset_rad * (180.0f / FOC_PI_F)),
                               (double)result.direction, (double)result.quality);
         app_terminal_cmd_emit("    verify: mean=%.2f deg  max=%.2f deg (limit 5/15)\r\n",
                               (double)result.verify_mean_deg, (double)result.verify_max_deg);
-        app_terminal_cmd_emit("    ratio_err=%.3f  (RAM only; flash v2)\r\n",
-                              (double)result.ratio_err);
+        app_terminal_cmd_emit("    ratio_err=%+.1f%% (mech travel vs 2pi/p; RAM only, flash v2)\r\n",
+                              (double)(result.ratio_err * 100.0f));
     } else {
-        app_terminal_cmd_emit("\r\nFAIL: encoder identify (reason=%u  q=%.3f  ratio_err=%.3f)\r\n",
-                              (unsigned)result.fail_reason, (double)result.quality,
-                              (double)result.ratio_err);
-        app_terminal_cmd_emit("      check: mechanical slack / encoder dir / pole pairs / "
-                              "I_cal too low\r\n");
+        app_terminal_cmd_emit("\r\nFAIL: encoder identify (%s)  q=%.3f  ratio_err=%+.1f%%\r\n",
+                              cal_encoder_fail_name(result.fail_reason),
+                              (double)result.quality, (double)(result.ratio_err * 100.0f));
+        app_terminal_cmd_emit("      check: free rotation / I_cal enough / encoder mounting / "
+                              "pole_pairs\r\n");
     }
     app_terminal_job_abort(); /* 结束 job（触发 abort 回调换行+刷新） */
 }
@@ -334,12 +356,16 @@ static int cmd_cal(int argc, char** argv) {
             csh_printf(csh, "ERR: FOC not enabled (use 'foc on' first)\r\n");
             return -1;
         }
+        if (app_foc_get_state() != APP_FOC_STATE_READY) {
+            csh_printf(csh, "ERR: FOC busy/FAULT (require READY: zero torque, no fault)\r\n");
+            return -1;
+        }
         if (app_debug_motor_is_running()) {
             csh_printf(csh, "ERR: V/F rotation running (stop first)\r\n");
             return -1;
         }
         csh_printf(csh,
-                   "WARN: motor must be FREE to rotate; I_cal=2.0A; ~4s; any key aborts\r\n");
+                   "WARN: motor must be FREE to rotate; I_cal~2A; ~3.2s; any key aborts\r\n");
         /* 先启动 job（会中止旧 job），再启动辨识 */
         if (app_terminal_job_start(&s_cal_encoder_job) != 0) {
             csh_printf(csh, "FAIL: job start\r\n");
