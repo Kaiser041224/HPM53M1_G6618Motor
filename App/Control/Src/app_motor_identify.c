@@ -308,6 +308,9 @@ int app_motor_identify_start(void) {
     id_encoder_ctor(&s_id_encoder);
     if (s_id_encoder.init(&s_id_encoder, &cfg) != 0) {
         app_foc_exit_calib();
+        s_result = (app_motor_identify_result_t){0};
+        s_result.failed = true;
+        s_result.fail_reason = APP_IDENTIFY_REASON_STATE; /* 配置非法：不留下陈旧结果 */
         return -1;
     }
     s_id_encoder.reset(&s_id_encoder);
