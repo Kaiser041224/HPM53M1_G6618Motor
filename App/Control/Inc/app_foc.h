@@ -44,6 +44,11 @@ typedef enum {
 } app_foc_angle_source_t;
 
 /**
+ * Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss；25kHz 节拍）
+ */
+extern volatile uint32_t g_foc_loop_cycles;
+
+/**
  * @brief 初始化（上电状态 OFF）
  */
 void app_foc_init(void);

@@ -18,6 +18,7 @@
 #include "app_software_params.h"
 #include "foc_angle.h"
 #include "foc_math.h"
+#include "intf_clock.h"
 
 #define APP_FOC_SPEED_LPF_HZ (100.0f) /**< ωe 估计低通截止 [Hz] */
 
@@ -31,6 +32,9 @@ static uint32_t s_rotor_seq_last; /**< 上一拍采样序号 */
 static bool s_rotor_seq_valid;    /**< 序号已建立 */
 static bool s_angle_ready;        /**< 角度链初始化成功 */
 static bool s_initialized;        /**< app_foc_init 已执行 */
+
+/* Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss，调试器直读） */
+volatile uint32_t g_foc_loop_cycles __attribute__((section(".noncacheable.bss")));
 
 /**
  * @brief 电角度链初始化（参数来源 motor 域）
@@ -87,7 +91,10 @@ static bool app_foc_read_rotor_rad(float* theta_m_rad) {
     return true;
 }
 
-void app_foc_run_once(void) {
+/**
+ * @brief 25kHz 单拍主体（由 app_foc_run_once 计时包裹）
+ */
+static void app_foc_run_body(void) {
     float theta_e = 0.0f;
     float omega_e = 0.0f;
     float theta_m;
@@ -131,6 +138,13 @@ void app_foc_run_once(void) {
     if ((s_state == APP_FOC_STATE_READY) && ((s_i_d_ref != 0.0f) || (s_i_q_ref != 0.0f))) {
         s_state = APP_FOC_STATE_RUN;
     }
+}
+
+void app_foc_run_once(void) {
+    uint32_t t0 = intf_clock_get_cycle();
+
+    app_foc_run_body();
+    g_foc_loop_cycles = intf_clock_get_cycle() - t0;
 }
 
 int app_foc_enable(void) {

@@ -5,11 +5,11 @@
  *
  * 主循环结构（节拍 = config/hardware.yaml 的 inverter.pwm_freq_hz，即半桥开关频率/FOC 闭环频率）：
  *   1) 每周期：编码器双路采样（更新 Ozone 观测变量 + 计时统计）
+ *   1a) 每周期：模拟量换算 + 故障保护 + **FOC 电流环**（app_foc_run_once，OFF 时空操作）
+ *   1b) 每周期：开环 V/F 自检（与 FOC 互斥；FOC 活动时让位）
  *   2) 1ms 分频：UART / CAN / USB 调试轮询（各自内部 1Hz 打印门限）
  *   3) 1s：RTT 心跳 + 编码器统计汇总
  *   4) 节拍点：mcycle 计时，迟到计数并重同步（心跳轮次不计数，避免打印污染指标）
- *
- * 说明：本文件为 bring-up 测试代码，后续由 FOC 应用替换。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
