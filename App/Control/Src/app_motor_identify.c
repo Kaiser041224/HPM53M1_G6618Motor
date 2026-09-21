@@ -124,6 +124,7 @@ bool app_motor_identify_fast_step(void) {
 
     s_id_encoder.step(&s_id_encoder, &in, &out);
     app_foc_calib_set_excitation(out.theta_e_cmd, out.i_d_ref, out.i_q_ref);
+    s_result.progress = out.progress; /* 终端心跳：长流程期间保持链路活跃 */
 
     if (out.done) {
         const app_motor_params_t* motor = app_motor_params_current();

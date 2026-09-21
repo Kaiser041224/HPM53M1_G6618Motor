@@ -38,6 +38,9 @@
  * @brief 打印电机状态行（运行态 / 电频率 / 调制比）。
  * @param csh terminal 实例
  */
+static uint32_t s_cal_beat_ms;   /**< 辨识心跳：上次打印时刻 [ms] */
+static uint32_t s_cal_beat_count; /**< 辨识心跳：已打印次数（= 秒） */
+
 static void motor_print_status(chry_shell_t* csh) {
     float freq_hz = 0.0f;
     float mod = 0.0f;
@@ -311,8 +314,19 @@ static void cal_encoder_tick(uint32_t now_ms) {
 
     app_motor_identify_run_once(now_ms);
     if (app_motor_identify_is_active()) {
+        /* 心跳：辨识约 10s 无输出会让上位机串口工具读超时（表现为连接不稳定） */
+        if ((uint32_t)(now_ms - s_cal_beat_ms) >= 1000U) {
+            s_cal_beat_ms = now_ms;
+            s_cal_beat_count++;
+            app_motor_identify_get_result(&result);
+            app_terminal_cmd_emit("cal: running %2u%% (%us)\r\n",
+                                  (unsigned)(result.progress * 100.0f),
+                                  (unsigned)s_cal_beat_count);
+        }
         return;
     }
+    s_cal_beat_ms = 0U; /* 结束：心跳复位 */
+    s_cal_beat_count = 0U;
 
     /* 结束：由 Comm 层读取 Control 结果并打印（分层：Comm → Control） */
     app_motor_identify_get_result(&result);

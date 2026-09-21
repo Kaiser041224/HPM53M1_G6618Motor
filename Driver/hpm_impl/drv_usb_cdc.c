@@ -164,6 +164,18 @@ static const struct usb_descriptor s_cdc_descriptor = {
 static volatile bool s_configured;
 static volatile bool s_dtr;
 static volatile bool s_tx_busy;
+static uint32_t s_tx_start_cycle; /**< 本次发送起始 cycle（卡死恢复判定） */
+
+/* 运行统计（链路稳定性诊断；Ozone 可直读） */
+static volatile uint32_t s_stat_tx_timeouts;
+static volatile uint32_t s_stat_tx_drops;
+static volatile uint32_t s_stat_rx_drops;
+static volatile uint32_t s_stat_bus_resets;
+static volatile uint32_t s_stat_xfer_errors;
+
+/* TX 完成等待上限 [ms]：控制器传输出错时 SDK 不回调完成 → 超时强制恢复，
+ * 否则 s_tx_busy 永久为真、TX 死锁（现象：终端静默，只能重新枚举恢复）。 */
+#define USB_CDC_TX_STALL_TIMEOUT_MS (50U)
 static bool s_initialized;
 static intf_usb_cdc_rx_cb_t s_rx_cb;
 
@@ -184,7 +196,8 @@ static inline void usb_cdc_ring_push(uint8_t byte)
     uint16_t next = (uint16_t) ((s_rx_head + 1U) & USB_CDC_RX_RING_MASK);
 
     if (next == s_rx_tail) {
-        return; /* 满：丢弃新字节 */
+        s_stat_rx_drops++; /* 满：丢弃新字节 */
+        return;
     }
     s_rx_ring[s_rx_head & USB_CDC_RX_RING_MASK] = byte;
     s_rx_head = next;
@@ -251,6 +264,15 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
         s_configured = false;
         s_dtr = false;
         s_tx_busy = false;
+        s_stat_bus_resets++;
+        break;
+    case USBD_EVENT_ERROR:
+        s_stat_xfer_errors++;
+        /* 控制器报错：完成回调不会到达，且 OUT 端点可能已停止接收 → 重新武装 */
+        if (s_configured) {
+            usbd_ep_start_read(busid, USB_CDC_OUT_EP, s_ep_out_buf,
+                               usbd_get_ep_mps(busid, USB_CDC_OUT_EP));
+        }
         break;
     case USBD_EVENT_CONFIGURED:
         s_configured = true;
@@ -364,16 +386,31 @@ static int hpm_usb_cdc_write(const uint8_t *data, size_t len, uint32_t timeout_m
     start = intf_clock_get_cycle();
     timeout_cycles = usb_cdc_ms_to_cycles(timeout_ms);
 
+    /* 上一次发送卡死（控制器报错/主机长时间不取）：超时强制恢复，避免 TX 永久死锁 */
+    if (s_tx_busy
+        && ((uint32_t)(intf_clock_get_cycle() - s_tx_start_cycle)
+            >= usb_cdc_ms_to_cycles(USB_CDC_TX_STALL_TIMEOUT_MS))) {
+        s_stat_tx_timeouts++;
+        s_tx_busy = false;
+        (void)usbd_ep_clear_stall(USB_CDC_BUSID, USB_CDC_IN_EP);
+    }
+
     /* 等待上一次发送完成 */
     while (s_tx_busy) {
         if (usb_cdc_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
+            s_stat_tx_drops++;
             return -1;
         }
     }
 
     memcpy(s_ep_in_buf, data, len);
+    s_tx_start_cycle = intf_clock_get_cycle();
     s_tx_busy = true;
-    usbd_ep_start_write(USB_CDC_BUSID, USB_CDC_IN_EP, s_ep_in_buf, (uint32_t) len);
+    if (usbd_ep_start_write(USB_CDC_BUSID, USB_CDC_IN_EP, s_ep_in_buf, (uint32_t) len) != 0) {
+        s_tx_busy = false; /* 启动失败：不留下永久 busy */
+        s_stat_tx_drops++;
+        return -1;
+    }
 
     if (timeout_ms == 0U) {
         return 0; /* 不等待完成 */
@@ -430,6 +467,18 @@ static bool hpm_usb_cdc_is_dtr(void)
 /**
  * @brief 反初始化 USB CDC 设备栈
  */
+static void hpm_usb_cdc_get_stats(intf_usb_cdc_stats_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->tx_timeouts = s_stat_tx_timeouts;
+    out->tx_drops = s_stat_tx_drops;
+    out->rx_drops = s_stat_rx_drops;
+    out->bus_resets = s_stat_bus_resets;
+    out->xfer_errors = s_stat_xfer_errors;
+}
+
 static void hpm_usb_cdc_deinit(void)
 {
     if (!s_initialized) {
@@ -454,6 +503,7 @@ static const intf_usb_cdc_t s_usb_cdc_dev = {
     .read = hpm_usb_cdc_read,
     .register_rx_callback = hpm_usb_cdc_register_rx_callback,
     .is_dtr = hpm_usb_cdc_is_dtr,
+    .get_stats = hpm_usb_cdc_get_stats,
     .deinit = hpm_usb_cdc_deinit,
 };
 

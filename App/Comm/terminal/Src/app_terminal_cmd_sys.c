@@ -108,14 +108,20 @@ static int cmd_status(int argc, char** argv) {
 }
 
 /**
- * @brief 命令 usb：DTR / Terminal 就绪 / TX 丢弃字节统计。
+ * @brief 命令 usb：链路统计（DTR / Terminal 就绪 / 丢弃 / TX 卡死恢复 / 总线复位）。
  */
 static int cmd_usb(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    intf_usb_cdc_stats_t st = {0};
 
-    csh_printf(
-        csh, "DTR=%u terminal ready=%u tx drop bytes=%u\r\n", app_usb_is_dtr() ? 1U : 0U,
-        app_terminal_is_ready() ? 1U : 0U, (unsigned)app_terminal_get_tx_drop_bytes());
+    app_usb_get_stats(&st);
+    csh_printf(csh, "DTR=%u terminal ready=%u tx drop bytes=%u\r\n", app_usb_is_dtr() ? 1U : 0U,
+               app_terminal_is_ready() ? 1U : 0U,
+               (unsigned)app_terminal_get_tx_drop_bytes());
+    csh_printf(csh, "cdc: tx_timeouts=%u (端点卡死强制恢复，应保持 0)  tx_drops=%u\r\n",
+               (unsigned)st.tx_timeouts, (unsigned)st.tx_drops);
+    csh_printf(csh, "     rx_drops=%u byte  bus_resets=%u  xfer_errors=%u\r\n",
+               (unsigned)st.rx_drops, (unsigned)st.bus_resets, (unsigned)st.xfer_errors);
 
     return 0;
 }

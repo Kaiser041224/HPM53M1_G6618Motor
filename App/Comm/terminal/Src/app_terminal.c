@@ -42,7 +42,9 @@ extern const int __vsymtab_start;
 extern const int __vsymtab_end;
 
 #define APP_TERMINAL_TX_RING_SIZE       (8192U) /**< TX 环容量（2 的幂，cherryrb 要求；需容纳欢迎界面 ~4KB） */
-#define APP_TERMINAL_TX_CHUNK_SIZE      (512U)  /**< 单次 USB 写上限（HS MPS） */
+/* 单次 USB 写上限：取 256（< HS MPS=512）→ 每次都是短包，避免"整 MPS 倍数需补 ZLP"
+ * 那条链路（ZLP 完成回调依赖更强，历史上是 TX 卡死入口） */
+#define APP_TERMINAL_TX_CHUNK_SIZE      (256U)  /**< 单次 USB 写上限（< HS MPS，免 ZLP） */
 #define APP_TERMINAL_TX_FLUSH_CHUNKS    (4U)    /**< 单拍最多推送块数 */
 #define APP_TERMINAL_RUN_BUDGET_US      (200U)  /**< 单次 run_once 输出 flush 总预算 [µs] */
 #define APP_TERMINAL_LINE_SIZE          (256U)  /**< 命令行上限 */

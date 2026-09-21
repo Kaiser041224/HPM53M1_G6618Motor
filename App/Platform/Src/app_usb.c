@@ -50,6 +50,13 @@ int app_usb_read(uint8_t* data, size_t len) {
     return s_usb->read(data, len);
 }
 
+void app_usb_get_stats(intf_usb_cdc_stats_t* out) {
+    if ((s_usb == NULL) || (s_usb->get_stats == NULL)) {
+        return;
+    }
+    s_usb->get_stats(out);
+}
+
 bool app_usb_is_dtr(void) {
     if (s_usb == NULL) {
         return false;
