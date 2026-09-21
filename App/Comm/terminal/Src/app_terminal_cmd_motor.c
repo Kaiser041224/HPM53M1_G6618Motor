@@ -27,6 +27,7 @@
 #include "app_analog_signal.h"
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
+#include "app_debug_rtt.h"
 #include "app_foc.h"
 #include "intf_clock.h"
 #include "app_motor_identify.h"
@@ -316,19 +317,18 @@ static void cal_encoder_tick(uint32_t now_ms) {
 
     app_motor_identify_run_once(now_ms);
     if (app_motor_identify_is_active()) {
-        /* 心跳：长流程无输出会让上位机串口工具读超时（表现为连接不稳定）。
-         * 250ms 一行；同时带实测节拍 dt / FOC 单拍耗时，便于定位主循环负载。 */
+        /* 进度走 RTT（终端保持"只回命令"，周期输出会干扰键入）；
+         * 250ms 一行，带实测节拍 dt / FOC 单拍耗时，便于定位主循环负载。 */
         if ((uint32_t)(now_ms - s_cal_beat_ms) >= 250U) {
             uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
 
             s_cal_beat_ms = now_ms;
             s_cal_beat_count++;
             app_motor_identify_get_result(&result);
-            app_terminal_cmd_emit("cal: running %2u%% (%.1fs) dt=%u us cyc=%u us\r\n",
-                                  (unsigned)(result.progress * 100.0f),
-                                  (double)s_cal_beat_count * 0.25,
-                                  (unsigned)g_foc_loop_dt_us,
-                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
+            app_debug_printf("[cal] %2u%% (%.1fs) dt=%u us cyc=%u us\r\n",
+                             (unsigned)(result.progress * 100.0f),
+                             (double)s_cal_beat_count * 0.25, (unsigned)g_foc_loop_dt_us,
+                             (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
         }
         return;
     }
