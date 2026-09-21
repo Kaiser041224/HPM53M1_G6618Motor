@@ -23,8 +23,8 @@ extern "C" {
  * @brief 调制配置
  */
 typedef struct {
-    float duty_max;  /**< 占空比上限（0.5, 1.0]；0.885 = 三电阻采样窗口约束 */
-    float v_bus_min; /**< 最低母线电压 [V]（低于则拒绝输出） */
+    float duty_max;  /**< 占空比上限（0.5, 1.0]；0.885 = 三电阻采样窗口约束；须有限） */
+    float v_bus_min; /**< 最低母线电压 [V]（须有限且 > 0；低于则拒绝输出） */
 } foc_modulation_cfg_t;
 
 /**
@@ -33,9 +33,10 @@ typedef struct {
  * @param v_alpha α 轴电压 [V]
  * @param v_beta β 轴电压 [V]
  * @param v_bus_v 母线电压 [V]
- * @param duty_abc 输出三相占空比 [0,1]
- * @param v_scale_out 输出调制缩放系数（1.0 = 未限幅；<1 = 已限幅；可为 NULL）
- * @return 0 = 成功；-1 = 输入非法（调用方应输出零矢量）
+ * @param duty_abc 输出三相占空比 [0,1]（返回 -1 时不修改）
+ * @param v_scale_out 输出幅度缩放系数（1.0 = 未限幅；<1 = 幅度限幅触发；
+ *                     不含逐相钳位；可为 NULL）
+ * @return 0 = 成功；-1 = 输入/配置非法（调用方应输出零矢量）
  */
 int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta, float v_bus_v,
                         float duty_abc[3], float* v_scale_out);

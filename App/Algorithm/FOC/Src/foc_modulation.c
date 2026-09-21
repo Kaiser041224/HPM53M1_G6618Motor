@@ -27,9 +27,10 @@ static inline float foc_max3(float a, float b, float c) {
     return (m > c) ? m : c;
 }
 
+FOC_ATTR_RAMFUNC
 int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta, float v_bus_v,
                         float duty_abc[3], float* v_scale_out) {
-    float vu, vv, vw, vmax, vmin, span, span_max, scale = 1.0f, offset;
+    float vu, vv, vw, vmax, vmin, span, span_max, scale = 1.0f, offset, inv_vbus;
 
     if ((cfg == NULL) || (duty_abc == NULL)) {
         return -1;
@@ -37,10 +38,13 @@ int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_
     if (!foc_finite(v_alpha) || !foc_finite(v_beta) || !foc_finite(v_bus_v)) {
         return -1;
     }
-    if (v_bus_v < cfg->v_bus_min) {
+    if (!foc_finite(cfg->duty_max) || (cfg->duty_max <= 0.5f) || (cfg->duty_max > 1.0f)) {
         return -1;
     }
-    if ((cfg->duty_max <= 0.5f) || (cfg->duty_max > 1.0f)) {
+    if (!foc_finite(cfg->v_bus_min) || (cfg->v_bus_min <= 0.0f)) {
+        return -1; /* 同时保证 v_bus_v ≥ v_bus_min > 0（除法安全） */
+    }
+    if (v_bus_v < cfg->v_bus_min) {
         return -1;
     }
 
@@ -60,9 +64,10 @@ int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_
     }
 
     offset = -0.5f * (vmax + vmin);
-    duty_abc[0] = 0.5f + (vu + offset) / v_bus_v;
-    duty_abc[1] = 0.5f + (vv + offset) / v_bus_v;
-    duty_abc[2] = 0.5f + (vw + offset) / v_bus_v;
+    inv_vbus = 1.0f / v_bus_v; /* 单次除法（v_bus_v ≥ v_bus_min > 0 已保证） */
+    duty_abc[0] = 0.5f + (vu + offset) * inv_vbus;
+    duty_abc[1] = 0.5f + (vv + offset) * inv_vbus;
+    duty_abc[2] = 0.5f + (vw + offset) * inv_vbus;
 
     for (uint8_t i = 0U; i < 3U; i++) {
         if (duty_abc[i] > cfg->duty_max) {
