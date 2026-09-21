@@ -41,6 +41,7 @@ typedef enum {
 typedef enum {
     APP_FOC_ANGLE_ENCODER = 0, /**< 编码器（正常闭环） */
     APP_FOC_ANGLE_FORCED,      /**< 强制角（辨识/调试） */
+    APP_FOC_ANGLE_OBSERVER,    /**< 观测器（无感占位；V1 未实现） */
 } app_foc_angle_source_t;
 
 /**

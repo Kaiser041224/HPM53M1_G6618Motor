@@ -327,6 +327,8 @@ void app_foc_get_snapshot(app_foc_snapshot_t* out); /* θe/ωe/id/iq/vd/vq/duty/
 7. 快照：更新 `g_foc_*` 观测变量（`.noncacheable.bss`，供 Ozone）。
 
 **调度**：由 `app_foc_run_once()` 统一调用；`app_foc_state == OFF/FAULT` 时跳过并输出零矢量/不写桥。
+**例外（V1 实施补充）**：OFF 状态仍刷新快照的 θe/ωe（只读编码器 + 角度链，不写桥），
+供台架"静态链路检查"（§9.1 步骤 1）在未使能时观察角度连续性。
 
 ### 4.3 参数消费
 
@@ -443,7 +445,7 @@ void id_encoder_reset(id_encoder_t* self);
 | 辨识电流 `I_cal` | 默认 **2.0 A**（峰值）；可配范围 (0, min(i_q_max, 5A)] |
 | 功率上限 | `I_cal²·Rs·t` 极小（2A² × 0.158Ω × 3.2s ≈ 2.0 J）；仍记录为检查项 |
 | 转子行程 | 电角度 2π = 机械 36°（p=10），无需整机旋转空间 |
-| 超时 | 每阶段独立超时（LOCK_IN 2s / DIR 1s / 每扫描 3s）；超时 → FAILED |
+| 超时 | **V1 实施偏差**：单一总超时 15s（`id_encoder.timeout_ms`）+ 编排侧 30s 兜底（1kHz tick）；每阶段独立超时（LOCK_IN 2s / DIR 1s / 每扫描 3s）为 v2 细化项（已记录，未实现） |
 | 故障 | 辨识中 fault != NORMAL → 立即中止（走 FOC FAULT 路径） |
 | 编码器 | 辨识中错误计数增量 > 0 → FAILED（ADC spec 健康项同源） |
 | 温度 | NTC 换算未定；V1 仅打印 NTC 电阻供人工判断 |
@@ -462,8 +464,14 @@ void id_encoder_reset(id_encoder_t* self);
 | 5 | `app_3phase_inverter` | 无变更（`set_duty_abc` 已满足；零矢量 = 0.5/0.5/0.5） | — |
 | 6 | `app_logic.c` | init 阶段新增 `app_foc_init()`；25kHz 节拍新增 `app_foc_run_once()`（在 `app_fault_process()` 之后、`app_debug_motor_run_once()` 之前） | 接线 |
 | 7 | `CMakeLists.txt` | include 增加 `App/Algorithm/FOC/Inc`；源文件增加 `App/Algorithm/FOC/Src/*.c`、`App/Control/Src/app_foc*.c`、`app_motor_identify.c` | 构建 |
-| 8 | `App/Comm/terminal` | 新增 `foc` 命令（`status/on/off`）；`motor` 增加 `iq <A>`；`cal` 增加 `encoder` 子命令；monitor 增加 θe/ωe/id/iq 行 | 可观测可操作 |
+| 8 | `App/Comm/terminal` | 新增 `foc` 命令（`status/on/off`）；`motor` 增加 `iq <A>`；`cal` 增加 `encoder` 子命令 | 可观测可操作 |
 | 9 | `App/Debug` | 新增 `app_debug_foc.{h,c}`（`foc` 命令数据源 + Ozone 快照刷新，可选） | 调试 |
+
+**实施偏差记录（2026-09-21）**：
+- monitor 常驻状态区**未增加** θe/ωe/id/iq 行（`foc status` 已提供完整快照，避免 monitor 行数膨胀）；
+- `app_debug_foc`（调试数据源模块）未单独建立（`foc` 命令 + `g_foc_current_snapshot` 已覆盖）；
+- `motor.encoder.electrical_offset_rad/direction` 的元数据 `apply` 为 LIVE，但实际在
+  下一次 `app_foc_enable()` 时消费（`enable()` 内 `set_offset`）——已在此记录。
 
 **PWM 影子寄存器行为记录**：`drv_hrpwm` 的 CMP 更新触发为 `pwm_shadow_register_update_on_modify`（SDK 语义：**写入即生效**，非周期锁存）。异步写入可能使当前周期脉冲边沿轻微抖动；现有 V/F 旋转（同为 25kHz 异步写入）台架未见异常。V1 沿用；ISR 迁移后写入位置固定在谷底后（余量最大），列为观察项（§10）。
 
@@ -591,6 +599,8 @@ control:
 | 11 | 速度/位置环未实现 | 范围 | V2/V3；外环分频点已预留 |
 | 12 | 温度保护缺失（NTC 换算未定） | 数据 | 型号确认后补；V1 辨识打印 NTC 电阻人工判断 |
 | 13 | `app_3phase_inverter_enable()` 含 ~10ms 阻塞（+12V 栅极稳定等待），`foc on`/`motor start` 期间 25kHz 环与 L2/L3 暂停 | 实时性 | 阻塞窗口内桥关闭、无电流风险；与既有 V/F 路径同构。**v2：非阻塞桥使能**（断言 +12V → 主循环 deadline 后启动 PWM） |
+| 14 | 辨识为**单一总超时**（15s）+ 30s 编排兜底，未实现 spec §5.5 的每阶段独立超时 | 范围 | V1 接受（锁定态 2A 持续 15s 热效应可忽略）；v2 细化 |
+| 15 | `motor.encoder.*` 参数元数据标 LIVE，实际在下一次 `app_foc_enable()` 消费 | 元数据 | V1 已记录（§6 偏差）；v2 可细化 apply 语义或改为运行期热更新 |
 
 ---
 

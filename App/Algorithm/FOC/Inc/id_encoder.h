@@ -63,8 +63,8 @@ typedef enum {
  */
 typedef struct {
     float theta_m_raw_rad; /**< 机械角（未加软件零点）[rad] */
-    float i_d_a, i_q_a;    /**< 电流反馈 [A] */
-    float v_bus_v;         /**< 母线电压 [V] */
+    float i_d_a, i_q_a;    /**< 电流反馈 [A]（预留：V1 未消费，供将来电流判据） */
+    float v_bus_v;         /**< 母线电压 [V]（预留：V1 未消费） */
     float dt_s;            /**< 本步间隔 [s] */
 } id_encoder_in_t;
 

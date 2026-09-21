@@ -116,6 +116,17 @@ static void app_foc_run_body(void) {
         return;
     }
 
+    if (s_state == APP_FOC_STATE_OFF) {
+        /* OFF：仅刷新角度观测（不写桥、不跑电流环），供台架静态链路检查（spec §9.1 步骤 1） */
+        if (s_angle_ready && app_foc_read_rotor_rad(&theta_m)) {
+            float omega_e = 0.0f;
+
+            g_foc_current_snapshot.theta_e_rad = s_angle.step(&s_angle, theta_m, &omega_e);
+            g_foc_current_snapshot.omega_e_rad_s = omega_e;
+        }
+        return;
+    }
+
     if ((s_state != APP_FOC_STATE_READY) && (s_state != APP_FOC_STATE_RUN)
         && (s_state != APP_FOC_STATE_CALIB)) {
         return;
@@ -307,6 +318,9 @@ void app_foc_exit_calib(void) {
 }
 
 void app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref) {
+    if (!foc_finite(theta_e_rad) || !foc_finite(i_d_ref) || !foc_finite(i_q_ref)) {
+        return;
+    }
     if (s_state == APP_FOC_STATE_CALIB) {
         s_forced_theta = theta_e_rad;
         s_i_d_ref = i_d_ref;

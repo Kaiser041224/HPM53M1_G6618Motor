@@ -103,6 +103,10 @@ static int cmd_motor(int argc, char** argv) {
     }
 
     if (strcmp(sub, "stop") == 0) {
+        if (app_foc_is_active()) {
+            csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
+            return -1;
+        }
         app_terminal_cmd_capture_begin();
         app_debug_motor_stop();
         app_terminal_cmd_capture_end();
@@ -222,6 +226,11 @@ static int cmd_inv(int argc, char** argv) {
             csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
             return -1;
         }
+    }
+
+    if (mask == 0U) {
+        /* 紧急路径：先停 FOC（状态置 OFF），再关调试输出，避免 FOC 状态与桥状态失配 */
+        app_foc_disable();
     }
 
     app_terminal_cmd_capture_begin();
@@ -361,10 +370,12 @@ static int cmd_cal(int argc, char** argv) {
             csh_printf(csh, "ERR: FOC not enabled (use 'foc on' first)\r\n");
             return -1;
         }
-        if (app_foc_get_state() != APP_FOC_STATE_READY) {
-            csh_printf(csh, "ERR: FOC busy/FAULT (require READY: zero torque, no fault)\r\n");
+        if ((app_foc_get_state() != APP_FOC_STATE_READY)
+            && (app_foc_get_state() != APP_FOC_STATE_RUN)) {
+            csh_printf(csh, "ERR: FOC busy/FAULT (require READY or RUN, no fault)\r\n");
             return -1;
         }
+        /* RUN 进入：先清零转矩给定（enter_calib 内部亦清零），避免切换瞬态 */
         if (app_debug_motor_is_running()) {
             csh_printf(csh, "ERR: V/F rotation running (stop first)\r\n");
             return -1;
