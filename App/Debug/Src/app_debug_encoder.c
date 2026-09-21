@@ -224,14 +224,28 @@ void app_debug_encoder_init(void) {
    降采样周期内两路背靠背采样（间隔 ~7µs），同时用于游标比值累计。 */
 void app_debug_encoder_sample(void) {
     int ret_rotor;
+    uint16_t raw;
+    bool valid;
 
-    ret_rotor = encoder_sample_one(APP_ENCODER_ROTOR);
+    /* 转子：共享采样（FOC 与 Debug 共用一次 SPI 读；耗时计入统计） */
+    {
+        uint32_t t0 = intf_clock_get_cycle();
+
+        ret_rotor = app_encoder_sample_rotor();
+        s_read_cycles_sum[APP_ENCODER_ROTOR] += intf_clock_get_cycle() - t0;
+        s_read_count[APP_ENCODER_ROTOR]++;
+        if ((ret_rotor == 0) && (app_encoder_get_rotor_raw(&raw, &valid) == 0) && valid) {
+            g_enc_rotor_raw = raw;
+            g_enc_rotor_deg = (float)raw * (360.0f / 65536.0f);
+        }
+    }
 
     if ((s_sample_index % ENC_OUTPUT_SAMPLE_DIV) == 0U) {
         int ret_output = encoder_sample_one(APP_ENCODER_OUTPUT);
 
-        if ((ret_rotor == 0) && (ret_output == 0)) {
-            ratio_accumulate(g_enc_rotor_raw, g_enc_output_raw);
+        if ((ret_rotor == 0) && (ret_output == 0) && (app_encoder_get_rotor_raw(&raw, &valid) == 0)
+            && valid) {
+            ratio_accumulate(raw, g_enc_output_raw);
         }
     }
     s_sample_index++;

@@ -113,6 +113,26 @@ int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw) {
     return s_encoder_dev[id]->read_raw(raw);
 }
 
+/* 转子共享采样缓存（25kHz 单次读取；FOC 与 Debug 共用） */
+static uint16_t s_rotor_raw;
+static bool s_rotor_valid;
+
+int app_encoder_sample_rotor(void) {
+    int rc = app_encoder_read_raw(APP_ENCODER_ROTOR, &s_rotor_raw);
+
+    s_rotor_valid = (rc == 0);
+    return rc;
+}
+
+int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid) {
+    if ((raw == NULL) || (valid == NULL)) {
+        return -1;
+    }
+    *raw = s_rotor_raw;
+    *valid = s_rotor_valid;
+    return 0;
+}
+
 int app_encoder_read_position(app_encoder_id_t id, uint16_t* pos) {
     uint16_t raw;
 

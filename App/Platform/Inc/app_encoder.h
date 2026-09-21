@@ -46,6 +46,21 @@ int app_encoder_init(void);
 int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw);
 
 /**
+ * @brief 转子编码器共享采样（25kHz 节拍单次读取并缓存）。
+ *        供 FOC（Control）与 Debug 共用，避免重复 SPI 读（每次 ≈5~7µs）。
+ * @return 0 = 成功；-1 = 失败（缓存保持上次值，valid 置 false）
+ */
+int app_encoder_sample_rotor(void);
+
+/**
+ * @brief 读取转子共享采样缓存（无 I/O）。
+ * @param raw 输出原始值（未加软件零点）
+ * @param valid 输出缓存有效性
+ * @return 0 = 成功；-1 = 参数错误
+ */
+int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid);
+
+/**
  * @brief 读取零点修正后的单圈位置：(raw − zero) & 0xFFFF。
  * @return 0 成功，-1 失败
  */
