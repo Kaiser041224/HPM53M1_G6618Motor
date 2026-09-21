@@ -18,6 +18,10 @@ static bool foc_angle_direction_valid(float direction) {
     return (foc_finite(direction) && (fabsf(fabsf(direction) - 1.0f) <= 1e-3f));
 }
 
+/** dt 合理范围 [s]：超出视为节拍异常（10µs ~ 5ms） */
+#define FOC_ANGLE_DT_MIN_S (1.0e-5f)
+#define FOC_ANGLE_DT_MAX_S (5.0e-3f)
+
 /**
  * @brief 初始化
  */
@@ -87,7 +91,8 @@ static void foc_angle_set_offset(foc_angle_t* self, float offset_rad, float dire
  * @brief 单步
  */
 FOC_ATTR_RAMFUNC
-static float foc_angle_step(foc_angle_t* self, float theta_m_raw_rad, float* omega_e_out) {
+static float foc_angle_step(foc_angle_t* self, float theta_m_raw_rad, float dt_s,
+                            float* omega_e_out) {
     float theta_e;
 
     if ((self == NULL) || !self->_inited) {
@@ -109,10 +114,15 @@ static float foc_angle_step(foc_angle_t* self, float theta_m_raw_rad, float* ome
     if (!self->_primed) {
         self->_primed = true;
         self->_omega_e = 0.0f;
-    } else {
+    } else if (foc_finite(dt_s) && (dt_s >= FOC_ANGLE_DT_MIN_S) && (dt_s <= FOC_ANGLE_DT_MAX_S)) {
+        /* 按实测 dt 换算（主循环丢拍/长迭代时固定 1/25kHz 会给出 2~N 倍 ωe 尖峰，
+         * 经限速判据放大为转矩断续 → 机械顿挫） */
         float dtheta = foc_wrap_pm_pi(theta_e - self->_theta_e_prev);
-        float omega_meas = dtheta * self->_inv_ts;
+        float omega_meas = dtheta / dt_s;
+
         self->_omega_e += self->_alpha * (omega_meas - self->_omega_e);
+    } else {
+        /* dt 非法：保持上次估计（不更新差分历史仍继续） */
     }
     self->_theta_e_prev = theta_e;
 

@@ -29,7 +29,7 @@ typedef struct {
     float direction;     /**< 方向（+1.0 / −1.0） */
     float offset_rad;    /**< 电角度零点 [rad] */
     float speed_lpf_hz;  /**< ωe 低通截止 [Hz]（0 = 不滤波） */
-    float sample_time_s; /**< 调用周期 [s] */
+    float sample_time_s; /**< 标称调用周期 [s]（LPF 设计用；实际 dt 由 step 传入） */
 } foc_angle_cfg_t;
 
 typedef struct foc_angle foc_angle_t;
@@ -43,10 +43,13 @@ typedef int (*foc_angle_init_fn)(foc_angle_t* self, const foc_angle_cfg_t* cfg);
  * @brief 单步：机械角 → 电角度
  * @param self 对象
  * @param theta_m_raw_rad 机械角（未加软件零点）[rad]
+ * @param dt_s 距上一拍的实际间隔 [s]（主循环节拍抖动时按实测值换算 ωe；
+ *             非有限或越界（<10µs / >5ms）时保持上次 ωe，不注入尖峰）
  * @param omega_e_out 输出电角速度 [rad/s]（可为 NULL）
  * @return 电角度 [rad]
  */
-typedef float (*foc_angle_step_fn)(foc_angle_t* self, float theta_m_raw_rad, float* omega_e_out);
+typedef float (*foc_angle_step_fn)(foc_angle_t* self, float theta_m_raw_rad, float dt_s,
+                                   float* omega_e_out);
 /**
  * @brief 复位（清除差分历史与 ωe）
  */

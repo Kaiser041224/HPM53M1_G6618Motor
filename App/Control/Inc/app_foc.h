@@ -48,6 +48,8 @@ typedef enum {
  * Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss；25kHz 节拍）
  */
 extern volatile uint32_t g_foc_loop_cycles;
+/** Ozone 观测：FOC 调用间隔 [µs]（25kHz 标称；明显大于 40 = 节拍抖动/丢拍） */
+extern volatile uint32_t g_foc_loop_dt_us;
 
 /**
  * @brief 初始化（上电状态 OFF）

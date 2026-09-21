@@ -23,6 +23,8 @@
 #include "intf_clock.h"
 
 #define APP_FOC_SPEED_LPF_HZ (100.0f) /**< ωe 估计低通截止 [Hz] */
+/* 限速滞环：超限切断，回落至 85% 才恢复（ωe 噪声/回摆不再造成转矩断续） */
+#define APP_FOC_SPEED_LIMIT_RESTORE (0.85f)
 
 static app_foc_state_t s_state;
 static foc_angle_t s_angle;
@@ -35,9 +37,32 @@ static uint32_t s_rotor_seq_last; /**< 上一拍采样序号 */
 static bool s_rotor_seq_valid;    /**< 序号已建立 */
 static bool s_angle_ready;        /**< 角度链初始化成功 */
 static bool s_initialized;        /**< app_foc_init 已执行 */
+static uint32_t s_last_cycle;     /**< 上一拍 FOC 调用时刻 [cycle]（实测 dt 用） */
+static bool s_dt_valid;           /**< 已建立上一拍时刻 */
+static float s_dt_s;              /**< 实测调用间隔 [s]（0 = 首拍/异常） */
+static bool s_speed_limited;      /**< 限速滞环状态（避免阈值附近转矩断续） */
 
 /* Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss，调试器直读） */
 volatile uint32_t g_foc_loop_cycles __attribute__((section(".noncacheable.bss")));
+/* Ozone 观测：FOC 调用间隔 [µs]（25kHz 标称；抖动/丢拍时明显大于 40） */
+volatile uint32_t g_foc_loop_dt_us __attribute__((section(".noncacheable.bss")));
+
+/**
+ * @brief 实测本拍与上一拍的调用间隔 [s]
+ * @note 主循环节拍存在抖动/丢拍（USB/终端/打印同循环），固定 1/25kHz 换算 ωe
+ *       会产生数倍尖峰；首拍返回 0（角度链保持 ωe 不更新）
+ */
+static float app_foc_measure_dt(void) {
+    uint32_t now = intf_clock_get_cycle();
+    float dt = 0.0f;
+
+    if (s_dt_valid) {
+        dt = (float)(now - s_last_cycle) / (float)intf_clock_get_cpu_freq();
+    }
+    s_last_cycle = now;
+    s_dt_valid = true;
+    return dt;
+}
 
 /**
  * @brief 电角度链初始化（参数来源 motor 域）
@@ -131,7 +156,7 @@ static void app_foc_run_body(void) {
 
         if (s_angle_ready && app_foc_read_rotor_rad(&theta_m)) {
             float omega_off = 0.0f;
-            float theta_off = s_angle.step(&s_angle, theta_m, &omega_off);
+            float theta_off = s_angle.step(&s_angle, theta_m, s_dt_s, &omega_off);
 
             g_foc_current_snapshot.theta_e_rad = theta_off;
             g_foc_current_snapshot.omega_e_rad_s = omega_off;
@@ -173,17 +198,29 @@ static void app_foc_run_body(void) {
             app_foc_current_protect(); /* 换相数据停摆/无效：保护式零矢量 */
             return;
         }
-        theta_e = s_angle.step(&s_angle, theta_m, &omega_e);
+        theta_e = s_angle.step(&s_angle, theta_m, s_dt_s, &omega_e);
     }
 
-    /* 转矩模式限速（保护，不锁存）：|ωe| 超限 → 生效给定置零，速度回落自动恢复。
+    /* 转矩模式限速（保护，不锁存）：|ωe| 超限 → 生效给定置零；带 15% 滞环恢复
+     * （无滞环时 ωe 噪声/回摆会在阈值附近反复切断 → 机械顿挫、电流冲击）。
      * CALIB 由辨识模块直接给激励（calib_set_excitation），不受限速影响。 */
     if (s_state != APP_FOC_STATE_CALIB) {
         float speed_max = app_software_params_current()->control.limits.speed_max_rad_s;
 
         s_i_q_ref = s_i_q_ref_cmd;
-        if (foc_finite(speed_max) && (speed_max > 0.0f) && (fabsf(omega_e) > speed_max)) {
-            s_i_q_ref = 0.0f;
+        if (foc_finite(speed_max) && (speed_max > 0.0f)) {
+            if (s_speed_limited) {
+                if (fabsf(omega_e) < (speed_max * APP_FOC_SPEED_LIMIT_RESTORE)) {
+                    s_speed_limited = false;
+                }
+            } else if (fabsf(omega_e) > speed_max) {
+                s_speed_limited = true;
+            }
+            if (s_speed_limited) {
+                s_i_q_ref = 0.0f;
+            }
+        } else {
+            s_speed_limited = false;
         }
     }
 
@@ -199,6 +236,8 @@ static void app_foc_run_body(void) {
 void app_foc_run_once(void) {
     uint32_t t0 = intf_clock_get_cycle();
 
+    s_dt_s = app_foc_measure_dt();
+    g_foc_loop_dt_us = (uint32_t)(s_dt_s * 1000000.0f);
     app_foc_run_body();
     g_foc_loop_cycles = intf_clock_get_cycle() - t0;
 }
@@ -278,6 +317,8 @@ void app_foc_disable(void) {
     s_i_d_ref = 0.0f;
     s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
+    s_speed_limited = false; /* 限速滞环随禁用复位 */
+    s_dt_valid = false;      /* 重新使能后首拍不注入 dt 尖峰 */
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_state = APP_FOC_STATE_OFF;
 }
