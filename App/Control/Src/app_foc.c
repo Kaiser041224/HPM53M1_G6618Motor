@@ -201,6 +201,7 @@ static void app_foc_run_body(void) {
         omega_e = 0.0f;
     } else {
         if (!app_foc_read_rotor_rad(&theta_m)) {
+            app_foc_current_protect_reason(APP_FOC_PROT_ENC);
             app_foc_current_protect(); /* 换相数据停摆/无效：保护式零矢量 */
             return;
         }
@@ -292,17 +293,17 @@ int app_foc_enable(void) {
         return 0; /* 已使能：幂等 */
     }
     if (app_fault_get_state() != APP_FAULT_STATE_NORMAL) {
-        return -1;
+        return -2; /* 故障模块非 NORMAL */
     }
     if (!app_adc_is_valid()) {
-        return -1;
+        return -3; /* ADC 采样链无效 */
     }
     if ((app_encoder_get_rotor_raw(&raw, &valid, NULL) != 0) || !valid) {
-        return -1;
+        return -4; /* 编码器无效 */
     }
     if ((motor->pole_pairs == 0U) || (software->control.limits.duty_max <= 0.5f)
         || (software->control.limits.duty_max > 1.0f)) {
-        return -1;
+        return -5; /* 参数非法 */
     }
     /* direction 元数据范围 [-1,1] 无法表达"仅 ±1"：运行期显式校验 */
     if ((motor->encoder.direction != 1.0f) && (motor->encoder.direction != -1.0f)) {

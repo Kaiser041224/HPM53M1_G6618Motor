@@ -27,11 +27,12 @@ fault:
 control:
   # FOC 电流环（V1 落地；增益 = 手册 R/L + 极点对消初值，V2 自整定更新）
   current_loop:
-    # 带宽 500Hz（主循环执行 + 打印/USB 停顿 → 有效延迟可达 3~5 拍；1kHz 时相位裕度不足，
-    # 台架表现为零给定下电流缓增/抖动/跳闸）。迁入 ADC ISR（v1.5）后可回调至 1kHz。
-    kp: 0.372                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×500Hz）
-    ki: 496.4                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
-    bandwidth_rad_s: 3141.6  # 目标带宽 [rad/s]（自整定用）
+    # 带宽 250Hz：主循环实测节拍 90~210µs（4.8~11kHz，非标称 25kHz），
+    # 500Hz 在 5kHz 采样下相位裕度不足（台架表现为抖动/电流冲击/辨识漂移）。
+    # 迁入 ADC ISR（v1.5）后可回调至 1kHz。
+    kp: 0.186                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×250Hz）
+    ki: 248.2                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
+    bandwidth_rad_s: 1570.8  # 目标带宽 [rad/s]（自整定用）
     decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
   speed_loop:
     kp: 0.0                  # 速度环 PID（目标带宽 50Hz；V2）

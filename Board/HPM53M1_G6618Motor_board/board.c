@@ -105,7 +105,9 @@ void board_init(void)
      * （linker 将 .noncacheable 与 .fast_ram 均放入 DLM 0x00080300）；
      * D-Cache 采用 write-around（写直达内存，不分配行），DMA 可见性不受影响。 */
     l1c_ic_enable();
-    l1c_dc_enable();
+    /* 暂不使能 D-Cache：DLM/AHB_SRAM 的缓存属性未从手册确认（本工具打不开 HPM5300
+     * 手册 PDF），而 ADC PMT DMA 缓冲位于 DLM；若 DLM 实际可缓存会读到陈旧电流。
+     * I-Cache 覆盖 flash 取指（热路径主要成本），风险为零。 */
     g_board_l1c_ctl = l1c_get_control(); /* 运行态回读：验证使能是否真正生效 */
 
     board_disable_usb_phy_dp_dm_pulldown();

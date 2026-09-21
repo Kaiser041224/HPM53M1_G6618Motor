@@ -26,7 +26,7 @@
 
 #include <string.h>
 
-#define APP_ENCODER_SCLK_HZ (10000000U) /* KTH7823 上限（TSCK≥100ns） */
+#define APP_ENCODER_SCLK_HZ (5000000U) /* 降为 5MHz：10MHz 台架实测坏帧率高（EMI） */
 
 /** 机械角单步跳变上限 [deg]（25kHz 采样；5° ≈ 20000 rpm，远超实际转速） */
 #define APP_ENCODER_JUMP_LIMIT_DEG (5.0f)
@@ -151,9 +151,13 @@ int app_encoder_sample_rotor(void) {
                 delta += 65536;
             }
             if ((delta > s_rotor_jump_limit) || (delta < -s_rotor_jump_limit)) {
+                /* 坏帧：保持上一有效角（"采样保持"），序号照常推进 —— 若丢样本，
+                 * FOC 的采样序号门控会判停摆 → 42% 拍走保护零矢量（台架实测），
+                 * 比"角度短暂保持"更糟。计数供观测/辨识健康检查。 */
                 s_rotor_jump_count++;
-                s_rotor_valid = false; /* 不更新 prev：下一帧与上一有效帧比较 */
-                return -1;
+                s_rotor_seq++;
+                s_rotor_valid = true;
+                return 0;
             }
         }
         s_rotor_prev_raw = s_rotor_raw;

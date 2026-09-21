@@ -126,13 +126,21 @@ static int cmd_foc(int argc, char** argv) {
         if (!app_terminal_cmd_require_motor_stopped(csh)) {
             return -1;
         }
-        if (app_foc_enable() != 0) {
-            if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
-                csh_printf(csh, "ERR: FOC latched in FAULT, run 'foc off' first\r\n");
-            } else {
-                csh_printf(csh, "ERR: foc enable rejected (fault/adc/encoder/params)\r\n");
+        {
+            int rc = app_foc_enable();
+
+            if (rc != 0) {
+                if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
+                    csh_printf(csh, "ERR: FOC latched in FAULT, run 'foc off' first\r\n");
+                } else {
+                    static const char* const why[] = {"?", "?", "fault state", "adc invalid",
+                                                      "encoder invalid", "params invalid"};
+
+                    csh_printf(csh, "ERR: foc enable rejected (%s)\r\n",
+                               ((rc <= -2) && (rc >= -5)) ? why[-rc] : "unknown");
+                }
+                return -1;
             }
-            return -1;
         }
         app_terminal_cmd_foc_status(csh);
         return 0;

@@ -237,6 +237,15 @@ void app_run(void) {
                                  (unsigned)(g_board_l1c_ctl & 0x1U),
                                  (unsigned)((g_board_l1c_ctl >> 1) & 0x1U),
                                  (unsigned)app_encoder_get_rotor_jump_count());
+                /* 保护路径分原因（rd/vb/pi/mod/duty/trip/enc）：定位"protect 计数暴涨" */
+                app_debug_printf("     prot: rd=%u vb=%u pi=%u mod=%u duty=%u trip=%u enc=%u\r\n",
+                                 (unsigned)g_foc_protect_counts[0],
+                                 (unsigned)g_foc_protect_counts[1],
+                                 (unsigned)g_foc_protect_counts[2],
+                                 (unsigned)g_foc_protect_counts[3],
+                                 (unsigned)g_foc_protect_counts[4],
+                                 (unsigned)g_foc_protect_counts[5],
+                                 (unsigned)g_foc_protect_counts[6]);
             }
 #else
             (void)last_printf_cycles;

@@ -164,6 +164,28 @@ void app_foc_current_zero_vector(void);
  */
 void app_foc_current_protect(void);
 
+/**
+ * @brief 保护原因枚举（g_foc_protect_counts 下标）
+ */
+typedef enum {
+    APP_FOC_PROT_READ = 0,   /**< 模拟量读取失败 */
+    APP_FOC_PROT_VBUS,       /**< 母线电压非法/过低 */
+    APP_FOC_PROT_PI,         /**< 电流环步进失败 */
+    APP_FOC_PROT_MOD,        /**< 调制失败 */
+    APP_FOC_PROT_DUTY,       /**< 占空比下发失败 */
+    APP_FOC_PROT_TRIP,       /**< 快速过流跳闸 */
+    APP_FOC_PROT_ENC,        /**< 换相角停摆/无效（app_foc 侧） */
+    APP_FOC_PROT_COUNT
+} app_foc_prot_reason_t;
+
+/** 保护路径分原因计数（.noncacheable.bss；Ozone/RTT 观测） */
+extern volatile uint32_t g_foc_protect_counts[APP_FOC_PROT_COUNT];
+
+/**
+ * @brief 记录一次保护路径并注明原因（g_foc_protect_counts[reason]++）
+ */
+void app_foc_current_protect_reason(uint8_t reason);
+
 #ifdef __cplusplus
 }
 #endif

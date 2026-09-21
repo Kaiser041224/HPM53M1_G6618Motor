@@ -28,6 +28,7 @@
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
 #include "app_debug_rtt.h"
+#include "app_encoder.h"
 #include "app_foc.h"
 #include "intf_clock.h"
 #include "app_motor_identify.h"

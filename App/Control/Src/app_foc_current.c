@@ -239,6 +239,19 @@ void app_foc_current_zero_vector(void) {
     /* 命令式零矢量（使能/关闭/待机）：不改变 valid/fault_count */
 }
 
+/** 保护路径分原因计数（.noncacheable.bss：Ozone/RTT 观测） */
+volatile uint32_t g_foc_protect_counts[APP_FOC_PROT_COUNT]
+    __attribute__((section(".noncacheable.bss")));
+
+/**
+ * @brief 记录一次保护路径并注明原因
+ */
+void app_foc_current_protect_reason(uint8_t reason) {
+    if (reason < (uint8_t)APP_FOC_PROT_COUNT) {
+        g_foc_protect_counts[reason]++;
+    }
+}
+
 /**
  * @brief 保护式零矢量：输出零矢量 + 标记数据不可信 + 故障计数
  */
@@ -275,12 +288,14 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     }
 
     if (!app_analog_signal_read_all(&values)) {
+        app_foc_current_protect_reason(APP_FOC_PROT_READ);
         app_foc_current_protect();
         return -1;
     }
     g_foc_cyc_read = intf_clock_get_cycle() - t_entry;
     v_bus = values.v_bus_v;
     if (!foc_finite(v_bus) || (v_bus < APP_FOC_V_BUS_MIN_V)) {
+        app_foc_current_protect_reason(APP_FOC_PROT_VBUS);
         app_foc_current_protect();
         return -1;
     }
@@ -304,6 +319,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         float i_trip = software->control.limits.i_trip_a;
 
         if (s_tripped) {
+            app_foc_current_protect_reason(APP_FOC_PROT_TRIP);
             app_foc_current_protect();
             return -1;
         }
@@ -313,6 +329,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
             if (s_trip_count >= 2U) {
                 s_tripped = true;
                 g_foc_current_snapshot.tripped = true;
+                app_foc_current_protect_reason(APP_FOC_PROT_TRIP);
                 app_foc_current_protect();
                 return -1;
             }
@@ -331,6 +348,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     in.omega_e_rad_s = omega_e_rad_s;
 
     if (s_current.step(&s_current, &in, &out) != 0) {
+        app_foc_current_protect_reason(APP_FOC_PROT_PI);
         app_foc_current_protect();
         return -1;
     }
@@ -341,6 +359,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     mod_cfg.duty_max = duty_max;
     mod_cfg.v_bus_min = APP_FOC_V_BUS_MIN_V;
     if (foc_modulation_step(&mod_cfg, v_alpha, v_beta, v_bus, duty, &v_scale) != 0) {
+        app_foc_current_protect_reason(APP_FOC_PROT_MOD);
         app_foc_current_protect();
         return -1;
     }
@@ -348,6 +367,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     g_foc_cyc_mod = intf_clock_get_cycle() - t_pi - g_foc_cyc_pi;
 
     if (app_3phase_inverter_set_duty_abc(duty[0], duty[1], duty[2]) != 0) {
+        app_foc_current_protect_reason(APP_FOC_PROT_DUTY);
         app_foc_current_protect();
         return -1;
     }
