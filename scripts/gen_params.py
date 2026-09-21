@@ -54,6 +54,8 @@ SCHEMA = {
         ("encoder.output_pinion_teeth", "encoder.output_pinion_teeth", "u8", 1, 255),
         ("encoder.rotor_ratio", "encoder.rotor_ratio", "f32", 0.0, None),
         ("encoder.output_ratio", "encoder.output_ratio", "f32", 0.0, None),
+        ("encoder.electrical_offset_rad", "encoder.electrical_offset_rad", "f32", 0.0, 6.283185307179586),
+        ("encoder.direction", "encoder.direction", "f32", -1.0, 1.0),
     ],
     "hardware": [
         ("current_sense.shunt_ohm", "current_sense.shunt_ohm", "f32", 0.0, None),
@@ -87,6 +89,8 @@ SCHEMA = {
         ("fault.enc_err_delta", "fault.enc_err_delta", "u8", 1, 255),
         ("control.current_loop.kp", "control.current_loop.kp", "f32", None, None),
         ("control.current_loop.ki", "control.current_loop.ki", "f32", None, None),
+        ("control.current_loop.bandwidth_rad_s", "control.current_loop.bandwidth_rad_s", "f32", 0.0, None),
+        ("control.current_loop.decoupling_en", "control.current_loop.decoupling_en", "u8", 0, 1),
         ("control.speed_loop.kp", "control.speed_loop.kp", "f32", None, None),
         ("control.speed_loop.ki", "control.speed_loop.ki", "f32", None, None),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),

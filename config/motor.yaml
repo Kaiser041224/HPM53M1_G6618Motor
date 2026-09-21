@@ -14,8 +14,8 @@ ls_h: 1.185e-4             # 相电感 [H]（线值 0.237mH ÷ 2）
 ke_vs_per_rad: 0.125       # 反电动势系数 [V·s/rad]（KV70 手册值；待离线辨识校核）
 kt_nm_per_a: 0.117         # 转矩系数 [N·m/A]（手册值；SI 下理想 PMSM 应与 Ke 相等，差异待校核）
 i_rated_a: 7.0             # 额定电流 [A]（RMS，105°C）
-i_peak_10s_a: 24.3         # 峰值电流 10s [A]（RMS）
-i_peak_2s_a: 48.6          # 峰值电流 2s [A]（RMS）
+i_peak_10s_a: 24.3         # 峰值电流 10s [A]（峰值）
+i_peak_2s_a: 48.6          # 峰值电流 2s [A]（峰值）
 vbus_nom_v: 48.0           # 母线额定电压 [V]（电机规格 12~48；当前测试系统母线 24V，保护门限见 software.yaml）
 rpm_max: 3300              # 最高转速 [rpm]
 inertia_kgm2: 2.3e-5       # 转动惯量 [kg·m²]
@@ -30,4 +30,6 @@ encoder:
   output_pinion_teeth: 50       # 出轴编码器小齿轮齿数（49:50）
   rotor_ratio: "rotor_ring_teeth / rotor_pinion_teeth"     # 转子编码器转角/转子转角 → 1.0
   output_ratio: "rotor_ring_teeth / output_pinion_teeth"   # 出轴编码器转角/转子转角 → 0.98（实测确认）
+  electrical_offset_rad: 0.0    # 电角度零点 [rad]（cal encoder 写入；V1 RAM，flash V2）
+  direction: 1.0                # 编码器方向（+1.0 / −1.0；cal encoder 写入）
   # reducer_ratio: <待确认>    # 减速器出轴/转子减速比（多圈解算用，待机械确认后加入）

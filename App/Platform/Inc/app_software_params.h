@@ -54,17 +54,27 @@ typedef struct {
  * @brief 控制限幅参数
  */
 typedef struct {
-    float i_q_max_a; /**< 电流限幅 [A]（RMS 口径；FOC 预留，未消费） */
+    float i_q_max_a; /**< 电流限幅 [A]（峰值口径 = 相电流峰值） */
     float duty_max;  /**< 占空比上限（FOC 预留，未消费） */
 } app_software_limits_t;
+
+/**
+ * @brief 电流环参数
+ */
+typedef struct {
+    float   kp;              /**< 比例增益 [V/A] */
+    float   ki;              /**< 积分增益 [V/(A·s)] */
+    float   bandwidth_rad_s; /**< 目标带宽 [rad/s]（自整定用） */
+    uint8_t decoupling_en;   /**< 解耦前馈（0/1） */
+} app_software_current_loop_t;
 
 /**
  * @brief 控制环参数
  */
 typedef struct {
-    app_software_pid_t current_loop; /**< 电流环（FOC 预留） */
-    app_software_pid_t speed_loop;   /**< 速度环（FOC 预留） */
-    app_software_limits_t limits;    /**< 控制限幅 */
+    app_software_current_loop_t current_loop; /**< 电流环 */
+    app_software_pid_t          speed_loop;   /**< 速度环（V2） */
+    app_software_limits_t       limits;       /**< 控制限幅 */
 } app_software_control_t;
 
 /**

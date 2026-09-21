@@ -28,6 +28,8 @@ typedef struct {
     uint8_t output_pinion_teeth; /**< 出轴编码器小齿轮齿数 */
     float   rotor_ratio;         /**< 转子编码器转角 / 转子转角 */
     float   output_ratio;        /**< 出轴编码器转角 / 转子转角 */
+    float   electrical_offset_rad; /**< 电角度零点 [rad]（cal encoder 写入） */
+    float   direction;             /**< 编码器方向（+1.0 / −1.0） */
 } app_motor_encoder_t;
 
 /**
@@ -40,8 +42,8 @@ typedef struct {
     float    ke_vs_per_rad;      /**< 反电动势系数 [V·s/rad] */
     float    kt_nm_per_a;        /**< 转矩系数 [N·m/A] */
     float    i_rated_a;          /**< 额定电流 [A]（RMS，105°C） */
-    float    i_peak_10s_a;       /**< 峰值电流 10s [A]（RMS） */
-    float    i_peak_2s_a;        /**< 峰值电流 2s [A]（RMS） */
+    float    i_peak_10s_a;       /**< 峰值电流 10s [A]（峰值） */
+    float    i_peak_2s_a;        /**< 峰值电流 2s [A]（峰值） */
     float    vbus_nom_v;         /**< 母线额定电压 [V] */
     uint16_t rpm_max;            /**< 最高转速 [rpm] */
     float    inertia_kgm2;       /**< 转动惯量 [kg·m²] */
