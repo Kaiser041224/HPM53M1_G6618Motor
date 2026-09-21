@@ -20,6 +20,9 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Board 层观测全局（L1C 控制寄存器回读；见 board.c） */
+extern volatile uint32_t g_board_l1c_ctl;
+
 #include "app_adc.h"
 #include "app_analog_signal.h"
 #include "app_debug_adc.h"
@@ -220,12 +223,19 @@ void app_run(void) {
                 uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
 
                 app_foc_get_snapshot(&snap);
-                app_debug_printf("foc: st=%u iq=%.2f/%.2f A om=%.0f dt=%u cyc=%u trip=%u\r\n",
+                app_debug_printf("foc: st=%u iq=%.2f/%.2f A om=%.0f trip=%u f=%08x\r\n",
                                  (unsigned)app_foc_get_state(), (double)snap.i_q_ref_a,
                                  (double)snap.i_q_avg_a, (double)snap.omega_e_rad_s,
-                                 (unsigned)g_foc_loop_dt_us,
+                                 (unsigned)snap.tripped, (unsigned)app_fault_get_codes());
+                /* 分段耗时 + L1C 运行态（ic/dc = 1 表示已使能） */
+                app_debug_printf("     cyc: tot=%u rd=%u pi=%u mod=%u us | dt=%u us ic=%u dc=%u\r\n",
                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
-                                 (unsigned)snap.tripped);
+                                 (unsigned)((mhz > 0U) ? (g_foc_cyc_read / mhz) : 0U),
+                                 (unsigned)((mhz > 0U) ? (g_foc_cyc_pi / mhz) : 0U),
+                                 (unsigned)((mhz > 0U) ? (g_foc_cyc_mod / mhz) : 0U),
+                                 (unsigned)g_foc_loop_dt_us,
+                                 (unsigned)(g_board_l1c_ctl & 0x1U),
+                                 (unsigned)((g_board_l1c_ctl >> 1) & 0x1U));
             }
 #else
             (void)last_printf_cycles;

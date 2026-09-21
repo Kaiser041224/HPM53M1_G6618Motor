@@ -10,6 +10,9 @@
 #include "board.h"
 
 #include "hpm_l1c_drv.h"
+
+/** L1C 控制寄存器回读（.noncacheable.bss：Ozone/终端可查；bit9=IC_EN, bit8=DC_EN） */
+volatile uint32_t g_board_l1c_ctl __attribute__((section(".noncacheable.bss")));
 #include "pinmux.h"
 #include "hpm_clock_drv.h"
 #include "hpm_usb_drv.h"
@@ -103,6 +106,7 @@ void board_init(void)
      * D-Cache 采用 write-around（写直达内存，不分配行），DMA 可见性不受影响。 */
     l1c_ic_enable();
     l1c_dc_enable();
+    g_board_l1c_ctl = l1c_get_control(); /* 运行态回读：验证使能是否真正生效 */
 
     board_disable_usb_phy_dp_dm_pulldown();
     init_pins();

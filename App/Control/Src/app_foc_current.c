@@ -10,6 +10,8 @@
 #include "app_foc_current.h"
 
 #include "app_3phase_inverter.h"
+#include "intf_clock.h"
+
 #include "app_analog_signal.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
@@ -246,12 +248,19 @@ void app_foc_current_protect(void) {
     g_foc_current_snapshot.fault_count++;
 }
 
+/* 分段耗时观测（Ozone/RTT；cycle） */
+volatile uint32_t g_foc_cyc_read __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_foc_cyc_pi __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_foc_cyc_mod __attribute__((section(".noncacheable.bss")));
+
 float app_foc_current_get_v_scale(void) {
     return g_foc_current_snapshot.v_scale;
 }
 
 int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
                         float duty_abc_out[3], bool* saturated_out) {
+    uint32_t t_entry = intf_clock_get_cycle();
+    uint32_t t_pi = 0U;
     const app_software_params_t* software = app_software_params_current();
     app_analog_values_t values;
     foc_current_in_t in = {0};
@@ -269,6 +278,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         app_foc_current_protect();
         return -1;
     }
+    g_foc_cyc_read = intf_clock_get_cycle() - t_entry;
     v_bus = values.v_bus_v;
     if (!foc_finite(v_bus) || (v_bus < APP_FOC_V_BUS_MIN_V)) {
         app_foc_current_protect();
@@ -276,6 +286,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
     }
 
     duty_max = software->control.limits.duty_max;
+    t_pi = intf_clock_get_cycle();
 
     /* 增益/前馈热更新（live 参数） */
     s_current.set_gains(&s_current, software->control.current_loop.kp,
@@ -323,6 +334,7 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         app_foc_current_protect();
         return -1;
     }
+    g_foc_cyc_pi = intf_clock_get_cycle() - t_pi;
 
     /* 反 Park → 调制（min-max 零序注入） */
     foc_inv_park_sc(out.v_d, out.v_q, s, c, &v_alpha, &v_beta);
@@ -332,6 +344,8 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
         app_foc_current_protect();
         return -1;
     }
+
+    g_foc_cyc_mod = intf_clock_get_cycle() - t_pi - g_foc_cyc_pi;
 
     if (app_3phase_inverter_set_duty_abc(duty[0], duty[1], duty[2]) != 0) {
         app_foc_current_protect();
