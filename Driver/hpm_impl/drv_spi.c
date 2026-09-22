@@ -27,10 +27,14 @@
 
 #define SPI_INSTANCE_COUNT (4U)
 
-/* 快速单帧路径轮询上限：正常单帧 ~3µs；此处按 ~10µs 设上限。
+/* 快速单帧路径轮询上限：正常单帧 ~3µs；此处按 ~10µs 设循环上限。
  * 原值 20000（≈0.4ms/次等待）在编码器场景（2 帧 × 3 等待 = 最坏 2.4ms）
- * 一旦搬进 25kHz ADC 中断就会饿死主循环/USB —— 台架表现为 foc on 后终端失联。 */
+ * 一旦搬进 25kHz ADC 中断就会饿死主循环/USB —— 台架表现为 foc on 后终端失联。
+ * 注：循环次数 ≠ 时间（每圈含寄存器访问，且可能被更高优先级 ISR 抢占），
+ * 因此**另加基于 intf_clock_get_cycle() 的硬期限**（见 SPI_FAST_DEADLINE_US）。 */
 #define SPI_FAST_RETRY_MAX (1000U)
+/* 单帧等待硬期限 [µs]：无论循环次数如何，超过即失败返回（时间界，非循环界） */
+#define SPI_FAST_DEADLINE_US (20U)
 
 /**
  * @brief SPI 实例上下文
@@ -105,11 +109,16 @@ static int spi_frame_fast(spi_ctx_t *ctx, const uint8_t *tx, uint8_t *rx, uint8_
     SPI_Type *base = ctx->base;
     uint32_t word = 0U;
     uint32_t retry;
+    uint32_t start = intf_clock_get_cycle();
+    uint32_t budget =
+        (uint32_t)(((uint64_t)intf_clock_get_cpu_freq() / 1000000U) * SPI_FAST_DEADLINE_US);
+
+#define SPI_FAST_EXPIRED() ((uint32_t)(intf_clock_get_cycle() - start) > budget)
 
     /* 1) 等待总线空闲（上一次传输完成、CS 已释放） */
     retry = 0U;
     while (spi_is_active(base)) {
-        if (++retry > SPI_FAST_RETRY_MAX) {
+        if ((++retry > SPI_FAST_RETRY_MAX) || SPI_FAST_EXPIRED()) {
             return -1;
         }
     }
@@ -126,7 +135,7 @@ static int spi_frame_fast(spi_ctx_t *ctx, const uint8_t *tx, uint8_t *rx, uint8_
     /* 4) 等待 RX 数据就绪 */
     retry = 0U;
     while ((base->STATUS & SPI_STATUS_RXEMPTY_MASK) != 0U) {
-        if (++retry > SPI_FAST_RETRY_MAX) {
+        if ((++retry > SPI_FAST_RETRY_MAX) || SPI_FAST_EXPIRED()) {
             return -1;
         }
     }
@@ -138,11 +147,12 @@ static int spi_frame_fast(spi_ctx_t *ctx, const uint8_t *tx, uint8_t *rx, uint8_
     /* 5) 等待传输结束（SPIACTIVE 清零 = CS 释放，保证帧间隔 Tpause） */
     retry = 0U;
     while (spi_is_active(base)) {
-        if (++retry > SPI_FAST_RETRY_MAX) {
+        if ((++retry > SPI_FAST_RETRY_MAX) || SPI_FAST_EXPIRED()) {
             return -1;
         }
     }
 
+#undef SPI_FAST_EXPIRED
     return 0;
 }
 

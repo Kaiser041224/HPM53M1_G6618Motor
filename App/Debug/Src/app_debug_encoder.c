@@ -47,6 +47,11 @@ volatile uint32_t g_enc_rotor_read_us __attribute__((section(".noncacheable.bss"
 volatile uint32_t g_enc_output_read_us __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_enc_loop_late_us __attribute__((section(".noncacheable.bss")));
 volatile int32_t g_enc_ratio_x10000 __attribute__((section(".noncacheable.bss")));
+/* 自检结果：被动健康 vs 通电电气标定（字段分离） */
+volatile uint32_t g_enc_passive_ok __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_passive_spi_hz __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_energized_ok __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_energized_not_run __attribute__((section(".noncacheable.bss")));
 
 /* ============================================================================
  * 游标比值累计（1kHz 成对采样）
@@ -165,10 +170,12 @@ static int encoder_sample_output(void) {
 void app_debug_encoder_init(void) {
     uint16_t raw = 0U;
     int ret;
+    int init_ret;
 
     app_debug_printf("\r\n[ENC] dual KTH7823 self-test: rotor=SPI3, output=SPI1, mode3\r\n");
 
     ret = app_encoder_init();
+    init_ret = ret;
     app_debug_printf(
         "[ENC] init: %s | sclk: rotor=%u Hz, output=%u Hz\r\n", (ret == 0) ? "OK" : "FAILED",
         (unsigned)app_encoder_get_sclk_hz(APP_ENCODER_ROTOR),
@@ -212,6 +219,143 @@ void app_debug_encoder_init(void) {
             (unsigned)(cycles / ENC_BENCH_ITERS), (unsigned)cycles_to_us(cycles / ENC_BENCH_ITERS),
             (unsigned)ENC_BENCH_ITERS, (unsigned)(intf_clock_get_cpu_freq() / 1000000U));
     }
+
+    /* 被动健康自检（真实读转子 + RD 寄存器；此刻采样器尚未 claim SPI3） */
+    {
+        int passive = app_debug_encoder_passive_selftest();
+
+        if ((passive != 0) || (init_ret != 0)) {
+            g_enc_passive_ok = 0U; /* init 或自检任一失败 → 不通过 */
+        }
+        g_enc_energized_ok = 0U;
+        g_enc_energized_not_run = 1U;
+        app_debug_printf("[ENC] selftest: passive=%s spi=%u Hz | energized=not_run\r\n",
+                         (g_enc_passive_ok != 0U) ? "OK" : "FAIL",
+                         (unsigned)g_enc_passive_spi_hz);
+    }
+}
+
+int app_debug_encoder_passive_selftest(void) {
+    uint16_t raw = 0U;
+    uint8_t rd = 0U;
+    bool ok = true;
+
+    /* 运行期 SPI3 归采样器独占：不可物理读，保留 boot 结果并明确返回忙 */
+    if (app_encoder_sampler_active()) {
+        return -3;
+    }
+    if (app_encoder_read_raw(APP_ENCODER_ROTOR, &raw) != 0) {
+        ok = false;
+    }
+    if (app_encoder_read_reg(APP_ENCODER_ROTOR, ENC_REG_RD, &rd) != 0) {
+        ok = false;
+    }
+    if ((rd & ENC_REG_RD_BIT) == 0U) {
+        ok = false;
+    }
+    g_enc_passive_spi_hz = app_encoder_get_sclk_hz(APP_ENCODER_ROTOR);
+    g_enc_passive_ok = ok ? 1U : 0U;
+    return ok ? 0 : -1;
+}
+
+/* ---- 运行期健康自检（不触碰 SPI3；评估采样器快照流） ---- */
+volatile uint32_t g_enc_runtime_active __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_ok __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_progress __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_seq_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_valid_pct __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_read_fail_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_jump_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_err_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_age_max_us __attribute__((section(".noncacheable.bss")));
+
+static uint32_t s_health_ticks;
+static uint32_t s_health_valid;
+static uint32_t s_health_seq_start;
+static uint32_t s_health_fail_start;
+static uint32_t s_health_jump_start;
+static uint32_t s_health_err_start;
+static uint32_t s_health_age_max_cycles;
+
+bool app_debug_encoder_health_active(void) { return g_enc_runtime_active != 0U; }
+
+void app_debug_encoder_health_start(void) {
+    app_encoder_rotor_snapshot_t snap;
+
+    if (g_enc_runtime_active != 0U) {
+        return; /* 已在运行 */
+    }
+    (void)app_encoder_get_rotor_snapshot(&snap);
+
+    s_health_ticks = 0U;
+    s_health_valid = 0U;
+    s_health_age_max_cycles = 0U;
+    s_health_seq_start = snap.seq;
+    s_health_fail_start = g_encoder_read_fail_count;
+    s_health_jump_start = app_encoder_get_rotor_jump_count();
+    s_health_err_start = app_encoder_get_error_count(APP_ENCODER_ROTOR);
+
+    g_enc_runtime_ok = 0U;
+    g_enc_runtime_progress = 0U;
+    g_enc_runtime_seq_delta = 0U;
+    g_enc_runtime_valid_pct = 0U;
+    g_enc_runtime_read_fail_delta = 0U;
+    g_enc_runtime_jump_delta = 0U;
+    g_enc_runtime_err_delta = 0U;
+    g_enc_runtime_age_max_us = 0U;
+    g_enc_runtime_active = 1U;
+}
+
+void app_debug_encoder_health_tick(void) {
+    app_encoder_rotor_snapshot_t snap;
+    uint32_t seq_delta;
+    uint32_t fail_delta;
+    uint32_t jump_delta;
+    uint32_t err_delta;
+    uint32_t valid_pct;
+    uint32_t cpu;
+
+    if (g_enc_runtime_active == 0U) {
+        return;
+    }
+
+    (void)app_encoder_get_rotor_snapshot(&snap); /* 只读快照：不触碰 SPI3 */
+    if (snap.valid) {
+        s_health_valid++;
+    }
+    if (snap.age_cycles > s_health_age_max_cycles) {
+        s_health_age_max_cycles = snap.age_cycles;
+    }
+
+    s_health_ticks++;
+    g_enc_runtime_progress = (s_health_ticks * 100U) / APP_ENC_HEALTH_TICKS;
+    if (s_health_ticks < APP_ENC_HEALTH_TICKS) {
+        return;
+    }
+
+    seq_delta = snap.seq - s_health_seq_start;
+    fail_delta = g_encoder_read_fail_count - s_health_fail_start;
+    jump_delta = app_encoder_get_rotor_jump_count() - s_health_jump_start;
+    err_delta = app_encoder_get_error_count(APP_ENCODER_ROTOR) - s_health_err_start;
+    valid_pct = (s_health_valid * 100U) / APP_ENC_HEALTH_TICKS;
+
+    g_enc_runtime_seq_delta = seq_delta;
+    g_enc_runtime_read_fail_delta = fail_delta;
+    g_enc_runtime_jump_delta = jump_delta;
+    g_enc_runtime_err_delta = err_delta;
+    g_enc_runtime_valid_pct = valid_pct;
+
+    cpu = intf_clock_get_cpu_freq();
+    g_enc_runtime_age_max_us =
+        (cpu != 0U) ? (uint32_t)(((uint64_t)s_health_age_max_cycles * 1000000U) / cpu) : 0U;
+
+    g_enc_runtime_ok = ((seq_delta >= ((APP_ENC_HEALTH_EXPECTED_SEQ * 8U) / 10U))
+                        && (valid_pct >= 99U) && (fail_delta == 0U) && (jump_delta == 0U)
+                        && (err_delta == 0U))
+                           ? 1U
+                           : 0U;
+    g_enc_runtime_progress = 100U;
+    g_enc_runtime_active = 0U;
 }
 
 /* 每控制周期调用：转子每周期采样；出轴按 ENC_OUTPUT_SAMPLE_DIV 降采样。

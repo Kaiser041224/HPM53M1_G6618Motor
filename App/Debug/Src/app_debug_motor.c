@@ -160,6 +160,10 @@ void app_debug_motor_rotation_toggle(void) {
         (void)app_adc_set_trigger_delay_ns(hardware->adc.trigger_delay_ns);
     }
 
+    /* 清除 FOC 故障路径可能遗留的逐相强制关断（否则该相输出被屏蔽） */
+    for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
+        (void)app_3phase_inverter_release((app_3phase_id_t)i);
+    }
     (void)app_3phase_inverter_enable();
     s_theta = 0.0f;
     s_last_cycle = intf_clock_get_cycle();

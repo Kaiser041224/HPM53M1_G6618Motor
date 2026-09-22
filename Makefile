@@ -57,6 +57,10 @@ LAST_BUILD_LOG := $(BUILD_DIR)/last_build.log
 OPT_LEVEL_DBG ?= -O0
 OPT_LEVEL_REL ?= -O3
 
+# Extra app-level preprocessor defines (e.g. -DAPP_BENCH_DEBUG_MODE=1 for
+# bench-only debug builds that bypass USB/terminal). Empty = normal build.
+APP_DEFINES ?=
+
 # ============================================================================
 # Flash Configuration
 # ============================================================================
@@ -102,7 +106,7 @@ CMAKE_ARGS := \
 	-DRV_ABI=$(RV_ABI) \
 	-DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) \
 	-DHPM_BUILD_TYPE=$(HPM_BUILD_TYPE) \
-	-DEXTRA_C_FLAGS="$(DEBUG_PREFIX_MAP)" \
+	-DEXTRA_C_FLAGS="$(DEBUG_PREFIX_MAP) $(APP_DEFINES)" \
 	$(OPT_CMAKE_ARGS)
 
 # ============================================================================

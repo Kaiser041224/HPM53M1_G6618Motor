@@ -50,6 +50,17 @@ typedef enum {
 extern volatile uint32_t g_foc_loop_cycles;
 /** Ozone 观测：FOC 调用间隔 [µs]（25kHz 标称；明显大于 40 = 节拍抖动/丢拍） */
 extern volatile uint32_t g_foc_loop_dt_us;
+/** Ozone 观测：25kHz ISR 单拍耗时 [cycle] / 历史最大 */
+extern volatile uint32_t g_foc_isr_cycles;
+extern volatile uint32_t g_foc_isr_cycles_max;
+/** Ozone 观测：ISR 单拍超预算次数（超限即停用快路径并紧急关桥） */
+extern volatile uint32_t g_foc_isr_overruns;
+/** Ozone 观测：编码器快照年龄与序号（ISR 侧） */
+extern volatile uint32_t g_foc_enc_age_cycles;
+extern volatile uint32_t g_foc_enc_age_us;
+extern volatile uint32_t g_foc_enc_seq;
+/** ISR→主循环 故障请求（ISR 只置位；主循环负责状态迁移） */
+extern volatile uint32_t g_foc_fault_request;
 
 /**
  * @brief 本拍实测调用间隔 [s]
@@ -61,6 +72,20 @@ float app_foc_get_last_dt_s(void);
  * @brief 初始化（上电状态 OFF）
  */
 void app_foc_init(void);
+
+/**
+ * @brief 绑定外部紧急停机请求邮箱（Control 持有指针；ISR 每拍只读，无需主循环）。
+ * @param req 请求字指针（*req != 0 → ISR 立即紧急关桥并锁存抑制）；可为 NULL 解绑。
+ * @note 典型绑定：Debug 层把一个 volatile 静态字段地址传入；Ozone 直接写该字段=1
+ *       即可在无主循环参与下触发停机。生命周期须覆盖运行期。
+ *       触发后 *req 会被回写为 1（锁存），disable() 会清零。
+ */
+void app_foc_register_estop_request(volatile uint32_t* req);
+
+/**
+ * @brief ISR 是否已锁存输出抑制（故障后为 true；disable 清除）
+ */
+bool app_foc_isr_inhibited(void);
 
 /**
  * @brief 25kHz 节拍（app_logic 主循环调用）

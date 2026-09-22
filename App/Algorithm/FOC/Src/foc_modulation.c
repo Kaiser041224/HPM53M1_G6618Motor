@@ -9,6 +9,13 @@
 
 #include "foc_modulation.h"
 
+float foc_modulation_vmax(float duty_max, float v_bus_v) {
+    if (!foc_finite(duty_max) || !foc_finite(v_bus_v)) {
+        return 0.0f;
+    }
+    return (2.0f * duty_max - 1.0f) * v_bus_v / FOC_SQRT3_F;
+}
+
 /**
  * @brief 三相最小值
  */

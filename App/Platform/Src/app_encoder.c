@@ -20,7 +20,10 @@
 
 #include "app_encoder.h"
 
+#include "algo_encoder_snapshot.h"
+#include "app_gptmr.h"
 #include "app_param.h"
+#include "intf_clock.h"
 #include "intf_encoder.h"
 #include "intf_spi.h"
 
@@ -40,12 +43,9 @@ typedef struct {
 } encoder_param_t;
 
 /* 板级映射：转子 -> SPI3，出轴 -> SPI1（SoC 实例号） */
-static bool s_rotor_valid;
-static uint32_t s_rotor_seq;      /* 成功采样序号（陈旧检测） */
-static uint16_t s_rotor_prev_raw; /**< 上一有效原始值（跳变检测） */
-static bool s_rotor_prev_valid;   /**< 上一有效值已建立 */
-static int32_t s_rotor_jump_limit;/**< 单步跳变上限 [count]（init 时按分辨率算） */
-static uint32_t s_rotor_jump_count; /**< 跳变（坏帧）计数 */
+static algo_encoder_snapshot_t s_rotor_snap; /**< 转子一致快照（唯一写者 = 采样 ISR） */
+static int32_t s_rotor_jump_limit;           /**< 单步跳变上限 [count]（init 时按分辨率算） */
+static volatile bool s_rotor_sampler_claimed; /**< 运行期 SPI3 所有权已移交采样器 */
 static const uint8_t s_encoder_bus[APP_ENCODER_COUNT] = {3U, 1U};
 
 /* init 时解析的设备对象（热路径直接调用，不再查表） */
@@ -105,6 +105,18 @@ int app_encoder_init(void) {
         }
     }
 
+    /* 转子快照构造（跳变上限按器件分辨率算出；连续失败上限默认 3） */
+    {
+        algo_encoder_snapshot_cfg_t snap_cfg = {
+            .jump_limit_counts = s_rotor_jump_limit,
+            .fail_limit = ALGO_ENCODER_FAIL_LIMIT_DEFAULT,
+            .stale_cycles = 0U, /* 时效由消费方按节拍判定（见 app_foc_isr_step） */
+        };
+
+        algo_encoder_snapshot_ctor(&s_rotor_snap, &snap_cfg);
+    }
+    s_rotor_sampler_claimed = false;
+
     /* 加载软件零点（flash 参数区；无有效记录时为 0） */
     if (app_param_init() == 0) {
         encoder_param_t param;
@@ -121,52 +133,139 @@ int app_encoder_init(void) {
     return ret;
 }
 
+void app_encoder_sampler_claim(void) { s_rotor_sampler_claimed = true; }
+
+void app_encoder_sampler_release_claim(void) { s_rotor_sampler_claimed = false; }
+
+bool app_encoder_sampler_active(void) { return s_rotor_sampler_claimed; }
+
+/* 采样器观测（.noncacheable.bss） */
+volatile uint32_t g_encoder_isr_cycles __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_encoder_isr_cycles_max __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_encoder_sample_count __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_encoder_read_fail_count __attribute__((section(".noncacheable.bss")));
+
+/**
+ * @brief GPTMR1 CH3 中断回调：采样转子（唯一物理 SPI3 运行期读点）
+ */
+static void app_encoder_sample_rotor_isr(void) { (void)app_encoder_sample_rotor(); }
+
+int app_encoder_sampler_start(void) {
+    int rc;
+
+    if (s_encoder_dev[APP_ENCODER_ROTOR] == NULL) {
+        return -1;
+    }
+    app_encoder_sampler_claim();
+    rc = app_gptmr_register_callback(APP_GPTMR_CH_3, app_encoder_sample_rotor_isr);
+    if (rc != 0) {
+        app_encoder_sampler_release_claim();
+        return -1;
+    }
+    rc = app_gptmr_start(APP_GPTMR_CH_3);
+    if (rc != 0) {
+        app_encoder_sampler_release_claim();
+        return -1;
+    }
+    return 0;
+}
+
 int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw) {
-    if ((id >= APP_ENCODER_COUNT) || (raw == NULL) || (s_encoder_dev[id] == NULL)) {
+    if ((id >= APP_ENCODER_COUNT) || (raw == NULL)) {
+        return -1;
+    }
+    /* 转子在采样器声明所有权后：只读快照，绝不触碰物理 SPI（单一所有者） */
+    if ((id == APP_ENCODER_ROTOR) && s_rotor_sampler_claimed) {
+        app_encoder_rotor_snapshot_t snap;
+
+        if ((app_encoder_get_rotor_snapshot(&snap) != 0) || !snap.valid) {
+            return -1;
+        }
+        *raw = snap.raw;
+        return 0;
+    }
+    if (s_encoder_dev[id] == NULL) {
         return -1;
     }
     return s_encoder_dev[id]->read_raw(raw);
 }
 
-/* 转子共享采样缓存（25kHz 单次读取；FOC 与 Debug 共用）
- * 注：单上下文（主循环）使用；若将来迁入 ISR，需重新审视本缓存的一致性。 */
-static uint16_t s_rotor_raw;
-static bool s_rotor_valid;
-static uint32_t s_rotor_seq;      /* 成功采样序号（陈旧检测） */
+int app_encoder_sample_rotor_at(uint32_t now_cycles) {
+    algo_encoder_input_t in = {
+        .raw = 0U,
+        .ok = false,
+        .timestamp_cycles = now_cycles,
+    };
+    uint32_t t0 = intf_clock_get_cycle();
+    uint32_t cycles;
+    int rc;
 
-int app_encoder_sample_rotor(void) {
-    int rc = app_encoder_read_raw(APP_ENCODER_ROTOR, &s_rotor_raw);
-
-    if (rc == 0) {
-        /* 跳变防护：KTH7823 的 SPI 帧无 CRC/奇偶校验（驱动仅判 SPI 传输成败），
-         * 坏帧会直接给出错误角度。25kHz 采样下真实机械角单步变化远小于阈值
-         * （5° 对应 ~20000 rpm），超限即判为坏帧：丢弃本样本并计错误，
-         * 避免坏帧把 N 倍电角误差注入 FOC 换相与辨识。 */
-        if (s_rotor_prev_valid) {
-            int32_t delta = (int32_t)s_rotor_raw - (int32_t)s_rotor_prev_raw;
-
-            if (delta > 32767) {
-                delta -= 65536;
-            } else if (delta < -32768) {
-                delta += 65536;
-            }
-            if ((delta > s_rotor_jump_limit) || (delta < -s_rotor_jump_limit)) {
-                /* 坏帧：保持上一有效角（"采样保持"），序号照常推进 —— 若丢样本，
-                 * FOC 的采样序号门控会判停摆 → 42% 拍走保护零矢量（台架实测），
-                 * 比"角度短暂保持"更糟。计数供观测/辨识健康检查。 */
-                s_rotor_jump_count++;
-                s_rotor_seq++;
-                s_rotor_valid = true;
-                return 0;
-            }
-        }
-        s_rotor_prev_raw = s_rotor_raw;
-        s_rotor_prev_valid = true;
-        s_rotor_seq++;
+    if (s_encoder_dev[APP_ENCODER_ROTOR] == NULL) {
+        return -1;
     }
+    /* 唯一物理 SPI3 读点（运行期）：设备读失败按无效样本处理 */
+    if (s_encoder_dev[APP_ENCODER_ROTOR]->read_raw(&in.raw) == 0) {
+        in.ok = true;
+    } else {
+        g_encoder_read_fail_count++;
+    }
+    rc = algo_encoder_snapshot_push(&s_rotor_snap, &in);
 
-    s_rotor_valid = (rc == 0);
-    return rc;
+    cycles = intf_clock_get_cycle() - t0;
+    g_encoder_isr_cycles = cycles;
+    if (cycles > g_encoder_isr_cycles_max) {
+        g_encoder_isr_cycles_max = cycles;
+    }
+    g_encoder_sample_count++;
+
+    return (rc == ALGO_ENC_PUSH_ACCEPTED) ? 0 : ((rc == ALGO_ENC_PUSH_HELD) ? 1 : -1);
+}
+
+int app_encoder_sample_rotor(void) { return app_encoder_sample_rotor_at(intf_clock_get_cycle()); }
+
+static void app_encoder_fill_snapshot(const algo_encoder_sample_t* sample,
+                                      app_encoder_rotor_snapshot_t* out) {
+    out->raw = sample->raw;
+    out->rad = (float)sample->raw * s_rad_scale[APP_ENCODER_ROTOR];
+    out->seq = sample->seq;
+    out->timestamp_cycles = sample->timestamp_cycles;
+    out->age_cycles = sample->age_cycles;
+    out->consecutive_fail = sample->consecutive_fail;
+    out->valid = sample->valid;
+    out->jumped = sample->jumped;
+    out->read_failed = sample->read_failed;
+}
+
+int app_encoder_get_rotor_snapshot(app_encoder_rotor_snapshot_t* out) {
+    algo_encoder_sample_t sample;
+    bool coherent;
+
+    if (out == NULL) {
+        return -1;
+    }
+    /* 主循环读者允许 8 次有界重试；更高优先级 ISR 读者用 read_rotor_isr */
+    coherent = algo_encoder_snapshot_read(&s_rotor_snap, intf_clock_get_cycle(), &sample, 8U);
+    app_encoder_fill_snapshot(&sample, out);
+    if (!coherent) {
+        out->valid = false; /* 未取到一致快照：消费方不得使用 */
+    }
+    return 0;
+}
+
+int app_encoder_read_rotor_isr(app_encoder_rotor_snapshot_t* out) {
+    algo_encoder_sample_t sample;
+    bool coherent;
+
+    if (out == NULL) {
+        return -1;
+    }
+    /* ISR：最多 1 次重试，取不到也返回当前值（不阻塞） */
+    coherent = algo_encoder_snapshot_read(&s_rotor_snap, intf_clock_get_cycle(), &sample, 1U);
+    app_encoder_fill_snapshot(&sample, out);
+    if (!coherent) {
+        out->valid = false;
+    }
+    return 0;
 }
 
 int app_encoder_get_rotor_rad(float* rad, bool* valid, uint32_t* seq) {
@@ -183,13 +282,18 @@ int app_encoder_get_rotor_rad(float* rad, bool* valid, uint32_t* seq) {
 }
 
 int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid, uint32_t* seq) {
+    app_encoder_rotor_snapshot_t sample;
+
     if ((raw == NULL) || (valid == NULL)) {
         return -1;
     }
-    *raw = s_rotor_raw;
-    *valid = s_rotor_valid;
+    if (app_encoder_get_rotor_snapshot(&sample) != 0) {
+        return -1;
+    }
+    *raw = sample.raw;
+    *valid = sample.valid;
     if (seq != NULL) {
-        *seq = s_rotor_seq;
+        *seq = sample.seq;
     }
     return 0;
 }
@@ -238,6 +342,10 @@ int app_encoder_read_deg(app_encoder_id_t id, float* deg) {
 
 int app_encoder_read_reg(app_encoder_id_t id, uint8_t addr, uint8_t* val) {
     if ((id >= APP_ENCODER_COUNT) || (val == NULL) || (s_encoder_dev[id] == NULL)) {
+        return -1;
+    }
+    /* 转子 SPI3 在采样器声明所有权后独占：运行期寄存器读不得触碰物理总线 */
+    if ((id == APP_ENCODER_ROTOR) && s_rotor_sampler_claimed) {
         return -1;
     }
     return s_encoder_dev[id]->read_reg(addr, val);
@@ -298,6 +406,10 @@ int app_encoder_set_zero_mtp(app_encoder_id_t id, uint16_t zero) {
     if ((id >= APP_ENCODER_COUNT) || (s_encoder_dev[id] == NULL)) {
         return -1;
     }
+    /* 运行期 MTP 写被禁止（采样器独占 SPI3；且 MTP 寿命有限） */
+    if ((id == APP_ENCODER_ROTOR) && s_rotor_sampler_claimed) {
+        return -1;
+    }
     return s_encoder_dev[id]->set_zero(zero);
 }
 
@@ -305,11 +417,15 @@ int app_encoder_set_direction(app_encoder_id_t id, bool cw_increasing) {
     if ((id >= APP_ENCODER_COUNT) || (s_encoder_dev[id] == NULL)) {
         return -1;
     }
+    /* 运行期方向写被禁止（采样器独占 SPI3；方向应在停机标定期设置） */
+    if ((id == APP_ENCODER_ROTOR) && s_rotor_sampler_claimed) {
+        return -1;
+    }
     return s_encoder_dev[id]->set_direction(cw_increasing);
 }
 
 uint32_t app_encoder_get_rotor_jump_count(void) {
-    return s_rotor_jump_count;
+    return s_rotor_snap.jump_count;
 }
 
 uint32_t app_encoder_get_error_count(app_encoder_id_t id) {

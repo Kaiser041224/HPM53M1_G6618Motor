@@ -24,6 +24,8 @@
 /* TBD：FOC 接入后随 inverter.pwm_freq_hz 派生（当前无消费者） */
 #define APP_GPTMR_CH1_FREQ 25000U
 #define APP_GPTMR_CH2_FREQ 10000U
+/* 编码器采样：25kHz 的一半，供 25kHz FOC 复用（用时间戳算 dt） */
+#define APP_GPTMR_CH3_FREQ 12500U
 
 extern void hpm_gptmr_driver_register(void);
 
@@ -68,9 +70,19 @@ void app_gptmr_init(void) {
     };
     (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_2), &cfg_ch2);
 
+    /* CH3: 编码器采样 12.5kHz（回调由 app_encoder_sampler_start 注册） */
+    intf_gptmr_cfg_t cfg_ch3 = {
+        .mode = INTF_GPTMR_MODE_TIMER,
+        .frequency_hz = APP_GPTMR_CH3_FREQ,
+        .callback = NULL,
+        .enable_sync = false,
+    };
+    (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_3), &cfg_ch3);
+
     s_callbacks[APP_GPTMR_CH_0] = NULL;
     s_callbacks[APP_GPTMR_CH_1] = NULL;
     s_callbacks[APP_GPTMR_CH_2] = NULL;
+    s_callbacks[APP_GPTMR_CH_3] = NULL;
 }
 
 int app_gptmr_register_callback(app_gptmr_ch_t ch, app_gptmr_callback_t cb) {
@@ -85,6 +97,7 @@ int app_gptmr_register_callback(app_gptmr_ch_t ch, app_gptmr_callback_t cb) {
     case APP_GPTMR_CH_0: freq = APP_GPTMR_CH0_FREQ; break;
     case APP_GPTMR_CH_1: freq = APP_GPTMR_CH1_FREQ; break;
     case APP_GPTMR_CH_2: freq = APP_GPTMR_CH2_FREQ; break;
+    case APP_GPTMR_CH_3: freq = APP_GPTMR_CH3_FREQ; break;
     default: return -1;
     }
 

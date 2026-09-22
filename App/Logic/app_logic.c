@@ -29,14 +29,17 @@ extern volatile uint32_t g_board_l1c_ctl;
 #include "app_debug_can.h"
 #include "app_debug_encoder.h"
 #include "app_debug_flash.h"
+#include "app_debug_foc.h"
 #include "app_debug_inverter.h"
 #include "app_debug_motor.h"
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
+#include "app_encoder.h"
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
 #include "app_gpio.h"
+#include "app_gptmr.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
 #include "app_terminal.h"
@@ -45,8 +48,19 @@ extern volatile uint32_t g_board_l1c_ctl;
 #include "intf_clock.h"
 #include "intf_sys.h"
 
+/* 电流环分段耗时观测（定义在 app_foc_current.c） */
+extern volatile uint32_t g_foc_cyc_read;
+extern volatile uint32_t g_foc_cyc_pi;
+extern volatile uint32_t g_foc_cyc_mod;
+
 #define APP_SLOW_TASK_PERIOD_MS   (1U) /* UART/CAN/USB 调试轮询分频 */
 #define APP_HEARTBEAT_INTERVAL_MS (1000U)
+
+/* 仅调试台架模式：旁路 USB/终端（保留 RTT + Ozone 直控）。
+ * 编译期开关：-DAPP_BENCH_DEBUG_MODE=1；默认 0（正常运行）。 */
+#ifndef APP_BENCH_DEBUG_MODE
+#define APP_BENCH_DEBUG_MODE 0
+#endif
 
 void app_init(void) {
     /*
@@ -103,12 +117,25 @@ void app_init(void) {
     /* 5. CAN 自检（MCAN3，经典 CAN；总线波特率与周期帧 ID 来源 config/software.yaml） */
     app_debug_can_init();
 
-    /* 6. USB 终端（USB0 CDC 虚拟串口，J10；CherrySH 交互 Terminal，1kHz 慢任务轮询） */
+    /* 6. USB 终端（USB0 CDC 虚拟串口，J10；CherrySH 交互 Terminal，1kHz 慢任务轮询）
+     *    台架调试模式旁路：仅保留 RTT + Ozone 直控。 */
+#if !APP_BENCH_DEBUG_MODE
     app_usb_init();
     app_terminal_init();
+#endif
 
     /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴） */
     app_debug_encoder_init();
+
+    /* 7b. 初始化 GPTMR 外设并启动 12.5kHz 转子采样器（GPTMR1 CH3，
+     * PLIC 优先级 3 > ADC0=2）。此后 SPI3 归采样 ISR 独占，运行期读 API 只返回快照。 */
+    app_gptmr_init();
+    {
+        int sampler_rc = app_encoder_sampler_start();
+
+        app_debug_printf("[ENC] sampler: %s (GPTMR1 CH3 @12.5kHz)\r\n",
+                         (sampler_rc == 0) ? "OK" : "FAILED");
+    }
 
     /* 8. Flash 自检（XPI NOR：属性 + 末尾扇区破坏性读写测试） */
     app_debug_flash_init();
@@ -149,6 +176,9 @@ void app_init(void) {
 
     /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
     app_foc_init();
+
+    /* 13b. FOC 调试观测/命令（Ozone 结构；主循环有界处理请求） */
+    app_debug_foc_init();
 
     /* 14. 开环旋转自检（V/F，命令 r 启动） */
     app_debug_motor_init();
@@ -196,7 +226,10 @@ void app_run(void) {
             app_adc_slow_process(); /* ADC1 慢速通道（VBUS/NTC/CANID）@1kHz */
             app_debug_uart_run_once();
             app_debug_can_run_once();
+#if !APP_BENCH_DEBUG_MODE
             app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
+#endif
+            app_debug_foc_tick(); /* Ozone 请求处理（每拍有界） */
         }
 
         /* 3) 心跳 + 编码器统计汇总（1s） */
@@ -214,32 +247,71 @@ void app_run(void) {
                 uint32_t c0 = intf_clock_get_cycle();
 
                 app_debug_printf(
-                    "hb=%u led=%u printf_cyc=%u\r\n", (unsigned)heartbeat,
-                    (unsigned)app_gpio_read(PIN_LED_STATUS), (unsigned)last_printf_cycles);
+                    "hb=%u led=%u printf_cyc=%u fault_st=%u f=%08x latched=%08x first=%08x\r\n",
+                    (unsigned)heartbeat,
+                    (unsigned)app_gpio_read(PIN_LED_STATUS), (unsigned)last_printf_cycles,
+                    (unsigned)app_fault_get_state(), (unsigned)app_fault_get_codes(),
+                    (unsigned)app_fault_get_latched(), (unsigned)app_fault_get_first());
                 last_printf_cycles = intf_clock_get_cycle() - c0;
                 app_debug_encoder_print_stats();
+                app_debug_printf(
+                    "[diag] sampler=%u sample=%u fail=%u spi_err=%u jump=%u enc_isr=%u/%u "
+                    "foc_isr=%u/%u ovr=%u inhibit=%u estop=%u prot_enc=%u\r\n",
+                    (unsigned)app_encoder_sampler_active(),
+                    (unsigned)g_encoder_sample_count,
+                    (unsigned)g_encoder_read_fail_count,
+                    (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
+                    (unsigned)app_encoder_get_rotor_jump_count(),
+                    (unsigned)g_encoder_isr_cycles,
+                    (unsigned)g_encoder_isr_cycles_max,
+                    (unsigned)g_foc_isr_cycles,
+                    (unsigned)g_foc_isr_cycles_max,
+                    (unsigned)g_foc_isr_overruns,
+                    (unsigned)app_foc_isr_inhibited(),
+                    (unsigned)g_foc_fault_request,
+                    (unsigned)g_foc_protect_counts[APP_FOC_PROT_ENC]);
             } else {
                 app_foc_current_snapshot_t snap;
                 uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
 
                 app_foc_get_snapshot(&snap);
-                app_debug_printf("foc: st=%u iq=%.2f/%.2f A om=%.0f trip=%u f=%08x\r\n",
-                                 (unsigned)app_foc_get_state(), (double)snap.i_q_ref_a,
+                app_debug_printf("foc: st=%u fault_st=%u first=%08x iq=%.2f/%.2f A om=%.0f "
+                                 "trip=%u f=%08x latched=%08x\r\n",
+                                 (unsigned)app_foc_get_state(),
+                                 (unsigned)app_fault_get_state(),
+                                 (unsigned)app_fault_get_first(),
+                                 (double)snap.i_q_ref_a,
                                  (double)snap.i_q_avg_a, (double)snap.omega_e_rad_s,
-                                 (unsigned)snap.tripped, (unsigned)app_fault_get_codes());
+                                 (unsigned)snap.tripped,
+                                 (unsigned)app_fault_get_codes(),
+                                 (unsigned)app_fault_get_latched());
                 /* 分段耗时 + L1C 运行态（ic/dc = 1 表示已使能） */
-                app_debug_printf("     cyc: tot=%u rd=%u pi=%u mod=%u us | dt=%u us ic=%u dc=%u jmp=%u "
-                                "enc_err=%u isr_ovr=%u\r\n",
+                app_debug_printf("     cyc: main=%u rd=%u pi=%u mod=%u us | dt=%u us "
+                                "isr=%u/%u ovr=%u inhibited=%u estop=%u ic=%u dc=%u\r\n",
                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_read / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_pi / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_mod / mhz) : 0U),
                                  (unsigned)g_foc_loop_dt_us,
+                                 (unsigned)g_foc_isr_cycles,
+                                 (unsigned)g_foc_isr_cycles_max,
+                                 (unsigned)g_foc_isr_overruns,
+                                 (unsigned)app_foc_isr_inhibited(),
+                                 (unsigned)g_foc_fault_request,
                                  (unsigned)(g_board_l1c_ctl & 0x1U),
-                                 (unsigned)((g_board_l1c_ctl >> 1) & 0x1U),
-                                 (unsigned)app_encoder_get_rotor_jump_count(),
+                                 (unsigned)((g_board_l1c_ctl >> 1) & 0x1U));
+                app_debug_printf("     enc: seq=%u age=%u us sample=%u fail=%u err=%u jump=%u "
+                                "isr=%u/%u self=%u/%u%%\r\n",
+                                 (unsigned)g_foc_enc_seq,
+                                 (unsigned)g_foc_enc_age_us,
+                                 (unsigned)g_encoder_sample_count,
+                                 (unsigned)g_encoder_read_fail_count,
                                  (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
-                                 (unsigned)g_foc_isr_overruns);
+                                 (unsigned)app_encoder_get_rotor_jump_count(),
+                                 (unsigned)g_encoder_isr_cycles,
+                                 (unsigned)g_encoder_isr_cycles_max,
+                                 (unsigned)g_enc_runtime_seq_delta,
+                                 (unsigned)g_enc_runtime_valid_pct);
                 /* 保护路径分原因（rd/vb/pi/mod/duty/trip/enc）：定位"protect 计数暴涨" */
                 app_debug_printf("     prot: rd=%u vb=%u pi=%u mod=%u duty=%u trip=%u enc=%u\r\n",
                                  (unsigned)g_foc_protect_counts[0],

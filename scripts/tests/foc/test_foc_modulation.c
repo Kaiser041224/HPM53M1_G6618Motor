@@ -96,4 +96,15 @@ void test_foc_modulation(void) {
         bad.v_bus_min = -1.0f;
         CHECK(foc_modulation_step(&bad, 0.0f, 0.0f, 24.0f, d, &scale) == -1);
     }
+
+    /* 线性区相电压峰值上限：A_max = (2D−1)·v_bus/√3（修正旧 /1.5） */
+    CHECK_NEAR(foc_modulation_vmax(0.885f, 24.0f),
+               (2.0f * 0.885f - 1.0f) * 24.0f / sqrtf(3.0f), 1e-4f);
+    CHECK_NEAR(foc_modulation_vmax(0.5f, 24.0f), 0.0f, 1e-6f);
+    CHECK_NEAR(foc_modulation_vmax(1.0f, 48.0f), 48.0f / sqrtf(3.0f), 1e-4f);
+    /* 比旧口径 /1.5 小 √3/1.5 ≈ 1.1547 倍 */
+    CHECK_NEAR((2.0f * 0.885f - 1.0f) * 24.0f / 1.5f,
+               foc_modulation_vmax(0.885f, 24.0f) * (sqrtf(3.0f) / 1.5f), 1e-4f);
+    CHECK(foc_modulation_vmax(NAN, 24.0f) == 0.0f);
+    CHECK(foc_modulation_vmax(0.885f, INFINITY) == 0.0f);
 }

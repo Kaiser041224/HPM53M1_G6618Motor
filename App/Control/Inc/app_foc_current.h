@@ -98,6 +98,14 @@ void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);
 float app_foc_current_get_v_scale(void);
 
 /**
+ * @brief 控制层实际生效占空比上限（= min(user duty_max, 保守 0.70)）。
+ * @return 有效占空比上限（>0.5）
+ * @note 0.70 为四槽 PMT 采样时序余量的初步保守值，须示波确认后可放宽；
+ *       对 PI 圆限幅 / 调制 / vtest 一致生效，不修改用户 config。
+ */
+float app_foc_current_duty_max(void);
+
+/**
  * @brief 开环电压矢量诊断（vtest）：不经电流环，按给定电压/角度直接调制输出。
  *        用于核实电流采样符号/相序映射/标度与电机直流增益（I ≈ v/R）。
  * @param volts 相电压峰值 [V]（内部限幅 0~2V）
@@ -123,6 +131,16 @@ bool app_foc_current_vtest_active(void);
  * @return 0 = 已执行；-1 = 已结束/失败
  */
 int app_foc_current_vtest_step(void);
+
+/**
+ * @brief vtest 单拍执行（显式输入版本：ADC 完成中断内使用，本拍新鲜采样 + 真实 dt）
+ * @param i_u_a/i_v_a/i_w_a 本拍三相电流 [A]
+ * @param v_bus_v 母线电压 [V]
+ * @param dt_s 本拍间隔 [s]（≤0/非有限时退回标称 pwm 周期）
+ * @return 0 = 已执行；-1 = 已结束/失败（已零矢量）
+ */
+int app_foc_current_vtest_step_fresh(float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
+                                     float dt_s);
 
 /** 波形捕获最大样本数（25kHz × 128 ≈ 5.1ms） */
 #define APP_FOC_TRACE_MAX (128U)

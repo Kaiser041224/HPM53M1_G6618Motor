@@ -106,6 +106,16 @@ hpmdev new my_motor_ctrl
 6. `App/Platform/Src/app_gpio.h`：GPIO 引脚宏。
 7. `App/Logic/app_logic.c`：替换为业务入口。
 
+## 项目附加文档（HPM53M1_G6618Motor）
+
+- 编码器独立采样器 + FOC 实时域解耦（2026-09-22）
+  - 设计：`docs/superpowers/specs/2026-09-22-encoder-sampler-foc-realtime-design.md`
+  - 计划：`docs/superpowers/plans/2026-09-22-encoder-sampler-foc-realtime.md`
+  - 交付摘要（含 Ozone 工作流 / 未决约束）：`docs/superpowers/2026-09-22-encoder-sampler-foc-realtime-summary.md`
+- 宿主测试：
+  - `bash scripts/tests/encoder/run.sh`（编码器快照 / SPI3 单一所有者）
+  - `bash scripts/tests/foc/run.sh`（FOC 纯数学层，含 `foc_modulation_vmax`）
+
 ## 许可证
 
 BSD-3-Clause

@@ -11,6 +11,9 @@
  *   CH0 — 电压外环 50kHz
  *   CH1 — 功率外环 25kHz
  *   CH2 — 通用通道 10kHz
+ *   CH3 — 编码器采样 12.5kHz（全球通道 7；PLIC 优先级 3 > ADC0=2）
+ *
+ * 注：GPTMR0 CH2（全球通道 2）已被 ADC1 慢速序列触发占用，不得复用。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -38,6 +41,7 @@ typedef enum {
     APP_GPTMR_CH_0 = 0, /**< GPTMR1 CH0: 电压外环 */
     APP_GPTMR_CH_1 = 1, /**< GPTMR1 CH1: 功率外环 */
     APP_GPTMR_CH_2 = 2, /**< GPTMR1 CH2: 通用通道 */
+    APP_GPTMR_CH_3 = 3, /**< GPTMR1 CH3: 编码器采样 @12.5kHz（全球 7；不占用 GPTMR0 CH2=全局2） */
     APP_GPTMR_CH_COUNT,
 } app_gptmr_ch_t;
 

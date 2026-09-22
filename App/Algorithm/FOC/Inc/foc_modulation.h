@@ -41,6 +41,20 @@ typedef struct {
 int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta, float v_bus_v,
                         float duty_abc[3], float* v_scale_out);
 
+/**
+ * @brief 线性区相电压峰值上限（与 foc_modulation_step 的 span 限幅严格一致）
+ *
+ * 推导：min-max 注入下 span_max = (2·duty_max − 1)·v_bus；
+ *       平衡正弦三相电压峰值 A 对应 span = √3·A；
+ *       → A_max = (2·duty_max − 1)·v_bus / √3。
+ * （旧实现用 /1.5 偏大 15.5%，会让 PI 误判未饱和、抗饱和失效。）
+ *
+ * @param duty_max 占空比上限（0.5, 1.0]
+ * @param v_bus_v 母线电压 [V]
+ * @return 相电压峰值上限 [V]；输入非有限返回 0
+ */
+float foc_modulation_vmax(float duty_max, float v_bus_v);
+
 #ifdef __cplusplus
 }
 #endif

@@ -316,7 +316,8 @@ static const char* cal_encoder_fail_name(app_identify_fail_t reason) {
 static void cal_encoder_tick(uint32_t now_ms) {
     app_motor_identify_result_t result;
 
-    app_motor_identify_run_once(now_ms);
+    /* 辨识编排的 1kHz 推进已集中到 app_debug_foc_tick()（Control/Debug 无 Terminal 依赖，
+     * 台架模式同样生效）；此处只负责终端进度显示，避免重复 step。 */
     if (app_motor_identify_is_active()) {
         /* 终端进度条（单行原地刷新 \r；job 期间输入已被屏蔽，不与 readline 冲突），
          * 同时把 dt/cyc 走 RTT（主循环负载观测）。 */
