@@ -48,8 +48,10 @@ void test_foc_math(void) {
         float id, iq, va, vb;
         foc_park(2.5f, -1.25f, 0.7f, &id, &iq);
         foc_inv_park(id, iq, 0.7f, &va, &vb);
-        CHECK_NEAR(va, 2.5f, 1e-5f);
-        CHECK_NEAR(vb, -1.25f, 1e-5f);
+        /* sincos 为 256 段查表 + 线性插值：幅值 2.5 时绝对误差 ~4e-4
+         * （角度误差 ~1e-4 rad ≈ 0.006°，对电流环无影响） */
+        CHECK_NEAR(va, 2.5f, 1e-3f);
+        CHECK_NEAR(vb, -1.25f, 1e-3f);
     }
 
     /* Park：θ=0 时 id=iα、iq=iβ */

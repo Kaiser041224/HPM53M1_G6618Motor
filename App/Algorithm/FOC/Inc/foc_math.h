@@ -85,13 +85,48 @@ static inline float foc_wrap_pm_pi(float x) {
  * @param theta 角度 [rad]（调用方保证有界，如 [0, 2π)）
  * @param s 输出 sin
  * @param c 输出 cos
- * @note 实现为 sinf + cosf 两次 libm 调用（不依赖非标准 sincosf）；
- *       GCC 可能自动融合。25kHz 热路径单拍调用一次，实测开销可接受。
+ * @note 查表 + 线性插值（纯单精度，无 libm 调用）。
+ *       背景：本工具链的 sinf/cosf 内部走双精度软浮点（反汇编可见 __floatdidf），
+ *       而 HPM5361 FPU 仅单精度 → 单次调用数千 cycle，台架实测 FOC 单拍 70~170µs、
+ *       主循环掉到 5kHz。256 段表 + 线性插值：误差 < 4e-5，代价 ~40 cycle。
  */
+#define FOC_SINCOS_TABLE_BITS (8U)
+#define FOC_SINCOS_TABLE_SIZE (1U << FOC_SINCOS_TABLE_BITS) /* 256 段 */
+
+/** sin(2πk/256) 查找表（foc_math_init 填充；FOC_SINCOS_TABLE_SIZE+1 项便于插值） */
+extern float foc_sincos_table[FOC_SINCOS_TABLE_SIZE + 1U];
+
+/** 表就绪标志（foc_math_init 置位；foc_sincos 首次调用兜底初始化） */
+extern bool foc_math_table_ready;
+
+/**
+ * @brief 初始化 sincos 查找表（用 libm 填一次，仅启动期；幂等）
+ */
+void foc_math_init(void);
+
 FOC_ATTR_RAMFUNC
 static inline void foc_sincos(float theta, float* s, float* c) {
-    *s = sinf(theta);
-    *c = cosf(theta);
+    float x;
+
+    if (!foc_math_table_ready) {
+        foc_math_init(); /* 兜底：未显式初始化时首次调用建表 */
+    }
+    x = theta * ((float)FOC_SINCOS_TABLE_SIZE / FOC_TWO_PI_F);
+    uint32_t idx = (uint32_t)x;
+    float frac = x - (float)idx;
+    float s0;
+    float s1;
+
+    idx &= (FOC_SINCOS_TABLE_SIZE - 1U);
+    s0 = foc_sincos_table[idx];
+    s1 = foc_sincos_table[idx + 1U];
+    *s = s0 + ((s1 - s0) * frac);
+
+    /* cos(θ) = sin(θ + π/2)：同一表偏移 1/4 圈，frac 相同 */
+    idx = (idx + (FOC_SINCOS_TABLE_SIZE / 4U)) & (FOC_SINCOS_TABLE_SIZE - 1U);
+    s0 = foc_sincos_table[idx];
+    s1 = foc_sincos_table[idx + 1U];
+    *c = s0 + ((s1 - s0) * frac);
 }
 
 /**

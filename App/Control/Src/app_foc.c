@@ -91,6 +91,8 @@ static int app_foc_angle_init(void) {
 }
 
 void app_foc_init(void) {
+    foc_math_init(); /* sincos 查表（用 libm 一次） */
+
     s_state = APP_FOC_STATE_OFF;
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_forced_theta = 0.0f;

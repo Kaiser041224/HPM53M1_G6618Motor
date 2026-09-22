@@ -828,7 +828,11 @@ static int hrpwm_set_duty(intf_hrpwm_ch_t ch, float duty) {
     hrpwm_instance_state_t* inst_state;
 
     map = hrpwm_get_channel_map(ch);
-    if ((map == NULL) || !hrpwm_is_valid_duty(duty)) {
+    /* instance 越界防御：Release(-O2) 下编译器无法证明映射表取值 < 实例数，
+     * 显式校验（越界写会直接踩坏相邻状态） */
+    if ((map == NULL) || (map->instance >= (uint8_t)(sizeof(s_hrpwm_instances)
+                                                    / sizeof(s_hrpwm_instances[0])))
+        || !hrpwm_is_valid_duty(duty)) {
         return -1;
     }
 
