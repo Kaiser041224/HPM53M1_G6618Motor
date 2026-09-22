@@ -27,8 +27,10 @@
 
 #define SPI_INSTANCE_COUNT (4U)
 
-/* 快速单帧路径轮询上限（约 0.4ms @480MHz；正常单帧 ~3µs） */
-#define SPI_FAST_RETRY_MAX (20000U)
+/* 快速单帧路径轮询上限：正常单帧 ~3µs；此处按 ~10µs 设上限。
+ * 原值 20000（≈0.4ms/次等待）在编码器场景（2 帧 × 3 等待 = 最坏 2.4ms）
+ * 一旦搬进 25kHz ADC 中断就会饿死主循环/USB —— 台架表现为 foc on 后终端失联。 */
+#define SPI_FAST_RETRY_MAX (1000U)
 
 /**
  * @brief SPI 实例上下文
@@ -233,14 +235,14 @@ static int spi_transfer_impl(uint8_t bus, const void *tx, void *rx,
         return -1;
     }
 
-    /* 单帧（编码器场景）：快速路径，省去 SDK 每帧 FIFO/控制器复位开销 */
+    /* 单帧（编码器场景）：快速路径，省去 SDK 每帧 FIFO/控制器复位开销。
+     * 失败直接返回（不再回退 SDK 路径）：SDK 路径按 timeout_ms 阻塞，而本调用
+     * 位于 25kHz ADC 中断内，毫秒级阻塞会饿死主循环；失败样本由上层
+     * "采样保持 + 错误计数"消化。 */
     if (frames == 1U) {
         uint8_t data_bytes = (uint8_t) ((ctx->data_bits + 7U) / 8U);
 
-        if (spi_frame_fast(ctx, (const uint8_t *) tx, (uint8_t *) rx, data_bytes) == 0) {
-            return 0;
-        }
-        /* 快速路径失败：回退 SDK 路径（含复位，可恢复干净状态） */
+        return spi_frame_fast(ctx, (const uint8_t *) tx, (uint8_t *) rx, data_bytes);
     }
 
     spi_master_get_default_control_config(&ctrl);

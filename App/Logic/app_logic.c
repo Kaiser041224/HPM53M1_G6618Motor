@@ -228,7 +228,8 @@ void app_run(void) {
                                  (double)snap.i_q_avg_a, (double)snap.omega_e_rad_s,
                                  (unsigned)snap.tripped, (unsigned)app_fault_get_codes());
                 /* 分段耗时 + L1C 运行态（ic/dc = 1 表示已使能） */
-                app_debug_printf("     cyc: tot=%u rd=%u pi=%u mod=%u us | dt=%u us ic=%u dc=%u jmp=%u\r\n",
+                app_debug_printf("     cyc: tot=%u rd=%u pi=%u mod=%u us | dt=%u us ic=%u dc=%u jmp=%u "
+                                "enc_err=%u isr_ovr=%u\r\n",
                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_read / mhz) : 0U),
                                  (unsigned)((mhz > 0U) ? (g_foc_cyc_pi / mhz) : 0U),
@@ -236,7 +237,9 @@ void app_run(void) {
                                  (unsigned)g_foc_loop_dt_us,
                                  (unsigned)(g_board_l1c_ctl & 0x1U),
                                  (unsigned)((g_board_l1c_ctl >> 1) & 0x1U),
-                                 (unsigned)app_encoder_get_rotor_jump_count());
+                                 (unsigned)app_encoder_get_rotor_jump_count(),
+                                 (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
+                                 (unsigned)g_foc_isr_overruns);
                 /* 保护路径分原因（rd/vb/pi/mod/duty/trip/enc）：定位"protect 计数暴涨" */
                 app_debug_printf("     prot: rd=%u vb=%u pi=%u mod=%u duty=%u trip=%u enc=%u\r\n",
                                  (unsigned)g_foc_protect_counts[0],

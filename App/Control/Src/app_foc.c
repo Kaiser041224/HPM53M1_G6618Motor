@@ -48,6 +48,13 @@ static float s_dt_s;              /**< 实测调用间隔 [s]（0 = 首拍/异�
 static bool s_speed_limited;      /**< 限速滞环状态（避免阈值附近转矩断续） */
 static uint32_t s_isr_last_cycle; /**< ISR 上一拍 cycle（实测 dt） */
 static bool s_isr_dt_valid;       /**< ISR dt 已建立 */
+static bool s_isr_disabled;       /**< ISR 快路径超预算后停用（防止饿死主循环） */
+
+/** ISR 单拍预算 [µs]（ISR 周期 40µs；超限即停用快路径并安全关桥） */
+#define APP_FOC_ISR_BUDGET_US (25U)
+
+/* Ozone 观测：ISR 超预算次数 */
+volatile uint32_t g_foc_isr_overruns __attribute__((section(".noncacheable.bss")));
 static bool s_vsat_limited;       /**< 电压饱和降转矩滞环状态 */
 
 /* Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss，调试器直读） */
@@ -274,10 +281,13 @@ void app_foc_isr_step(void) {
     float i_w;
     float v_bus;
     uint16_t raw;
+    uint32_t t_isr;
+    uint32_t mhz;
 
-    if (!s_initialized) {
+    if (!s_initialized || s_isr_disabled) {
         return;
     }
+    t_isr = intf_clock_get_cycle();
 
     /* 转子编码器：ISR 内采样（角度新鲜度直接决定换相质量） */
     (void)app_encoder_sample_rotor();
@@ -334,6 +344,17 @@ void app_foc_isr_step(void) {
     /* 电流环（含限幅/过流跳闸/占空比下发） */
     (void)app_foc_current_run_fresh(theta_e, omega_e, s_i_d_ref, s_i_q_ref, i_u, i_v, i_w, v_bus,
                                     NULL, NULL);
+
+    /* 预算检查：超限则停用 ISR 快路径并安全关桥。
+     * 目的：任何一处阻塞（SPI 等待、库函数、总线竞争）都不允许饿死主循环——
+     * 主循环死了就再也回不来（终端失联、无法下发 off），这是台架踩过的坑。 */
+    mhz = intf_clock_get_cpu_freq() / 1000000U;
+    if ((mhz > 0U) && (((intf_clock_get_cycle() - t_isr) / mhz) > APP_FOC_ISR_BUDGET_US)) {
+        g_foc_isr_overruns++;
+        s_isr_disabled = true;
+        app_3phase_inverter_disable();
+        s_state = APP_FOC_STATE_FAULT;
+    }
 }
 
 void app_foc_run_once(void) {
@@ -421,6 +442,7 @@ void app_foc_disable(void) {
     s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_speed_limited = false; /* 限速滞环随禁用复位 */
+    s_isr_disabled = false;  /* 重新使能后允许重试 ISR 快路径 */
     s_vsat_limited = false;  /* 电压饱和滞环随禁用复位 */
     s_dt_valid = false;      /* 重新使能后首拍不注入 dt 尖峰 */
     s_angle_src = APP_FOC_ANGLE_ENCODER;

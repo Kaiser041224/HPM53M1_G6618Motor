@@ -28,7 +28,9 @@
 
 #define KTH7823_INSTANCE_COUNT (2U)        /* 双编码器设计 */
 #define KTH7823_SCLK_MAX_HZ    (10000000U) /* TSCK ≥ 100ns */
-#define KTH7823_SPI_TIMEOUT_MS (1U)        /* 单帧内部超时（标称 ~5µs） */
+/* 单帧超时：0 = 不等待（帧在 25kHz ADC 中断内读取，任何毫秒级阻塞都会饿死主循环；
+ * 失败样本由 app_encoder 的采样保持 + 错误计数消化） */
+#define KTH7823_SPI_TIMEOUT_MS (0U)
 #define KTH7823_MTP_DELAY_MS   (20U)       /* 写寄存器帧间最小等待 */
 
 /* 帧编码 */
