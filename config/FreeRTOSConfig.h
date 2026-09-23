@@ -51,7 +51,8 @@
 /* Memory allocation definitions. */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   ((size_t) (16 * 1024))
+/* 24KB：app_fast 8K + app_io 6K + app_diag 2K + rtt_log 2K + idle/timer 2K + TCB 余量 */
+#define configTOTAL_HEAP_SIZE                   ((size_t) (24 * 1024))
 
 /* Hook function definitions. */
 #define configUSE_IDLE_HOOK                     0
