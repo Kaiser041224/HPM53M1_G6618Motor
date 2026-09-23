@@ -166,6 +166,7 @@ sdk_app_src(App/Algorithm/Src/algo_pid.c)
 sdk_app_src(App/Algorithm/Src/algo_pll.c)
 sdk_app_src(App/Algorithm/Src/algo_ramp.c)
 sdk_app_src(App/Algorithm/Src/algo_rms.c)
+sdk_app_src(App/Algorithm/Src/algo_trig.c)
 
 # ============================================================================
 # Platform Layer
