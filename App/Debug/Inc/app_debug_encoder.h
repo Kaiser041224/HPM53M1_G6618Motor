@@ -36,7 +36,17 @@ extern volatile int32_t g_enc_ratio_x10000;    /* 游标比值累计 ×10000（1
 void app_debug_encoder_init(void);
 
 /**
- * @brief 每控制周期调用：双路采样 + 更新观测变量 + 计时统计。
+ * @brief 转子编码器单次采样（25kHz 快车道 / ADC PMT ISR：FOC 电角度反馈）。
+ */
+void app_debug_encoder_sample_rotor(void);
+
+/**
+ * @brief 出轴编码器单次采样（1kHz 慢任务；角度闭环阶段随角度环频率提速）。
+ */
+void app_debug_encoder_sample_output(void);
+
+/**
+ * @brief 兼容包装：转子 + 出轴背靠背采样（调试/初始化路径用）。
  */
 void app_debug_encoder_sample(void);
 

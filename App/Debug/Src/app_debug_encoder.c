@@ -220,22 +220,27 @@ void app_debug_encoder_init(void) {
     }
 }
 
-/* 每控制周期调用：转子每周期采样；出轴按 ENC_OUTPUT_SAMPLE_DIV 降采样。
-   降采样周期内两路背靠背采样（间隔 ~7µs），同时用于游标比值累计。 */
-void app_debug_encoder_sample(void) {
-    int ret_rotor;
+/* 转子编码器单次采样（25kHz 快车道 / ADC PMT ISR）：FOC 电角度反馈。
+ * 出轴编码器由 app_debug_encoder_sample_output 在慢任务采样（角度闭环阶段
+ * 再随角度环频率提速）——见 app_debug_motor / FOC 阶段说明。 */
+void app_debug_encoder_sample_rotor(void) {
+    (void)encoder_sample_one(APP_ENCODER_ROTOR);
+    s_loop_count++;
+}
 
-    ret_rotor = encoder_sample_one(APP_ENCODER_ROTOR);
-
-    if ((s_sample_index % ENC_OUTPUT_SAMPLE_DIV) == 0U) {
-        int ret_output = encoder_sample_one(APP_ENCODER_OUTPUT);
-
-        if ((ret_rotor == 0) && (ret_output == 0)) {
-            ratio_accumulate(g_enc_rotor_raw, g_enc_output_raw);
-        }
+/* 出轴编码器单次采样（1kHz 慢任务）：游标比值累计 + 出轴角度观测。
+ * 游标配对用最新转子样本（≤40µs 偏斜，累计中大部分抵消）。 */
+void app_debug_encoder_sample_output(void) {
+    if (encoder_sample_one(APP_ENCODER_OUTPUT) == 0) {
+        ratio_accumulate(g_enc_rotor_raw, g_enc_output_raw);
     }
     s_sample_index++;
-    s_loop_count++;
+}
+
+/* 兼容包装（旧调用点）：转子 + 出轴背靠背采样 */
+void app_debug_encoder_sample(void) {
+    app_debug_encoder_sample_rotor();
+    app_debug_encoder_sample_output();
 }
 
 /* 主循环节拍迟到反馈（迟到周期数） */
