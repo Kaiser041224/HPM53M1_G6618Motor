@@ -19,28 +19,26 @@
 
 ---
 
-## 2. 任务结构
+## 2. 任务结构（2026-09-23 修订：控制环路移入 ADC PMT 中断）
 
 ```
 main()
   board_init()
-  intf_clock_init()            ← 移至调度器前（对齐 SDK 惯例 + freertos-test-tasks）
+  intf_clock_init()            ← 调度器前（对齐 SDK 惯例 + freertos-test-tasks）
   app_application_start()
     ├─ app_debug_rtt_start_task()   → rtt_log（prio 4，队列驱动）
     ├─ xTaskCreate(app_io_task)     → prio 3
     └─ vTaskStartScheduler()
 
+ADC PMT 完成中断（25kHz 硬件触发，PLIC prio 3 = 最高）
+  isr_adc0 → adc_generic_isr → adc_current_pmt_cb（收相电流）
+           → fast_cb = app_fast_step_hook
+             └─ app_fast_step()   ← FOC 快车道五件套（40µs 周期内 ~20-25µs）
+
 app_io_task (prio 3)
   app_init()                   ← 一次性初始化（电流零点标定依赖 ISR，须调度器后）
-  xTaskCreate(app_fast_task)   → prio 2
   xTaskCreate(app_diag_task)   → prio 3
   for(;;) { app_io_step(); vTaskDelay(1); }
-
-app_fast_task (prio 2)
-  for(;;) {                    ← 25kHz mcycle 忙等超循环（精确节拍）
-    app_fast_step();           ← FOC 快车道五件套
-    忙等对齐 next += loop_cycles;
-  }
 
 app_diag_task (prio 3)
   for(;;) { app_diag_step(); vTaskDelay(1000); }
@@ -49,37 +47,51 @@ rtt_log (prio 4)
   for(;;) { 队列阻塞 → SEGGER RTT 写出 + 1s 心跳 }
 ```
 
-### 2.1 优先级与调度可行性
+### 2.1 实时性硬化依据（2026-09-23 实测）
 
-| 任务 | prio | 阻塞方式 | CPU 份额 |
+前一版「app_fast 任务 + mcycle 忙等」实测：
+
+| 工况 | rate | 丢拍/s | late/max |
 | :--- | :--- | :--- | :--- |
-| `rtt_log` | 4（最高） | 队列阻塞 | 仅日志到达时短占用 |
-| `app_io` | 3 | `vTaskDelay(1)` | 每 1ms 短占用（≤200µs 约束不变） |
-| `app_diag` | 3 | `vTaskDelay(1000)` | 每 1s 轻占用 |
-| `app_fast` | 2 | 忙等（不阻塞） | 其余全部（25kHz 节拍） |
-| idle / timer | 0 / 31 | — | — |
+| 静止 | 21.9kHz | 3100 | 1000/s, 2.2ms |
+| 旋转 | 16.5kHz | 8500 | 4300/s, 2.4ms |
 
-**关键机制**：`app_fast` 忙等不 yield，只会饿死**同/低**优先级；`app_io`/`app_diag`
-用 `vTaskDelay` 阻塞后由 **tick（1kHz）唤醒并抢占** `app_fast`（3 > 2）。
-故形成「快车道独占 CPU + 慢任务按需短抢占」结构——正是 FOC 期望形态。
-`rtt_log`（prio 4）阻塞在队列上，无日志零打扰。
+`read: rotor max=2370µs`（正常 7-12µs）= SPI 轮询被任务抢占拉长 200 倍。
+根因：`app_io`/`app_diag`/`rtt_log` 抢占 `app_fast` 忙等任务——「回报走 RTOS」
+的结构性代价。**FOC 25kHz 电流环不可接受** → 控制环路移入 ADC PMT 完成中断。
 
-**代价**：`app_io` 每 1ms 抢占 `app_fast` 约 200µs（≈5 个 25kHz 节拍），
-`g_enc_loop_late_us` 会体现——列入测试断言监控。
+修订后契约：
+- **节拍 = 硬件触发**（PWM1 CMP10 → TRGM → ADC0 PMT），25kHz 精确，无软件抖动；
+- **ISR 优先级最高**（PLIC 3），不被任务/日志抢占；
+- `app_fast` 任务删除，任务域收窄为纯后台（io/diag/rtt_log）；
+- 超时观测：`app_fast_step_hook` 内 mcycle 自测执行时长，超一个节拍周期记 late。
 
-### 2.2 快车道内容（`app_fast_step`，25kHz）
+### 2.2 优先级与调度
 
-| 调用 | 语义（FOC 视角） |
-| :--- | :--- |
-| `app_debug_encoder_sample()` | 转子/出轴角度采样（FOC 反馈；将来移入 FOC 模块时改名） |
-| `app_analog_signal_process()` | 三相电流/母线电压换算 + 滤波（FOC 反馈） |
-| `app_fault_process()` | 三相电流 RMS 累加 + L2 保护判断（FOC 保护） |
-| `app_debug_motor_run_once()` | 控制输出（开环 V/F；**将来由 FOC 控制环原位替换**） |
+| 单元 | 优先级 | 角色 |
+| :--- | :--- | :--- |
+| **ADC PMT 中断（FOC 快车道）** | PLIC 3（最高） | 25kHz 控制环路（采样/换算/保护/输出） |
+| `rtt_log` | 4（任务最高） | 日志队列 → RTT（阻塞，无日志零打扰） |
+| `app_io` / `app_diag` | 3 | 1ms IO / 1s 回报（vTaskDelay 阻塞） |
+| idle | 0 | — |
 
-**硬约束**（FOC 引入前提）：无 RTOS API / 无 printf / 无动态分配 / 无等待。
-本 step 内 5 个调用全部满足（已逐函数核对）。
+ADC0 PMT 中断 > ADC1 SEQ 中断（PLIC 1）；`DISABLE_IRQ_PREEMPTIVE=1` 非抢占 →
+两个 ADC ISR **串行**，`s_fault_ctx`（fault_process 25kHz 与 fault_tick 1kHz 共享）
+并发面**消除**（原 §6 遗留项闭环）。
 
-### 2.3 IO 内容（`app_io_step`，1ms）
+### 2.3 快车道内容（`app_fast_step`，25kHz，ADC PMT 中断内）
+
+| 调用 | 语义（FOC 视角） | 执行时间 |
+| :--- | :--- | :--- |
+| `app_debug_encoder_sample()` | 转子/出轴角度采样（FOC 反馈） | ~8-12µs（SPI 轮询，ISR 内不会被抢占） |
+| `app_analog_signal_process()` | 三相电流/母线电压换算 + 滤波 | ~3-5µs |
+| `app_fault_process()` | 三相电流 RMS + L2 保护判断 | ~2-3µs |
+| `app_debug_motor_run_once()` | 控制输出（**FOC 控制环原位替换点**） | ~2-3µs |
+| **合计** | | **~20-25µs（40µs 周期，余量 25-50%）** |
+
+**硬约束**：无 RTOS API / 无 printf / 无动态分配 / 无等待（已逐函数核对）。
+
+### 2.4 IO 内容（`app_io_step`，1ms）
 
 | 调用 | 语义 |
 | :--- | :--- |
@@ -89,7 +101,7 @@ rtt_log (prio 4)
 | `app_debug_can_run_once()` | MCAN3 自检 |
 | `app_terminal_run_once()` | USB Terminal（通讯） |
 
-### 2.4 诊断内容（`app_diag_step`，1s，回报）
+### 2.5 诊断内容（`app_diag_step`，1s，回报）
 
 | 调用 | 语义 |
 | :--- | :--- |
@@ -151,11 +163,13 @@ DLM 用量 92.4KB（72.64%）+8KB ≈ 100.4KB（≈79%），仍安全。
 
 ## 6. 遗留项（本次不做）
 
-- **`app_fault_tick`（ADC ISR 回调）与 `app_fault_process` 共享 `s_fault_ctx`**：
-  裸机时代既有形态（ISR 1kHz + 主循环 25kHz 并发），非本次引入。
-  FOC 引入前需审计保护状态机的并发正确性。
-- 25kHz 硬触发快车道（ADC PMT ISR 直跑 FOC）——留给 FOC 阶段。
-- 中断优先级重排与 `configMAX_SYSCALL_INTERRUPT_PRIORITY` 评估。
+- ~~**`app_fault_tick`（ADC ISR 回调）与 `app_fault_process` 共享 `s_fault_ctx`**~~
+  **已闭环（2026-09-23）**：控制环路移入 ADC PMT 中断后，二者均在 ISR 上下文
+  且 `DISABLE_IRQ_PREEMPTIVE=1` 非抢占 → 串行化，并发面消除。
+- 25kHz 硬触发快车道 = **已完成**（ADC PMT 完成中断驱动，见 §2.1）。
+- 编码器 SPI 改 DMA + 中断回调（消除 ISR 内 8-12µs 轮询，为 FOC 计算腾余量）。
+- 中断优先级重排 = **已完成**（ADC0 PMT 提至 PLIC 3 最高）；后续评估
+  `configMAX_SYSCALL_INTERRUPT_PRIORITY`（仅当需要 ISR 调 FreeRTOS API 时）。
 - 快车道函数去 `debug_` 前缀改名（`app_encoder_sample` 等）——随 FOC 模块化一并做。
 
 ---
