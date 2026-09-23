@@ -1,15 +1,19 @@
 /**
  * @file    app_logic.c
- * @brief   板级 bring-up：时钟自检 + 各驱动自检 + 控制环仿真（节拍 = inverter.pwm_freq_hz）
+ * @brief   初始化编排 + FOC 快车道钩子 / IO / 诊断步骤函数
  * @author  Kaiser
  *
- * 主循环结构（节拍 = config/hardware.yaml 的 inverter.pwm_freq_hz，即半桥开关频率/FOC 闭环频率）：
- *   1) 每周期：编码器双路采样（更新 Ozone 观测变量 + 计时统计）
- *   1a) 每周期：模拟量换算 + 故障保护 + **FOC 电流环**（app_foc_run_once，OFF 时空操作）
- *   1b) 每周期：开环 V/F 自检（与 FOC 互斥；FOC 活动时让位）
- *   2) 1ms 分频：UART / CAN / USB 调试轮询（各自内部 1Hz 打印门限）
- *   3) 1s：RTT 心跳 + 编码器统计汇总
- *   4) 节拍点：mcycle 计时，迟到计数并重同步（心跳轮次不计数，避免打印污染指标）
+ * 步骤函数（任务编排见 App/Logic/app_rtos_tasks.c）：
+ *   - app_init()           ：一次性串行初始化（调度器后由 app_io 任务执行，此时 ISR 可用）
+ *   - app_fast_step_hook() ：FOC 硬实时快车道（25kHz，ADC PMT 完成中断内）
+ *                            mcycle 计时包装 → app_foc_isr_step
+ *                            硬约束：无 RTOS API、无 printf、无动态分配、无等待
+ *   - app_io_step()        ：RTOS 后台 IO（1ms）——模拟量/故障/状态机编排 + 通讯轮询
+ *   - app_diag_step()      ：RTOS 后台诊断（1s）——回报（LED / 统计），不改控制状态
+ *
+ * 时钟：intf_clock_init() 在 main()、调度器启动前完成（对齐 SDK 惯例，
+ *      保证 MCHTMR tick 基频正确）。设计文档：
+ *      docs/superpowers/specs/2026-09-23-foc-v1-rtos-merge-design.md
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -20,9 +24,6 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Board 层观测全局（L1C 控制寄存器回读；见 board.c） */
-extern volatile uint32_t g_board_l1c_ctl;
-
 #include "app_adc.h"
 #include "app_analog_signal.h"
 #include "app_debug_adc.h"
@@ -31,42 +32,43 @@ extern volatile uint32_t g_board_l1c_ctl;
 #include "app_debug_flash.h"
 #include "app_debug_foc.h"
 #include "app_debug_inverter.h"
-#include "app_debug_motor.h"
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_foc.h"
-#include "app_foc_current.h"
 #include "app_gpio.h"
 #include "app_gptmr.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
-#include "app_terminal.h"
 #include "app_software_params.h"
+#include "app_terminal.h"
 #include "app_usb.h"
+#include "intf_adc.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
 
-/* 电流环分段耗时观测（定义在 app_foc_current.c） */
-extern volatile uint32_t g_foc_cyc_read;
-extern volatile uint32_t g_foc_cyc_pi;
-extern volatile uint32_t g_foc_cyc_mod;
+/* 前向声明：hook 注册于 app_init 末尾（覆盖 app_foc_init 的自注册），定义在后 */
+static void app_fast_step_hook(void);
 
-#define APP_SLOW_TASK_PERIOD_MS   (1U) /* UART/CAN/USB 调试轮询分频 */
-#define APP_HEARTBEAT_INTERVAL_MS (1000U)
+/* ISR 耗时统计打印（app_diag_step 调用；定义在文件尾部） */
+void app_isr_stats_print(void);
 
-/* 仅调试台架模式：旁路 USB/终端（保留 RTT + Ozone 直控）。
- * 编译期开关：-DAPP_BENCH_DEBUG_MODE=1；默认 0（正常运行）。 */
-#ifndef APP_BENCH_DEBUG_MODE
-#define APP_BENCH_DEBUG_MODE 0
-#endif
+/* ============================================================================
+ * ISR 耗时统计
+ *   step 段 = app_foc_isr_step（FOC 控制段，hook 内测量）
+ *   isr 段  = adc_generic_isr 整体（drv_adc 内测量：PMT 校验 + 控制段回调）
+ * ISR 内只做廉价 min/max/累加；app_diag_step 每秒打印并清零窗口。
+ * ========================================================================== */
+static uint32_t s_step_min_cy = 0xFFFFFFFFU;
+static uint32_t s_step_max_cy;
+static uint32_t s_step_sum_cy;
+static uint32_t s_step_cnt;
 
 void app_init(void) {
     /*
      * 0. 复位诊断：
-     *    - s_boot_seq 位于 NOLOAD 段（复位不清零）：若逐次递增 = 芯片在复位循环；
-     *      若恒定 = 非复位（上位机重读缓冲）。
+     *    - s_boot_seq 位于 NOLOAD 段（复位不清零）：逐次递增 = 芯片在复位循环。
      *    - rst_status 为 PPOR.RESET_STATUS（只读）：bit0=欠压、bit4=调试复位、
      *      bit16/17=看门狗、bit24=PMIC 看门狗、bit31=软件复位。
      */
@@ -78,8 +80,7 @@ void app_init(void) {
     app_debug_printf(
         "boot: seq=%u rst_status=0x%08x\r\n", (unsigned)s_boot_seq, (unsigned)rst_status);
 
-    /* 0b. 参数单例初始化 + 摘要（验证 YAML 参数管线端到端：
-     * config/{motor,hardware,software}.yaml → 生成 → 加载） */
+    /* 0b. 参数单例初始化 + 摘要（验证 YAML 参数管线端到端） */
     {
         app_motor_params_init();
         app_hardware_params_init();
@@ -99,36 +100,32 @@ void app_init(void) {
             (unsigned)hardware->inverter.pwm_freq_hz, (unsigned)hardware->inverter.deadtime_ns);
     }
 
-    /* 1. 系统时钟（顺序与 SuperCap 一致：board_init -> intf_clock_init）
+    /* 1. 系统时钟已在 main() 中、调度器启动前完成（intf_clock_init）：
      *    CPU 480MHz / AXI-AHB 160MHz / PLL0 960MHz / DCDC 1275mV */
-    intf_clock_init();
 
     /* 2. GPIO 驱动注册 + PA09（DRV_+12V_EN，默认输出低=关闭） */
     app_gpio_init();
 
-    /* 3. 频率自检（寄存器读数；实测频率校验因 MCHTMR/cycle 异常暂缓） */
+    /* 3. 频率自检（寄存器读数） */
     app_debug_printf(
         "clock: cpu=%u Hz, ahb=%u Hz\r\n", (unsigned)intf_clock_get_cpu_freq(),
         (unsigned)intf_clock_get_ahb_freq());
 
-    /* 4. UART0 自检（PA00/PA01，115200 8N1）：TX 周期输出 + RX 回显 */
+    /* 4. UART0 自检（PA00/PA01，115200 8N1） */
     app_debug_uart_init();
 
-    /* 5. CAN 自检（MCAN3，经典 CAN；总线波特率与周期帧 ID 来源 config/software.yaml） */
+    /* 5. CAN 自检（MCAN3，经典 CAN） */
     app_debug_can_init();
 
-    /* 6. USB 终端（USB0 CDC 虚拟串口，J10；CherrySH 交互 Terminal，1kHz 慢任务轮询）
-     *    台架调试模式旁路：仅保留 RTT + Ozone 直控。 */
-#if !APP_BENCH_DEBUG_MODE
+    /* 6. USB 终端（USB0 CDC 虚拟串口；CherrySH Terminal，1kHz 慢任务轮询） */
     app_usb_init();
     app_terminal_init();
-#endif
 
     /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴） */
     app_debug_encoder_init();
 
-    /* 7b. 初始化 GPTMR 外设并启动 12.5kHz 转子采样器（GPTMR1 CH3，
-     * PLIC 优先级 3 > ADC0=2）。此后 SPI3 归采样 ISR 独占，运行期读 API 只返回快照。 */
+    /* 7b. GPTMR 外设 + 12.5kHz 转子采样器（GPTMR1 CH3，PLIC prio 3 > ADC0）。
+     *     此后 SPI3 归采样 ISR 独占，运行期读 API 只返回一致快照。 */
     app_gptmr_init();
     {
         int sampler_rc = app_encoder_sampler_start();
@@ -140,15 +137,14 @@ void app_init(void) {
     /* 8. Flash 自检（XPI NOR：属性 + 末尾扇区破坏性读写测试） */
     app_debug_flash_init();
 
-    /* 9. 三相半桥输出自检（PWM1：U/V/W 默认频率 / 50% 持续输出；频率见 config/hardware.yaml） */
+    /* 9. 三相半桥输出自检（PWM1：默认频率 / 50% 持续输出） */
     app_debug_inverter_init();
 
     /* 10. 故障保护（在 ADC 之前：提供 WDOG 阈值与回调） */
     app_fault_init(NULL);
 
     /* 11. ADC 采样链（PWM1 CMP10 触发 → TRGM → 双 ADC PMT：三相电流 + 母线/NTC；
-     *     ADC0 电流通道启用 WDOG；ADC1 序列完成回调接入故障 tick @1kHz）
-     *     内部启动 PWM1 计数（仅计数、输出仍由逆变桥控制） */
+     *     ADC0 电流通道启用 WDOG；ADC1 序列完成回调接入故障 tick @1kHz） */
     {
         app_adc_cfg_t adc_cfg;
         uint16_t wdog_hi;
@@ -177,170 +173,180 @@ void app_init(void) {
     /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
     app_foc_init();
 
-    /* 13b. FOC 调试观测/命令（Ozone 结构；主循环有界处理请求） */
+    /* 13b. FOC 调试观测/命令（Ozone 结构；io 任务有界处理请求） */
     app_debug_foc_init();
 
-    /* 14. 开环旋转自检（V/F，命令 r 启动） */
-    app_debug_motor_init();
+    /* 13c. 快车道钩子：覆盖 app_foc_init 内的直注册，注入 mcycle 计时包装 */
+    app_adc_register_current_hook(app_fast_step_hook);
 }
 
-void app_run(void) {
-    const app_hardware_params_t *hardware = app_hardware_params_current();
+/**
+ * @brief FOC 快车道钩子（ADC0 PMT 完成中断内调用，25kHz 硬件触发）。
+ *
+ * 节拍由 PWM1 CMP10 → TRGM → ADC0 PMT 保证；ISR 不被 RTOS 任务/日志抢占。
+ * 仅做 mcycle 计时包装 + 耗时统计；控制语义全在 app_foc_isr_step（foc-v1 原样）。
+ * 超预算（> 1 个节拍周期）记 late，供 [ENC]/[ISR] 统计。
+ */
+static void app_fast_step_hook(void) {
+    static uint32_t s_budget_cycles;
+    uint32_t start_cycle;
+    uint32_t elapsed;
 
-    /* 控制节拍 = 半桥开关频率（config/hardware.yaml；FOC 闭环同频） */
-    const uint32_t cpu_freq = intf_clock_get_cpu_freq();
-    const uint32_t loop_cycles = cpu_freq / hardware->inverter.pwm_freq_hz;
-    const uint32_t slow_cycles = (cpu_freq / 1000U) * APP_SLOW_TASK_PERIOD_MS;
-    const uint32_t hb_cycles = (cpu_freq / 1000U) * APP_HEARTBEAT_INTERVAL_MS;
-    uint32_t next = intf_clock_get_cycle() + loop_cycles;
-    uint32_t last_slow = 0U;
-    uint32_t last_hb = 0U;
-    uint32_t last_printf_cycles = 0U;
-    uint32_t heartbeat = 0U;
-
-    for (;;) {
-        uint32_t now;
-        bool did_heartbeat = false;
-
-        /* 1) 核心：编码器双路采样（主循环节拍） */
-        app_debug_encoder_sample();
-
-        /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（主循环节拍）+ Ozone 观测变量 */
-        app_analog_signal_process();
-        app_fault_process(); /* 主循环节拍：三相电流 RMS 累加（故障保护 L2） */
-
-        /* 1a2) FOC 电流环（25kHz，与开关周期同频；OFF 时为空操作） */
-        app_foc_run_once();
-        app_debug_adc_update();
-
-        /* 1b) 开环旋转（V/F）：FOC 活动时让位（互斥） */
-        if (!app_foc_is_active()) {
-            app_debug_motor_run_once();
-        }
-
-        now = intf_clock_get_cycle();
-
-        /* 2) 低速调试任务（1ms 分频；各自内部有 1Hz 打印门限） */
-        if ((uint32_t)(now - last_slow) >= slow_cycles) {
-            last_slow = now;
-            app_adc_slow_process(); /* ADC1 慢速通道（VBUS/NTC/CANID）@1kHz */
-            app_debug_uart_run_once();
-            app_debug_can_run_once();
-#if !APP_BENCH_DEBUG_MODE
-            app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
-#endif
-            app_debug_foc_tick(); /* Ozone 请求处理（每拍有界） */
-        }
-
-        /* 3) 心跳 + 编码器统计汇总（1s） */
-        if ((uint32_t)(now - last_hb) >= hb_cycles) {
-            last_hb = now;
-            did_heartbeat = true;
-            heartbeat++;
-            app_gpio_toggle(PIN_LED_STATUS);
-
-#if APP_DEBUG_PERIODIC_PRINT
-            /* FOC OFF：常规心跳（RTT）。
-             * FOC 活动：终端保持静默（周期输出会干扰键入），遥测走 RTT ——
-             * SEGGER RTT 为 NO_BLOCK_SKIP 非阻塞写，1Hz 一行不影响电流环节拍。 */
-            if (!app_foc_is_active()) {
-                uint32_t c0 = intf_clock_get_cycle();
-
-                app_debug_printf(
-                    "hb=%u led=%u printf_cyc=%u fault_st=%u f=%08x latched=%08x first=%08x\r\n",
-                    (unsigned)heartbeat,
-                    (unsigned)app_gpio_read(PIN_LED_STATUS), (unsigned)last_printf_cycles,
-                    (unsigned)app_fault_get_state(), (unsigned)app_fault_get_codes(),
-                    (unsigned)app_fault_get_latched(), (unsigned)app_fault_get_first());
-                last_printf_cycles = intf_clock_get_cycle() - c0;
-                app_debug_encoder_print_stats();
-                app_debug_printf(
-                    "[diag] sampler=%u sample=%u fail=%u spi_err=%u jump=%u enc_isr=%u/%u "
-                    "foc_isr=%u/%u ovr=%u inhibit=%u estop=%u prot_enc=%u\r\n",
-                    (unsigned)app_encoder_sampler_active(),
-                    (unsigned)g_encoder_sample_count,
-                    (unsigned)g_encoder_read_fail_count,
-                    (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
-                    (unsigned)app_encoder_get_rotor_jump_count(),
-                    (unsigned)g_encoder_isr_cycles,
-                    (unsigned)g_encoder_isr_cycles_max,
-                    (unsigned)g_foc_isr_cycles,
-                    (unsigned)g_foc_isr_cycles_max,
-                    (unsigned)g_foc_isr_overruns,
-                    (unsigned)app_foc_isr_inhibited(),
-                    (unsigned)g_foc_fault_request,
-                    (unsigned)g_foc_protect_counts[APP_FOC_PROT_ENC]);
-            } else {
-                app_foc_current_snapshot_t snap;
-                uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
-
-                app_foc_get_snapshot(&snap);
-                app_debug_printf("foc: st=%u fault_st=%u first=%08x iq=%.2f/%.2f A om=%.0f "
-                                 "trip=%u f=%08x latched=%08x\r\n",
-                                 (unsigned)app_foc_get_state(),
-                                 (unsigned)app_fault_get_state(),
-                                 (unsigned)app_fault_get_first(),
-                                 (double)snap.i_q_ref_a,
-                                 (double)snap.i_q_avg_a, (double)snap.omega_e_rad_s,
-                                 (unsigned)snap.tripped,
-                                 (unsigned)app_fault_get_codes(),
-                                 (unsigned)app_fault_get_latched());
-                /* 分段耗时 + L1C 运行态（ic/dc = 1 表示已使能） */
-                app_debug_printf("     cyc: main=%u rd=%u pi=%u mod=%u us | dt=%u us "
-                                "isr=%u/%u ovr=%u inhibited=%u estop=%u ic=%u dc=%u\r\n",
-                                 (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
-                                 (unsigned)((mhz > 0U) ? (g_foc_cyc_read / mhz) : 0U),
-                                 (unsigned)((mhz > 0U) ? (g_foc_cyc_pi / mhz) : 0U),
-                                 (unsigned)((mhz > 0U) ? (g_foc_cyc_mod / mhz) : 0U),
-                                 (unsigned)g_foc_loop_dt_us,
-                                 (unsigned)g_foc_isr_cycles,
-                                 (unsigned)g_foc_isr_cycles_max,
-                                 (unsigned)g_foc_isr_overruns,
-                                 (unsigned)app_foc_isr_inhibited(),
-                                 (unsigned)g_foc_fault_request,
-                                 (unsigned)(g_board_l1c_ctl & 0x1U),
-                                 (unsigned)((g_board_l1c_ctl >> 1) & 0x1U));
-                app_debug_printf("     enc: seq=%u age=%u us sample=%u fail=%u err=%u jump=%u "
-                                "isr=%u/%u self=%u/%u%%\r\n",
-                                 (unsigned)g_foc_enc_seq,
-                                 (unsigned)g_foc_enc_age_us,
-                                 (unsigned)g_encoder_sample_count,
-                                 (unsigned)g_encoder_read_fail_count,
-                                 (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
-                                 (unsigned)app_encoder_get_rotor_jump_count(),
-                                 (unsigned)g_encoder_isr_cycles,
-                                 (unsigned)g_encoder_isr_cycles_max,
-                                 (unsigned)g_enc_runtime_seq_delta,
-                                 (unsigned)g_enc_runtime_valid_pct);
-                /* 保护路径分原因（rd/vb/pi/mod/duty/trip/enc）：定位"protect 计数暴涨" */
-                app_debug_printf("     prot: rd=%u vb=%u pi=%u mod=%u duty=%u trip=%u enc=%u\r\n",
-                                 (unsigned)g_foc_protect_counts[0],
-                                 (unsigned)g_foc_protect_counts[1],
-                                 (unsigned)g_foc_protect_counts[2],
-                                 (unsigned)g_foc_protect_counts[3],
-                                 (unsigned)g_foc_protect_counts[4],
-                                 (unsigned)g_foc_protect_counts[5],
-                                 (unsigned)g_foc_protect_counts[6]);
-            }
-#else
-            (void)last_printf_cycles;
-            (void)heartbeat;
-#endif
-        }
-
-        /* 4) 主循环节拍：迟到计数并重同步（心跳轮次不计数） */
-        now = intf_clock_get_cycle();
-        {
-            int32_t late = (int32_t)(now - next);
-
-            if (late >= 0) {
-                if (!did_heartbeat) {
-                    app_debug_encoder_note_loop_late((uint32_t)late);
-                }
-                next = now + loop_cycles;
-            }
-        }
-        while ((int32_t)(intf_clock_get_cycle() - next) < 0) {}
-        next += loop_cycles;
+    if (s_budget_cycles == 0U) {
+        s_budget_cycles = intf_clock_get_cpu_freq()
+                        / app_hardware_params_current()->inverter.pwm_freq_hz;
     }
+
+    start_cycle = intf_clock_get_cycle();
+    app_foc_isr_step();
+    elapsed = intf_clock_get_cycle() - start_cycle;
+
+    /* step 段耗时统计（1s 窗口；app_diag_step 读取并清零） */
+    s_step_cnt++;
+    s_step_sum_cy += elapsed;
+    if (elapsed > s_step_max_cy) {
+        s_step_max_cy = elapsed;
+    }
+    if (elapsed < s_step_min_cy) {
+        s_step_min_cy = elapsed;
+    }
+
+    /* ISR 执行时间超过一个节拍周期（丢拍风险） */
+    if (elapsed > s_budget_cycles) {
+        app_debug_encoder_note_loop_late(elapsed - s_budget_cycles);
+    }
+}
+
+void app_io_step(void) {
+    /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：单次处理有界（≤200µs 约束不变）。
+     * 顺序：观测刷新 → 模拟量换算 → 故障 RMS → 状态机编排 → 通讯轮询。 */
+
+    /* 转子观测变量刷新（缓存读，零 SPI 成本；出轴采样已裁，spec §3） */
+    app_debug_encoder_sample();
+
+    /* 模拟量：ADC 缓存 → 物理量换算 + 滤波（FOC 的 v_bus 亦取自本模块缓存） */
+    app_analog_signal_process();
+
+    /* 故障保护 L2/L3：RMS 累加 + 去抖判断（M1 动作全关、仅检测/告警，spec §6） */
+    app_fault_process();
+
+    /* FOC 状态机 / 给定编排（控制环在 ISR，见 app_foc_isr_step） */
+    app_foc_run_once();
+
+    /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */
+    app_debug_foc_tick();
+
+    /* ADC1 慢速通道（VBUS/NTC/CANID 原始码生产者） */
+    app_adc_slow_process();
+
+    /* Ozone 观测变量刷新（.noncacheable，1ms 刷新，容忍撕裂） */
+    app_debug_adc_update();
+
+    /* 调试与通讯轮询（各自内部 1Hz 打印门限） */
+    app_debug_uart_run_once();
+    app_debug_can_run_once();
+    app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
+}
+
+void app_diag_step(void) {
+    /* RTOS 后台诊断单步（1s，由 app_diag 任务调用）：纯回报，不改控制状态。 */
+    app_gpio_toggle(PIN_LED_STATUS);
+    app_debug_encoder_print_stats();
+    app_isr_stats_print();
+}
+
+/**
+ * @brief ISR 耗时统计打印（1s 窗口，由 app_diag_step 调用）
+ *
+ * 输出（单位 µs，一位小数）：
+ *   step min/avg/max = app_foc_isr_step（FOC 控制段）
+ *   isr  avg/peak    = adc_generic_isr 整体（PMT 校验 + 控制段；peak 每窗复位）
+ *   headroom         = 40µs 节拍预算 − isr peak
+ *   load             = isr 段 CPU 占用率（窗口内 delta，0.1% 单位）
+ * 注：isr 段不含 FreeRTOS 上下文保存/恢复与 PLIC claim/complete（另约 1–2µs）。
+ */
+void app_isr_stats_print(void) {
+    static uint64_t s_prev_isr_total;
+    static uint32_t s_prev_isr_cnt;
+    static uint32_t s_prev_cycle;
+    static bool s_inited;
+
+    intf_adc_diag_snapshot_t snap;
+    uint32_t cycle_now;
+    uint32_t window_cy;
+    uint32_t div;
+    uint32_t step_min;
+    uint32_t step_avg;
+    uint32_t step_max;
+    uint32_t isr_avg;
+    uint32_t isr_peak;
+    uint32_t isr_cnt;
+    uint32_t load_x10;
+    uint32_t budget_cy;
+    uint32_t headroom_cy;
+    uint32_t status;
+
+    /* 临界区快照 + 清零 step 统计（防止 ISR 并发写导致读数撕裂） */
+    status = intf_sys_irq_save();
+    step_min = s_step_min_cy;
+    step_max = s_step_max_cy;
+    step_avg = (s_step_cnt != 0U) ? (s_step_sum_cy / s_step_cnt) : 0U;
+    s_step_min_cy = 0xFFFFFFFFU;
+    s_step_max_cy = 0U;
+    s_step_sum_cy = 0U;
+    isr_cnt = s_step_cnt;
+    s_step_cnt = 0U;
+    intf_sys_irq_restore(status);
+
+    if (intf_adc_get_diag_snapshot(&snap) != 0) {
+        app_debug_printf("[ISR] diag unavailable\r\n");
+        return;
+    }
+
+    cycle_now = intf_clock_get_cycle();
+    window_cy = s_inited ? (uint32_t)(cycle_now - s_prev_cycle) : 0U;
+    div = intf_clock_get_cpu_freq() / 1000000U; /* cycles per µs */
+    if (div == 0U) {
+        div = 1U;
+    }
+    budget_cy = (intf_clock_get_cpu_freq()
+                 / app_hardware_params_current()->inverter.pwm_freq_hz);
+
+    /* isr 段窗口均值（ADC0 = FOC 快车道中断）与本窗峰值 */
+    isr_avg = 0U;
+    load_x10 = 0U;
+    if (s_inited && (isr_cnt > 0U)) {
+        uint64_t delta_total = snap.isr_total_cycles[0] - s_prev_isr_total;
+        uint32_t delta_cnt = snap.irq_entry[0] - s_prev_isr_cnt;
+
+        if (delta_cnt > 0U) {
+            isr_avg = (uint32_t)(delta_total / delta_cnt);
+        }
+        if (window_cy > 0U) {
+            /* 0.1% 单位：占用率 × 1000（此前误用 ×10，读数偏小 100 倍） */
+            load_x10 = (uint32_t)((delta_total * 1000ULL) / window_cy);
+        }
+    }
+    isr_peak = snap.isr_cycles_max[0];
+    headroom_cy = (budget_cy > isr_peak) ? (budget_cy - isr_peak) : 0U;
+
+    app_debug_printf(
+        "[ISR] n=%u | step min/avg/max=%u.%u/%u.%u/%u.%u | isr avg=%u.%u peak=%u.%u | "
+        "budget=%u.%u headroom=%u.%u | load=%u.%u%%\r\n",
+        (unsigned)isr_cnt, (unsigned)(step_min / div), (unsigned)((step_min % div) * 10U / div),
+        (unsigned)(step_avg / div), (unsigned)((step_avg % div) * 10U / div),
+        (unsigned)(step_max / div), (unsigned)((step_max % div) * 10U / div),
+        (unsigned)(isr_avg / div), (unsigned)((isr_avg % div) * 10U / div),
+        (unsigned)(isr_peak / div), (unsigned)((isr_peak % div) * 10U / div),
+        (unsigned)(budget_cy / div), (unsigned)((budget_cy % div) * 10U / div),
+        (unsigned)(headroom_cy / div), (unsigned)((headroom_cy % div) * 10U / div),
+        (unsigned)(load_x10 / 10U), (unsigned)(load_x10 % 10U));
+
+    /* 峰值按窗复位：否则开机瞬态（如标定期）污染 headroom 至关机 */
+    intf_adc_reset_diag_max();
+
+    s_prev_isr_total = snap.isr_total_cycles[0];
+    s_prev_isr_cnt = snap.irq_entry[0];
+    s_prev_cycle = cycle_now;
+    s_inited = true;
 }

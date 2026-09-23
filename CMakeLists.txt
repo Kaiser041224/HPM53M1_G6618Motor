@@ -16,6 +16,13 @@ set(CONFIG_CHERRYUSB 1)
 set(CONFIG_USB_DEVICE 1)
 set(CONFIG_USB_DEVICE_CDC_ACM 1)
 
+# ============================================================================
+# FreeRTOS middleware（tick 源 = SDK 默认 MCHTMR @24MHz，见 config/FreeRTOSConfig.h）
+# CONFIG_FREERTOS 必须在 find_package(hpm-sdk) 之前设置，供 middleware/CMakeLists.txt 判定
+# ============================================================================
+
+set(CONFIG_FREERTOS 1)
+
 # Linker scripts
 set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/gcc/user_linker.ld)
 set(CUSTOM_SES_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/segger/user_linker.icf)
@@ -25,7 +32,21 @@ find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 
 project(user_app)
 
-# 数学库（sinf/cosf 等，开环旋转与后续 FOC 使用）
+# ============================================================================
+# FreeRTOS 中断模式（对齐 HPM SDK 官方 FreeRTOS 示例惯例，57/57 示例全部如此）
+#   - USE_NONVECTOR_MODE=1：走 freertos_handle_interrupt + HPM_PLIC_BASE 宏做
+#     PLIC claim/complete（地址正确）。向量模式的 freertos_hpmicro_vectors.h
+#     硬编码 PLIC complete 到 0xE4200000，而 HPM5361 实际 PLIC_BASE=0xE4000000，
+#     差 2MB —— 每个 ISR 结束都写错地址，25kHz ADC 中断密集触发时总线异常。
+#     该 bug 仅存在于向量模式路径，官方 57/57 示例均用非向量模式故从未暴露。
+#   - DISABLE_IRQ_PREEMPTIVE=1：与 55/57 官方示例一致（非向量 + 非抢占组合经官方验证）。
+#     AGENTS.md「FreeRTOS 引入纪律」为权威说明，勿改为向量模式。
+# ============================================================================
+
+sdk_compile_definitions(-DUSE_NONVECTOR_MODE=1)
+sdk_compile_definitions(-DDISABLE_IRQ_PREEMPTIVE=1)
+
+# 数学库（sinf/cosf 等：foc_math 查表初始化、模拟量换算）
 sdk_link_libraries(m)
 
 # ============================================================================
@@ -55,7 +76,6 @@ sdk_app_src(${PARAMS_GEN_DIR}/params_meta_generated.c)
 # CherrySH（Shell 核心）+ cherryrb（环形缓冲）
 # 不使用 SDK port（barebone_usb/shell.c 的 CDC 描述符/回调与 drv_usb_cdc.c 冲突）；
 # 不设置 CONFIG_CHERRYSH，直接引用源文件（同 SEGGER RTT 方式）。
-# csh.h 无条件 include "csh_config.h" → 由 config/csh_config.h 提供。
 # ============================================================================
 
 set(CHERRYSH_DIR $ENV{HPM_SDK_BASE}/middleware/cherrysh)
@@ -75,7 +95,6 @@ sdk_app_inc(${RTT_DIR}/Config)
 sdk_app_inc(${RTT_DIR}/RTT)
 sdk_app_src(${RTT_DIR}/RTT/SEGGER_RTT.c)
 sdk_app_src(${RTT_DIR}/RTT/SEGGER_RTT_printf.c)
-# 中间件（CherryUSB）经 usb_config.h 使用 RTT 日志，需全局可见
 sdk_inc(${RTT_DIR}/Config)
 sdk_inc(${RTT_DIR}/RTT)
 
@@ -103,8 +122,6 @@ sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/App/Debug/Inc)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/hpm_impl)
 sdk_app_inc(${CMAKE_CURRENT_SOURCE_DIR}/Driver/IrqProfiler)
 
-# Optional shared code, provided by the environment (HPMDEV_SHARED_DIR).
-# Degrades gracefully when the project is built outside the workspace.
 if(DEFINED ENV{HPMDEV_SHARED_DIR} AND EXISTS "$ENV{HPMDEV_SHARED_DIR}/include")
     sdk_app_inc($ENV{HPMDEV_SHARED_DIR}/include)
 endif()
@@ -137,6 +154,7 @@ sdk_app_src(Interface/intf_default.c)
 
 # ============================================================================
 # Algorithm Library (pure C, hardware independent)
+#   M1 裁剪：id_encoder.c（辨识专用）不编译；algo_trig.c（V/F 专用）不编译。
 # ============================================================================
 
 sdk_app_src(App/Algorithm/Src/algo_ffd.c)
@@ -151,7 +169,6 @@ sdk_app_src(App/Algorithm/FOC/Src/foc_math.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_angle.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_current.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_modulation.c)
-sdk_app_src(App/Algorithm/FOC/Src/id_encoder.c)
 
 # ============================================================================
 # Platform Layer
@@ -170,21 +187,20 @@ sdk_app_src(App/Platform/Src/app_analog_signal.c)
 sdk_app_src(App/Platform/Src/app_can.c)
 sdk_app_src(App/Platform/Src/app_hardware_params.c)
 sdk_app_src(App/Platform/Src/app_software_params.c)
+sdk_app_src(App/Platform/Src/app_rtos.c)
 
 # ============================================================================
 # Control Layer
+#   M1 裁剪：app_motor_identify.c 不编译（调用点空桩见 spec §4）。
 # ============================================================================
 
 sdk_app_src(App/Control/Src/app_fault.c)
 sdk_app_src(App/Control/Src/app_motor_params.c)
 sdk_app_src(App/Control/Src/app_foc_current.c)
 sdk_app_src(App/Control/Src/app_foc.c)
-sdk_app_src(App/Control/Src/app_motor_identify.c)
 
 # ============================================================================
-# Comm Layer（通讯：终端 / CAN 协议）
-#   terminal/ — USB CDC 终端（CherrySH 绑定 + 命令 + 常驻状态区）
-#   can/      — CAN 协议（预留：电机控制报文 / 反馈报文，独立 spec）
+# Comm Layer
 # ============================================================================
 
 sdk_app_src(App/Comm/terminal/Src/app_terminal.c)
@@ -199,6 +215,7 @@ sdk_app_src(App/Comm/terminal/Src/app_terminal_monitor.c)
 
 # ============================================================================
 # Debug Layer
+#   M1 裁剪：app_debug_motor.c 不编译（V/F，调用点已清理）。
 # ============================================================================
 
 sdk_app_src(App/Debug/Src/app_debug_uart.c)
@@ -206,7 +223,6 @@ sdk_app_src(App/Debug/Src/app_debug_encoder.c)
 sdk_app_src(App/Debug/Src/app_debug_cmd.c)
 sdk_app_src(App/Debug/Src/app_debug_flash.c)
 sdk_app_src(App/Debug/Src/app_debug_inverter.c)
-sdk_app_src(App/Debug/Src/app_debug_motor.c)
 sdk_app_src(App/Debug/Src/app_debug_can.c)
 sdk_app_src(App/Debug/Src/app_debug_adc.c)
 sdk_app_src(App/Debug/Src/app_debug_fault.c)
@@ -220,10 +236,9 @@ sdk_app_src(App/Debug/Src/app_debug_rtt.c)
 # ============================================================================
 
 sdk_app_src(App/Logic/app_logic.c)
+sdk_app_src(App/Logic/app_rtos_tasks.c)
 sdk_app_src(App/main.c)
 
-# ============================================================================
-# Generate IDE Projects
 # ============================================================================
 
 generate_ide_projects()

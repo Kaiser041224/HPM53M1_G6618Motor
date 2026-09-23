@@ -9,9 +9,9 @@
 
 #include "app_terminal_cmd.h"
 
-#include "app_debug_motor.h"
 #include "app_debug_rtt.h"
 #include "app_fault.h"
+#include "app_foc.h"
 #include "app_terminal.h"
 
 #include <errno.h>
@@ -81,8 +81,9 @@ int app_terminal_cmd_parse_float(const char* text, float* out) {
 }
 
 bool app_terminal_cmd_require_motor_stopped(chry_shell_t* csh) {
-    if (app_debug_motor_is_running()) {
-        csh_printf(csh, "ERR: motor is running, stop it first (motor stop)\r\n");
+    /* V/F 开环已裁剪（M1）：唯一被驱动源为 FOC */
+    if (app_foc_is_active()) {
+        csh_printf(csh, "ERR: FOC is active (use 'foc off' first)\r\n");
         return false;
     }
     return true;

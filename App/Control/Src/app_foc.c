@@ -15,7 +15,6 @@
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_hardware_params.h"
-#include "app_motor_identify.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
 #include "foc_angle.h"
@@ -231,10 +230,8 @@ static void app_foc_run_body(void) {
     /* 开环电压诊断（vtest）：在 ADC0 ISR 内以本拍新鲜电流/母线 + 真实 dt 执行
      * （单一实时输出所有者：主循环不再直接写桥）。此处仅保留状态编排。 */
 
-    /* 辨识模式：由辨识模块提供激励（强制角 + 电流给定）；电流环在 ISR 内执行 */
-    if (s_state == APP_FOC_STATE_CALIB) {
-        (void)app_motor_identify_fast_step();
-    }
+    /* 辨识模式：M1 裁剪（spec §1），app_motor_identify 不参与构建。
+     * CALIB 状态/接口保留；重新接入辨识时在此恢复 app_motor_identify_fast_step()。 */
 
     /* 角度/电流环已迁至 app_foc_isr_step（ADC 完成回调，固定 25kHz）；
      * 此处只做状态机、限幅与激励编排。ωe 取 ISR 侧快照用于限速判据。 */
@@ -597,11 +594,7 @@ void app_foc_disable(void) {
     app_3phase_inverter_disable();
     app_foc_current_reset();
 
-    /* 3) 中止电气标定编排（若进行中）：避免其状态在 FOC 已 OFF 后悬挂。
-     *    此时 state 已是 OFF，exit_calib 不会被误触发回 READY。 */
-    if (app_motor_identify_is_active()) {
-        app_motor_identify_abort();
-    }
+    /* 3) 电气标定中止：M1 裁剪（辨识不构建），无中止对象。 */
 }
 
 int app_foc_set_iq_ref(float i_q_a) {

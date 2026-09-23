@@ -27,10 +27,6 @@
 #define ENC_REG_RD     (0x09U)
 #define ENC_REG_RD_BIT (0x80U) /* RD 位于 0x09 的 bit7，出厂默认 1 */
 
-/* 出轴编码器降采样：游标差值变化率仅为转子的 1/50，1kHz 足够。
-   设为 1 = 每周期读（双路 25kHz 压力模式）。（TBD：随 pwm_freq 派生） */
-#define ENC_OUTPUT_SAMPLE_DIV (25U)
-
 /* init 基准：read_raw 平均耗时测量次数 */
 #define ENC_BENCH_ITERS (100U)
 
@@ -54,46 +50,6 @@ volatile uint32_t g_enc_energized_ok __attribute__((section(".noncacheable.bss")
 volatile uint32_t g_enc_energized_not_run __attribute__((section(".noncacheable.bss")));
 
 /* ============================================================================
- * 游标比值累计（1kHz 成对采样）
- *
- * 原理：每 1ms 将两路编码器背靠背采样（间隔 ~7µs），逐对计算 wrap-safe 有符号
- * 差值并累计。刚体传动下每对 ΔO = k·ΔR（k 为齿比），故累计和之比即为精确 k；
- * 采样偏斜（~7µs）在累计中大部分抵消（误差 ~0.02%），远优于 1Hz 打印对比。
- * ============================================================================ */
-
-static uint16_t s_ratio_prev_rotor;
-static uint16_t s_ratio_prev_output;
-static bool s_ratio_primed;
-static int64_t s_ratio_sum_rotor;
-static int64_t s_ratio_sum_output;
-static uint32_t s_ratio_pairs;
-
-/**
- * @brief 累加一对转子的游标差值（wrap-safe），用于估算齿比
- * @param rotor_raw 转子编码器原始值
- * @param output_raw 出轴编码器原始值
- */
-static void ratio_accumulate(uint16_t rotor_raw, uint16_t output_raw) {
-    if (!s_ratio_primed) {
-        s_ratio_prev_rotor = rotor_raw;
-        s_ratio_prev_output = output_raw;
-        s_ratio_primed = true;
-        return;
-    }
-
-    /* wrap-safe 有符号差（1kHz 采样，单步位移远小于半量程） */
-    int32_t delta_rotor = (int16_t)(rotor_raw - s_ratio_prev_rotor);
-    int32_t delta_output = (int16_t)(output_raw - s_ratio_prev_output);
-
-    s_ratio_sum_rotor += delta_rotor;
-    s_ratio_sum_output += delta_output;
-    s_ratio_pairs++;
-
-    s_ratio_prev_rotor = rotor_raw;
-    s_ratio_prev_output = output_raw;
-}
-
-/* ============================================================================
  * 统计窗口（print_stats 后清零）
  * ============================================================================ */
 
@@ -104,7 +60,6 @@ static uint32_t s_loop_count;
 static uint32_t s_loop_late_count;
 static uint32_t s_loop_late_max_us;
 static uint32_t s_cpu_mhz;
-static uint32_t s_sample_index;
 
 /**
  * @brief 将 CPU 周期数换算为微秒（首次调用时缓存 CPU 频率）
@@ -125,42 +80,6 @@ static inline uint32_t cycles_to_us(uint32_t cycles) {
  */
 static const char* encoder_name(app_encoder_id_t id) {
     return (id == APP_ENCODER_ROTOR) ? "rotor" : "output";
-}
-
-/**
- * @brief 读一次编码器 + 计时 + 更新观测变量
- * @param id 编码器实例
- * @return read_raw 结果（0 = 成功）
- */
-/**
- * @brief 采样出轴编码器并更新观测变量与统计（转子已改由共享采样路径处理）
- * @return 0 = 成功；-1 = 失败
- */
-static int encoder_sample_output(void) {
-    uint32_t cycle_start = intf_clock_get_cycle();
-    uint16_t raw = 0U;
-    uint16_t zero = 0U;
-    uint32_t mdeg = 0U;
-    int ret = app_encoder_read_raw(APP_ENCODER_OUTPUT, &raw);
-    uint32_t cycles = intf_clock_get_cycle() - cycle_start;
-
-    s_read_cycles_sum[APP_ENCODER_OUTPUT] += cycles;
-    if (cycles > s_read_cycles_max[APP_ENCODER_OUTPUT]) {
-        s_read_cycles_max[APP_ENCODER_OUTPUT] = cycles;
-    }
-    s_read_count[APP_ENCODER_OUTPUT]++;
-    g_enc_output_read_us = cycles_to_us(cycles);
-
-    if (ret == 0) {
-        /* 观测角度为"零点修正后"的机械角（与 app API 语义一致） */
-        (void)app_encoder_get_zero(APP_ENCODER_OUTPUT, &zero);
-        mdeg = (uint32_t)(((uint64_t)(uint16_t)(raw - zero) * 360000U) / 65536U);
-    }
-
-    g_enc_output_raw = raw;
-    g_enc_output_deg = (float)mdeg / 1000.0f;
-
-    return ret;
 }
 
 /* ============================================================================
@@ -358,46 +277,22 @@ void app_debug_encoder_health_tick(void) {
     g_enc_runtime_active = 0U;
 }
 
-/* 每控制周期调用：转子每周期采样；出轴按 ENC_OUTPUT_SAMPLE_DIV 降采样。
-   降采样周期内两路背靠背采样（间隔 ~7µs），同时用于游标比值累计。 */
+/* 刷新转子观测变量（缓存读，零 SPI 成本；出轴采样已按 M1 裁剪移除，spec §3）。 */
 void app_debug_encoder_sample(void) {
-    int ret_rotor;
     uint16_t raw;
     bool valid;
 
-    /* 转子：采样已迁至 ADC 完成中断内的 FOC 快速路径（app_foc_isr_step），
-     * 此处只读缓存（避免与 ISR 争用 SPI3，也避免重复 SPI 读）。 */
-    {
-        uint32_t cycles = 0U;
+    /* 转子：采样在 GPTMR 12.5kHz 采样 ISR（SPI3 独占）；此处只读一致快照 */
+    if ((app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
+        uint16_t zero = 0U;
 
-        ret_rotor = 0;
-        s_read_cycles_sum[APP_ENCODER_ROTOR] += cycles;
-        if (cycles > s_read_cycles_max[APP_ENCODER_ROTOR]) {
-            s_read_cycles_max[APP_ENCODER_ROTOR] = cycles;
-        }
-        g_enc_rotor_read_us = cycles_to_us(cycles);
-        s_read_count[APP_ENCODER_ROTOR]++;
-        if ((ret_rotor == 0) && (app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
-            uint16_t zero = 0U;
-
-            g_enc_rotor_raw = raw;
-            /* 观测角保持"零点修正后"语义（与 app API / 出轴实例一致）；
-             * FOC 换相直接读共享缓存原始值（app_encoder_get_rotor_raw） */
-            if (app_encoder_get_zero(APP_ENCODER_ROTOR, &zero) == 0) {
-                g_enc_rotor_deg = (float)(uint16_t)(raw - zero) * (360.0f / 65536.0f);
-            }
+        g_enc_rotor_raw = raw;
+        if (app_encoder_get_zero(APP_ENCODER_ROTOR, &zero) == 0) {
+            g_enc_rotor_deg = (float)(uint16_t)(raw - zero) * (360.0f / 65536.0f);
         }
     }
-
-    if ((s_sample_index % ENC_OUTPUT_SAMPLE_DIV) == 0U) {
-        int ret_output = encoder_sample_output();
-
-        if ((ret_rotor == 0) && (ret_output == 0)
-            && (app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
-            ratio_accumulate(raw, g_enc_output_raw);
-        }
-    }
-    s_sample_index++;
+    s_read_cycles_sum[APP_ENCODER_ROTOR] += 0U;
+    s_read_count[APP_ENCODER_ROTOR]++;
     s_loop_count++;
 }
 
@@ -451,19 +346,6 @@ void app_debug_encoder_print_stats(void) {
         (unsigned)avg_output, (unsigned)cycles_to_us(s_read_cycles_max[APP_ENCODER_OUTPUT]),
         (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
         (unsigned)app_encoder_get_error_count(APP_ENCODER_OUTPUT));
-
-    /* 游标比值（1kHz 成对采样累计）：刚体传动下 ratio = ΔO/ΔR = 齿比 */
-    if (s_ratio_sum_rotor != 0) {
-        int32_t ratio_x10000 = (int32_t)((s_ratio_sum_output * 10000) / s_ratio_sum_rotor);
-
-        g_enc_ratio_x10000 = ratio_x10000;
-        app_debug_printf(
-            "[ENC] vernier: pairs=%u dR=%d dO=%d ratio_x10000=%d\r\n", (unsigned)s_ratio_pairs,
-            (int32_t)s_ratio_sum_rotor, (int32_t)s_ratio_sum_output, ratio_x10000);
-    } else {
-        app_debug_printf(
-            "[ENC] vernier: waiting for motion (pairs=%u)\r\n", (unsigned)s_ratio_pairs);
-    }
 
     /* 清零窗口 */
     for (uint8_t i = 0U; i < (uint8_t)APP_ENCODER_COUNT; i++) {

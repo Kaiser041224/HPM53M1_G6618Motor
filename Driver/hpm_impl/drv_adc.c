@@ -265,9 +265,11 @@ static void adc_enable_instance_irq(uint8_t inst) {
     adc_inst_t* ai = &s_adc_instances[inst];
     uint32_t irq = ai->irq;
     if (irq != 0) {
-        /* PLIC: 数字越大优先级越高。ADC0 负责 IL 电流内环触发，优先级高于
-         * ADC1 的 VCAP/VOUT/IIN 缓存刷新。 */
-        uint32_t priority = (inst == 0U) ? 2U : 1U;
+        /* PLIC: 数字越大优先级越高。ADC0 负责 25kHz FOC 控制环路（PMT 完成中断），
+         * 优先级最高（3），高于 ADC1 的慢通道/故障 tick（1）与其它外设 ISR。
+         * 对齐 freertos-foc-fastlane 设计 §6 优先级契约：
+         * 硬件故障关断 > FOC 快车道(ADC0 PMT) > 其它外设 ISR > RTOS 任务。 */
+        uint32_t priority = (inst == 0U) ? 3U : 1U;
         intc_m_enable_irq_with_priority(irq, priority);
     }
 }

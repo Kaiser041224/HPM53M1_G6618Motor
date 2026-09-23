@@ -14,7 +14,6 @@
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
-#include "app_motor_identify.h"
 #include "intf_clock.h"
 
 /** Ozone 结构（.noncacheable.bss：启动清零 + 调试器直读，不受 D-Cache 影响） */
@@ -58,10 +57,8 @@ static int32_t app_debug_foc_dispatch(uint32_t cmd) {
         return (int32_t)app_foc_current_vtest_start(volts, theta, 1.0f);
     }
     case APP_DEBUG_FOC_CMD_CAL_ENCODER:
-        return (int32_t)app_motor_identify_start();
     case APP_DEBUG_FOC_CMD_CAL_ABORT:
-        app_motor_identify_abort();
-        return 0;
+        return -1; /* M1 裁剪：辨识不参与构建 */
     case APP_DEBUG_FOC_CMD_PASSIVE_SELFTEST:
         /* 运行期健康自检：只评估采样器快照流（不触碰 SPI3），100ms 后出结果 */
         if (app_debug_encoder_health_active()) {
@@ -80,12 +77,10 @@ static int32_t app_debug_foc_dispatch(uint32_t cmd) {
 static void app_debug_foc_refresh(void) {
     app_foc_current_snapshot_t snap;
     app_encoder_rotor_snapshot_t enc;
-    app_motor_identify_result_t idr;
     uint32_t cpu = intf_clock_get_cpu_freq();
 
     app_foc_get_snapshot(&snap);
     (void)app_encoder_get_rotor_snapshot(&enc);
-    app_motor_identify_get_result(&idr);
 
     g_app_debug_foc.state = (uint32_t)app_foc_get_state();
     g_app_debug_foc.enabled = app_foc_is_active() ? 1U : 0U;
@@ -122,14 +117,15 @@ static void app_debug_foc_refresh(void) {
     g_app_debug_foc.selftest_jump_delta = g_enc_runtime_jump_delta;
     g_app_debug_foc.selftest_age_max_us = g_enc_runtime_age_max_us;
 
-    g_app_debug_foc.cal_active = idr.active ? 1U : 0U;
-    g_app_debug_foc.cal_done = idr.done ? 1U : 0U;
-    g_app_debug_foc.cal_failed = idr.failed ? 1U : 0U;
-    g_app_debug_foc.cal_fail_reason = (uint32_t)idr.fail_reason;
-    g_app_debug_foc.cal_progress = idr.progress;
-    g_app_debug_foc.cal_offset_rad = idr.offset_rad;
-    g_app_debug_foc.cal_direction = idr.direction;
-    g_app_debug_foc.cal_quality = idr.quality;
+    /* 辨识结果域：M1 裁剪（辨识不构建），恒 0（重新接入后由 get_result 回填） */
+    g_app_debug_foc.cal_active = 0U;
+    g_app_debug_foc.cal_done = 0U;
+    g_app_debug_foc.cal_failed = 0U;
+    g_app_debug_foc.cal_fail_reason = 0U;
+    g_app_debug_foc.cal_progress = 0.0f;
+    g_app_debug_foc.cal_offset_rad = 0.0f;
+    g_app_debug_foc.cal_direction = 0.0f;
+    g_app_debug_foc.cal_quality = 0.0f;
 
     g_app_debug_foc.i_d_a = snap.i_d_a;
     g_app_debug_foc.i_q_a = snap.i_q_a;
@@ -198,10 +194,7 @@ void app_debug_foc_tick(void) {
         }
     }
 
-    /* 3) 电气标定 1kHz 推进（集中于此，无 Terminal 依赖；台架模式同样生效） */
-    if (app_motor_identify_is_active()) {
-        app_motor_identify_run_once(g_app_debug_foc.tick_count);
-    }
+    /* 3) 电气标定推进：M1 裁剪（辨识不构建）。 */
 
     /* 3b) 运行期健康自检推进（不触碰 SPI3；100ms 窗口） */
     app_debug_encoder_health_tick();

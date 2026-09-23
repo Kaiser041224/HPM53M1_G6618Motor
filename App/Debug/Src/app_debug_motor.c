@@ -25,17 +25,17 @@
 
 #include "app_debug_motor.h"
 
+#include "algo_trig.h"
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
 #include "app_debug_rtt.h"
 #include "app_hardware_params.h"
 #include "intf_clock.h"
 
-#include <math.h>
 #include <stdbool.h>
 
 #define MOTOR_TWO_PI    (6.283185307179586f)
-#define MOTOR_PHASE_120 (2.0943951023931953f) /* 2π/3 */
+#define MOTOR_SQ3_2     (0.8660254037844386f) /* √3/2，用于 sin(θ±120°) 恒等式 */
 
 #define MOTOR_TEST_FREQ_DEFAULT (1.0f)
 #define MOTOR_TEST_FREQ_MIN     (0.5f)
@@ -50,8 +50,20 @@
 static bool s_running;
 static float s_freq_hz;
 static float s_mod;
-static float s_theta;
-static uint32_t s_last_cycle;
+/* 角度状态（[rad]，25kHz 硬触发节拍下 dt 恒定 = 1/pwm_freq）。
+ * sin/cos 由 algo_trig_sin_cos 查表得出（HPM SDK hpm_mcl/bldc_foc_sin_cos
+ * 惯例：四象限折叠 + 单表镜像，一次查表出 sin/cos，无浮点三角函数、无漂移）。 */
+static float s_angle_rad;
+static float s_delta_rad;
+
+/**
+ * @brief 重算角度步长（频率变更/启动时调用，任务上下文）
+ */
+static void motor_angle_recompute_delta(void) {
+    const app_hardware_params_t* hardware = app_hardware_params_current();
+
+    s_delta_rad = MOTOR_TWO_PI * s_freq_hz / (float)hardware->inverter.pwm_freq_hz;
+}
 
 bool app_debug_motor_is_running(void) {
     return s_running;
@@ -86,6 +98,7 @@ void app_debug_motor_set_freq(float freq_hz) {
     }
 
     s_freq_hz = freq_hz;
+    motor_angle_recompute_delta();
     motor_print_state();
 }
 
@@ -101,48 +114,47 @@ void app_debug_motor_set_mod(float mod) {
 }
 
 /**
- * @brief 按给定旋转矢量角输出三相占空比（SPWM）
- * @param theta 旋转矢量角 [rad]
+ * @brief 按旋转矢量角的 sin/cos 输出三相占空比（SPWM）
+ *
+ * sin(θ∓120°) = -0.5·sinθ ∓ (√3/2)·cosθ —— 单对 sin/cos 生成三相，
+ * 与 hpm_mcl 的 inv_park(ud,uq,sin,cos) 同构（sin/cos 为入参，此处直接出三相）。
+ * @param s sin(θ)
+ * @param c cos(θ)
  */
-static void motor_apply(float theta) {
+static void motor_apply_sincos(float s, float c) {
     float half_mod = s_mod * 0.5f;
 
     (void)app_3phase_inverter_set_duty_abc(
-        0.5f + half_mod * sinf(theta), 0.5f + half_mod * sinf(theta - MOTOR_PHASE_120),
-        0.5f + half_mod * sinf(theta + MOTOR_PHASE_120));
+        0.5f + half_mod * s, 0.5f + half_mod * (-0.5f * s - MOTOR_SQ3_2 * c),
+        0.5f + half_mod * (-0.5f * s + MOTOR_SQ3_2 * c));
 }
 
 void app_debug_motor_init(void) {
     s_running = false;
     s_freq_hz = MOTOR_TEST_FREQ_DEFAULT;
     s_mod = MOTOR_TEST_MOD_DEFAULT;
-    s_theta = 0.0f;
-    s_last_cycle = 0U;
+    s_angle_rad = 0.0f;
+    motor_angle_recompute_delta();
 
     app_debug_printf("[MOTOR] open-loop V/F ready (r=start/stop, +/-=freq, m/M=mod)\r\n");
     motor_print_state();
 }
 
 void app_debug_motor_run_once(void) {
-    uint32_t now;
-    uint32_t dt_cycles;
-    float dt_s;
+    float s;
+    float c;
 
     if (!s_running) {
         return;
     }
 
-    now = intf_clock_get_cycle();
-    dt_cycles = now - s_last_cycle;
-    s_last_cycle = now;
-
-    dt_s = (float)dt_cycles / (float)intf_clock_get_cpu_freq();
-    s_theta += MOTOR_TWO_PI * s_freq_hz * dt_s;
-    if (s_theta >= MOTOR_TWO_PI) {
-        s_theta -= MOTOR_TWO_PI;
+    /* 角度推进（25kHz 硬触发，Δ 恒定）+ 查表 sin/cos（SDK FOC 惯例） */
+    s_angle_rad += s_delta_rad;
+    if (s_angle_rad >= MOTOR_TWO_PI) {
+        s_angle_rad -= MOTOR_TWO_PI;
     }
-
-    motor_apply(s_theta);
+    algo_trig_sin_cos(s_angle_rad, &s, &c);
+    motor_apply_sincos(s, c);
 }
 
 void app_debug_motor_rotation_toggle(void) {
@@ -165,10 +177,16 @@ void app_debug_motor_rotation_toggle(void) {
         (void)app_3phase_inverter_release((app_3phase_id_t)i);
     }
     (void)app_3phase_inverter_enable();
-    s_theta = 0.0f;
-    s_last_cycle = intf_clock_get_cycle();
+    s_angle_rad = 0.0f;
+    motor_angle_recompute_delta();
     s_running = true;
-    motor_apply(s_theta);
+    {
+        float s;
+        float c;
+
+        algo_trig_sin_cos(s_angle_rad, &s, &c);
+        motor_apply_sincos(s, c);
+    }
     app_debug_printf("[MOTOR] rotation START\r\n");
     motor_print_state();
 }
@@ -187,6 +205,7 @@ void app_debug_motor_freq_step(int8_t dir) {
         s_freq_hz = MOTOR_TEST_FREQ_MAX;
     }
 
+    motor_angle_recompute_delta();
     motor_print_state();
 }
 

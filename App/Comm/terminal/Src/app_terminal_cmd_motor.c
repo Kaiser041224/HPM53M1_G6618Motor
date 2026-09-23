@@ -1,19 +1,19 @@
 /**
  * @file    app_terminal_cmd_motor.c
- * @brief   Terminal 电机命令（motor / inv / cal）
+ * @brief   Terminal 电机命令（motor / cal）—— M1：仅 FOC 转矩给定与电流零点标定
  * @author  Kaiser
  *
  * 命令：
- *   motor start | stop | freq <+|-> | mod <+|->   （开环 V/F 自检）
- *   motor iq [<A>]                               （FOC 转矩给定；无参 = 查询）
- *   inv <u|v|w|all|off>                          （三相逆变桥逐相输出）
- *   cal current                                  （电流零点标定）
- *   cal encoder                                  （电角度辨识；job 驱动，结果落 RAM）
+ *   motor iq [<A>]     （FOC 转矩给定；无参 = 查询）
+ *   cal current        （电流零点标定）
  *
- * 安全联锁（设计文档 §8）：
- *   驱动类命令要求无故障锁存；先停旋转；标定要求电机停止。
- *   inv 使能 / cal current 与 FOC 互斥（需先 'foc off'）；inv off 始终允许。
- *   命令本体快速返回，不阻塞控制环。
+ * M1 裁剪（spec §1/§4）：V/F 开环（motor start/stop/freq/mod）、逆变桥逐相
+ * （inv）、电角度辨识（cal encoder）不接入；相关源文件不参与构建。重新接入时
+ * 恢复本文件相应分支，并把 app_debug_motor.c / app_motor_identify.c 加回
+ * CMakeLists.txt。
+ *
+ * 安全联锁：驱动类命令要求无故障锁存；标定要求 FOC 关闭。
+ * 命令本体快速返回，不阻塞控制环。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -25,99 +25,22 @@
 #include "app_terminal_job.h"
 
 #include "app_analog_signal.h"
-#include "app_debug_inverter.h"
-#include "app_debug_motor.h"
-#include "app_debug_rtt.h"
-#include "app_encoder.h"
 #include "app_foc.h"
-#include "intf_clock.h"
-#include "app_motor_identify.h"
-#include "app_motor_params.h"
-#include "foc_math.h"
 
 #include <string.h>
 
 /**
- * @brief 打印电机状态行（运行态 / 电频率 / 调制比）。
- * @param csh terminal 实例
- */
-static uint32_t s_cal_beat_ms;   /**< 辨识心跳：上次打印时刻 [ms] */
-static uint32_t s_cal_beat_count; /**< 辨识心跳：已打印次数（= 秒） */
-
-static void motor_print_status(chry_shell_t* csh) {
-    float freq_hz = 0.0f;
-    float mod = 0.0f;
-    bool running = false;
-
-    app_debug_motor_get_state(&freq_hz, &mod, &running);
-    csh_printf(csh, "motor: %s  freq=%.2f Hz  mod=%.1f%%\r\n", running ? "RUN " : "STOP",
-               (double)freq_hz, (double)(mod * 100.0f));
-}
-
-/**
- * @brief 命令 motor：status / start / stop / freq / mod。
+ * @brief 命令 motor：iq（FOC 转矩给定）。
  *
  * 用法：
- *   motor [status]              查询状态
- *   motor start | stop          启停旋转
- *   motor freq [<hz>|+|-]       电频率（0.5~10 Hz；无参=查询）
- *   motor mod  [<pct>|+|-]      调制比（1~10 %；无参=查询）
+ *   motor [iq [<A>]]   无参 = 查询；有参 = 设置（限幅 ±i_q_max）
  */
 static int cmd_motor(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
-    const char* sub;
+    const char* sub = (argc >= 2) ? argv[1] : "iq";
 
-    if (argc < 2) {
-        motor_print_status(csh);
-        return 0;
-    }
-
-    sub = argv[1];
-
-    if (strcmp(sub, "status") == 0) {
-        motor_print_status(csh);
-        return 0;
-    }
-
-    if (strcmp(sub, "help") == 0) {
-        csh_printf(csh,
-                   "usage: motor [status]\r\n"
-                   "       motor start | stop\r\n"
-                   "       motor freq [<hz>|+|-]   (0.5~10 Hz; no arg = query)\r\n"
-                   "       motor mod  [<pct>|+|-]  (1~10 %%; no arg = query)\r\n"
-                   "       motor iq [<A>]          (FOC torque ref; no arg = query)\r\n");
-        return 0;
-    }
-
-    if (strcmp(sub, "start") == 0) {
-        if (!app_terminal_cmd_require_no_fault(csh)) {
-            return -1;
-        }
-        if (app_foc_is_active()) {
-            csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
-            return -1;
-        }
-        if (app_debug_motor_is_running()) {
-            csh_printf(csh, "motor already running\r\n");
-            motor_print_status(csh);
-            return 0;
-        }
-        app_terminal_cmd_capture_begin();
-        app_debug_motor_rotation_toggle();
-        app_terminal_cmd_capture_end();
-        motor_print_status(csh);
-        return 0;
-    }
-
-    if (strcmp(sub, "stop") == 0) {
-        if (app_foc_is_active()) {
-            csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
-            return -1;
-        }
-        app_terminal_cmd_capture_begin();
-        app_debug_motor_stop();
-        app_terminal_cmd_capture_end();
-        motor_print_status(csh);
+    if ((strcmp(sub, "help") == 0) || (strcmp(sub, "status") == 0)) {
+        csh_printf(csh, "usage: motor iq [<A>]   (FOC torque ref; no arg = query)\r\n");
         return 0;
     }
 
@@ -151,101 +74,8 @@ static int cmd_motor(int argc, char** argv) {
         return 0;
     }
 
-    if ((strcmp(sub, "freq") == 0) || (strcmp(sub, "mod") == 0)) {
-        bool is_freq = (strcmp(sub, "freq") == 0);
-
-        if (argc < 3) {
-            motor_print_status(csh); /* 无参 = 查询 */
-            return 0;
-        }
-
-        if ((strcmp(argv[2], "+") == 0) || (strcmp(argv[2], "-") == 0)) {
-            int8_t dir = (argv[2][0] == '-') ? (int8_t)-1 : (int8_t)1;
-
-            app_terminal_cmd_capture_begin();
-            if (is_freq) {
-                app_debug_motor_freq_step(dir);
-            } else {
-                app_debug_motor_mod_step(dir);
-            }
-            app_terminal_cmd_capture_end();
-            motor_print_status(csh);
-            return 0;
-        }
-
-        {
-            float value;
-
-            if (app_terminal_cmd_parse_float(argv[2], &value) != 0) {
-                csh_printf(csh, "ERR: invalid value '%s'\r\n", argv[2]);
-                return -1;
-            }
-            app_terminal_cmd_capture_begin();
-            if (is_freq) {
-                app_debug_motor_set_freq(value); /* 电频率 [Hz] */
-            } else {
-                app_debug_motor_set_mod(value / 100.0f); /* 调制比按百分比输入 */
-            }
-            app_terminal_cmd_capture_end();
-            motor_print_status(csh);
-            return 0;
-        }
-    }
-
     csh_printf(csh, "ERR: unknown subcommand '%s'\r\n", sub);
-    csh_printf(csh,
-               "usage: motor [status] | start | stop | freq [<hz>|+|-] | mod [<pct>|+|-] | "
-               "iq [<A>]\r\n");
-    return -1;
-}
-
-/**
- * @brief 命令 inv：三相逆变桥逐相输出控制（u/v/w/all/off）。
- */
-static int cmd_inv(int argc, char** argv) {
-    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
-    uint8_t mask;
-
-    if (argc < 2) {
-        return app_terminal_cmd_usage(csh, "inv <u|v|w|all|off>");
-    }
-
-    if (strcmp(argv[1], "u") == 0) {
-        mask = 0x1U;
-    } else if (strcmp(argv[1], "v") == 0) {
-        mask = 0x2U;
-    } else if (strcmp(argv[1], "w") == 0) {
-        mask = 0x4U;
-    } else if (strcmp(argv[1], "all") == 0) {
-        mask = 0x7U;
-    } else if (strcmp(argv[1], "off") == 0) {
-        mask = 0x0U;
-    } else {
-        return app_terminal_cmd_usage(csh, "inv <u|v|w|all|off>");
-    }
-
-    /* 仅"使能输出"需要无故障；off 必须始终可用（安全优先） */
-    if (mask != 0U) {
-        if (!app_terminal_cmd_require_no_fault(csh)) {
-            return -1;
-        }
-        if (app_foc_get_state() != APP_FOC_STATE_OFF) {
-            csh_printf(csh, "ERR: FOC active (use 'foc off' first)\r\n");
-            return -1;
-        }
-    }
-
-    if (mask == 0U) {
-        /* 紧急路径：先停 FOC（状态置 OFF），再关调试输出，避免 FOC 状态与桥状态失配 */
-        app_foc_disable();
-    }
-
-    app_terminal_cmd_capture_begin();
-    app_debug_motor_stop();
-    app_debug_inverter_set_output(mask);
-    app_terminal_cmd_capture_end();
-
-    return 0;
+    return app_terminal_cmd_usage(csh, "motor iq [<A>]");
 }
 
 /**
@@ -288,172 +118,13 @@ static app_terminal_job_t s_cal_job = {
 };
 
 /**
- * @brief 辨识失败原因名称
- * @param reason 原因枚举
- * @return 名称；越界返回 "?"
- */
-static const char* cal_encoder_fail_name(app_identify_fail_t reason) {
-    switch (reason) {
-    case APP_IDENTIFY_REASON_NONE: return "none";
-    case APP_IDENTIFY_REASON_TIMEOUT: return "timeout";
-    case APP_IDENTIFY_REASON_DIR: return "rotor not following (dir)";
-    case APP_IDENTIFY_REASON_QUALITY: return "quality low";
-    case APP_IDENTIFY_REASON_RATIO: return "pole-pair/ratio mismatch";
-    case APP_IDENTIFY_REASON_HYST: return "hysteresis/slip too large (check encoder coupling)";
-    case APP_IDENTIFY_REASON_NONFINITE: return "non-finite samples";
-    case APP_IDENTIFY_REASON_VERIFY: return "verify failed";
-    case APP_IDENTIFY_REASON_ENCODER: return "encoder error";
-    case APP_IDENTIFY_REASON_FAULT: return "fault";
-    case APP_IDENTIFY_REASON_STATE: return "state changed";
-    default: return "?";
-    }
-}
-
-/**
- * @brief cal encoder job：1kHz 推进辨识编排（进度/验证/结果打印）
- * @param now_ms 系统毫秒计数
- */
-static void cal_encoder_tick(uint32_t now_ms) {
-    app_motor_identify_result_t result;
-
-    /* 辨识编排的 1kHz 推进已集中到 app_debug_foc_tick()（Control/Debug 无 Terminal 依赖，
-     * 台架模式同样生效）；此处只负责终端进度显示，避免重复 step。 */
-    if (app_motor_identify_is_active()) {
-        /* 终端进度条（单行原地刷新 \r；job 期间输入已被屏蔽，不与 readline 冲突），
-         * 同时把 dt/cyc 走 RTT（主循环负载观测）。 */
-        if ((uint32_t)(now_ms - s_cal_beat_ms) >= 200U) {
-            uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
-            uint32_t pct;
-            char bar[21];
-            uint32_t i;
-
-            s_cal_beat_ms = now_ms;
-            s_cal_beat_count++;
-            app_motor_identify_get_result(&result);
-            pct = (uint32_t)(result.progress * 100.0f);
-            if (pct > 100U) {
-                pct = 100U;
-            }
-            for (i = 0U; i < 20U; i++) {
-                bar[i] = (i < (pct / 5U)) ? '#' : '-';
-            }
-            bar[20] = '\0';
-            app_terminal_cmd_emit("\rcal [%s] %3u%%  %4.1fs  dt=%u us cyc=%u us   ", bar,
-                                  (unsigned)pct, (double)s_cal_beat_count * 0.2,
-                                  (unsigned)g_foc_loop_dt_us,
-                                  (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U));
-            app_debug_printf("[cal] %3u%% (%.1fs) dt=%u us cyc=%u us jmp=%u\r\n", (unsigned)pct,
-                             (double)s_cal_beat_count * 0.2, (unsigned)g_foc_loop_dt_us,
-                             (unsigned)((mhz > 0U) ? (g_foc_loop_cycles / mhz) : 0U),
-                             (unsigned)app_encoder_get_rotor_jump_count());
-        }
-        return;
-    }
-    s_cal_beat_ms = 0U; /* 结束：心跳复位 */
-    s_cal_beat_count = 0U;
-
-    /* 结束：由 Comm 层读取 Control 结果并打印（分层：Comm → Control） */
-    app_motor_identify_get_result(&result);
-    if (result.done) {
-        app_terminal_cmd_emit("\r\nOK: encoder identify  offset=%.4f rad (%.2f deg)  dir=%+.0f  "
-                              "q=%.3f (tracking quality)\r\n",
-                              (double)result.offset_rad,
-                              (double)(result.offset_rad * (180.0f / FOC_PI_F)),
-                              (double)result.direction, (double)result.quality);
-        app_terminal_cmd_emit("    verify: probe=%.3f rad (need >=0.05, x dir)  resid mean=%.2f "
-                              "max=%.2f deg  drift=%.0f deg/s\r\n",
-                              (double)result.probe_travel_rad, (double)result.verify_mean_deg,
-                              (double)result.verify_max_deg, (double)result.verify_drift_deg_s);
-        {
-            const app_motor_params_t* motor = app_motor_params_current();
-            float implied_pp = (float)motor->pole_pairs / (1.0f + result.ratio_err);
-
-            app_terminal_cmd_emit(
-                "    ratio_err=%+.1f%%  offset fwd=%.2f rev=%.2f deg (diff=%.2f)\r\n",
-                (double)(result.ratio_err * 100.0f),
-                (double)(result.offset_fwd_rad * (180.0f / FOC_PI_F)),
-                (double)(result.offset_rev_rad * (180.0f / FOC_PI_F)),
-                (double)(fabsf(result.offset_fwd_rad - result.offset_rev_rad)
-                         * (180.0f / FOC_PI_F)));
-            app_terminal_cmd_emit("    implied effective pole_pairs = %.1f (if encoder ratio is 1:1)\r\n",
-                                  (double)implied_pp);
-        }
-    } else {
-        app_terminal_cmd_emit("\r\nFAIL: encoder identify (%s)  q=%.3f  ratio_err=%+.1f%%\r\n",
-                              cal_encoder_fail_name(result.fail_reason),
-                              (double)result.quality, (double)(result.ratio_err * 100.0f));
-        app_terminal_cmd_emit("      verify: probe=%.3f rad (need >=0.05, x dir)  resid mean=%.2f "
-                              "max=%.2f deg  drift=%.0f deg/s\r\n",
-                              (double)result.probe_travel_rad, (double)result.verify_mean_deg,
-                              (double)result.verify_max_deg, (double)result.verify_drift_deg_s);
-        app_terminal_cmd_emit("      check: free rotation / I_cal enough / encoder mounting / "
-                              "pole_pairs\r\n");
-    }
-    app_terminal_job_abort(); /* 结束 job（触发 abort 回调换行+刷新） */
-}
-
-/**
- * @brief cal encoder job 中止回调
- */
-static void cal_encoder_abort(void) {
-    app_motor_identify_abort();
-    app_terminal_cmd_emit("\r\n");
-    app_terminal_refresh();
-}
-
-/** cal encoder job（静态生命周期） */
-static app_terminal_job_t s_cal_encoder_job = {
-    .name = "cal encoder",
-    .tick = cal_encoder_tick,
-    .abort = cal_encoder_abort,
-    .active = false,
-};
-
-/**
- * @brief 命令 cal：电流零点标定（current）/ 电角度辨识（encoder），job 驱动，不阻塞控制环。
+ * @brief 命令 cal：电流零点标定（current），job 驱动，不阻塞控制环。
  */
 static int cmd_cal(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
 
-    if (argc < 2) {
-        return app_terminal_cmd_usage(csh, "cal current | cal encoder");
-    }
-
-    if (strcmp(argv[1], "encoder") == 0) {
-        if (!app_terminal_cmd_require_no_fault(csh)) {
-            return -1;
-        }
-        if (app_foc_get_state() == APP_FOC_STATE_OFF) {
-            csh_printf(csh, "ERR: FOC not enabled (use 'foc on' first)\r\n");
-            return -1;
-        }
-        if ((app_foc_get_state() != APP_FOC_STATE_READY)
-            && (app_foc_get_state() != APP_FOC_STATE_RUN)) {
-            csh_printf(csh, "ERR: FOC busy/FAULT (require READY or RUN, no fault)\r\n");
-            return -1;
-        }
-        /* RUN 进入：先清零转矩给定（enter_calib 内部亦清零），避免切换瞬态 */
-        if (app_debug_motor_is_running()) {
-            csh_printf(csh, "ERR: V/F rotation running (stop first)\r\n");
-            return -1;
-        }
-        csh_printf(csh,
-                   "WARN: motor must be FREE to rotate; I_cal=2A; ~20s; input disabled\r\n");
-        /* 先启动 job（会中止旧 job），再启动辨识 */
-        if (app_terminal_job_start(&s_cal_encoder_job) != 0) {
-            csh_printf(csh, "FAIL: job start\r\n");
-            return -1;
-        }
-        if (app_motor_identify_start() != 0) {
-            app_terminal_job_abort();
-            csh_printf(csh, "FAIL: identify start (fault/foc state/params)\r\n");
-            return -1;
-        }
-        return 0;
-    }
-
-    if (strcmp(argv[1], "current") != 0) {
-        return app_terminal_cmd_usage(csh, "cal current | cal encoder");
+    if ((argc < 2) || (strcmp(argv[1], "current") != 0)) {
+        return app_terminal_cmd_usage(csh, "cal current");
     }
     if (!app_terminal_cmd_require_motor_stopped(csh)) {
         return -1;
@@ -466,8 +137,7 @@ static int cmd_cal(int argc, char** argv) {
         return -1;
     }
 
-    /* 先启动 job（内部会中止旧 job → 旧 cal 的 abort 回调取消旧标定），再启动新标定，
-     * 避免旧 job 的 cancel 误杀新标定 */
+    /* 先启动 job（内部会中止旧 job → 旧 cal 的 abort 回调取消旧标定），再启动新标定 */
     if (app_terminal_job_start(&s_cal_job) != 0) {
         csh_printf(csh, "FAIL: job start\r\n");
         return -1;
@@ -483,5 +153,4 @@ static int cmd_cal(int argc, char** argv) {
 }
 
 CSH_CMD_EXPORT_ALIAS(cmd_motor, motor, );
-CSH_CMD_EXPORT_ALIAS(cmd_inv, inv, );
 CSH_CMD_EXPORT_ALIAS(cmd_cal, cal, );
