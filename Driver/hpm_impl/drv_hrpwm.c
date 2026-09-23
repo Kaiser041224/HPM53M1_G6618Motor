@@ -396,7 +396,14 @@ static hrpwm_cmp_pair_t hrpwm_calc_cmp_pair(uint32_t reload, float duty, intf_hr
 }
 
 /**
- * @brief 写入一对 CMP 值（含扩展位），并解锁影子寄存器
+ * @brief 写入一对 CMP 值（含扩展位）
+ *
+ * 直接写 CMP 工作寄存器（pwm_cmp_update_cmp_value = RMW pwm_x->CMP[index]），
+ * 占空比 CMP 配置为 update_trigger=on_modify，**禁止 pwm_shadow_register_unlock**：
+ * UNLK 键写会触发影子锁存副作用，扰动同实例的 ADC 触发比较器 CMP10 工作值
+ * （曾观测到 228kHz 触发突发；控制环路在 ADC PMT ISR 内执行时会自持成触发风暴
+ * → ISR 饱和饿死全部任务）。参见 hrpwm_set_trigger_cmp_delay_impl 的同类说明。
+ *
  * @param base PWM 基地址
  * @param cmp_start_index CMP 起始索引
  * @param cmp 比较值对
@@ -410,11 +417,9 @@ static void
     uint32_t begin_24bit = cmp->cmp_begin & HRPWM_RELOAD_MAX_24BIT;
     uint32_t end_24bit = cmp->cmp_end & HRPWM_RELOAD_MAX_24BIT;
 
-    pwm_shadow_register_unlock(base);
     pwm_cmp_update_cmp_value(base, cmp_start_index, begin_24bit, ex_begin);
     pwm_cmp_update_cmp_value(base, cmp_start_index + 1U, end_24bit, ex_end);
 #else
-    pwm_shadow_register_unlock(base);
     pwm_cmp_update_cmp_value(base, cmp_start_index, cmp->cmp_begin, 0);
     pwm_cmp_update_cmp_value(base, cmp_start_index + 1U, cmp->cmp_end, 0);
 #endif
