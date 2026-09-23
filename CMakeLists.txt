@@ -230,6 +230,7 @@ sdk_app_src(App/Debug/Src/app_debug_rtt.c)
 # ============================================================================
 
 sdk_app_src(App/Logic/app_logic.c)
+sdk_app_src(App/Logic/app_rtos_tasks.c)
 sdk_app_src(App/main.c)
 
 # ============================================================================

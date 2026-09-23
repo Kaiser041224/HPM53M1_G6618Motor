@@ -1,15 +1,20 @@
 /**
  * @file    app_logic.c
- * @brief   板级 bring-up：时钟自检 + 各驱动自检 + 控制环仿真（节拍 = inverter.pwm_freq_hz）
+ * @brief   板级 bring-up：初始化编排 + FOC 快车道 / IO / 诊断步骤函数
  * @author  Kaiser
  *
- * 主循环结构（节拍 = config/hardware.yaml 的 inverter.pwm_freq_hz，即半桥开关频率/FOC 闭环频率）：
- *   1) 每周期：编码器双路采样（更新 Ozone 观测变量 + 计时统计）
- *   2) 1ms 分频：UART / CAN / USB 调试轮询（各自内部 1Hz 打印门限）
- *   3) 1s：RTT 心跳 + 编码器统计汇总
- *   4) 节拍点：mcycle 计时，迟到计数并重同步（心跳轮次不计数，避免打印污染指标）
+ * 步骤函数（任务编排见 App/Logic/app_rtos_tasks.c）：
+ *   - app_init()      ：一次性串行初始化（调度器后由 app_io 任务执行，此时 ISR 可用）
+ *   - app_fast_step() ：FOC 硬实时快车道单步（25kHz）——采样 / 换算 / 保护 / 控制输出
+ *                      硬约束：无 RTOS API、无 printf、无动态分配、无等待
+ *   - app_io_step()   ：RTOS 后台 IO（1ms）——慢通道采样 + 调试观测 + 通讯轮询
+ *   - app_diag_step() ：RTOS 后台诊断（1s）——回报（LED / 统计），不改控制状态
+ *
+ * 时钟：intf_clock_init() 已移至 main()，在调度器启动前完成
+ *（对齐 SDK 惯例 board_init 含 board_init_clock；保证 MCHTMR tick 基频正确）。
  *
  * 说明：本文件为 bring-up 测试代码，后续由 FOC 应用替换。
+ * 设计文档：docs/superpowers/specs/2026-09-23-foc-fastlane-task-structure-design.md
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -30,18 +35,16 @@
 #include "app_debug_motor.h"
 #include "app_debug_rtt.h"
 #include "app_debug_uart.h"
+
 #include "app_fault.h"
 #include "app_gpio.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
-#include "app_terminal.h"
 #include "app_software_params.h"
+#include "app_terminal.h"
 #include "app_usb.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
-
-#define APP_SLOW_TASK_PERIOD_MS   (1U) /* UART/CAN/USB 调试轮询分频 */
-#define APP_HEARTBEAT_INTERVAL_MS (1000U)
 
 void app_init(void) {
     /*
@@ -80,9 +83,8 @@ void app_init(void) {
             (unsigned)hardware->inverter.pwm_freq_hz, (unsigned)hardware->inverter.deadtime_ns);
     }
 
-    /* 1. 系统时钟（顺序与 SuperCap 一致：board_init -> intf_clock_init）
+    /* 1. 系统时钟已在 main() 中、调度器启动前完成（intf_clock_init）：
      *    CPU 480MHz / AXI-AHB 160MHz / PLL0 960MHz / DCDC 1275mV */
-    intf_clock_init();
 
     /* 2. GPIO 驱动注册 + PA09（DRV_+12V_EN，默认输出低=关闭） */
     app_gpio_init();
@@ -146,81 +148,45 @@ void app_init(void) {
     app_debug_motor_init();
 }
 
-void app_run(void) {
-    const app_hardware_params_t *hardware = app_hardware_params_current();
+void app_fast_step(void) {
+    /* FOC 硬实时快车道单步（25kHz，由 app_fast 任务调用）。
+     * 硬约束：无 RTOS API、无 printf、无动态分配、无等待。
+     * 内容 = FOC 强实时必需：采样 → 换算 → 保护 → 控制输出。
+     * 将来 FOC 控制环替换 app_debug_motor_run_once 的位置。 */
 
-    /* 控制节拍 = 半桥开关频率（config/hardware.yaml；FOC 闭环同频） */
-    const uint32_t cpu_freq = intf_clock_get_cpu_freq();
-    const uint32_t loop_cycles = cpu_freq / hardware->inverter.pwm_freq_hz;
-    const uint32_t slow_cycles = (cpu_freq / 1000U) * APP_SLOW_TASK_PERIOD_MS;
-    const uint32_t hb_cycles = (cpu_freq / 1000U) * APP_HEARTBEAT_INTERVAL_MS;
-    uint32_t next = intf_clock_get_cycle() + loop_cycles;
-    uint32_t last_slow = 0U;
-    uint32_t last_hb = 0U;
-    uint32_t last_printf_cycles = 0U;
-    uint32_t heartbeat = 0U;
+    /* 1) 编码器双路采样（FOC 角度反馈） */
+    app_debug_encoder_sample();
 
-    for (;;) {
-        uint32_t now;
-        bool did_heartbeat = false;
+    /* 2) 模拟量：ADC 缓存 → 物理量换算 + 滤波（FOC 电流/电压反馈） */
+    app_analog_signal_process();
 
-        /* 1) 核心：编码器双路采样（主循环节拍） */
-        app_debug_encoder_sample();
+    /* 3) 三相电流 RMS 累加 + L2 保护判断（FOC 保护） */
+    app_fault_process();
 
-        /* 1a) 模拟量：ADC 缓存 → 物理量换算 + 滤波（主循环节拍）+ Ozone 观测变量 */
-        app_analog_signal_process();
-        app_fault_process(); /* 主循环节拍：三相电流 RMS 累加（故障保护 L2） */
-        app_debug_adc_update();
+    /* 4) 控制输出（开环 V/F；FOC 控制环原位替换点） */
+    app_debug_motor_run_once();
+}
 
-        /* 1b) 开环旋转（V/F）：主循环节拍更新三相占空比（未启动时为空操作） */
-        app_debug_motor_run_once();
+void app_io_step(void) {
+    /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：
+     * 慢通道采样 + 调试观测 + 通讯轮询。单次处理有界（≤200µs 约束不变）。 */
 
-        now = intf_clock_get_cycle();
+    /* ADC1 慢速通道采样（VBUS/NTC/CANID 原始码生产者） */
+    app_adc_slow_process();
 
-        /* 2) 低速调试任务（1ms 分频；各自内部有 1Hz 打印门限） */
-        if ((uint32_t)(now - last_slow) >= slow_cycles) {
-            last_slow = now;
-            app_adc_slow_process(); /* ADC1 慢速通道（VBUS/NTC/CANID）@1kHz */
-            app_debug_uart_run_once();
-            app_debug_can_run_once();
-            app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
-        }
+    /* Ozone 观测变量刷新（.noncacheable，1kHz 刷新，容忍撕裂） */
+    app_debug_adc_update();
 
-        /* 3) 心跳 + 编码器统计汇总（1s） */
-        if ((uint32_t)(now - last_hb) >= hb_cycles) {
-            last_hb = now;
-            did_heartbeat = true;
-            heartbeat++;
-            app_gpio_toggle(PIN_LED_STATUS);
+    /* 调试与通讯轮询（各自内部 1Hz 打印门限） */
+    app_debug_uart_run_once();
+    app_debug_can_run_once();
+    app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
+}
 
-#if APP_DEBUG_PERIODIC_PRINT
-            {
-                uint32_t c0 = intf_clock_get_cycle();
-                app_debug_printf(
-                    "hb=%u led=%u printf_cyc=%u\r\n", (unsigned)heartbeat,
-                    (unsigned)app_gpio_read(PIN_LED_STATUS), (unsigned)last_printf_cycles);
-                last_printf_cycles = intf_clock_get_cycle() - c0;
-            }
-            app_debug_encoder_print_stats();
-#else
-            (void)last_printf_cycles;
-            (void)heartbeat;
-#endif
-        }
+void app_diag_step(void) {
+    /* RTOS 后台诊断单步（1s，由 app_diag 任务调用）：
+     * 纯回报，不改控制状态。 */
 
-        /* 4) 主循环节拍：迟到计数并重同步（心跳轮次不计数） */
-        now = intf_clock_get_cycle();
-        {
-            int32_t late = (int32_t)(now - next);
-
-            if (late >= 0) {
-                if (!did_heartbeat) {
-                    app_debug_encoder_note_loop_late((uint32_t)late);
-                }
-                next = now + loop_cycles;
-            }
-        }
-        while ((int32_t)(intf_clock_get_cycle() - next) < 0) {}
-        next += loop_cycles;
-    }
+    app_gpio_toggle(PIN_LED_STATUS);
+    app_debug_encoder_print_stats();
 }

@@ -1,14 +1,17 @@
 /**
  * @file    main.c
- * @brief   程序入口：板级初始化 + FreeRTOS 调度（bring-up 超循环任务化）
+ * @brief   程序入口：板级/时钟初始化 + FreeRTOS 调度（任务编排见 app_rtos_tasks.c）
  * @author  Kaiser
  *
- * 调度结构（设计文档：docs/superpowers/specs/2026-09-23-rtos-foundation-design.md）：
- *   main → board_init → 创建 app 任务 → vTaskStartScheduler
- *   app 任务 = app_init + tick 自检 + app_run（原样超循环，零改动）
+ * 调度结构（设计文档：docs/superpowers/specs/2026-09-23-foc-fastlane-task-structure-design.md）：
+ *   main → board_init → intf_clock_init → app_application_start（不返回）
+ *   app_io (prio 3, 1ms)  ：app_init → 创建 fast/diag → 慢通道采样 + 调试 + 通讯
+ *   app_fast(prio 2, 25kHz)：FOC 快车道（采样 / 换算 / 保护 / 控制输出）
+ *   app_diag(prio 3, 1s)   ：回报（LED / 统计）
+ *   rtt_log (prio 4)       ：日志队列 → SEGGER RTT
  *
- * 说明：app_init 必须在调度器启动后执行（电流零标定等依赖 ISR；
- *       CONFIG_DISABLE_GLOBAL_IRQ_ON_STARTUP=1 使全局中断由调度器开启）。
+ * 时钟：intf_clock_init() 在调度器启动前完成（对齐 SDK 惯例 board_init 含
+ * board_init_clock；保证 MCHTMR tick 基频正确，消除时钟树重配与 tick 的竞争窗口）。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -16,43 +19,19 @@
 
 #include "board.h"
 
-#include "app_debug_rtt.h"
 #include "app_rtos.h"
-
-#include "FreeRTOS.h"
-#include "task.h"
-
-extern void app_init(void);
-extern void app_run(void);
+#include "app_rtos_tasks.h"
+#include "intf_clock.h"
 
 /**
- * @brief bring-up 任务体：既有自检 + 超循环原样运行。
- * @param arg 未使用
- */
-static void app_bringup_task(void* arg) {
-    (void)arg;
-
-    app_init();
-    app_rtos_selfcheck_tick();
-    app_run(); /* 内含 for(;;)，永不返回 */
-}
-
-/**
- * @brief  程序入口：板级初始化后进入 FreeRTOS 调度。
+ * @brief  程序入口：板级 + 时钟初始化后进入 FreeRTOS 调度。
  * @return 退出码（正常运行时不会返回）
  */
 int main(void) {
     board_init();
+    intf_clock_init(); /* CPU 480MHz / AHB 160MHz / MCHTMR 24MHz；调度器前完成 */
 
-    /* B：RTT 日志队列 + rtt_log 任务（须在 start_task 之后再产生日志） */
-    app_debug_rtt_start_task();
-
-    if (xTaskCreate(app_bringup_task, "app", APP_RTOS_STACK_BRINGUP_WORDS, NULL,
-                    APP_RTOS_PRIO_BRINGUP, NULL) != pdPASS) {
-        app_rtos_fatal(__FILE__, __LINE__);
-    }
-
-    vTaskStartScheduler();
+    app_application_start();
 
     /* 调度器不应返回 */
     app_rtos_fatal(__FILE__, __LINE__);
