@@ -271,3 +271,42 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   （live = 实时读取；reboot = init 期消费，v1 不持久化）。
 - **第三方豁免**：SDK 中间件源文件（`middleware/cherrysh`、`middleware/cherryrb`）保持原样，
   不适用本工程版权头/命名规范；`config/csh_config.h` 为 SDK 模板派生（保留原归属，注明工程修改）。
+
+### FreeRTOS 引入纪律（2026-09-23）
+
+- **必须 `sdk_compile_definitions(-DUSE_NONVECTOR_MODE=1)` + `(-DDISABLE_IRQ_PREEMPTIVE=1)`**
+  （对齐 SDK 官方惯例：57/57 个 FreeRTOS 示例用非向量模式，55/57 配非抢占）。
+  调用顺序：`set(CONFIG_FREERTOS 1)` 在 `find_package(hpm-sdk)` **之前**；
+  两条 `sdk_compile_definitions` 在 `find_package`（即 `project()`）**之后**——该函数此时才可用。
+- **向量模式是未验证路径，且含地址 bug（差 2MB）**：`middleware/FreeRTOS/.../freertos_hpmicro_vectors.h`
+  的 `default_isr_N` 硬编码 PLIC complete 到 `0xE4200000`，而 HPM5300 系列
+  `HPM_PLIC_BASE = 0xE4000000`（`soc/HPM5300/HPM5361/hpm_soc_ip.h:37`）。
+  每个 ISR 结束都写错地址；25kHz 等密集中断首次触发时总线异常 →
+  落入 `portASM.S` 的 `j .` 死循环 → 全系统静默冻结（RTT 无输出 / USB 不枚举 / ADC 不刷新）。
+  官方示例全用非向量模式（走 `freertos_handle_interrupt` + `HPM_PLIC_BASE` 宏做 claim/complete），
+  故该 bug 从未被暴露。**不要用向量模式。**
+- **FreeRTOS 异常 = 静默死亡陷阱**：`freertos_risc_v_application_exception_handler` 在
+  `freertos_exception_handler()` 之后无条件 `j .`（`portASM.S:323`），且 trap 入口硬件清
+  `mstatus.MIE` → 冻结；SDK 弱实现用 `printf`（stdout）**不走 RTT** → 零征兆。
+  **必须强符号覆盖 `freertos_exception_handler`**（见 `App/Platform/Src/app_rtos.c`）：
+  先纯内联汇编读 CSR、零函数调用写 `.noncacheable` 全局 `g_rtos_exc_*`（栈烂时也存活，
+  J-Link/Ozone 直读 `0x8b000–0x8b018`），再尝试 RTT 直写。**排查冻结先读这 7 个字。**
+- **任务栈预算不能照搬裸机主栈**：裸机 `_stack_size=16KB`；FreeRTOS 任务栈从 `ucHeap` 抠，
+  且**首层中断帧（含 FPU 约 300B）压在任务栈上**（`portContext.h` 先 SAVE 再切 ISR 栈）。
+  `configCHECK_FOR_STACK_OVERFLOW=2` 只在任务切换时检查，忙等路径溢出静默。
+  bring-up 类重任务至少 2048 words（8KB）。**指纹**：`mepc` 落在 `ucHeap` 区间 = 控制流被栈砸烂。
+- **时钟初始化在调度器之前**（SDK 惯例：`board_init()` 含 `board_init_clock()`）。
+  本工程 `intf_clock_init()` 在任务里（调度器后）执行——已实测可用，但属偏离惯例；
+  若后续 tick 不稳优先复查此处与 `clock_mchtmr0`（`drv_clock.c` 自证 MCHTMR 本板曾"跑飞"）。
+- **CherryUSB OSAL 连带**：`CONFIG_FREERTOS` 会自动编入 `usb_osal_freertos.c`，需
+  `configUSE_MUTEXES` / `configUSE_COUNTING_SEMAPHORES` / `configUSE_TIMERS` = 1，
+  以及 `configTIMER_TASK_STACK_DEPTH`（`port.c` 的 `vApplicationGetTimerTaskMemory`
+  无条件引用，与 `configUSE_TIMERS` 无关）。但 `config/usb_config.h` 的
+  `CONFIG_USBDEV_EP0_THREAD` **保持未定义** → USB 仍走裸机 ISR 路径，`usb_osal_*` 运行时不被调用，
+  USB 行为零变化。**启用 `CONFIG_USBDEV_EP0_THREAD` 会改变 USB 行为，须单独评估。**
+- **驱动层 `SDK_DECLARE_EXT_ISR_M` 零改动**：它是条件宏，非向量模式自动切换展开形态
+  （生成 `default_isr_N` 直通包装，PLIC complete 由 `freertos_handle_interrupt` 统一做）。
+- **冻结排查顺序**：先外部供电（欠压复位会伪装成"跑飞"）→ 读 `g_rtos_exc_*` 指纹
+  （`mcause` bit31=中断/低 31 位=异常码；`mepc`=肇事指令；`mscratch`=中断嵌套深度）→
+  按 `mepc` 落点分类（Flash=代码逻辑、`ucHeap`=栈砸烂、外设区=寄存器/总线错误）→
+  再查调度。**不要先改调度代码。**

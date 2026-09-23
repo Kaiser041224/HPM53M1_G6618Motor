@@ -65,14 +65,18 @@ app_debug_printf(fmt, ...)
   s_writer(buf, len)        // 同步旁路（保持 Terminal capture 语义）
   enqueue(buf)              // 入环形队列；满则丢弃并计数
 
-rtt_log_task (prio 1, 512 words)
+rtt_log 任务（prio 3, 512 words）
   阻塞等队列 → SEGGER_RTT_WriteString
   每 1s 输出 rtt_hb（队列水位 / 丢弃计数），证明调度在跑
 ```
 
 - `app_debug_printf` 签名不变，调用方零改动。
 - 旁路 writer（Terminal capture）**仍在生产者上下文同步调用**，保证 dump 捕获时序不被异步化破坏。
-- ISR 内禁止 `app_log_printf` / `app_debug_printf`（现状本就无 ISR 打印，保持不变）。
+- ISR 内禁止 `app_debug_printf`（现状本就无 ISR 打印，保持不变）。
+- **优先级修订**：rtt_log=3 > app=2。原因：`app_run()` 忙等超循环不阻塞，
+  低优先级 logger 会被饿死；log 提高到更高优先级后，无日志时阻塞在队列上零打扰，
+  有日志时短暂抢占写 RTT（SEGGER 写为非阻塞拷贝）。
+- 队列 8 条 × 256B；满则丢弃新消息并 `drop++`，不阻塞生产者。
 
 ---
 
@@ -140,8 +144,9 @@ rtt_log_task (prio 1, 512 words)
 | 任务 | 栈 | 优先级 | 阶段 |
 | :--- | :--- | :--- | :--- |
 | `app`（bring-up） | 1024 words = 4KB | 2 | A |
-| `rtt_log` | 512 words = 2KB | 1 | B |
+| `rtt_log` | 512 words = 2KB | 3（**高于 app**，见 §2.2） | B |
 | idle | 256 words = 1KB | 0 | A |
+| timer daemon | 256 words = 1KB | 31 | A（CherryUSB OSAL 连带，见 §4.4） |
 
 ### 4.3 内存落点与风险
 
@@ -230,3 +235,78 @@ make configure && make build
 - 25kHz 快车道与 RTOS 后台域的硬隔离（FOC 接入点）。
 - 中断优先级重排（ADC0/PWM1 提到 3、GPTMR 降到 2）与 `configMAX_SYSCALL_INTERRUPT_PRIORITY` 评估。
 - 若 MCHTMR tick 实测不稳 → 独立 commit 切 GPTMR tick。
+
+---
+
+## 10. 实施记录与关键发现（2026-09-23）
+
+### 10.1 上板验证结果（B + 根因修复后）
+
+| 断言 | 实测 |
+| :--- | :--- |
+| 不再冻结 | 走完 `app_init` 全程，`[ADC] zero calibration: OK` + `[MOTOR] open-loop V/F ready` |
+| tick 自检 | `tick_selfcheck: PASS, avg=994.9 us, dev=0.5% (n=32)` |
+| 多任务调度 | `rtt_hb=1..25 q=0 drop=0` 稳定 1Hz 推进 |
+| ADC | 零点标定 OK（PMT 25kHz 链路在刷新） |
+| 电机 | `rotation START`、`f=5.00 Hz` 调速生效 |
+| 异常埋点 | 无 `[EXC]`，未再触发异常 |
+
+### 10.2 关键发现：向量模式 PLIC complete 地址 bug（根因）
+
+**症状**：RTT 在 `[ADC] 16 bit / sample_cycle=25 /  = PWM1 25kHz` 后静默冻结；USB 不枚举；
+ADC 不刷新；无 `[FATAL]`。（该行**并未截断**——格式串 `app_debug_adc.c:73` 含中文
+「触发/计数（）」，是 RTT 采集端丢了非 ASCII 字节的残迹。）
+
+**异常指纹实证**（`g_rtos_exc_*`，埋点产物）：
+
+| 字段 | 值 | 含义 |
+| :--- | :--- | :--- |
+| `mepc` | `0x00088800` | 落在 `ucHeap`（0x86604–0x8A604）= CPU 跳去执行任务栈数据，**控制流被砸烂** |
+| `mcause` | `0x8000BF84` | bit31=1（中断）+ 非法码 0xBF84 = **中断/异常交织** |
+| RTT | 无 `[EXC]` 但 `.noncacheable` 写成功 | 栈烂到 printf/RTT 走不动，裸 store 还能活 |
+
+**根因（算术实锤，非推断）**：
+
+```
+freertos_hpmicro_vectors.h:31（仅向量模式编译）:
+    lui a4, 0xe4200        # → 0xE4200000，硬编码
+    store_x a3, 4(a4)      # → 写 0xE4200004 —— 错误地址
+
+hpm_soc_ip.h:37:
+    #define HPM_PLIC_BASE (0xE4000000UL)   # 实际 PLIC 基址
+```
+
+**差 2MB。** 每个 ISR 的 PLIC complete 都写错地址 → 25kHz ADC PMT 首次密集触发时总线异常
+→ `portASM.S:323` 的 `j .` + trap 入口清 `MIE` → 全系统静默冻结。
+
+**为何此前未暴露**：SDK 全部 **57 个 FreeRTOS 示例 100% 用 `USE_NONVECTOR_MODE=1`**，
+向量模式路径**无一个官方示例在用**，该 bug 从未被验证。本工程未设该宏，落入无人区。
+非向量模式走 `freertos_handle_interrupt` + `__plic_complete_irq(HPM_PLIC_BASE, ...)` 宏，地址正确。
+
+**第二嫌疑（放大器，已一并处理）**：`app` 任务栈 4KB（裸机主栈 16KB），中断首层帧
+（含 FPU 约 300B）叠压后溢出砸穿 `ucHeap` 邻块——`mepc` 落栈区是它的指纹。已扩到 8KB。
+
+### 10.3 修复（对齐官方惯例）与构建期实测
+
+| 修复 | 依据 |
+| :--- | :--- |
+| `sdk_compile_definitions(-DUSE_NONVECTOR_MODE=1)` | 57/57 官方惯例；走 `freertos_handle_interrupt` + `HPM_PLIC_BASE` 宏 |
+| `sdk_compile_definitions(-DDISABLE_IRQ_PREEMPTIVE=1)` | 55/57 官方惯例（非向量+非抢占经官方验证） |
+| `APP_RTOS_STACK_BRINGUP_WORDS` 1024→2048 | 消除栈溢出放大器 |
+
+**构建期实测**：objdump 全文搜 `0xe4200` = **0 命中**（硬编码消失）；PLIC complete 反汇编为
+`lui a5,0xe4000`（正确）；`default_isr_58/59/51/5..8/13..16/40/45` 全为强符号（ISR 正确注册）；
+`irq_handler_wrapper_*`（向量模式产物）消失；ILM 14.80%→7.00%（73 个 stub 不再编入）。
+
+### 10.4 已固化能力（长期保留）
+
+- **异常指纹埋点**（`app_rtos.c` 的 `freertos_exception_handler` 强符号覆盖）：诊断基建。
+  冻结时 J-Link 直读 `g_rtos_exc_*`（`0x8b000–0x8b018`）即可定位。
+- **tick 基频自检**（`app_rtos_selfcheck_tick`）：mcycle 实测 32 tick 平均周期 vs 1ms，偏差 >2% 报 FAIL。
+- **日志队列统计**（`app_debug_rtt_get_write_ok/dropped/queue_depth`）。
+
+### 10.5 遗留待验证项
+
+- USB Terminal 本轮仅验证 USB 枚举链路（实际命令走 UART 单字符路径），Terminal 交互
+  待后续任务化时单独验证。
+- `intf_clock_init()` 在调度器后执行（偏离 SDK 惯例）：实测可用；若后续 tick 不稳优先复查。

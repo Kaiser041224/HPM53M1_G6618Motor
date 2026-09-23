@@ -18,7 +18,7 @@ set(CONFIG_USB_DEVICE_CDC_ACM 1)
 
 # ============================================================================
 # FreeRTOS middleware（tick 源 = SDK 默认 MCHTMR @24MHz，见 config/FreeRTOSConfig.h）
-# 必须在 find_package(hpm-sdk) 之前设置，供 middleware/CMakeLists.txt 判定
+# CONFIG_FREERTOS 必须在 find_package(hpm-sdk) 之前设置，供 middleware/CMakeLists.txt 判定
 # ============================================================================
 
 set(CONFIG_FREERTOS 1)
@@ -31,6 +31,20 @@ set(CUSTOM_IAR_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/iar/user_linker.i
 find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 
 project(user_app)
+
+# ============================================================================
+# FreeRTOS 中断模式（对齐 HPM SDK 官方 FreeRTOS 示例惯例，57/57 示例全部如此）
+#   - USE_NONVECTOR_MODE=1：走 freertos_handle_interrupt + HPM_PLIC_BASE 宏做
+#     PLIC claim/complete（地址正确）。向量模式的 freertos_hpmicro_vectors.h
+#     硬编码 PLIC complete 到 0xE4200000，而 HPM5361 实际 PLIC_BASE=0xE4000000，
+#     差 2MB —— 每个 ISR 结束都写错地址，25kHz ADC 中断密集触发时总线异常。
+#     该 bug 仅存在于向量模式路径，官方 57/57 示例均用非向量模式故从未暴露。
+#   - DISABLE_IRQ_PREEMPTIVE=1：与 55/57 官方示例一致（非向量 + 非抢占组合
+#     经官方验证；非向量 + 抢占无官方先例）。
+# ============================================================================
+
+sdk_compile_definitions(-DUSE_NONVECTOR_MODE=1)
+sdk_compile_definitions(-DDISABLE_IRQ_PREEMPTIVE=1)
 
 # 数学库（sinf/cosf 等，开环旋转与后续 FOC 使用）
 sdk_link_libraries(m)
