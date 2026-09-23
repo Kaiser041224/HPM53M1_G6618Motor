@@ -16,10 +16,17 @@
  * 任务预算（栈单位：word）
  *   A：bring-up 任务（app_init + app_run 超循环）
  *   B：rtt_log 任务（RTT 输出由 RTOS 调度）
+ *
+ * 优先级说明：app 超循环忙等不阻塞，低优先级 logger 会被饿死，
+ * 故 rtt_log 优先级高于 app；无日志时 log 阻塞在队列上，零打扰。
+ *
+ * 栈说明：app 任务 2048 words = 8KB。裸机时 app_init 跑在 16KB 主栈上；
+ * FreeRTOS 下首层中断帧（含 FPU 约 300B）还压在任务栈上，4KB 不足，
+ * 栈溢出曾砸穿 ucHeap 邻块（mepc 落在栈区是其指纹）。8KB 留足余量。
  * ------------------------------------------------------------------------- */
 #define APP_RTOS_PRIO_BRINGUP           (2)
-#define APP_RTOS_PRIO_LOG               (1)
-#define APP_RTOS_STACK_BRINGUP_WORDS    (1024)
+#define APP_RTOS_PRIO_LOG               (3)
+#define APP_RTOS_STACK_BRINGUP_WORDS    (2048)
 #define APP_RTOS_STACK_LOG_WORDS        (512)
 
 /**

@@ -16,6 +16,7 @@
 
 #include "board.h"
 
+#include "app_debug_rtt.h"
 #include "app_rtos.h"
 
 #include "FreeRTOS.h"
@@ -42,6 +43,9 @@ static void app_bringup_task(void* arg) {
  */
 int main(void) {
     board_init();
+
+    /* B：RTT 日志队列 + rtt_log 任务（须在 start_task 之后再产生日志） */
+    app_debug_rtt_start_task();
 
     if (xTaskCreate(app_bringup_task, "app", APP_RTOS_STACK_BRINGUP_WORDS, NULL,
                     APP_RTOS_PRIO_BRINGUP, NULL) != pdPASS) {
