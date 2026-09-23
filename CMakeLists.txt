@@ -16,6 +16,13 @@ set(CONFIG_CHERRYUSB 1)
 set(CONFIG_USB_DEVICE 1)
 set(CONFIG_USB_DEVICE_CDC_ACM 1)
 
+# ============================================================================
+# FreeRTOS middleware（tick 源 = SDK 默认 MCHTMR @24MHz，见 config/FreeRTOSConfig.h）
+# 必须在 find_package(hpm-sdk) 之前设置，供 middleware/CMakeLists.txt 判定
+# ============================================================================
+
+set(CONFIG_FREERTOS 1)
+
 # Linker scripts
 set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/gcc/user_linker.ld)
 set(CUSTOM_SES_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/segger/user_linker.icf)
@@ -163,6 +170,7 @@ sdk_app_src(App/Platform/Src/app_analog_signal.c)
 sdk_app_src(App/Platform/Src/app_can.c)
 sdk_app_src(App/Platform/Src/app_hardware_params.c)
 sdk_app_src(App/Platform/Src/app_software_params.c)
+sdk_app_src(App/Platform/Src/app_rtos.c)
 
 # ============================================================================
 # Control Layer
