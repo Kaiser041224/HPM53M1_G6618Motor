@@ -201,6 +201,19 @@ void app_fast_step(void) {
 
     /* 4) 控制输出（开环 V/F；FOC 控制环原位替换点） */
     app_debug_motor_run_once();
+
+    /* 5) 恢复 ADC 触发比较器 CMP10（直接写工作寄存器，无影子握手）。
+     *
+     * 原因：占空比 CMP 写会 pwm_shadow_register_unlock(PWM1)——U/V/W 占空比 CMP
+     * 与触发比较器 CMP10 同在 PWM1，影子寄存器交互会扰动 CMP10 工作值
+     * （曾观测到 228kHz 触发突发）。控制环路在 ADC PMT ISR 内执行时，扰动会
+     * 自持成触发风暴：ISR 内再扰动 → 自触发 → ISR 饱和饿死全部任务
+     * （表现为 g_adc 不更新 / RTT 不输出 / USB 卡死）。
+     *
+     * 故每次输出写后立即恢复触发点。app_adc_set_trigger_delay_ns 走
+     * hrpwm_set_trigger_cmp_delay 的直接 CMP 写路径（on_modify 单次存储，
+     * 无 SHLK 握手），ISR 安全。FOC 输出写后同样保留此步。 */
+    (void)app_adc_set_trigger_delay_ns(app_adc_get_config()->trigger_delay_ns);
 }
 
 void app_io_step(void) {
