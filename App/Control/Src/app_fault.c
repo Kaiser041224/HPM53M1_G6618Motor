@@ -379,16 +379,17 @@ void app_fault_tick(void) {
     }
 
     /* ---- 状态汇总（FAULT 锁存优先） ----
-     * software.fault.shutdown_en = 0（台架模式）：过流/健康类保护仍检测、计数、
-     * 上报，但状态不进入 FAULT（消费方据此停机），仅保持 WARNING。
-     * 例外：母线过压/欠压仍保持停机 —— 反灌抬压是真实硬件风险（电容耐压），
-     * 限流电源无法吸收回馈能量，此保护不可关。 */
+     * software.fault.shutdown_en = 0（台架模式）：全部保护仅检测、计数、上报，
+     * 状态不进入 FAULT（消费方据此停机），仅保持 WARNING。
+     * M1 修订（spec §6）：母线 OV/UV 同样只判断提醒、不做停机动作 ——
+     * 取消「OV/UV 无条件停机」例外，跟随 shutdown_en。检测/告警保留不变。
+     * 注意：反灌抬压风险仍在（限流电源不吸收回馈能量），进入旋转测试前
+     * 须逐步加回 OV/UV 停机动作（revert 本提交即恢复硬停机路径）。 */
     {
-        uint32_t hard = s_fault_ctx.latched & (APP_FAULT_VBUS_OV | APP_FAULT_VBUS_UV);
-        uint32_t soft = s_fault_ctx.latched & ~(APP_FAULT_VBUS_OV | APP_FAULT_VBUS_UV);
+        uint32_t soft = s_fault_ctx.latched;
         bool shutdown_en = (app_software_params_current()->fault.shutdown_en != 0U);
 
-        if ((hard != 0U) || (shutdown_en && (soft != 0U))) {
+        if (shutdown_en && (soft != 0U)) {
             s_fault_ctx.state = APP_FAULT_STATE_FAULT;
         } else if ((soft != 0U) || pending) {
             s_fault_ctx.state = APP_FAULT_STATE_WARNING;
