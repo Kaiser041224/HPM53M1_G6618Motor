@@ -159,6 +159,13 @@ static void adc_current_pmt_cb(
         s_valid_mask |= (1UL << ch);
     }
     s_sequence++;
+
+    /* FOC 快车道钩子（25kHz 硬件触发，ISR 上下文）：
+     * 控制环路在此执行 —— 节拍由 PWM1 CMP10 → TRGM → ADC0 PMT 保证，
+     * 不被 RTOS 任务/日志抢占。约束：无 RTOS API、无 printf、无等待。 */
+    if (s_adc_cfg.fast_cb != NULL) {
+        s_adc_cfg.fast_cb(s_adc_cfg.fast_cb_user);
+    }
 }
 
 /* ============================================================================

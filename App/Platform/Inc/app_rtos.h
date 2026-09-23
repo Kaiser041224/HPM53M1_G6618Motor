@@ -16,23 +16,21 @@
  * 任务预算（栈单位：word）
  *
  * 优先级（高 → 低）：
- *   rtt_log(4) > app_io(3) = app_diag(3) > app_fast(2) > idle(0)
+ *   rtt_log(4) > app_io(3) = app_diag(3) > idle(0)
+ *   ADC PMT 中断（25kHz 控制环路）为硬件 ISR，优先级高于所有任务。
  *
- * 调度机制：app_fast 为 25kHz mcycle 忙等超循环（不 yield），只饿死同/低优先级；
- * app_io / app_diag 用 vTaskDelay 阻塞后由 tick（1kHz）唤醒并**抢占** app_fast，
- * 形成「快车道独占 CPU + 慢任务按需短抢占」的 FOC 期望结构。rtt_log 阻塞在
- * 日志队列上，无日志零打扰。
+ * 实时性契约：25kHz 控制环路由 PWM1 CMP10 → TRGM → ADC0 PMT 硬件触发，
+ * 在 PMT 完成中断内执行（app_fast_step，见 app_logic.c），不被任务/日志抢占。
+ * FreeRTOS tick 不得作为 FOC 触发源。
  *
- * 栈说明：app_fast 2048 words = 8KB。裸机时 app_init 跑在 16KB 主栈上；
- * FreeRTOS 下首层中断帧（含 FPU 约 300B）压在任务栈上（portContext.h 先 SAVE
- * 再切 ISR 栈）。指纹：mepc 落在 ucHeap 区间 = 控制流被栈砸烂。
+ * 栈说明：FreeRTOS 任务栈从 ucHeap 抠；首层中断帧（含 FPU 约 300B）压在
+ * 被打断任务栈上（portContext.h 先 SAVE 再切 ISR 栈，ISR 栈 = 16KB .stack）。
+ * 指纹：mepc 落在 ucHeap 区间 = 控制流被栈砸烂。
  * ------------------------------------------------------------------------- */
-#define APP_RTOS_PRIO_FAST              (2)
 #define APP_RTOS_PRIO_IO                (3)
 #define APP_RTOS_PRIO_DIAG              (3)
 #define APP_RTOS_PRIO_LOG               (4)
 
-#define APP_RTOS_STACK_FAST_WORDS       (2048)  /* 8KB：快车道 + 中断帧余量 */
 #define APP_RTOS_STACK_IO_WORDS         (1536)  /* 6KB：init/printf/Terminal */
 #define APP_RTOS_STACK_DIAG_WORDS       (512)   /* 2KB：printf */
 #define APP_RTOS_STACK_LOG_WORDS        (512)   /* 2KB：队列排空写 RTT */

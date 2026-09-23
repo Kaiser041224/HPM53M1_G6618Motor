@@ -46,6 +46,10 @@
 #include "intf_clock.h"
 #include "intf_sys.h"
 
+/* 前向声明：hook 先于 step 定义（hook 注册在 app_init，step 定义在后） */
+void app_fast_step(void);
+static void app_fast_step_hook(void* user);
+
 void app_init(void) {
     /*
      * 0. 复位诊断：
@@ -131,6 +135,8 @@ void app_init(void) {
         adc_cfg.wdog_thshd_low = wdog_lo;
         adc_cfg.wdog_cb = app_fault_on_wdog;
         adc_cfg.wdog_cb_user = NULL;
+        adc_cfg.fast_cb = app_fast_step_hook; /* 25kHz 控制环路（PMT 完成中断） */
+        adc_cfg.fast_cb_user = NULL;
         adc_cfg.slow_cb = app_fault_tick;
         app_adc_init(&adc_cfg);
     }
@@ -148,8 +154,38 @@ void app_init(void) {
     app_debug_motor_init();
 }
 
+/**
+ * @brief FOC 快车道钩子（ADC PMT 完成中断内调用，25kHz 硬件触发）。
+ *
+ * 节拍由 PWM1 CMP10 → TRGM → ADC0 PMT 保证；ISR 不被 RTOS 任务/日志抢占。
+ * 超时观测：执行时长超过一个节拍周期（40µs@25kHz）时记录 late。
+ * @param user 用户上下文（未使用）
+ */
+static void app_fast_step_hook(void* user) {
+    static uint32_t s_budget_cycles;
+    uint32_t start_cycle;
+    uint32_t elapsed;
+
+    (void)user;
+
+    if (s_budget_cycles == 0U) {
+        const app_hardware_params_t* hardware = app_hardware_params_current();
+
+        s_budget_cycles = intf_clock_get_cpu_freq() / hardware->inverter.pwm_freq_hz;
+    }
+
+    start_cycle = intf_clock_get_cycle();
+    app_fast_step();
+    elapsed = intf_clock_get_cycle() - start_cycle;
+
+    /* 复用 late 指标：ISR 执行时间超过一个节拍周期（丢拍风险） */
+    if (elapsed > s_budget_cycles) {
+        app_debug_encoder_note_loop_late(elapsed - s_budget_cycles);
+    }
+}
+
 void app_fast_step(void) {
-    /* FOC 硬实时快车道单步（25kHz，由 app_fast 任务调用）。
+    /* FOC 硬实时快车道单步（25kHz，ADC PMT 完成中断内执行）。
      * 硬约束：无 RTOS API、无 printf、无动态分配、无等待。
      * 内容 = FOC 强实时必需：采样 → 换算 → 保护 → 控制输出。
      * 将来 FOC 控制环替换 app_debug_motor_run_once 的位置。 */

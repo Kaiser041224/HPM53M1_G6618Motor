@@ -56,6 +56,9 @@ _Static_assert(ADC_CH_V_CANID == (ADC_CH_COUNT - 1), "CANID must be the last cha
 /* WDOG 回调（逻辑通道，非硬件通道） */
 typedef void (*app_adc_wdog_cb_t)(adc_channel_t ch, uint16_t value, void* user);
 
+/** PMT 完成回调（FOC 快车道钩子；ISR 上下文，25kHz 硬件触发） */
+typedef void (*app_adc_fast_cb_t)(void* user);
+
 /**
  * @brief ADC 采样链初始化配置
  */
@@ -69,6 +72,9 @@ typedef struct {
     uint16_t wdog_thshd_low;   /**< WDOG 低阈值原始码 */
     app_adc_wdog_cb_t wdog_cb; /**< WDOG 回调 */
     void* wdog_cb_user;        /**< WDOG 回调用户上下文 */
+    /* ADC0 PMT 完成回调（25kHz，ISR 上下文；NULL = 不启用） */
+    app_adc_fast_cb_t fast_cb; /**< FOC 快车道钩子（相电流收取后调用） */
+    void* fast_cb_user;        /**< 快车道钩子用户上下文 */
     /* ADC1 序列完成回调（1kHz，ISR 上下文；NULL = 不启用） */
     void (*slow_cb)(void); /**< 慢速序列完成回调 */
 } app_adc_cfg_t;
