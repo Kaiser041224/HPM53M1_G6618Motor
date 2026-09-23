@@ -43,12 +43,24 @@
 #include "app_software_params.h"
 #include "app_terminal.h"
 #include "app_usb.h"
+#include "intf_adc.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
 
 /* 前向声明：hook 先于 step 定义（hook 注册在 app_init，step 定义在后） */
 void app_fast_step(void);
 static void app_fast_step_hook(void* user);
+
+/* ============================================================================
+ * ISR 耗时统计（诊断测试）
+ *   step 段 = app_fast_step（FOC 控制路径，hook 内测量）
+ *   isr 段  = adc_generic_isr 整体（drv_adc 内测量：PMT 校验 + 控制环回调）
+ * ISR 内只做廉价 min/max/累加；app_diag_step 每秒打印并清零。
+ * ========================================================================== */
+static uint32_t s_step_min_cy = 0xFFFFFFFFU;
+static uint32_t s_step_max_cy;
+static uint32_t s_step_sum_cy;
+static uint32_t s_step_cnt;
 
 void app_init(void) {
     /*
@@ -159,6 +171,7 @@ void app_init(void) {
  *
  * 节拍由 PWM1 CMP10 → TRGM → ADC0 PMT 保证；ISR 不被 RTOS 任务/日志抢占。
  * 超时观测：执行时长超过一个节拍周期（40µs@25kHz）时记录 late。
+ * 另收集 step 段耗时 min/avg/max（app_diag 每秒打印一次并清零）。
  * @param user 用户上下文（未使用）
  */
 static void app_fast_step_hook(void* user) {
@@ -177,6 +190,16 @@ static void app_fast_step_hook(void* user) {
     start_cycle = intf_clock_get_cycle();
     app_fast_step();
     elapsed = intf_clock_get_cycle() - start_cycle;
+
+    /* step 段耗时统计（1s 窗口；app_diag_step 读取并清零） */
+    s_step_cnt++;
+    s_step_sum_cy += elapsed;
+    if (elapsed > s_step_max_cy) {
+        s_step_max_cy = elapsed;
+    }
+    if (elapsed < s_step_min_cy) {
+        s_step_min_cy = elapsed;
+    }
 
     /* 复用 late 指标：ISR 执行时间超过一个节拍周期（丢拍风险） */
     if (elapsed > s_budget_cycles) {
@@ -207,6 +230,97 @@ void app_fast_step(void) {
     app_debug_motor_run_once();
 }
 
+/**
+ * @brief ISR 耗时统计打印（1s 窗口，由 app_diag_step 调用）
+ *
+ * 输出三段指标（单位 µs，一位小数）：
+ *   step  min/avg/max  = app_fast_step（FOC 控制段）
+ *   isr   avg/peak     = adc_generic_isr 整体（PMT 校验 + 控制段；peak 为开机以来峰值）
+ *   headroom          = 40µs 节拍预算 − isr peak
+ *   load              = isr 段 CPU 占用率（窗口内 delta）
+ * 注：isr 段不含 FreeRTOS 上下文保存/恢复与 PLIC claim/complete（另约 1–2µs）。
+ */
+void app_isr_stats_print(void) {
+    static uint64_t s_prev_isr_total;
+    static uint32_t s_prev_isr_cnt;
+    static uint32_t s_prev_cycle;
+    static bool s_inited;
+
+    intf_adc_diag_snapshot_t snap;
+    uint32_t cycle_now;
+    uint32_t window_cy;
+    uint32_t div;
+    uint32_t step_min;
+    uint32_t step_avg;
+    uint32_t step_max;
+    uint32_t isr_avg;
+    uint32_t isr_peak;
+    uint32_t isr_cnt;
+    uint32_t load_x10;
+    uint32_t budget_cy;
+    uint32_t headroom_cy;
+    uint32_t status;
+
+    /* 临界区快照 + 清零 step 统计（防止 ISR 并发写导致读数撕裂） */
+    status = intf_sys_irq_save();
+    step_min = s_step_min_cy;
+    step_max = s_step_max_cy;
+    step_avg = (s_step_cnt != 0U) ? (s_step_sum_cy / s_step_cnt) : 0U;
+    s_step_min_cy = 0xFFFFFFFFU;
+    s_step_max_cy = 0U;
+    s_step_sum_cy = 0U;
+    isr_cnt = s_step_cnt;
+    s_step_cnt = 0U;
+    intf_sys_irq_restore(status);
+
+    if (intf_adc_get_diag_snapshot(&snap) != 0) {
+        app_debug_printf("[ISR] diag unavailable\r\n");
+        return;
+    }
+
+    cycle_now = intf_clock_get_cycle();
+    window_cy = s_inited ? (cycle_now - s_prev_cycle) : 0U;
+    div = intf_clock_get_cpu_freq() / 1000000U; /* cycles per µs */
+    if (div == 0U) {
+        div = 1U;
+    }
+    budget_cy = (intf_clock_get_cpu_freq() / app_hardware_params_current()->inverter.pwm_freq_hz);
+
+    /* isr 段窗口均值（ADC0 = FOC 快车道中断）与开机以来峰值 */
+    isr_avg = 0U;
+    load_x10 = 0U;
+    if (s_inited && (isr_cnt > 0U)) {
+        uint64_t delta_total = snap.isr_total_cycles[0] - s_prev_isr_total;
+        uint32_t delta_cnt = snap.irq_entry[0] - s_prev_isr_cnt;
+
+        if (delta_cnt > 0U) {
+            isr_avg = (uint32_t)(delta_total / delta_cnt);
+        }
+        if (window_cy > 0U) {
+            load_x10 = (uint32_t)((delta_total * 10U) / window_cy); /* 0.1% 单位 */
+        }
+    }
+    isr_peak = snap.isr_cycles_max[0];
+    headroom_cy = (budget_cy > isr_peak) ? (budget_cy - isr_peak) : 0U;
+
+    app_debug_printf(
+        "[ISR] n=%u | step min/avg/max=%u.%u/%u.%u/%u.%u | isr avg=%u.%u peak=%u.%u | "
+        "budget=%u.%u headroom=%u.%u | load=%u.%u%%\r\n",
+        (unsigned)isr_cnt, (unsigned)(step_min / div), (unsigned)((step_min % div) * 10U / div),
+        (unsigned)(step_avg / div), (unsigned)((step_avg % div) * 10U / div),
+        (unsigned)(step_max / div), (unsigned)((step_max % div) * 10U / div),
+        (unsigned)(isr_avg / div), (unsigned)((isr_avg % div) * 10U / div),
+        (unsigned)(isr_peak / div), (unsigned)((isr_peak % div) * 10U / div),
+        (unsigned)(budget_cy / div), (unsigned)((budget_cy % div) * 10U / div),
+        (unsigned)(headroom_cy / div), (unsigned)((headroom_cy % div) * 10U / div),
+        (unsigned)(load_x10 / 10U), (unsigned)(load_x10 % 10U));
+
+    s_prev_isr_total = snap.isr_total_cycles[0];
+    s_prev_isr_cnt = snap.irq_entry[0];
+    s_prev_cycle = cycle_now;
+    s_inited = true;
+}
+
 void app_io_step(void) {
     /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：
      * 慢通道采样 + 调试观测 + 通讯轮询。单次处理有界（≤200µs 约束不变）。 */
@@ -232,4 +346,5 @@ void app_diag_step(void) {
 
     app_gpio_toggle(PIN_LED_STATUS);
     app_debug_encoder_print_stats();
+    app_isr_stats_print();
 }
