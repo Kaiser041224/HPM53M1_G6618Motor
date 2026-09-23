@@ -187,19 +187,21 @@ static void app_fast_step_hook(void* user) {
 void app_fast_step(void) {
     /* FOC 硬实时快车道单步（25kHz，ADC PMT 完成中断内执行）。
      * 硬约束：无 RTOS API、无 printf、无动态分配、无等待。
-     * 内容 = FOC 强实时必需：采样 → 换算 → 保护 → 控制输出。
-     * 将来 FOC 控制环替换 app_debug_motor_run_once 的位置。 */
+     * 内容 = FOC 强实时必需：换算 → 保护 → 控制输出。
+     * 将来 FOC 控制环替换 app_debug_motor_run_once 的位置。
+     *
+     * 诊断（2026-09-23）：编码器采样暂移出 ISR（→ app_io_step，1kHz），
+     * 用于隔离「ISR 执行时长过长」假设：motor_run_once 启用后
+     * sinf×3 + set_duty×3 增量可能顶穿 40µs 预算 → 任务饿死。
+     * 若结论成立，FOC 阶段需将编码器改 DMA+中断回调（结果零等待取用）。 */
 
-    /* 1) 编码器双路采样（FOC 角度反馈） */
-    app_debug_encoder_sample();
-
-    /* 2) 模拟量：ADC 缓存 → 物理量换算 + 滤波（FOC 电流/电压反馈） */
+    /* 1) 模拟量：ADC 缓存 → 物理量换算 + 滤波（FOC 电流/电压反馈） */
     app_analog_signal_process();
 
-    /* 3) 三相电流 RMS 累加 + L2 保护判断（FOC 保护） */
+    /* 2) 三相电流 RMS 累加 + L2 保护判断（FOC 保护） */
     app_fault_process();
 
-    /* 4) 控制输出（开环 V/F；FOC 控制环原位替换点）。
+    /* 3) 控制输出（开环 V/F；FOC 控制环原位替换点）。
      * 占空比 CMP 写走直接工作寄存器路径（hrpwm_write_cmp_pair 无 UNLK），
      * 不扰动同实例的 ADC 触发比较器 CMP10。 */
     app_debug_motor_run_once();
@@ -208,6 +210,10 @@ void app_fast_step(void) {
 void app_io_step(void) {
     /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：
      * 慢通道采样 + 调试观测 + 通讯轮询。单次处理有界（≤200µs 约束不变）。 */
+
+    /* 编码器双路采样（诊断期暂居 1kHz 慢任务；FOC 阶段需移回 25kHz 快车道
+     * 或改 DMA+中断回调 —— 见 app_fast_step 注释） */
+    app_debug_encoder_sample();
 
     /* ADC1 慢速通道采样（VBUS/NTC/CANID 原始码生产者） */
     app_adc_slow_process();
