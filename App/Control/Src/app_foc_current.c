@@ -15,6 +15,7 @@
 #include "app_analog_signal.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
+#include "app_protect_policy.h"
 #include "app_software_params.h"
 #include "foc_current.h"
 #include "foc_math.h"
@@ -203,9 +204,11 @@ int app_foc_current_vtest_step_fresh(float i_u_a, float i_v_a, float i_w_a, floa
                          + (g_foc_current_snapshot.i_q_a * g_foc_current_snapshot.i_q_a);
 
             if (foc_finite(i_trip) && (i_trip > 0.0f) && (mag2 > (i_trip * i_trip))) {
-                s_tripped = true;
-                g_foc_current_snapshot.tripped = true;
-                app_foc_current_vtest_stop();
+                if (APP_PROTECT_ACTION_EN) {
+                    s_tripped = true; /* 跳闸锁存 + 停 vtest：M1 只判断不动作 */
+                    g_foc_current_snapshot.tripped = true;
+                    app_foc_current_vtest_stop();
+                }
                 app_foc_current_protect();
                 return -1;
             }
@@ -378,8 +381,10 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
             && ((in.i_d_a * in.i_d_a + in.i_q_a * in.i_q_a) > (i_trip * i_trip))) {
             s_trip_count++;
             if (s_trip_count >= 2U) {
-                s_tripped = true;
-                g_foc_current_snapshot.tripped = true;
+                if (APP_PROTECT_ACTION_EN) {
+                    s_tripped = true; /* 跳闸锁存：M1 只判断不锁存 */
+                    g_foc_current_snapshot.tripped = true;
+                }
                 app_foc_current_protect_reason(APP_FOC_PROT_TRIP);
                 app_foc_current_protect();
                 return -1;

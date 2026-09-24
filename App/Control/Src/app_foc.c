@@ -16,6 +16,7 @@
 #include "app_fault.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
+#include "app_protect_policy.h"
 #include "app_software_params.h"
 #include "foc_angle.h"
 #include "foc_math.h"
@@ -187,16 +188,16 @@ static void app_foc_run_body(void) {
     if (s_state == APP_FOC_STATE_FAULT) {
         return;
     }
-    if ((s_state != APP_FOC_STATE_OFF)
+    if (APP_PROTECT_ACTION_EN && (s_state != APP_FOC_STATE_OFF)
         && ((app_fault_get_state() == APP_FAULT_STATE_FAULT)
             || (g_foc_fault_request != 0U))) {
         app_foc_current_zero_vector();
         app_3phase_inverter_emergency_stop(); /* 幂等：ISR 侧可能已执行 */
-        s_state = APP_FOC_STATE_FAULT;
+        s_state = APP_FAULT_STATE_FAULT;
         return;
     }
     /* 快速过流跳闸（电流环内置）：零矢量已由保护路径输出，此处关桥并锁存 FAULT */
-    if ((s_state != APP_FOC_STATE_OFF) && app_foc_current_is_tripped()) {
+    if (APP_PROTECT_ACTION_EN && (s_state != APP_FOC_STATE_OFF) && app_foc_current_is_tripped()) {
         app_3phase_inverter_emergency_stop();
         s_state = APP_FOC_STATE_FAULT;
         return;
@@ -444,7 +445,9 @@ void app_foc_isr_step(void) {
 
     if (fault) {
         app_foc_current_protect();
-        app_foc_isr_emergency();
+        if (APP_PROTECT_ACTION_EN) {
+            app_foc_isr_emergency(); /* M1：只判断不动作（本拍零矢量回退，不停机） */
+        }
     } else if (degraded) {
         app_foc_current_protect(); /* 本拍零矢量（无角度）；下拍重试，不停机 */
     } else {
@@ -455,8 +458,8 @@ void app_foc_isr_step(void) {
             (void)app_foc_current_run_fresh(theta_e, omega_e, s_i_d_ref, s_i_q_ref, i_u, i_v, i_w,
                                             v_bus, NULL, NULL);
         }
-        /* 过流跳闸（电流环或 vtest 内置）→ 紧急停机独立于主循环 */
-        if (app_foc_current_is_tripped()) {
+        /* 过流跳闸（电流环或 vtest 内置）→ M1：只判断不动作 */
+        if (APP_PROTECT_ACTION_EN && app_foc_current_is_tripped()) {
             app_foc_isr_emergency();
         }
     }
@@ -476,7 +479,7 @@ isr_exit:
             /* 孤立尖峰（冷 cache/总线尾延迟）不瞬杀：连续 32 拍超限才判快路径
              * 失控（真触发风暴 = 每拍超限，streak 快速打满）。 */
             s_overrun_streak++;
-            if (s_overrun_streak >= APP_FOC_OVR_TRIP_STREAK) {
+            if (APP_PROTECT_ACTION_EN && (s_overrun_streak >= APP_FOC_OVR_TRIP_STREAK)) {
                 s_isr_disabled = true;
                 app_foc_isr_emergency();
             }
@@ -513,8 +516,8 @@ int app_foc_enable(void) {
     if (s_state != APP_FOC_STATE_OFF) {
         return 0; /* 已使能：幂等 */
     }
-    if (app_fault_get_state() != APP_FAULT_STATE_NORMAL) {
-        return -2; /* 故障模块非 NORMAL */
+    if (APP_PROTECT_ACTION_EN && (app_fault_get_state() != APP_FAULT_STATE_NORMAL)) {
+        return -2; /* 故障模块非 NORMAL（M1：动作全关时不拦截） */
     }
     if (!app_adc_is_valid()) {
         return -3; /* ADC 采样链无效 */

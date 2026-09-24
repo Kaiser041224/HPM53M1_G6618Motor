@@ -77,7 +77,9 @@ void test_foc_current_integration(void) {
     app_foc_current_get_snapshot(&snap);
     CHECK_NEAR(snap.v_scale, 1.0f, 1e-4f); /* 到达调制前已被 PI 圆限幅 */
 
-    /* 5) vtest 过流跳闸：立即停机（零矢量 + tripped 锁存） */
+    /* 5) vtest 过流判断：M1 保护动作全关（app_protect_policy.h APP_PROTECT_ACTION_EN=0）
+     *     —— 只判断（rc=-1 + 本拍零矢量回退 + 计数），不锁存跳闸、不停 vtest。
+     *     动作加回（开关置 1）后本组断言应恢复为：tripped==true / vtest_active==false。 */
     mock_set_current_gains(0.3f, 100.0f);
     mock_set_i_trip(5.0f);
     app_foc_current_reset();
@@ -85,9 +87,9 @@ void test_foc_current_integration(void) {
     CHECK(app_foc_current_vtest_active() == true);
     rc = app_foc_current_vtest_step_fresh(10.0f, 0.0f, 0.0f, 24.0f, 0.001f);
     CHECK(rc == -1);
-    CHECK(app_foc_current_is_tripped() == true);
-    CHECK(app_foc_current_vtest_active() == false);
-    CHECK_NEAR(g_mock_duty[0], 0.5f, 1e-6f); /* 跳闸输出零矢量 */
+    CHECK(app_foc_current_is_tripped() == false);  /* 只判断：不锁存 */
+    CHECK(app_foc_current_vtest_active() == true); /* 只判断：不停 vtest */
+    CHECK_NEAR(g_mock_duty[0], 0.5f, 1e-6f); /* 本拍零矢量回退（非停机动作） */
 
     /* 6) vtest 计时按传入 dt 推进（ADC 实测 dt，与编码器样本无关） */
     mock_set_i_trip(10.0f);

@@ -12,6 +12,7 @@
 #include "app_debug_rtt.h"
 #include "app_fault.h"
 #include "app_foc.h"
+#include "app_protect_policy.h"
 #include "app_terminal.h"
 
 #include <errno.h>
@@ -91,7 +92,8 @@ bool app_terminal_cmd_require_motor_stopped(chry_shell_t* csh) {
 bool app_terminal_cmd_require_no_fault(chry_shell_t* csh) {
     uint32_t latched = app_fault_get_latched();
 
-    if (latched != 0U) {
+    /* M1：保护动作全关 → 告警/锁存只判断、不拦截指令 */
+    if (APP_PROTECT_ACTION_EN && (latched != 0U)) {
         csh_printf(csh, "ERR: fault latched 0x%08X, clear it first (fault clear)\r\n",
                    (unsigned)latched);
         return false;

@@ -16,6 +16,7 @@
 #include "app_analog_signal.h"
 #include "app_encoder.h"
 #include "app_hardware_params.h"
+#include "app_protect_policy.h"
 #include "app_software_params.h"
 #include "intf_sys.h"
 
@@ -128,7 +129,9 @@ static void fault_raise(uint32_t code, uint16_t oc_fast_raw) {
         fault_snapshot_now();
     }
 
-    s_fault_ctx.state = APP_FAULT_STATE_FAULT;
+    if (APP_PROTECT_ACTION_EN) {
+        s_fault_ctx.state = APP_FAULT_STATE_FAULT; /* M1：动作全关 → 只告警，不进 FAULT */
+    }
     fault_publish();
 }
 
@@ -389,7 +392,7 @@ void app_fault_tick(void) {
         uint32_t soft = s_fault_ctx.latched;
         bool shutdown_en = (app_software_params_current()->fault.shutdown_en != 0U);
 
-        if (shutdown_en && (soft != 0U)) {
+        if (APP_PROTECT_ACTION_EN && shutdown_en && (soft != 0U)) {
             s_fault_ctx.state = APP_FAULT_STATE_FAULT;
         } else if ((soft != 0U) || pending) {
             s_fault_ctx.state = APP_FAULT_STATE_WARNING;

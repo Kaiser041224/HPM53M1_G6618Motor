@@ -50,6 +50,13 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
                (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w,
                (unsigned)snap.valid, (unsigned)snap.run_count, (unsigned)snap.fault_count,
                (unsigned)snap.tripped, (unsigned)g_foc_loop_dt_us);
+    /* M1 保护动作全关：判断计数（只增不动作），复测定位触发源用 */
+    csh_printf(csh, "     judge: ovr=%u penc=%u pread=%u pvb=%u ptrip=%u\r\n",
+               (unsigned)g_foc_isr_overruns,
+               (unsigned)g_foc_protect_counts[APP_FOC_PROT_ENC],
+               (unsigned)g_foc_protect_counts[APP_FOC_PROT_READ],
+               (unsigned)g_foc_protect_counts[APP_FOC_PROT_VBUS],
+               (unsigned)g_foc_protect_counts[APP_FOC_PROT_TRIP]);
     if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
         csh_printf(csh, "     hint: run 'foc off' then 'foc on' to recover\r\n");
     }
