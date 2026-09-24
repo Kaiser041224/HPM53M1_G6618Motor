@@ -33,6 +33,9 @@
 #define APP_FOC_ENC_MAX_AGE_US  (APP_FOC_ENC_PERIOD_US + APP_FOC_ENC_MARGIN_US)
 /* 连续失败/跳变阈值：达到即判换相角不可信（与 algo fail_limit 默认一致） */
 #define APP_FOC_ENC_FAIL_TRIP   (3U)
+/* 时序类编码器故障确认（坏帧拒绝发布 → age 越限到 2 采样周期，单拍不判死） */
+#define APP_FOC_ENC_DEG_TRIP_STREAK (32U) /**< 连续 32 拍（25kHz ≈ 1.3ms）不可用才停机 */
+#define APP_FOC_OVR_TRIP_STREAK     (32U) /**< 连续 32 拍超预算才停用快路径（真失控/风暴） */
 
 static app_foc_state_t s_state;
 static foc_angle_t s_angle;
@@ -59,6 +62,8 @@ static volatile bool s_emergency_active; /**< ISR 紧急关桥已执行（避免
 static volatile bool s_isr_inhibited; /**< ISR 输出抑制（故障锁存；仅 enable 清除） */
 static uint32_t s_isr_last_cycle; /**< ADC ISR 上一拍时刻 [cycle]（vtest 真实 dt） */
 static bool s_isr_dt_valid;       /**< ADC ISR dt 基准已建立 */
+static uint8_t s_enc_degraded_streak; /**< 编码器时序类不可用连续拍数（streak 确认） */
+static uint8_t s_overrun_streak;      /**< ISR 超预算连续拍数（streak 确认） */
 
 /** 外部（Debug）紧急停机请求邮箱（Control 持有指针；ISR 只读，绝不阻塞） */
 static volatile uint32_t* s_estop_request;
@@ -310,6 +315,7 @@ void app_foc_isr_step(void) {
     float v_bus;
     uint16_t raw;
     bool fault = false;
+    bool degraded = false;
 
     if (!s_initialized || s_isr_disabled) {
         return; /* 已停用：无输出，无需计时 */
@@ -360,24 +366,9 @@ void app_foc_isr_step(void) {
             (cpu != 0U) ? (uint32_t)(((uint64_t)enc.age_cycles * 1000000U) / cpu) : 0U;
         g_foc_enc_seq = enc.seq;
 
-        if ((max_age != 0U) && (enc.age_cycles > max_age)) {
-            /* 持续无新有效样本（超过采样周期 + 余量）：角度不可信 → 停机 */
-            app_foc_current_protect_reason(APP_FOC_PROT_ENC);
-            fault = true;
-        } else if (!enc.valid) {
-            /* 单次读失败/连续跳变达上限：若已有上拍角度则短暂保持（40µs 级误差可忽略），
-             * 否则视为不可用。避免一次 SPI 抖动就误关机。 */
-            if (s_theta_held_valid) {
-                theta_e = s_theta_held;
-                omega_e = s_omega_held;
-            } else {
-                app_foc_current_protect_reason(APP_FOC_PROT_ENC);
-                fault = true;
-            }
-        } else if (enc.consecutive_fail >= APP_FOC_ENC_FAIL_TRIP) {
-            app_foc_current_protect_reason(APP_FOC_PROT_ENC);
-            fault = true;
-        } else {
+        if (enc.valid && (enc.consecutive_fail < APP_FOC_ENC_FAIL_TRIP)
+            && ((max_age == 0U) || (enc.age_cycles <= max_age))) {
+            s_enc_degraded_streak = 0U;
             is_new = !s_rotor_seq_primed || (enc.seq != s_rotor_seq_last);
             if (is_new) {
                 if (s_enc_ts_valid) {
@@ -398,6 +389,26 @@ void app_foc_isr_step(void) {
                 omega_e = s_omega_held;
             } else {
                 fault = true; /* 尚无可用角度 */
+            }
+        } else if (s_theta_held_valid) {
+            /* 时序/质量类不可用（坏帧丢样、超龄、连续失败）：复用保持角继续出矢量
+             * （40µs 级误差可忽略）；连续 ENC_DEG_TRIP_STREAK 拍才判真失效停机。
+             * ——原注释语义是"持续无新有效样本→停机"，此处以 streak 落地，
+             * 单次丢样（age 会越限到 2 采样周期）不再瞬杀 FOC。 */
+            theta_e = s_theta_held;
+            omega_e = s_omega_held;
+            s_enc_degraded_streak++;
+            if (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK) {
+                app_foc_current_protect_reason(APP_FOC_PROT_ENC);
+                fault = true;
+            }
+        } else {
+            /* 尚无可用角度（冷启动首拍/坏帧窗口）：本拍零矢量等待，不停机 */
+            s_enc_degraded_streak++;
+            degraded = true;
+            if (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK) {
+                app_foc_current_protect_reason(APP_FOC_PROT_ENC);
+                fault = true;
             }
         }
     }
@@ -434,6 +445,8 @@ void app_foc_isr_step(void) {
     if (fault) {
         app_foc_current_protect();
         app_foc_isr_emergency();
+    } else if (degraded) {
+        app_foc_current_protect(); /* 本拍零矢量（无角度）；下拍重试，不停机 */
     } else {
         if (app_foc_current_vtest_active()) {
             /* vtest 独占执行（ADC ISR，本拍新鲜采样 + ADC 实测 dt） */
@@ -460,8 +473,15 @@ isr_exit:
         }
         if ((mhz > 0U) && ((cycles / mhz) > APP_FOC_ISR_BUDGET_US)) {
             g_foc_isr_overruns++;
-            s_isr_disabled = true;
-            app_foc_isr_emergency();
+            /* 孤立尖峰（冷 cache/总线尾延迟）不瞬杀：连续 32 拍超限才判快路径
+             * 失控（真触发风暴 = 每拍超限，streak 快速打满）。 */
+            s_overrun_streak++;
+            if (s_overrun_streak >= APP_FOC_OVR_TRIP_STREAK) {
+                s_isr_disabled = true;
+                app_foc_isr_emergency();
+            }
+        } else {
+            s_overrun_streak = 0U;
         }
     }
 }
@@ -544,6 +564,8 @@ int app_foc_enable(void) {
         s_rotor_seq_primed = false; /* 重新建立采样序号基准 */
         s_enc_ts_valid = false;     /* 首拍不注入 dt 尖峰 */
         s_theta_held_valid = false;
+        s_enc_degraded_streak = 0U;
+        s_overrun_streak = 0U;
         s_isr_dt_valid = false;
         s_emergency_active = false;
         s_isr_inhibited = false;
@@ -583,6 +605,8 @@ void app_foc_disable(void) {
     s_rotor_seq_primed = false;
     s_enc_ts_valid = false;
     s_theta_held_valid = false;
+    s_enc_degraded_streak = 0U;
+    s_overrun_streak = 0U;
     g_foc_fault_request = 0U;
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     intf_sys_irq_restore(st);
