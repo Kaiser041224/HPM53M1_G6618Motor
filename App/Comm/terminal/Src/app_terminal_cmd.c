@@ -81,11 +81,10 @@ int app_terminal_cmd_parse_float(const char* text, float* out) {
 }
 
 bool app_terminal_cmd_require_motor_stopped(chry_shell_t* csh) {
-    /* V/F 开环已裁剪（M1）：唯一被驱动源为 FOC */
-    if (app_foc_is_active()) {
-        csh_printf(csh, "ERR: FOC is active (use 'foc off' first)\r\n");
-        return false;
-    }
+    /* V/F 开环已裁剪（M1）：无独立旋转源，恒真。
+     * FOC 互斥由 app_foc_enable（FAULT 需先 foc off / 非 OFF 幂等返回）自检，
+     * 不在此拦截——否则 FAULT 态的 foc on 恢复路径被误拒。 */
+    (void)csh;
     return true;
 }
 
