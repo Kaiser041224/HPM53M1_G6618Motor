@@ -393,22 +393,25 @@ void app_foc_isr_step(void) {
             }
         } else if (s_theta_held_valid) {
             /* 时序/质量类不可用（坏帧丢样、超龄、连续失败）：复用保持角继续出矢量
-             * （40µs 级误差可忽略）；连续 ENC_DEG_TRIP_STREAK 拍才判真失效停机。
-             * ——原注释语义是"持续无新有效样本→停机"，此处以 streak 落地，
-             * 单次丢样（age 会越限到 2 采样周期）不再瞬杀 FOC。 */
+             * （40µs 级误差可忽略）；连续 ENC_DEG_TRIP_STREAK 拍判定"真失效"事件。
+             * M1（动作全关）：判定只计数、不升级 fault —— 控制输出保持连续。 */
             theta_e = s_theta_held;
             omega_e = s_omega_held;
             s_enc_degraded_streak++;
-            if (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK) {
-                app_foc_current_protect_reason(APP_FOC_PROT_ENC);
-                fault = true;
+            if (s_enc_degraded_streak == APP_FOC_ENC_DEG_TRIP_STREAK) {
+                app_foc_current_protect_reason(APP_FOC_PROT_ENC); /* 判定事件：计数一次 */
+            }
+            if (APP_PROTECT_ACTION_EN && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
+                fault = true; /* 动作开：确认真失效 → 停机 */
             }
         } else {
             /* 尚无可用角度（冷启动首拍/坏帧窗口）：本拍零矢量等待，不停机 */
             s_enc_degraded_streak++;
             degraded = true;
-            if (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK) {
+            if (s_enc_degraded_streak == APP_FOC_ENC_DEG_TRIP_STREAK) {
                 app_foc_current_protect_reason(APP_FOC_PROT_ENC);
+            }
+            if (APP_PROTECT_ACTION_EN && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
                 fault = true;
             }
         }
