@@ -126,12 +126,15 @@ pub fn check_range(v: &ParamValue, meta: &ParamMeta) -> Result<(), RangeError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PayloadError;
 
-pub fn encode_name(name: &str) -> Vec<u8> {
+/// len-prefixed (u8) name 编码；name 超过 255 字节返回 Err(PayloadError)。
+pub fn encode_name(name: &str) -> Result<Vec<u8>, PayloadError> {
     let bytes = name.as_bytes();
-    assert!(bytes.len() <= 255);
+    if bytes.len() > u8::MAX as usize {
+        return Err(PayloadError);
+    }
     let mut out = vec![bytes.len() as u8];
     out.extend_from_slice(bytes);
-    out
+    Ok(out)
 }
 
 pub fn decode_name(buf: &[u8], pos: &mut usize) -> Result<String, PayloadError> {
@@ -146,16 +149,16 @@ pub fn decode_name(buf: &[u8], pos: &mut usize) -> Result<String, PayloadError> 
     Ok(s.to_string())
 }
 
-pub fn encode_meta_resp(meta: &ParamMeta) -> Vec<u8> {
+pub fn encode_meta_resp(meta: &ParamMeta) -> Result<Vec<u8>, PayloadError> {
     let mut out = Vec::new();
     out.extend_from_slice(&meta.index.to_le_bytes());
     out.push(meta.ty.to_u8());
     out.push(meta.apply.to_u8());
     out.extend_from_slice(&meta.min.to_le_bytes());
     out.extend_from_slice(&meta.max.to_le_bytes());
-    out.extend_from_slice(&encode_name(&meta.name));
-    out.extend_from_slice(&encode_name(&meta.unit));
-    out
+    out.extend_from_slice(&encode_name(&meta.name)?);
+    out.extend_from_slice(&encode_name(&meta.unit)?);
+    Ok(out)
 }
 
 pub fn decode_meta_resp(body: &[u8]) -> Result<ParamMeta, PayloadError> {
@@ -229,7 +232,7 @@ mod tests {
             min: 1.0,
             max: 64.0,
         };
-        let bytes = encode_meta_resp(&meta);
+        let bytes = encode_meta_resp(&meta).unwrap();
         // 布局：index u16 | type u8 | apply u8 | min f32 | max f32 | name_len u8 | name | unit_len u8 | unit
         assert_eq!(&bytes[0..2], &7u16.to_le_bytes());
         assert_eq!(bytes[2], ParamType::U32 as u8);
@@ -246,5 +249,13 @@ mod tests {
         let (ty, v) = decode_value(&encode_value(ParamValue::from_f32(3.3), ParamType::F32)).unwrap();
         assert_eq!(ty, ParamType::F32);
         assert_eq!(v.as_f32(), 3.3);
+    }
+
+    #[test]
+    fn encode_name_rejects_overlong_name() {
+        let overlong = "a".repeat(256);
+        assert_eq!(encode_name(&overlong), Err(PayloadError));
+        let max = "a".repeat(255);
+        assert!(encode_name(&max).is_ok());
     }
 }
