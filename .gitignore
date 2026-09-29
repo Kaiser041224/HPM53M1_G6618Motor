@@ -27,3 +27,4 @@ __pycache__/
 
 # Rust (Gui host tool)
 Gui/**/target/
+Gui/.cargo/
