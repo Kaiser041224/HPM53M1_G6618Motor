@@ -143,20 +143,35 @@ pub fn is_connected() -> bool {
     CONNECTED.load(Ordering::SeqCst)
 }
 
+/// 解析 PROTO_INFO 应答体：major u8 | minor u8 | caps u32 | name_len u8 | name。
+/// 头部长度或 name 越界均返回本地 `0x1FF`，绝不 panic。
+fn parse_proto_info_body(body: &[u8]) -> Result<(u8, u8, u32, String), FrbError> {
+    if body.len() < 7 {
+        return Err(FrbError {
+            code: 0x1FF,
+            message: "short PROTO_INFO".into(),
+        });
+    }
+    let caps = u32::from_le_bytes(body[2..6].try_into().unwrap());
+    let n = body[6] as usize;
+    let end = 7usize.checked_add(n).ok_or_else(|| FrbError {
+        code: 0x1FF,
+        message: "short PROTO_INFO name".into(),
+    })?;
+    if end > body.len() {
+        return Err(FrbError {
+            code: 0x1FF,
+            message: "short PROTO_INFO name".into(),
+        });
+    }
+    let name = String::from_utf8_lossy(&body[7..end]).into_owned();
+    Ok((body[0], body[1], caps, name))
+}
+
 pub async fn proto_info() -> Result<(u8, u8, u32, String), FrbError> {
     on_tokio(async move {
         let body = request(cmd::PROTO_INFO, vec![], RequestKind::Read).await?;
-        // body: major u8 | minor u8 | caps u32 | name_len u8 | name
-        if body.len() < 7 {
-            return Err(FrbError {
-                code: 0x1FF,
-                message: "short PROTO_INFO".into(),
-            });
-        }
-        let caps = u32::from_le_bytes(body[2..6].try_into().unwrap());
-        let n = body[6] as usize;
-        let name = String::from_utf8_lossy(&body[7..7 + n]).into_owned();
-        Ok((body[0], body[1], caps, name))
+        parse_proto_info_body(&body)
     })
     .await?
 }
@@ -385,4 +400,51 @@ pub async fn stats_get() -> Result<StatsDto, FrbError> {
         })
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_proto_info_body_accepts_valid() {
+        let mut body = vec![1u8, 0];
+        body.extend_from_slice(&0x0000_0003u32.to_le_bytes());
+        body.push(7);
+        body.extend_from_slice(b"gui-sim");
+        let (major, minor, caps, name) = parse_proto_info_body(&body).unwrap();
+        assert_eq!(major, 1);
+        assert_eq!(minor, 0);
+        assert_eq!(caps, 0x0000_0003);
+        assert_eq!(name, "gui-sim");
+    }
+
+    #[test]
+    fn parse_proto_info_body_accepts_empty_name() {
+        let mut body = vec![1u8, 0];
+        body.extend_from_slice(&0x0000_0003u32.to_le_bytes());
+        body.push(0);
+        let (major, minor, caps, name) = parse_proto_info_body(&body).unwrap();
+        assert_eq!((major, minor, caps), (1, 0, 0x0000_0003));
+        assert!(name.is_empty());
+    }
+
+    #[test]
+    fn parse_proto_info_body_rejects_truncated_header() {
+        let err = parse_proto_info_body(&[1, 0, 3]).unwrap_err();
+        assert_eq!(err.code, 0x1FF);
+        assert_eq!(err.message, "short PROTO_INFO");
+    }
+
+    #[test]
+    fn parse_proto_info_body_rejects_name_len_overrun() {
+        // 头部合法但 name_len 声称 9 字节、实际仅 3 字节：旧实现会 panic。
+        let mut body = vec![1u8, 0];
+        body.extend_from_slice(&0x0000_0003u32.to_le_bytes());
+        body.push(9);
+        body.extend_from_slice(b"gui");
+        let err = parse_proto_info_body(&body).unwrap_err();
+        assert_eq!(err.code, 0x1FF);
+        assert_eq!(err.message, "short PROTO_INFO name");
+    }
 }
