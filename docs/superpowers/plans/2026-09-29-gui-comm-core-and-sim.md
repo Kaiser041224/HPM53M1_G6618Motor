@@ -359,6 +359,8 @@ typedef struct {
 
 向量出处（勿手改 hex）：frame1 CRC 覆盖 `01 01 00 00 00` → `0xCDE9`；frame2 覆盖 `01 81 00 0A 00` + `01 00 03 00 00 00 03 53 49 4D`（proto v1.0，caps=3，name "SIM"）→ `0xC42D`；frame3 覆盖 `01 04 01 11 00` + `10 "motor.pole_pairs"` → `0x4035`；frame4 覆盖 `01 84 01 01 00 02` → `0x81A0`。CRC 字段小端放置。
 
+> **Errata（2026-09-29，最终评审后已实施）**：frame1 CRC 尾应为小端 `E9CD`（原 `CDE9` 为誊写错误）；frame2 最终权威帧为 `A55A0181000F0000010003000000076775692D73696DCF5D`（含 status 00 前缀，设备名 `gui-sim`，LEN=0x000F，CRC 0x5DCF 独立实算）——即 `Gui/protocol/test_vectors.json` 现值为准；`encode`/`encode_name`/`encode_meta_resp` 按 Kaiser 裁定改为 `Result` 返回（`EncodeError`/`PayloadError`），`SessionError` 增 `BadPayload`。
+
 - [ ] **Step 4: 写 `Gui/core/tests/vectors_valid.rs`（JSON 结构校验）**
 
 ```rust
