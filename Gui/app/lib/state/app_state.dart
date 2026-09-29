@@ -52,15 +52,21 @@ class AppState extends ChangeNotifier {
   /// Periodic [frb.statsGet] refresher; active only while connected.
   Timer? statusTimer;
 
+  /// Test-only: when set, [connect] throws this instead of calling the bridge.
+  @visibleForTesting
+  Object? connectError;
+
   bool _disposed = false;
 
   /// Test-only constructor seeding [metas] and [status] without touching the
-  /// bridge. [onCtrl] may be supplied here or assigned afterwards.
+  /// bridge. [onCtrl] and [connectError] may be supplied here or assigned
+  /// afterwards.
   @visibleForTesting
   AppState.test({
     List<frb.ParamMetaDto> metas = const [],
     this.status,
     this.onCtrl,
+    this.connectError,
   }) : metas = List.of(metas);
 
   /// Loads the metadata table, then reads every parameter value.
@@ -180,6 +186,8 @@ class AppState extends ChangeNotifier {
   /// Returns true on success; on failure [lastError] is populated.
   Future<bool> connect(String addr) async {
     try {
+      final injected = connectError;
+      if (injected != null) throw injected;
       await frb.connect(addr: addr);
       final info = await frb.protoInfo();
       deviceName = info.$4;
