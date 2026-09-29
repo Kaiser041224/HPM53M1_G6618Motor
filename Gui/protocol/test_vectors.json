@@ -1,0 +1,25 @@
+{
+  "crc_sanity": { "input_ascii": "123456789", "crc": "29B1" },
+  "frames": [
+    {
+      "name": "proto_info_req_seq0",
+      "hex": "A55A0101000000E9CD",
+      "expect": { "ver": 1, "cmd": 1, "seq": 0, "payload_hex": "" }
+    },
+    {
+      "name": "proto_info_resp_sim",
+      "hex": "A55A0181000B00000100030000000353494D70E9",
+      "expect": { "ver": 1, "cmd": 129, "seq": 0, "payload_hex": "000100030000000353494D" }
+    },
+    {
+      "name": "param_read_req_motor_pole_pairs",
+      "hex": "A55A0104011100106D6F746F722E706F6C655F70616972733540",
+      "expect": { "ver": 1, "cmd": 4, "seq": 1, "payload_hex": "106D6F746F722E706F6C655F7061697273" }
+    },
+    {
+      "name": "param_read_resp_bad_param_seq1",
+      "hex": "A55A018401010002A081",
+      "expect": { "ver": 1, "cmd": 132, "seq": 1, "payload_hex": "02" }
+    }
+  ]
+}
