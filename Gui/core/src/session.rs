@@ -32,6 +32,8 @@ pub enum SessionError {
     Status(u8),
     Transport(TransportError),
     Closed,
+    /// payload 长度超过 `crate::codec::MAX_PAYLOAD`。
+    BadPayload,
 }
 
 pub struct Session<T: Transport> {
@@ -72,6 +74,9 @@ impl<T: Transport> Session<T> {
         payload: &[u8],
         kind: RequestKind,
     ) -> Result<Vec<u8>, SessionError> {
+        if payload.len() > crate::codec::MAX_PAYLOAD {
+            return Err(SessionError::BadPayload);
+        }
         let max_attempts = match kind {
             RequestKind::Read => READ_RETRIES + 1,
             RequestKind::Write => 1,
@@ -87,7 +92,11 @@ impl<T: Transport> Session<T> {
                 seq,
                 payload: payload.to_vec(),
             };
-            if let Err(e) = self.transport.write_all(&encode(&frame)).await {
+            let wire = match encode(&frame) {
+                Ok(w) => w,
+                Err(_) => return Err(SessionError::BadPayload),
+            };
+            if let Err(e) = self.transport.write_all(&wire).await {
                 last_err = SessionError::Transport(e);
                 continue;
             }
@@ -178,7 +187,7 @@ mod tests {
                         seq: req.seq,
                         payload: body,
                     };
-                    if t.write_all(&encode(&resp)).await.is_err() {
+                    if t.write_all(&encode(&resp).unwrap()).await.is_err() {
                         break;
                     }
                 }
@@ -236,7 +245,7 @@ mod tests {
                 seq: req.seq,
                 payload: vec![0x04], // MP_STATUS_LOCKED
             };
-            server.write_all(&encode(&resp)).await.unwrap();
+            server.write_all(&encode(&resp).unwrap()).await.unwrap();
         });
         let mut s = Session::new(client);
         let err = s.request(0x06, b"", RequestKind::Write).await.unwrap_err();
@@ -253,6 +262,22 @@ mod tests {
         for _ in 0..300 {
             s.request(0x07, b"", RequestKind::Read).await.unwrap();
         }
+        drop(s);
+        h.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_payload_returns_bad_payload_without_attempts() {
+        let (client, server) = loopback_pair();
+        let h = spawn_fake_device(server, true);
+        let mut s = Session::new(client);
+        let payload = vec![0u8; crate::codec::MAX_PAYLOAD + 1];
+        let err = s
+            .request(0x04, &payload, RequestKind::Read)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::BadPayload));
+        assert_eq!(s.stats().attempts, 0);
         drop(s);
         h.await.unwrap();
     }
