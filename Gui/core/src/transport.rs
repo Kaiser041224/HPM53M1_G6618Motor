@@ -1,6 +1,9 @@
 //! 传输抽象：统一 `Tcp` 与内存回环（测试/仿真）两种字节流通道。
 
+use std::collections::VecDeque;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -59,34 +62,103 @@ impl Transport for TcpTransport {
     }
 }
 
-/// 内存回环传输实现，两端互为对端。
+/// 单向回环通道的共享状态：字节队列 + 关闭标志 + 唤醒通知。
+struct LoopbackChannel {
+    queue: Mutex<VecDeque<u8>>,
+    closed: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl LoopbackChannel {
+    /// 创建空的单向通道。
+    fn new() -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::new()),
+            closed: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// 标记通道关闭并唤醒挂起的读者。
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+}
+
+/// 内存回环传输实现，两端互为对端；按 **字节流** 语义收发
+/// （无消息边界，允许任意切分/合并，超出缓冲区的数据保留在队列中）。
 pub struct LoopbackTransport {
-    tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    inbox: Arc<LoopbackChannel>,
+    outbox: Arc<LoopbackChannel>,
 }
 
 /// 创建一对互为对端的回环传输。
 pub fn loopback_pair() -> (LoopbackTransport, LoopbackTransport) {
-    let (tx_a, rx_b) = tokio::sync::mpsc::unbounded_channel();
-    let (tx_b, rx_a) = tokio::sync::mpsc::unbounded_channel();
+    let a_to_b = Arc::new(LoopbackChannel::new());
+    let b_to_a = Arc::new(LoopbackChannel::new());
     (
-        LoopbackTransport { tx: tx_a, rx: rx_a },
-        LoopbackTransport { tx: tx_b, rx: rx_b },
+        LoopbackTransport {
+            inbox: Arc::clone(&b_to_a),
+            outbox: Arc::clone(&a_to_b),
+        },
+        LoopbackTransport {
+            inbox: a_to_b,
+            outbox: b_to_a,
+        },
     )
+}
+
+impl Drop for LoopbackTransport {
+    fn drop(&mut self) {
+        self.inbox.close();
+        self.outbox.close();
+    }
 }
 
 impl Transport for LoopbackTransport {
     async fn write_all(&mut self, buf: &[u8]) -> Result<(), TransportError> {
-        self.tx.send(buf.to_vec()).map_err(|_| TransportError::Closed)
+        if self.outbox.closed.load(Ordering::Acquire) {
+            return Err(TransportError::Closed);
+        }
+        {
+            let mut queue = self
+                .outbox
+                .queue
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            queue.extend(buf.iter().copied());
+        }
+        self.outbox.notify.notify_one();
+        Ok(())
     }
+
     async fn read_some(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        match self.rx.recv().await {
-            Some(data) => {
-                let n = data.len().min(buf.len());
-                buf[..n].copy_from_slice(&data[..n]);
-                Ok(n)
+        // 空缓冲区视为 no-op：不阻塞、不消费队列（与 TcpTransport 的 0 语义不同，
+        // 此处按 ruling 文档化为 `Ok(0)`）。
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            {
+                let mut queue = self
+                    .inbox
+                    .queue
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if !queue.is_empty() {
+                    let n = queue.len().min(buf.len());
+                    for (slot, byte) in buf[..n].iter_mut().zip(queue.drain(..n)) {
+                        *slot = byte;
+                    }
+                    return Ok(n);
+                }
+                // 队列已排空后才报告对端关闭。
+                if self.inbox.closed.load(Ordering::Acquire) {
+                    return Err(TransportError::Closed);
+                }
             }
-            None => Err(TransportError::Closed),
+            self.inbox.notify.notified().await;
         }
     }
 }
@@ -112,6 +184,46 @@ mod tests {
         let (mut a, b) = super::loopback_pair();
         drop(b);
         let mut buf = [0u8; 4];
+        assert!(matches!(a.read_some(&mut buf).await, Err(TransportError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn loopback_partial_reads_preserve_all_bytes_in_order() {
+        let (mut a, mut b) = super::loopback_pair();
+        let payload: Vec<u8> = (0..100u8).collect();
+        a.write_all(&payload).await.unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 30];
+        while got.len() < payload.len() {
+            let n = b.read_some(&mut buf).await.unwrap();
+            assert!(n > 0 && n <= 30);
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(got, payload);
+    }
+
+    #[tokio::test]
+    async fn loopback_coalesces_writes_into_one_stream() {
+        let (mut a, mut b) = super::loopback_pair();
+        a.write_all(b"hello ").await.unwrap();
+        a.write_all(b"world").await.unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 11];
+        while got.len() < 11 {
+            let n = b.read_some(&mut buf).await.unwrap();
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(got, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn loopback_drains_queued_bytes_then_reports_closed() {
+        let (mut a, mut b) = super::loopback_pair();
+        b.write_all(b"bye").await.unwrap();
+        drop(b);
+        let mut buf = [0u8; 8];
+        let n = a.read_some(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"bye");
         assert!(matches!(a.read_some(&mut buf).await, Err(TransportError::Closed)));
     }
 
