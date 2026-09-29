@@ -1,0 +1,17 @@
+[package]
+name = "gui-frb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+gui-core = { path = "../core" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+flutter_rust_bridge = "2"
+
+[dev-dependencies]
+gui-sim = { path = "../sim" }
+tokio = { workspace = true, features = ["full"] }
