@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'bridge/frb/api.dart' as frb;
 import 'bridge/frb/frb_generated.dart';
 import 'state/app_state.dart';
+import 'ui/shell.dart';
 import 'ui/theme.dart';
 
 Future<void> main() async {
@@ -12,27 +13,38 @@ Future<void> main() async {
   runApp(GuiApp(bridgeOk: bridgeOk));
 }
 
-/// Root widget. The `Shell` (navigation rail + status bar) replaces the
-/// placeholder body in Task 4; `AppState` is the single source of app state.
+/// Root widget. Owns the single [AppState] instance and builds the [Shell]
+/// (navigation rail + status bar).
 ///
-/// `bridgeOk` is the startup FFI smoke result: `frb.isConnected()` touches the
+/// [bridgeOk] is the startup FFI smoke result: `frb.isConnected()` touches the
 /// native symbol table without needing a device, so a broken wire fails loudly.
-class GuiApp extends StatelessWidget {
+class GuiApp extends StatefulWidget {
   const GuiApp({super.key, this.bridgeOk = false});
 
   final bool bridgeOk;
 
   @override
+  State<GuiApp> createState() => _GuiAppState();
+}
+
+class _GuiAppState extends State<GuiApp> {
+  late final AppState _state = AppState();
+
+  @override
+  void dispose() {
+    _state.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: AppState(),
+      listenable: _state,
       builder: (context, _) => MaterialApp(
         title: 'Gui',
         debugShowCheckedModeBanner: false,
         theme: buildGuiTheme(),
-        home: Scaffold(
-          body: Center(child: Text('Gui — bridge ok: $bridgeOk')),
-        ),
+        home: Shell(state: _state),
       ),
     );
   }

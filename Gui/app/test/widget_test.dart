@@ -3,24 +3,34 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:g6618_gui/main.dart';
 import 'package:g6618_gui/state/app_state.dart';
+import 'package:g6618_gui/ui/status_bar.dart';
 import 'package:g6618_gui/ui/theme.dart';
 
 void main() {
-  testWidgets('shell renders the Gui placeholder', (WidgetTester tester) async {
+  testWidgets('shell renders navigation rail and persistent status bar', (
+    WidgetTester tester,
+  ) async {
     await tester.pumpWidget(const GuiApp());
 
-    expect(find.textContaining('Gui — bridge ok: false'), findsOneWidget);
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.text('连接管理'), findsOneWidget);
+    expect(find.byType(StatusBar), findsOneWidget);
+    expect(find.text('未连接'), findsOneWidget);
 
     final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
     expect(app.theme?.useMaterial3, isTrue);
     expect(app.theme?.colorScheme.brightness, Brightness.dark);
   });
 
-  test('AppState starts disconnected with empty device name', () {
+  test('AppState starts disconnected with zeroed counters', () {
     final state = AppState();
     expect(state.connected, isFalse);
     expect(state.deviceName, isEmpty);
     expect(state.lastError, isEmpty);
+    expect(state.reconnects, 0);
+    expect(state.crcErrors, 0);
+    expect(state.requestFailures, 0);
+    expect(state.statusTimer, isNull);
   });
 
   test('buildGuiTheme is Material 3 dark', () {
