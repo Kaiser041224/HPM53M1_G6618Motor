@@ -19,7 +19,7 @@
 | CAN 链路 | 经独立 CAN 适配器小板（自制 USB 转 CAN 或无线 CAN，ESP32 / HPM 单片机）；上位机面向「适配器链路」，适配器固件是独立项目 |
 | 平台 | Windows / Linux 桌面为主；Android 预留；iOS 仅网络链路（系统无自定义 USB Host） |
 | 开发路径 | 方案 1：契约先行 + 设备模拟器驱动（融合纵切片交付节奏） |
-| 命名 | 产品名 **Gui**（文档全称 "G6618Motor Gui"）；目录 `gui/`；Dart 包与可执行文件 `g6618_gui`；协议 C 头 `motor_proto.h` |
+| 命名 | 产品名 **Gui**（文档全称 "G6618Motor Gui"）；目录 `Gui/`；Dart 包与可执行文件 `g6618_gui`；协议 C 头 `motor_proto.h` |
 | 分支策略 | `feat/host-tool`（自 `main` a8c5d2c），完成后 PR 合回 `main` |
 | 示波器数据形态 | 协议定义两级流（原始流 + 降采样流），一期只实现降采样流 |
 | 框架选型依据 | Qt6 / Slint / EUI-NEO 均评估否决或降级，依据见 §12 |
@@ -64,7 +64,7 @@
 - 分支：`feat/host-tool` 自 `main`（a8c5d2c），上位机全部开发在此分支，完成后 PR 合回 `main`；本分支不修改固件代码。
 
 ```text
-gui/                          # 上位机根（本分支唯一新增顶层目录）
+Gui/                          # 上位机根（本分支唯一新增顶层目录）
 ├── protocol/                 # 协议契约 = 单一事实源
 │   ├── motor_proto.h         # 共享 C 头：帧格式/命令字/结构体/错误码（固件将来直接 include）
 │   ├── test_vectors.json     # 金测试向量（hex 帧 + 期望结果，Rust/固件两侧共用）
@@ -112,7 +112,7 @@ gui/                          # 上位机根（本分支唯一新增顶层目录
 
 ## 6. 协议契约 v1（要点）
 
-完整展开见 `gui/protocol/protocol_spec.md`（M0 产出）。要点：
+完整展开见 `Gui/protocol/protocol_spec.md`（M0 产出）。要点：
 
 ### 6.1 帧格式（小端）
 
@@ -231,7 +231,7 @@ Ready → Degraded（流中断但请求可通，状态栏显式标注）
 
 | 里程碑 | 内容 | 验收 |
 | :--- | :--- | :--- |
-| **M0** | 分支 + `gui/` 骨架 + `motor_proto.h` + `protocol_spec.md` + 测试向量 | spec 评审通过 |
+| **M0** | 分支 + `Gui/` 骨架 + `motor_proto.h` + `protocol_spec.md` + 测试向量 | spec 评审通过 |
 | **M1** | gui-core + gui-sim + Gui 参数面板（**A 阶段**） | 模拟器上参数全流程 + 联锁/故障用例通过 |
 | **M2** | dashboard 状态/电机控制 + 真板 bulk 接入 | 真板联调（依赖固件侧协议服务端） |
 | **M3** | 示波器（**B 阶段**，一级流） | 模拟器流 + 真板流 |

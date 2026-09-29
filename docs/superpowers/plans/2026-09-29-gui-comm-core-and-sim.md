@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 交付 `gui/` 工作区：协议契约三件套（`motor_proto.h` + `protocol_spec.md` + `test_vectors.json`）、gui-core（codec/transport/session/params）、gui-sim（TCP 设备模拟器）及全链路集成测试——无硬件即可运行的完整 A 阶段 Rust 侧。
+**Goal:** 交付 `Gui/` 工作区：协议契约三件套（`motor_proto.h` + `protocol_spec.md` + `test_vectors.json`）、gui-core（codec/transport/session/params）、gui-sim（TCP 设备模拟器）及全链路集成测试——无硬件即可运行的完整 A 阶段 Rust 侧。
 
 **Architecture:** 契约先行：`motor_proto.h` 是双端唯一事实源，gui-core 手写 Rust 镜像，用独立计算的金向量锁一致。传输抽象 `Transport`（Loopback/Tcp，UsbBulk/Serial 属 M2 计划）→ codec（SOF 重同步 + CRC）→ session（SEQ/超时/重试）→ params（元数据驱动）。gui-sim 复用 `config/*.yaml` 做协议服务端参考实现，集成测试走真实 TCP 路径。
 
@@ -14,19 +14,19 @@
 
 ## Global Constraints
 
-- 命名：产品 **Gui**；目录 `gui/`；协议头 `motor_proto.h`；crate 包名 `gui-core` / `gui-sim` / `gui-tests`（Rust 标识符 `gui_core` / `gui_sim` / `gui_tests`）。
+- 命名：产品 **Gui**；目录 `Gui/`；协议头 `motor_proto.h`；crate 包名 `gui-core` / `gui-sim` / `gui-tests`（Rust 标识符 `gui_core` / `gui_sim` / `gui_tests`）。
 - 协议 v1 硬常量：`VER=0x01`，`SOF=0xA55A`，CRC16-CCITT-FALSE（init `0xFFFF`，poly `0x1021`，无反转，结果不取反），**小端**，`MAX_PAYLOAD=512`，响应 CMD = 请求 CMD | `0x80`，响应 payload 首字节 = status。
 - 错误策略（spec §10）：请求超时 **500ms/次**；**读**自动重试 2 次（共 3 发）；**写**不重试；`PARAM_COMMIT` 绝不自动重试。
 - gui-core 禁止 panic：全部 `Result` 上抛（测试代码不受限）。
-- 本计划只新增 `gui/` 与本计划文档；**禁改** `App/`、`Driver/`、`Interface/`、`Board/`、`config/`、`scripts/`。
+- 本计划只新增 `Gui/` 与本计划文档；**禁改** `App/`、`Driver/`、`Interface/`、`Board/`、`config/`、`scripts/`。
 - 工具链：Rust 经 rustup 安装；mingw gcc（`D:\Program Files\Compiler\mingw64\w64devkit\bin\gcc.exe`）仅用于 C 头语法检查。
-- 测试入口：在 `gui/` 下 `cargo test --workspace`，必须全绿才算任务完成。
+- 测试入口：在 `Gui/` 下 `cargo test --workspace`，必须全绿才算任务完成。
 - 每个任务结束必须提交（frequent commits），提交信息用 `type(scope): 描述`（如 `feat(gui-core): ...`）。
 
 ## File Structure
 
 ```text
-gui/
+Gui/
 ├── Cargo.toml                      # [workspace] members = core, sim, tests
 ├── README.md                       # 构建/测试/模拟器运行说明（Task 9）
 ├── protocol/
@@ -65,8 +65,8 @@ gui/
 ### Task 1: 工具链与工作区骨架
 
 **Files:**
-- Create: `gui/Cargo.toml`、`gui/core/Cargo.toml`、`gui/core/src/lib.rs`、`gui/sim/Cargo.toml`、`gui/sim/src/lib.rs`、`gui/sim/src/main.rs`、`gui/tests/Cargo.toml`、`gui/tests/tests/.gitkeep`
-- Modify: `.gitignore`（追加 `gui/**/target/`，若顶层 `target/` 未覆盖）
+- Create: `Gui/Cargo.toml`、`Gui/core/Cargo.toml`、`Gui/core/src/lib.rs`、`Gui/sim/Cargo.toml`、`Gui/sim/src/lib.rs`、`Gui/sim/src/main.rs`、`Gui/tests/Cargo.toml`、`Gui/tests/tests/.gitkeep`
+- Modify: `.gitignore`（追加 `Gui/**/target/`，若顶层 `target/` 未覆盖）
 
 **Interfaces:**
 - Consumes: 无
@@ -86,7 +86,7 @@ cargo --version
 
 - [ ] **Step 2: 创建 workspace 骨架**
 
-`gui/Cargo.toml`：
+`Gui/Cargo.toml`：
 ```toml
 [workspace]
 resolver = "2"
@@ -104,7 +104,7 @@ serde_yaml = "0.9"
 serde_json = "1"
 ```
 
-`gui/core/Cargo.toml`：
+`Gui/core/Cargo.toml`：
 ```toml
 [package]
 name = "gui-core"
@@ -120,13 +120,13 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
 ```
 
-`gui/core/src/lib.rs`：
+`Gui/core/src/lib.rs`：
 ```rust
 //! gui-core：Gui 通讯核（transport / codec / session / params）。
-//! 契约源头：`gui/protocol/motor_proto.h`，本 crate 为其 Rust 镜像实现。
+//! 契约源头：`Gui/protocol/motor_proto.h`，本 crate 为其 Rust 镜像实现。
 ```
 
-`gui/sim/Cargo.toml`：
+`Gui/sim/Cargo.toml`：
 ```toml
 [package]
 name = "gui-sim"
@@ -149,19 +149,19 @@ name = "gui-sim"
 path = "src/main.rs"
 ```
 
-`gui/sim/src/lib.rs`：
+`Gui/sim/src/lib.rs`：
 ```rust
 //! gui-sim：设备模拟器（协议服务端参考实现）。
 ```
 
-`gui/sim/src/main.rs`：
+`Gui/sim/src/main.rs`：
 ```rust
 fn main() {
     println!("gui-sim: skeleton ok");
 }
 ```
 
-`gui/tests/Cargo.toml`：
+`Gui/tests/Cargo.toml`：
 ```toml
 [package]
 name = "gui-tests"
@@ -176,16 +176,16 @@ gui-sim = { path = "../sim" }
 tokio.workspace = true
 ```
 
-`gui/tests/tests/.gitkeep`：空文件。
+`Gui/tests/tests/.gitkeep`：空文件。
 
 `.gitignore` 追加（若不存在等价规则）：
 ```text
-gui/**/target/
+Gui/**/target/
 ```
 
 - [ ] **Step 3: 构建验证**
 
-Run: `cargo build --workspace`（在 `gui/` 下）
+Run: `cargo build --workspace`（在 `Gui/` 下）
 Expected: 编译通过，无 error。
 
 - [ ] **Step 4: 测试验证**
@@ -196,7 +196,7 @@ Expected: 0 tests（或 gui-sim 无测试），退出码 0。
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add gui/ .gitignore
+git add Gui/ .gitignore
 git commit -m "feat(gui): workspace 骨架（core/sim/tests crates）"
 ```
 
@@ -205,15 +205,15 @@ git commit -m "feat(gui): workspace 骨架（core/sim/tests crates）"
 ### Task 2: 协议契约三件套（motor_proto.h / protocol_spec.md / test_vectors.json）
 
 **Files:**
-- Create: `gui/protocol/motor_proto.h`、`gui/protocol/protocol_spec.md`、`gui/protocol/test_vectors.json`、`gui/core/tests/vectors_valid.rs`
-- Modify: `gui/core/Cargo.toml`（dev-dep 已含 serde_json，无需改）
+- Create: `Gui/protocol/motor_proto.h`、`Gui/protocol/protocol_spec.md`、`Gui/protocol/test_vectors.json`、`Gui/core/tests/vectors_valid.rs`
+- Modify: `Gui/core/Cargo.toml`（dev-dep 已含 serde_json，无需改）
 
 **Interfaces:**
 - Consumes: Task 1 workspace
 - Produces: `motor_proto.h` 中的全部常量与字节布局（Task 3/6/7 实现镜像）；`test_vectors.json` 结构：
   `{"crc_sanity": {"input_ascii": str, "crc": str}, "frames": [{"name": str, "hex": str, "expect": {"ver": u8, "cmd": u8, "seq": u8, "payload_hex": str}}]}`。
 
-- [ ] **Step 1: 写 `gui/protocol/motor_proto.h`**
+- [ ] **Step 1: 写 `Gui/protocol/motor_proto.h`**
 
 ```c
 /**
@@ -318,7 +318,7 @@ typedef struct {
 #endif /* MOTOR_PROTO_H */
 ```
 
-- [ ] **Step 2: 写 `gui/protocol/protocol_spec.md`**
+- [ ] **Step 2: 写 `Gui/protocol/protocol_spec.md`**
 
 内容要求（逐节写全，不得留 TBD）：
 1. 帧格式表（含 `test_vectors.json` 4 个金帧的逐步字节注解）；
@@ -327,7 +327,7 @@ typedef struct {
 4. 传输映射（bulk/CDC/UART 直载；CAN 适配器分片承载）；
 5. 版本协商：`proto_major` 不等 → 主机拒绝连接并报错；`caps` 位定义 v1 仅 bit0=参数写、bit1=控制、bit2=一级流（预留恒 0）。
 
-- [ ] **Step 3: 写 `gui/protocol/test_vectors.json`（下列 hex 为独立 C 程序实算结果，原样使用）**
+- [ ] **Step 3: 写 `Gui/protocol/test_vectors.json`（下列 hex 为独立 C 程序实算结果，原样使用）**
 
 ```json
 {
@@ -359,7 +359,7 @@ typedef struct {
 
 向量出处（勿手改 hex）：frame1 CRC 覆盖 `01 01 00 00 00` → `0xCDE9`；frame2 覆盖 `01 81 00 0A 00` + `01 00 03 00 00 00 03 53 49 4D`（proto v1.0，caps=3，name "SIM"）→ `0xC42D`；frame3 覆盖 `01 04 01 11 00` + `10 "motor.pole_pairs"` → `0x4035`；frame4 覆盖 `01 84 01 01 00 02` → `0x81A0`。CRC 字段小端放置。
 
-- [ ] **Step 4: 写 `gui/core/tests/vectors_valid.rs`（JSON 结构校验）**
+- [ ] **Step 4: 写 `Gui/core/tests/vectors_valid.rs`（JSON 结构校验）**
 
 ```rust
 use serde_json::Value;
@@ -389,7 +389,7 @@ fn test_vectors_json_is_well_formed() {
 
 Run (PowerShell):
 ```powershell
-& "D:\Program Files\Compiler\mingw64\w64devkit\bin\gcc.exe" -std=c17 -fsyntax-only -x c gui/protocol/motor_proto.h
+& "D:\Program Files\Compiler\mingw64\w64devkit\bin\gcc.exe" -std=c17 -fsyntax-only -x c Gui/protocol/motor_proto.h
 ```
 Expected: 无输出、退出码 0。
 
@@ -401,7 +401,7 @@ Expected: `test_vectors_json_is_well_formed` PASS。
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add gui/protocol gui/core/tests
+git add Gui/protocol Gui/core/tests
 git commit -m "feat(gui): 协议契约 v1（motor_proto.h + protocol_spec.md + 金向量）"
 ```
 
@@ -410,8 +410,8 @@ git commit -m "feat(gui): 协议契约 v1（motor_proto.h + protocol_spec.md + �
 ### Task 3: gui-core codec（CRC / 帧编解码 / SOF 重同步）
 
 **Files:**
-- Create: `gui/core/src/codec.rs`
-- Modify: `gui/core/src/lib.rs`（声明 `pub mod codec;`）
+- Create: `Gui/core/src/codec.rs`
+- Modify: `Gui/core/src/lib.rs`（声明 `pub mod codec;`）
 
 **Interfaces:**
 - Consumes: `test_vectors.json`（Task 2）
@@ -421,7 +421,7 @@ git commit -m "feat(gui): 协议契约 v1（motor_proto.h + protocol_spec.md + �
   - `gui_core::codec::encode(frame: &Frame) -> Vec<u8>`
   - `gui_core::codec::Decoder::new() -> Decoder`、`Decoder::feed(&mut self, data: &[u8])`、`Decoder::next_frame(&mut self) -> Option<Frame>`、`Decoder::crc_errors() -> u64`、`Decoder::resyncs() -> u64`
 
-- [ ] **Step 1: 写失败测试 `gui/core/src/codec.rs`（测试置于同文件 `#[cfg(test)] mod tests`）**
+- [ ] **Step 1: 写失败测试 `Gui/core/src/codec.rs`（测试置于同文件 `#[cfg(test)] mod tests`）**
 
 ```rust
 //! 帧编解码：SOF 重同步 + CRC16-CCITT-FALSE。
@@ -625,13 +625,13 @@ mod tests {
 - [ ] **Step 2: 运行测试确认失败（编译错误即失败）**
 
 Run: `cargo test -p gui-core`
-Expected: FAIL（`serde_json` dev-dep 已有；若报 `serde_json` 未定义则先在 `gui/core/Cargo.toml` `[dev-dependencies]` 确认 `serde_json.workspace = `true`）。
+Expected: FAIL（`serde_json` dev-dep 已有；若报 `serde_json` 未定义则先在 `Gui/core/Cargo.toml` `[dev-dependencies]` 确认 `serde_json.workspace = `true`）。
 
-- [ ] **Step 3: 若编译错误系 `lib.rs` 未声明模块，补 `gui/core/src/lib.rs`：**
+- [ ] **Step 3: 若编译错误系 `lib.rs` 未声明模块，补 `Gui/core/src/lib.rs`：**
 
 ```rust
 //! gui-core：Gui 通讯核（transport / codec / session / params）。
-//! 契约源头：`gui/protocol/motor_proto.h`，本 crate 为其 Rust 镜像实现。
+//! 契约源头：`Gui/protocol/motor_proto.h`，本 crate 为其 Rust 镜像实现。
 pub mod codec;
 ```
 
@@ -643,7 +643,7 @@ Expected: 6 tests PASS。
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add gui/core
+git add Gui/core
 git commit -m "feat(gui-core): 帧编解码 codec（CRC16-CCITT + SOF 重同步，金向量测试）"
 ```
 
@@ -652,8 +652,8 @@ git commit -m "feat(gui-core): 帧编解码 codec（CRC16-CCITT + SOF 重同步�
 ### Task 4: transport（trait + Loopback + Tcp）
 
 **Files:**
-- Create: `gui/core/src/transport.rs`
-- Modify: `gui/core/src/lib.rs`（追加 `pub mod transport;`）
+- Create: `Gui/core/src/transport.rs`
+- Modify: `Gui/core/src/lib.rs`（追加 `pub mod transport;`）
 
 **Interfaces:**
 - Consumes: 无（独立模块）
@@ -817,7 +817,7 @@ Expected: Task 3 全部 + 本任务 3 个测试 PASS。
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add gui/core
+git add Gui/core
 git commit -m "feat(gui-core): Transport 抽象（Loopback/Tcp）"
 ```
 
@@ -826,8 +826,8 @@ git commit -m "feat(gui-core): Transport 抽象（Loopback/Tcp）"
 ### Task 5: session（SEQ / 超时 / 重试 / 状态机）
 
 **Files:**
-- Create: `gui/core/src/session.rs`
-- Modify: `gui/core/src/lib.rs`（追加 `pub mod session;`）
+- Create: `Gui/core/src/session.rs`
+- Modify: `Gui/core/src/lib.rs`（追加 `pub mod session;`）
 
 **Interfaces:**
 - Consumes: `codec::{Frame, encode, Decoder}`、`transport::{Transport, TransportError}`
@@ -1122,7 +1122,7 @@ Expected: 全部 PASS（含 `seq_wraps_after_256`）。
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add gui/core
+git add Gui/core
 git commit -m "feat(gui-core): session 层（SEQ 配对/500ms 超时/读重试 2 次）"
 ```
 
@@ -1131,8 +1131,8 @@ git commit -m "feat(gui-core): session 层（SEQ 配对/500ms 超时/读重试 2
 ### Task 6: params 模型 + proto 常量镜像（payload 编解码）
 
 **Files:**
-- Create: `gui/core/src/params.rs`、`gui/core/src/proto.rs`
-- Modify: `gui/core/src/lib.rs`（追加 `pub mod params; pub mod proto;`）
+- Create: `Gui/core/src/params.rs`、`Gui/core/src/proto.rs`
+- Modify: `Gui/core/src/lib.rs`（追加 `pub mod params; pub mod proto;`）
 
 **Interfaces:**
 - Consumes: `motor_proto.h` 常量（Task 2）
@@ -1455,7 +1455,7 @@ Expected: 全部 PASS。
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add gui/core
+git add Gui/core
 git commit -m "feat(gui-core): params 模型 + proto 常量镜像（payload 编解码）"
 ```
 
@@ -1464,7 +1464,7 @@ git commit -m "feat(gui-core): params 模型 + proto 常量镜像（payload 编�
 ### Task 7: gui-sim（SimDevice + YAML 加载 + TCP 服务）
 
 **Files:**
-- Create: `gui/sim/src/lib.rs`（改写）、`gui/sim/src/yaml.rs`、`gui/sim/src/main.rs`（改写）、`gui/sim/tests/sim_device.rs`
+- Create: `Gui/sim/src/lib.rs`（改写）、`Gui/sim/src/yaml.rs`、`Gui/sim/src/main.rs`（改写）、`Gui/sim/tests/sim_device.rs`
 
 **Interfaces:**
 - Consumes: `gui_core::codec::{Frame, encode, Decoder}`、`gui_core::proto`、`gui_core::params`
@@ -1490,7 +1490,7 @@ git commit -m "feat(gui-core): params 模型 + proto 常量镜像（payload 编�
 - 未知命令字 → `BAD_CMD`。
 - YAML 加载（`yaml.rs`）：读 `motor.yaml`/`hardware.yaml`/`software.yaml`，递归展平 map，参数名 = `<域>.<路径>`（域=文件名去扩展名，路径用 `.` 连接）；标量推断类型：整数→`U32`（负数→`I32`），浮点→`F32`，`true/false`→`Bool`，带引号字符串（表达式）→ 跳过不入表（v1 不支持表达式求值，与 gen_params 的构建期求值不同，记入 README 限制）；`min>max`（不限制）；`apply`：名字含 `software.fault.` 或 `software.can.` 前缀 → `Reboot`，其余 `Live`。
 
-- [ ] **Step 1: 写失败测试 `gui/sim/tests/sim_device.rs`**
+- [ ] **Step 1: 写失败测试 `Gui/sim/tests/sim_device.rs`**
 
 ```rust
 use gui_core::codec::{Frame, Decoder};
@@ -1715,7 +1715,7 @@ Expected: 6 tests PASS。注意 `loads_yaml_params_with_domain_prefix` 依赖仓
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add gui/sim
+git add Gui/sim
 git commit -m "feat(gui-sim): 设备模拟器（YAML 参数同源 + 联锁语义 + TCP 服务）"
 ```
 
@@ -1724,7 +1724,7 @@ git commit -m "feat(gui-sim): 设备模拟器（YAML 参数同源 + 联锁语义
 ### Task 8: 集成测试（TCP 全链路）
 
 **Files:**
-- Create: `gui/tests/tests/tcp_roundtrip.rs`
+- Create: `Gui/tests/tests/tcp_roundtrip.rs`
 
 **Interfaces:**
 - Consumes: `gui_core::session::{Session, RequestKind}`、`gui_core::transport::TcpTransport`、`gui_sim::{SimDevice, serve}`
@@ -1830,7 +1830,7 @@ async fn fault_get_reflects_injection() {
 Run: `cargo test -p gui-tests`
 Expected: FAIL（编译错误或断言失败）。
 
-- [ ] **Step 3: 修正实现直到通过（仅改 gui/core、gui/sim，不改协议）**
+- [ ] **Step 3: 修正实现直到通过（仅改 Gui/core、Gui/sim，不改协议）**
 
 Run: `cargo test --workspace`
 Expected: 全部 PASS。
@@ -1838,7 +1838,7 @@ Expected: 全部 PASS。
 - [ ] **Step 4: Commit**
 
 ```powershell
-git add gui/tests
+git add Gui/tests
 git commit -m "test(gui): TCP 全链路集成测试（握手/元数据/读写/联锁/故障）"
 ```
 
@@ -1847,17 +1847,17 @@ git commit -m "test(gui): TCP 全链路集成测试（握手/元数据/读写/�
 ### Task 9: 文档收尾
 
 **Files:**
-- Create: `gui/README.md`
+- Create: `Gui/README.md`
 
 **Interfaces:**
 - Consumes: 全部前序任务
 - Produces: 面向使用者的构建/测试/运行说明
 
-- [ ] **Step 1: 写 `gui/README.md`**
+- [ ] **Step 1: 写 `Gui/README.md`**
 
 必含内容：
 1. 定位：Gui 上位机的 Rust 通讯核 + 设备模拟器（spec 链接）；
-2. 构建与测试：`cargo build --workspace` / `cargo test --workspace`（在 `gui/` 下）；
+2. 构建与测试：`cargo build --workspace` / `cargo test --workspace`（在 `Gui/` 下）；
 3. 运行模拟器：`cargo run -p gui-sim -- --port 9000 --config ../config`；
 4. 协议入口：`protocol/motor_proto.h`（双端契约）、`protocol/protocol_spec.md`、`protocol/test_vectors.json`；
 5. 已知限制（如实记录）：v1 不含一级流（M3）、UsbBulk/Serial（M2）、frb（计划 2）；YAML 表达式值跳过（与 `gen_params.py` 的构建期求值不同）；参数 min/max 不限制（真范围以固件元数据为准）。
@@ -1870,7 +1870,7 @@ Expected: 全部 PASS。
 - [ ] **Step 3: Commit**
 
 ```powershell
-git add gui/README.md
+git add Gui/README.md
 git commit -m "docs(gui): README（构建/测试/模拟器运行/已知限制）"
 ```
 
