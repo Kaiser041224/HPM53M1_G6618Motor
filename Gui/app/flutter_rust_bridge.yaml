@@ -1,0 +1,6 @@
+rust_input: crate::api
+rust_root: ../frb
+dart_output: lib/bridge/frb
+c_output: windows/flutter/generated_rust_bridge.h
+dart_entrypoint_class_name: RustLib
+add_mod_to_lib: true

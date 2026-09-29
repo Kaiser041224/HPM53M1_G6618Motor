@@ -38,3 +38,36 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# === Rust bridge (gui-frb) ===
+# The generated Dart loader (frb_generated.dart) looks up a dynamic library with
+# stem "gui_frb", so build the crate's cdylib via cargo and stage it next to the
+# runner. This mirrors the flutter_rust_bridge Cargokit CMake helper on Windows.
+find_program(CARGO_EXECUTABLE NAMES cargo
+  HINTS "$ENV{USERPROFILE}/.cargo/bin" "$ENV{CARGO_HOME}/bin")
+if(NOT CARGO_EXECUTABLE)
+  message(FATAL_ERROR "cargo not found; it is required to build the gui-frb Rust bridge")
+endif()
+
+set(GUI_FRB_WORKSPACE_DIR "${CMAKE_SOURCE_DIR}/../..")
+set(GUI_FRB_MANIFEST "${GUI_FRB_WORKSPACE_DIR}/frb/Cargo.toml")
+set(GUI_FRB_CARGO_TARGET_DIR "${GUI_FRB_WORKSPACE_DIR}/target")
+set(GUI_FRB_CARGO_PROFILE "$<IF:$<CONFIG:Debug>,dev,release>")
+set(GUI_FRB_OUTPUT_DIR "$<IF:$<CONFIG:Debug>,debug,release>")
+set(GUI_FRB_DLL "${GUI_FRB_CARGO_TARGET_DIR}/${GUI_FRB_OUTPUT_DIR}/gui_frb.dll")
+
+add_custom_target(gui_frb_cargo ALL
+  COMMAND ${CMAKE_COMMAND} -E env "CARGO_TARGET_DIR=${GUI_FRB_CARGO_TARGET_DIR}"
+          "${CARGO_EXECUTABLE}" build --manifest-path "${GUI_FRB_MANIFEST}"
+          --package gui-frb "--profile=${GUI_FRB_CARGO_PROFILE}"
+  WORKING_DIRECTORY "${GUI_FRB_WORKSPACE_DIR}"
+  COMMENT "Building gui-frb Rust bridge (cargo, $<CONFIG>)"
+  VERBATIM)
+
+add_dependencies(${BINARY_NAME} gui_frb_cargo)
+
+add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GUI_FRB_DLL}" "$<TARGET_FILE_DIR:${BINARY_NAME}>/gui_frb.dll"
+  COMMENT "Staging gui_frb.dll next to ${BINARY_NAME}"
+  VERBATIM)

@@ -1,30 +1,31 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:g6618_gui/main.dart';
+import 'package:g6618_gui/state/app_state.dart';
+import 'package:g6618_gui/ui/theme.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('shell renders the Gui placeholder', (WidgetTester tester) async {
+    await tester.pumpWidget(const GuiApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.textContaining('Gui — bridge ok: false'), findsOneWidget);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.theme?.useMaterial3, isTrue);
+    expect(app.theme?.colorScheme.brightness, Brightness.dark);
+  });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('AppState starts disconnected with empty device name', () {
+    final state = AppState();
+    expect(state.connected, isFalse);
+    expect(state.deviceName, isEmpty);
+    expect(state.lastError, isEmpty);
+  });
+
+  test('buildGuiTheme is Material 3 dark', () {
+    final theme = buildGuiTheme();
+    expect(theme.useMaterial3, isTrue);
+    expect(theme.colorScheme.brightness, Brightness.dark);
   });
 }
