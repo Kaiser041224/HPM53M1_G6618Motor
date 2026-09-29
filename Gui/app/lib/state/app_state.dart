@@ -39,16 +39,29 @@ class AppState extends ChangeNotifier {
   /// True while [loadMetas] is in flight.
   bool loadingParams = false;
 
+  /// Last device status snapshot, refreshed by [refreshStatus].
+  frb.StatusDto? status;
+
+  /// Latched fault bitmask reported alongside [status].
+  int latchedFlags = 0;
+
+  /// Overrides the bridge control calls when set (test injection). Receives
+  /// the operation name (`start`/`stop`/`setFreq`/`setMod`/`faultClear`).
+  Future<void> Function(String op)? onCtrl;
+
   /// Periodic [frb.statsGet] refresher; active only while connected.
   Timer? statusTimer;
 
   bool _disposed = false;
 
-  /// Test-only constructor seeding [metas] without touching the bridge.
+  /// Test-only constructor seeding [metas] and [status] without touching the
+  /// bridge. [onCtrl] may be supplied here or assigned afterwards.
   @visibleForTesting
-  AppState.test({required List<frb.ParamMetaDto> metas}) {
-    this.metas = List.of(metas);
-  }
+  AppState.test({
+    List<frb.ParamMetaDto> metas = const [],
+    this.status,
+    this.onCtrl,
+  }) : metas = List.of(metas);
 
   /// Loads the metadata table, then reads every parameter value.
   Future<void> loadMetas() async {
@@ -112,6 +125,58 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Refreshes [status] and [latchedFlags] from the device.
+  Future<void> refreshStatus() async {
+    try {
+      status = await frb.statusGet();
+      final fault = await frb.faultGet();
+      latchedFlags = fault.$2;
+      _clearError();
+    } on Exception catch (e) {
+      _recordError(e);
+      requestFailures++;
+    }
+    if (_disposed) return;
+    notifyListeners();
+  }
+
+  /// Runs a control [op] (through [onCtrl] when injected) and records any
+  /// failure so the UI can classify it by [lastErrorCode].
+  Future<bool> _ctrl(String op, Future<void> Function() fallback) async {
+    try {
+      final injected = onCtrl;
+      if (injected != null) {
+        await injected(op);
+      } else {
+        await fallback();
+      }
+      _clearError();
+      notifyListeners();
+      return true;
+    } on Exception catch (e) {
+      _recordError(e);
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Starts the motor. Returns false on failure (see [lastErrorCode]).
+  Future<bool> ctrlStart() => _ctrl('start', frb.ctrlStart);
+
+  /// Stops the motor. Returns false on failure (see [lastErrorCode]).
+  Future<bool> ctrlStop() => _ctrl('stop', frb.ctrlStop);
+
+  /// Sets the commanded frequency in Hz.
+  Future<bool> ctrlSetFreq(double hz) =>
+      _ctrl('setFreq', () => frb.ctrlSetFreq(freqHz: hz));
+
+  /// Sets the modulation depth in percent.
+  Future<bool> ctrlSetMod(double pct) =>
+      _ctrl('setMod', () => frb.ctrlSetMod(modPct: pct));
+
+  /// Clears latched faults. Returns false on failure.
+  Future<bool> faultClear() => _ctrl('faultClear', frb.faultClear);
+
   /// Connects to [addr] and reads the device name from PROTO_INFO.
   /// Returns true on success; on failure [lastError] is populated.
   Future<bool> connect(String addr) async {
@@ -141,6 +206,8 @@ class AppState extends ChangeNotifier {
     } finally {
       connected = false;
       deviceName = '';
+      status = null;
+      latchedFlags = 0;
       notifyListeners();
     }
   }
@@ -170,6 +237,7 @@ class AppState extends ChangeNotifier {
       requestFailures++;
       notifyListeners();
     }
+    await refreshStatus();
   }
 
   @override
@@ -192,12 +260,25 @@ class AppState extends ChangeNotifier {
   }
 }
 
+/// GUI-side carrier for a device error code, shielding the UI from the
+/// concrete bridge exception type. UI code should branch on [code] only.
+class GuiException implements Exception {
+  const GuiException(this.code, this.message);
+
+  final int code;
+  final String message;
+
+  @override
+  String toString() => 'GuiException(code=$code, message=$message)';
+}
+
 /// Extracts the device-side error code from a bridge failure.
 ///
-/// Prefers the typed [frb.FrbError]; falls back to a `code: N` scan of the
-/// exception text so wrapped/stringified errors still classify. Returns -1
-/// when no code can be recovered.
+/// Prefers the typed [GuiException]/[frb.FrbError]; falls back to a `code: N`
+/// scan of the exception text so wrapped/stringified errors still classify.
+/// Returns -1 when no code can be recovered.
 int exceptionCode(Object error) {
+  if (error is GuiException) return error.code;
   if (error is frb.FrbError) return error.code;
   final match = RegExp(r'code[\s:=]+(\d+)').firstMatch(error.toString());
   return match == null ? -1 : int.parse(match.group(1)!);
