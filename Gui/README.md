@@ -159,8 +159,8 @@ flutter analyze   # 静态检查（应无 issue）
   与真板接入属 M2，依赖固件侧协议服务端。
 - **传输多态（M2 注意）**：`Transport` 使用 RPITIT（trait 内 `impl Future`），**非对象安全**，
   不能用 `Box<dyn Transport>`。M2 运行时多链路选择需以 `AnyTransport` 枚举包装或等价方案实现。
-- **UI 平台**：**Windows x64 优先**（当前唯一验收平台）；Linux / macOS 构建脚本存在但**未验收**；
-  iOS / Android 移动端**未做**。
+- **UI 平台**：**Windows x64 优先**（当前唯一验收平台）；Linux / macOS **未验收**（`flutter create`
+  仅生成 `windows/` 平台工程，扩展需 `flutter create --platforms=linux,macos .`）；iOS / Android 移动端**未做**。
 - **UI 传输链路**：连接管理页今期仅 **TCP** 可用；**USB bulk / UART 为 M2 禁用项**（依赖固件侧协议服务端）。
 - **参数取值范围**：模拟器从 YAML 加载的参数元数据 `min>max`，视为**不限制**；真实范围以固件元数据为准。
 - **YAML 表达式值**：带引号的字符串（构建期表达式）在模拟器中**跳过**，不入参数表；
