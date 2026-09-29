@@ -31,3 +31,8 @@ Gui/.cargo/
 
 # Gui simulator runtime artifact (PARAM_COMMIT output)
 sim_params.json
+
+# Flutter (Gui/app) build & generated artifacts
+Gui/app/build/
+Gui/app/.dart_tool/
+Gui/app/windows/flutter/ephemeral/
