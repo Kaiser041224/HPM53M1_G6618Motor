@@ -4,6 +4,23 @@ pub const SOF: [u8; 2] = [0xA5, 0x5A];
 pub const VER: u8 = 0x01;
 pub const MAX_PAYLOAD: usize = 512;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodeError {
+    PayloadTooLong,
+}
+
+impl std::fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncodeError::PayloadTooLong => {
+                write!(f, "payload too long: > {MAX_PAYLOAD}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EncodeError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub ver: u8,
@@ -23,8 +40,11 @@ pub fn crc16_ccitt_false(data: &[u8]) -> u16 {
     crc
 }
 
-pub fn encode(frame: &Frame) -> Vec<u8> {
-    assert!(frame.payload.len() <= MAX_PAYLOAD, "payload 超长");
+/// 编码帧；payload 超过 MAX_PAYLOAD(512) 返回 Err(EncodeError::PayloadTooLong)。
+pub fn encode(frame: &Frame) -> Result<Vec<u8>, EncodeError> {
+    if frame.payload.len() > MAX_PAYLOAD {
+        return Err(EncodeError::PayloadTooLong);
+    }
     let mut body = Vec::with_capacity(5 + frame.payload.len());
     body.push(frame.ver);
     body.push(frame.cmd);
@@ -36,7 +56,7 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
     out.extend_from_slice(&SOF);
     out.extend_from_slice(&body);
     out.extend_from_slice(&crc.to_le_bytes());
-    out
+    Ok(out)
 }
 
 #[derive(Default)]
@@ -153,14 +173,14 @@ mod tests {
     fn encode_decode_roundtrip() {
         let f = Frame { ver: VER, cmd: 0x07, seq: 200, payload: vec![1, 2, 3, 4] };
         let mut dec = Decoder::new();
-        dec.feed(&encode(&f));
+        dec.feed(&encode(&f).unwrap());
         assert_eq!(dec.next_frame(), Some(f));
     }
 
     #[test]
     fn resyncs_after_garbage_and_half_sof() {
         let f = Frame { ver: VER, cmd: 0x01, seq: 0, payload: vec![] };
-        let wire = encode(&f);
+        let wire = encode(&f).unwrap();
         let mut dec = Decoder::new();
         dec.feed(&[0xDE, 0xAD, 0xA5]); // 垃圾 + 半个 SOF
         dec.feed(&wire);
@@ -172,13 +192,13 @@ mod tests {
     #[test]
     fn drops_bad_crc_frame_and_continues() {
         let bad = Frame { ver: VER, cmd: 0x01, seq: 9, payload: vec![0xFF] };
-        let mut wire = encode(&bad);
+        let mut wire = encode(&bad).unwrap();
         let n = wire.len();
         wire[n - 1] ^= 0xFF; // 破坏 CRC
         let good = Frame { ver: VER, cmd: 0x01, seq: 10, payload: vec![] };
         let mut dec = Decoder::new();
         dec.feed(&wire);
-        dec.feed(&encode(&good));
+        dec.feed(&encode(&good).unwrap());
         assert_eq!(dec.next_frame(), Some(good));
         assert_eq!(dec.crc_errors(), 1);
     }
@@ -186,11 +206,17 @@ mod tests {
     #[test]
     fn incremental_feed_yields_frame() {
         let f = Frame { ver: VER, cmd: 0x04, seq: 1, payload: vec![0x10] };
-        let wire = encode(&f);
+        let wire = encode(&f).unwrap();
         let mut dec = Decoder::new();
         for chunk in wire.chunks(3) {
             dec.feed(chunk);
         }
         assert_eq!(dec.next_frame(), Some(f));
+    }
+
+    #[test]
+    fn rejects_oversized_payload_without_panicking() {
+        let f = Frame { ver: VER, cmd: 0x01, seq: 0, payload: vec![0; MAX_PAYLOAD + 1] };
+        assert_eq!(encode(&f), Err(EncodeError::PayloadTooLong));
     }
 }
