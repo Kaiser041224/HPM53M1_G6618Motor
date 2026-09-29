@@ -28,6 +28,7 @@ version = "0.1.0"
 dependencies = [
  "gui-core",
  "serde",
+ "serde_json",
  "serde_yaml",
  "tokio",
 ]

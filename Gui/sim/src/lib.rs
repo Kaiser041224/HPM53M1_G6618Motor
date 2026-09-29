@@ -173,7 +173,7 @@ impl SimDevice {
                 Ok(body) => (status::OK, body),
                 Err(_) => (status::BAD_PARAM, Vec::new()),
             },
-            None => (status::BAD_PARAM, Vec::new()),
+            None => (status::RANGE_ERR, Vec::new()),
         }
     }
 
@@ -224,9 +224,9 @@ impl SimDevice {
         }
     }
 
-    /// 停机窗口才允许落盘；运行中返回 LOCKED。
+    /// 停机窗口且无故障锁存才允许落盘；否则返回 LOCKED。
     fn param_commit(&mut self) -> (u8, Vec<u8>) {
-        if self.motor_running {
+        if self.motor_running || self.latched_flags != 0 {
             return (status::LOCKED, Vec::new());
         }
         match self.save_params() {
@@ -314,7 +314,7 @@ impl SimDevice {
 
 /// PROTO_INFO 体：major=1, minor=0, caps(u32), name_len=7, "gui-sim"。
 fn proto_info_body() -> Vec<u8> {
-    let mut body = Vec::with_capacity(11);
+    let mut body = Vec::with_capacity(14);
     body.push(1);
     body.push(0);
     body.extend_from_slice(&0x0000_0003u32.to_le_bytes());

@@ -10,6 +10,9 @@ tokio.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lib]
 name = "gui_sim"
 path = "src/lib.rs"

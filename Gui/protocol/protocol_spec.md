@@ -75,8 +75,7 @@ CRC 为 16-bit 无符号整数，**小端放置**：偏移 `7+LEN` 存低字节�
 ## 2. 金帧逐步字节注解（`test_vectors.json`）
 
 以下 4 个金帧取自 `Gui/protocol/test_vectors.json`，逐字节注解。
-其中 `CRC16` 行的括号给出**契约定义**下应为的小端字节；与文件实际字节的差异
-见附录 A。
+金向量与契约一致（历史勘误见附录 A）。
 
 ### 2.1 `proto_info_req_seq0`
 
@@ -97,7 +96,7 @@ A5 5A  01  01  00  0000  E9 CD
 ### 2.2 `proto_info_resp_sim`
 
 ```
-A5 5A  01  81  00  0B00  00 01 00 03 000000 03 53 49 4D  70 E9
+A5 5A  01  81  00  0F00  00 01 00 03 000000 07 67 75 69 2D 73 69 6D  CF 5D
 ```
 
 | 偏移 | 字节 | 字段 | 值 / 含义 |
@@ -107,14 +106,14 @@ A5 5A  01  81  00  0B00  00 01 00 03 000000 03 53 49 4D  70 E9
 | 2 | `01` | VER | 1 |
 | 3 | `81` | CMD | `MP_CMD_PROTO_INFO \| 0x80`（响应） |
 | 4 | `00` | SEQ | 0 |
-| 5–6 | `0B 00` | LEN | 11 |
+| 5–6 | `0F 00` | LEN | 15 |
 | 7 | `00` | 载荷[0] | `status = MP_STATUS_OK` |
 | 8 | `01` | 载荷[1] | `proto_major = 1` |
 | 9 | `00` | 载荷[2] | `proto_minor = 0` |
 | 10–13 | `03 00 00 00` | 载荷[3..6] | `caps = 0x00000003`（bit0\|bit1） |
-| 14 | `03` | 载荷[7] | `name_len = 3` |
-| 15–17 | `53 49 4D` | 载荷[8..10] | 设备名 `"SIM"` |
-| 18–19 | `70 E9` | CRC16 | 值 `0xE970`（小端 `70 E9`），覆盖 `01 81 00 0B 00` + 上述载荷 |
+| 14 | `07` | 载荷[7] | `name_len = 7` |
+| 15–21 | `67 75 69 2D 73 69 6D` | 载荷[8..14] | 设备名 `"gui-sim"`（ASCII） |
+| 22–23 | `CF 5D` | CRC16 | 值 `0x5DCF`（小端 `CF 5D`），覆盖 `01 81 00 0F 00` + 上述载荷 |
 
 ### 2.3 `param_read_req_motor_pole_pairs`
 
@@ -373,16 +372,19 @@ CAN 经典帧单帧数据 ≤ 8 字节，无法容纳最大 521 字节的协议�
 
 ---
 
-## 附录 A：金帧勘误记录（fix round 1，已修正）
+## 附录 A：金帧勘误记录（已修正）
 
-`test_vectors.json` 的原始 hex 曾有两处与本文 §1–§6 契约不符，已按 controller
+`test_vectors.json` 的原始 hex 曾与本文 §1–§6 契约不符，已按 controller
 ruling 修正，现行文件与契约一致：
 
 1. **`proto_info_req_seq0` 的 CRC 字节序**：原为 `CD E9`（大端，转录错误），
    已改为 `E9 CD`（`0xCDE9` 的小端）。CRC 覆盖范围与值不变。
 2. **`proto_info_resp_sim` 缺少响应状态字节**：原载荷 10 字节，未含
-   `mp_status_t`。已补 `status = MP_STATUS_OK`（`00`）为首字节，载荷变为 11 字节、
-   `LEN = 0x000B`，CRC 按同一独立 C 工具重算为 `0xE970`（线序 `70 E9`）。
+   `mp_status_t`。已补 `status = MP_STATUS_OK`（`00`）为首字节。
+3. **`proto_info_resp_sim` 设备名与 sim 实现不一致**：原金帧设备名为 `"SIM"`，
+   而 sim 实际发送 `"gui-sim"`。已按 sim 真实输出改为 `name_len = 7`、名称
+   `67 75 69 2D 73 69 6D`，`LEN = 0x000F`，CRC 按独立实现重算为 `0x5DCF`
+   （线序 `CF 5D`）；`sim_device.rs` 新增编码侧逐字符闭环测试。
 
 修正后 4 个金帧的 CRC 均按小端放置，响应帧均以状态字节开头，与
 `motor_proto.h` 及本文 §1–§6 一致；`vectors_valid.rs` 的结构校验继续成立。

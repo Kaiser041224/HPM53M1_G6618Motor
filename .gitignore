@@ -28,3 +28,6 @@ __pycache__/
 # Rust (Gui host tool)
 Gui/**/target/
 Gui/.cargo/
+
+# Gui simulator runtime artifact (PARAM_COMMIT output)
+sim_params.json

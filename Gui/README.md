@@ -91,6 +91,8 @@ cargo run -p gui-sim -- --port 9000 --config ../config
 - **一级流（示波器）**：v1 不实现，`STREAM_SUB` / `STREAM_UNSUB` 返回 `UNSUPPORTED`（属 M3）。
 - **传输链路**：当前仅 `LoopbackTransport` / `TcpTransport`；`UsbBulkTransport` / `SerialTransport`
   与真板接入属 M2，依赖固件侧协议服务端。
+- **传输多态（M2 注意）**：`Transport` 使用 RPITIT（trait 内 `impl Future`），**非对象安全**，
+  不能用 `Box<dyn Transport>`。M2 运行时多链路选择需以 `AnyTransport` 枚举包装或等价方案实现。
 - **UI**：Flutter / `flutter_rust_bridge` 前端属后续计划；本目录只交付 Rust 通讯核。
 - **参数取值范围**：模拟器从 YAML 加载的参数元数据 `min>max`，视为**不限制**；真实范围以固件元数据为准。
 - **YAML 表达式值**：带引号的字符串（构建期表达式）在模拟器中**跳过**，不入参数表；

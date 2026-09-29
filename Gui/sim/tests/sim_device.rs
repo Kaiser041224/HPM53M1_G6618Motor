@@ -91,9 +91,9 @@ fn param_meta_count_and_get() {
     assert_eq!(resp.payload[0], status::OK);
     let meta = params::decode_meta_resp(&resp.payload[1..]).unwrap();
     assert_eq!(meta.index, 0);
-    // 越界 → BAD_PARAM
+    // 越界 → RANGE_ERR（线契约 §3.3：meta 序号越界）
     let resp = dev.handle_frame(&req(cmd::PARAM_META_GET, &(count as u16).to_le_bytes()));
-    assert_eq!(resp.payload[0], status::BAD_PARAM);
+    assert_eq!(resp.payload[0], status::RANGE_ERR);
 }
 
 #[test]
@@ -119,6 +119,56 @@ fn ctrl_interlocks_follow_terminal_semantics() {
     assert_eq!(resp.payload[0], status::OK);
     // 运行中 START 再次 OK（幂等）
     let _ = std::fs::remove_file("sim_params.json"); // 清理 COMMIT 产物
+}
+
+#[test]
+fn param_commit_locked_by_latch_even_when_stopped() {
+    let mut dev = load();
+    // 注入故障（同时置入锁存）
+    dev.inject_fault(0x1);
+    // 停机：motor_running=false，但故障锁存仍在
+    let mut stop = vec![ctrl::STOP];
+    stop.extend_from_slice(&0f32.to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &stop)).payload[0], status::OK);
+    // 停机但故障锁存 → PARAM_COMMIT 仍 LOCKED（契约 §3.6）
+    let resp = dev.handle_frame(&req(cmd::PARAM_COMMIT, &[]));
+    assert_eq!(resp.payload[0], status::LOCKED);
+    // 清除故障锁存后 → PARAM_COMMIT OK
+    dev.handle_frame(&req(cmd::FAULT_CLEAR, &[]));
+    let resp = dev.handle_frame(&req(cmd::PARAM_COMMIT, &[]));
+    assert_eq!(resp.payload[0], status::OK);
+    let _ = std::fs::remove_file("sim_params.json"); // 清理 COMMIT 产物
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02X}"));
+    }
+    s
+}
+
+#[test]
+fn proto_info_response_encodes_to_golden_vector() {
+    let raw = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../protocol/test_vectors.json"),
+    )
+    .expect("test_vectors.json 可读");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("合法 JSON");
+    let golden = v["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "proto_info_resp_sim")
+        .expect("存在 proto_info_resp_sim 金帧")["hex"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // 编码侧闭环：sim 真实应答 → 编码 → 与金向量 hex 逐字符相等
+    let mut dev = load();
+    let resp = dev.handle_frame(&req(cmd::PROTO_INFO, &[]));
+    let wire = gui_core::codec::encode(&resp).unwrap();
+    assert_eq!(to_hex(&wire), golden);
 }
 
 #[test]

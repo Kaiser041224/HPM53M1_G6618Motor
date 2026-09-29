@@ -66,7 +66,7 @@ typedef enum {
     MP_CTRL_SET_MOD  = 0x04
 } mp_ctrl_opcode_t;
 
-/* 帧头布局（CRC 覆盖范围 = hdr[0..7] + PAYLOAD，即 VER..PAYLOAD） */
+/* 帧头布局（CRC 覆盖 VER..PAYLOAD，即 5 字节头 + PAYLOAD） */
 typedef struct {
     uint8_t  ver;      /* MP_VERSION */
     uint8_t  cmd;

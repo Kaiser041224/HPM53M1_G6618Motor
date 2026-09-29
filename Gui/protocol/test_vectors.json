@@ -8,8 +8,8 @@
     },
     {
       "name": "proto_info_resp_sim",
-      "hex": "A55A0181000B00000100030000000353494D70E9",
-      "expect": { "ver": 1, "cmd": 129, "seq": 0, "payload_hex": "000100030000000353494D" }
+      "hex": "A55A0181000F0000010003000000076775692D73696DCF5D",
+      "expect": { "ver": 1, "cmd": 129, "seq": 0, "payload_hex": "00010003000000076775692D73696D" }
     },
     {
       "name": "param_read_req_motor_pole_pairs",
