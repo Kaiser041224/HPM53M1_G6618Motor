@@ -248,8 +248,15 @@ class AppState extends ChangeNotifier {
   }
 
   /// Stores [error] and its device code for later UI classification.
+  ///
+  /// [frb.FrbError] has no `toString` override, so its [lastError] is rendered
+  /// explicitly as `code=N: message` instead of `Instance of 'FrbError'`.
   void _recordError(Object error) {
-    lastError = error.toString();
+    lastError = error is frb.FrbError
+        ? 'code=${error.code}: ${error.message}'
+        : error is GuiException
+        ? error.message
+        : error.toString();
     lastErrorCode = exceptionCode(error);
   }
 
