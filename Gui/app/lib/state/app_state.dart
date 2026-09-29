@@ -76,7 +76,7 @@ class AppState extends ChangeNotifier {
       metas = list;
       await readAll();
     } on Exception catch (e) {
-      _recordError(e);
+      _recordFailure(e);
     }
     loadingParams = false;
     notifyListeners();
@@ -88,7 +88,7 @@ class AppState extends ChangeNotifier {
       try {
         values[m.name] = await frb.paramRead(name: m.name);
       } on Exception catch (e) {
-        _recordError(e);
+        _recordFailure(e);
       }
     }
     notifyListeners();
@@ -104,7 +104,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return true;
     } on Exception catch (e) {
-      _recordError(e);
+      _recordFailure(e);
       notifyListeners();
       return false;
     }
@@ -119,7 +119,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return true;
     } on Exception catch (e) {
-      _recordError(e);
+      _recordFailure(e);
       notifyListeners();
       return false;
     }
@@ -133,8 +133,7 @@ class AppState extends ChangeNotifier {
       latchedFlags = fault.$2;
       _clearError();
     } on Exception catch (e) {
-      _recordError(e);
-      requestFailures++;
+      _recordFailure(e);
     }
     if (_disposed) return;
     notifyListeners();
@@ -154,7 +153,7 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return true;
     } on Exception catch (e) {
-      _recordError(e);
+      _recordFailure(e);
       notifyListeners();
       return false;
     }
@@ -190,7 +189,8 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _recordError(e);
+      _stopPolling();
+      _recordFailure(e);
       connected = false;
       notifyListeners();
       return false;
@@ -202,7 +202,7 @@ class AppState extends ChangeNotifier {
     try {
       await frb.disconnect();
     } catch (e) {
-      _recordError(e);
+      _recordFailure(e);
     } finally {
       connected = false;
       deviceName = '';
@@ -232,9 +232,9 @@ class AppState extends ChangeNotifier {
       reconnects = stats.reconnects.toInt();
       crcErrors = stats.crcErrors.toInt();
       notifyListeners();
-    } catch (_) {
+    } catch (e) {
       if (_disposed) return;
-      requestFailures++;
+      _recordFailure(e);
       notifyListeners();
     }
     await refreshStatus();
@@ -251,6 +251,13 @@ class AppState extends ChangeNotifier {
   void _recordError(Object error) {
     lastError = error.toString();
     lastErrorCode = exceptionCode(error);
+  }
+
+  /// Central failure sink for every bridge request: records [error] and counts
+  /// it exactly once in [requestFailures].
+  void _recordFailure(Object error) {
+    _recordError(error);
+    requestFailures++;
   }
 
   /// Clears the last error and its code.
