@@ -5,6 +5,10 @@ use gui_core::params::{self, ParamType, ParamValue};
 use gui_core::proto::{cmd, ctrl, status};
 use gui_sim::SimDevice;
 
+/// 串行化对 cwd 下 `sim_params.json` 的访问：PARAM_COMMIT 写盘与测试清理删除
+/// 在并行测试线程间存在竞态（写失败 → BUSY → 断言失败），须全程持锁。
+static COMMIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn req(cmd: u8, payload: &[u8]) -> Frame {
     Frame { ver: gui_core::proto::VER, cmd, seq: 0, payload: payload.to_vec() }
 }
@@ -98,6 +102,7 @@ fn param_meta_count_and_get() {
 
 #[test]
 fn ctrl_interlocks_follow_terminal_semantics() {
+    let _g = COMMIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut dev = load();
     // 故障锁存时 START → LOCKED
     dev.inject_fault(0x1);
@@ -123,6 +128,7 @@ fn ctrl_interlocks_follow_terminal_semantics() {
 
 #[test]
 fn param_commit_locked_by_latch_even_when_stopped() {
+    let _g = COMMIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut dev = load();
     // 注入故障（同时置入锁存）
     dev.inject_fault(0x1);
