@@ -1,0 +1,19 @@
+[package]
+name = "gui-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gui-core = { path = "../core" }
+tokio.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+
+[lib]
+name = "gui_sim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gui-sim"
+path = "src/main.rs"

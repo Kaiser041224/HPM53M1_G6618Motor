@@ -1,0 +1,11 @@
+[package]
+name = "gui-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+gui-core = { path = "../core" }
+gui-sim = { path = "../sim" }
+tokio.workspace = true
