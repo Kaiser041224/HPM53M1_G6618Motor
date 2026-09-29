@@ -4,6 +4,11 @@ import 'package:flutter/foundation.dart';
 
 import '../bridge/frb/api.dart' as frb;
 
+// Re-exported so the UI layer depends only on AppState (ui -> state -> bridge)
+// and never imports the generated bridge code directly.
+export '../bridge/frb/api.dart'
+    show ParamMetaDto, ParamValueDto, StatusDto, StatsDto;
+
 /// App-wide observable state.
 ///
 /// Holds the connection state plus the device-side statistics that the
@@ -257,14 +262,23 @@ class AppState extends ChangeNotifier {
 
   /// Stores [error] and its device code for later UI classification.
   ///
-  /// [frb.FrbError] has no `toString` override, so its [lastError] is rendered
-  /// explicitly as `code=N: message` instead of `Instance of 'FrbError'`.
+  /// A concrete [frb.FrbError] is translated into the bridge-agnostic
+  /// [GuiException] at this boundary. [frb.FrbError] has no `toString`
+  /// override, so its [lastError] is rendered explicitly as
+  /// `code=N: message` instead of `Instance of 'FrbError'`.
   void _recordError(Object error) {
-    lastError = error is frb.FrbError
-        ? 'code=${error.code}: ${error.message}'
-        : error is GuiException
-        ? error.message
-        : error.toString();
+    if (error is frb.FrbError) {
+      final converted = GuiException(error.code, error.message);
+      lastError = 'code=${converted.code}: ${converted.message}';
+      lastErrorCode = converted.code;
+      return;
+    }
+    if (error is GuiException) {
+      lastError = error.message;
+      lastErrorCode = error.code;
+      return;
+    }
+    lastError = error.toString();
     lastErrorCode = exceptionCode(error);
   }
 

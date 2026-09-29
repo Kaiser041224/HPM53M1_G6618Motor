@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../bridge/frb/api.dart';
 import '../state/app_state.dart';
 
 /// Formats a 32-bit bitmask as a fixed-width hex literal.
@@ -12,6 +11,7 @@ String _ctrlMessage(int code) => switch (code) {
   4 => '联锁拒绝：若故障锁存请先 FAULT_CLEAR；若运行中请先停止',
   6 => '设备判定越界',
   0x100 => '请求超时',
+  0x101 => '通讯错误/连接中断',
   0x102 => '连接已断开',
   _ => '操作失败（code=$code）',
 };

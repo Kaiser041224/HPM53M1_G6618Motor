@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../bridge/frb/api.dart';
 import '../state/app_state.dart';
 
 /// Human-readable name of a parameter wire type.
@@ -15,13 +14,13 @@ String typeName(int ty) => switch (ty) {
   _ => 'ty$ty',
 };
 
-/// Reinterprets a 32-bit [raw] bit pattern as an IEEE-754 single.
+/// Reinterprets a 32-bit [raw] little-endian bit pattern as an IEEE-754 single.
 double f32FromRaw(int raw) =>
-    (ByteData(4)..setInt32(0, raw, Endian.little)).getFloat32(0);
+    (ByteData(4)..setInt32(0, raw, Endian.little)).getFloat32(0, Endian.little);
 
-/// Encodes an IEEE-754 single into its 32-bit [raw] bit pattern.
+/// Encodes an IEEE-754 single into its 32-bit little-endian [raw] bit pattern.
 int f32ToRaw(double value) =>
-    (ByteData(4)..setFloat32(0, value, Endian.little)).getInt32(0);
+    (ByteData(4)..setFloat32(0, value, Endian.little)).getInt32(0, Endian.little);
 
 /// Formats [raw] for display according to its wire type.
 String formatValue(int ty, int raw) => switch (ty) {

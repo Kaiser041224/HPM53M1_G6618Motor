@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:g6618_gui/bridge/frb/api.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/ui/dashboard_page.dart';
 

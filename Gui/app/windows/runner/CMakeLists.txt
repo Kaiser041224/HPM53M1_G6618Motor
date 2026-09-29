@@ -66,8 +66,12 @@ add_custom_target(gui_frb_cargo ALL
 
 add_dependencies(${BINARY_NAME} gui_frb_cargo)
 
-add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${GUI_FRB_DLL}" "$<TARGET_FILE_DIR:${BINARY_NAME}>/gui_frb.dll"
-  COMMENT "Staging gui_frb.dll next to ${BINARY_NAME}"
-  VERBATIM)
+# Stage the freshly built cdylib next to the runner through the same install
+# mechanism Flutter uses for flutter_windows.dll. The install step runs as part
+# of the default VS build, so the deployed DLL is refreshed even when only Rust
+# sources changed and the runner itself is not relinked (a POST_BUILD copy on
+# the runner would be skipped in that case, and referencing the runner target
+# from gui_frb_cargo would create a target dependency cycle).
+install(FILES "${GUI_FRB_DLL}"
+  DESTINATION "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+  COMPONENT Runtime)
