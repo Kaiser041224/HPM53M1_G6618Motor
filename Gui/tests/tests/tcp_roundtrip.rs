@@ -78,6 +78,12 @@ async fn locked_and_range_errors_surface_as_status() {
     let err = s.request(cmd::PARAM_COMMIT, &[], RequestKind::Write).await.unwrap_err();
     assert!(matches!(err, gui_core::session::SessionError::Status(x) if x == status::LOCKED));
 
+    // STOP 解锁后 COMMIT=OK
+    let mut stop = vec![ctrl::STOP];
+    stop.extend_from_slice(&0f32.to_le_bytes());
+    s.request(cmd::CTRL_CMD, &stop, RequestKind::Write).await.unwrap();
+    s.request(cmd::PARAM_COMMIT, &[], RequestKind::Write).await.unwrap();
+
     // 未知参数 → BAD_PARAM
     let err = s
         .request(cmd::PARAM_READ, &gui_core::params::encode_name("x.y").unwrap(), RequestKind::Read)
