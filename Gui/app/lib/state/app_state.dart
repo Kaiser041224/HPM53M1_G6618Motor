@@ -70,6 +70,37 @@ class AppState extends ChangeNotifier {
   /// Latched fault bitmask reported alongside [status].
   int latchedFlags = 0;
 
+  /// NTC over-temperature trip threshold [°C] (`software.fault.ntc_ot_c`).
+  ///
+  /// Read from the already-loaded parameter table; null when that parameter
+  /// has not been read yet, so the UI can honestly show `—` rather than
+  /// inventing a limit.
+  double? get thresholdNtc => _paramDouble('software.fault.ntc_ot_c');
+
+  /// Bus over-voltage trip threshold [V] (`software.fault.vbus_ov_v`).
+  double? get thresholdVbus => _paramDouble('software.fault.vbus_ov_v');
+
+  /// Over-current trip threshold [A], preferring the motor's 10 s peak rating
+  /// (`motor.i_peak_10s_a`) and falling back to `software.fault.oc_trip_a`
+  /// when only that one is exposed. Null when neither is loaded.
+  double? get thresholdCurrent =>
+      _paramDouble('motor.i_peak_10s_a') ??
+      _paramDouble('software.fault.oc_trip_a');
+
+  /// Decodes parameter [name] to its physical float, or null when unloaded.
+  double? _paramDouble(String name) {
+    final value = values[name];
+    if (value == null) return null;
+    return switch (value.ty) {
+      0 => (ByteData(4)..setInt32(0, value.raw, Endian.little)).getFloat32(
+        0,
+        Endian.little,
+      ),
+      1 || 2 || 3 => value.raw.toDouble(),
+      _ => null,
+    };
+  }
+
   /// Overrides the bridge control calls when set (test injection). Receives
   /// the operation name (`start`/`stop`/`setFreq`/`setMod`/`faultClear`).
   Future<void> Function(String op)? onCtrl;

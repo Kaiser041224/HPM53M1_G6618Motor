@@ -67,6 +67,11 @@ flutter:
       fonts:
         - asset: assets/fonts/Aldrich-Regular.ttf
 
+  # SIL OFL 1.1 license texts must ship alongside the redistributed fonts.
+  assets:
+    - assets/fonts/OFL-Electrolize.txt
+    - assets/fonts/OFL-Aldrich.txt
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

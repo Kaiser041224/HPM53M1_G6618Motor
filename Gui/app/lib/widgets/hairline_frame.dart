@@ -54,18 +54,26 @@ class HairlineFrame extends StatelessWidget {
     }
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: palette.lineHi, width: palette.lineWidth),
+        border: Border.all(color: palette.lineDim, width: palette.lineWidth),
         boxShadow: <BoxShadow>[
-          BoxShadow(color: palette.lineDim, spreadRadius: 1),
-          BoxShadow(color: palette.accent.withValues(alpha: 0.10), blurRadius: 14),
+          BoxShadow(
+            color: palette.accent.withValues(alpha: 0.10),
+            blurRadius: 14,
+            blurStyle: BlurStyle.outer,
+          ),
         ],
       ),
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(color: palette.bgPanel, width: palette.lineWidth),
+          border: Border.all(color: palette.lineHi, width: palette.lineWidth),
         ),
-        padding: padding,
-        child: child,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: palette.bgPanel, width: palette.lineWidth),
+          ),
+          padding: padding,
+          child: child,
+        ),
       ),
     );
   }

@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'bridge/frb/api.dart' as frb;
 import 'bridge/frb/frb_generated.dart';
@@ -8,6 +10,7 @@ import 'ui/single_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _registerFontLicenses();
   try {
     await RustLib.init();
     // FFI smoke: resolves native symbols without needing a device, so a broken
@@ -17,6 +20,21 @@ Future<void> main() async {
   } catch (error) {
     runApp(BridgeStartupErrorApp(error: error.toString()));
   }
+}
+
+/// Registers the SIL OFL 1.1 license texts bundled with the Electrolize and
+/// Aldrich display fonts so `showLicensePage` can display them.
+void _registerFontLicenses() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+      const <String>['Electrolize'],
+      await rootBundle.loadString('assets/fonts/OFL-Electrolize.txt'),
+    );
+    yield LicenseEntryWithLineBreaks(
+      const <String>['Aldrich'],
+      await rootBundle.loadString('assets/fonts/OFL-Aldrich.txt'),
+    );
+  });
 }
 
 /// Root widget. Owns the single [AppState] instance and builds the

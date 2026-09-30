@@ -4,14 +4,16 @@ import '../state/app_state.dart';
 import '../theme/gui_theme.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
+import 'scope_zone.dart';
 import 'status_bar.dart';
+import 'status_zone.dart';
 import 'top_bar.dart';
 
 /// Single-page flat layout (design-system §4.1): no navigation rail.
 ///
 /// Top bar -> scrolling body (status -> scope -> parameters) -> status bar.
-/// The three body zones are task-scoped placeholders here; tasks 4-6 replace
-/// them with the real `status_zone` / `scope_zone` / `param_zone` widgets.
+/// The parameters zone is still a task-scoped placeholder; Task 5 replaces it
+/// with the real `param_zone` widget.
 class SinglePage extends StatelessWidget {
   const SinglePage({super.key, required this.state});
 
@@ -26,22 +28,14 @@ class SinglePage extends StatelessWidget {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-              child: const Column(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  _PlaceholderZone(
-                    title: '状态监视',
-                    en: 'status',
-                    note: '状态瓦片 · 热与负载 · 控制条 · 故障构成 —— Task 4 实装',
-                  ),
-                  SizedBox(height: 24),
-                  _PlaceholderZone(
-                    title: '曲线',
-                    en: 'scope',
-                    note: '三相电流波形 · 相电流占比 · 运行上限 —— 曲线阶段实装',
-                  ),
-                  SizedBox(height: 24),
-                  _PlaceholderZone(
+                  StatusZone(state: state),
+                  const SizedBox(height: 24),
+                  ScopeZone(state: state),
+                  const SizedBox(height: 24),
+                  const _PlaceholderZone(
                     title: '参数',
                     en: 'parameters',
                     note: '双栏分组表 · 搜索 · COMMIT 落盘 · 联锁提示 —— Task 5 实装',
