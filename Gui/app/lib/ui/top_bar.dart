@@ -5,6 +5,7 @@ import '../state/app_state.dart';
 import '../theme/gui_theme.dart';
 import '../widgets/device_ascii.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/hairline_frame.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/window_caption.dart';
@@ -173,15 +174,19 @@ class _TopBarState extends State<TopBar> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
-    return Container(
-      color: palette.bgPanel,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          _bar(context),
-          if (_expanded) _panel(context),
-        ],
+    // v3 fills the screen with bright hairline panels: the whole top bar is one
+    // `HairlineFrame(main)` (bright cyan 1.5px) instead of a bare strip.
+    return HairlineFrame(
+      child: Container(
+        color: palette.bgPanel,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            _bar(context),
+            if (_expanded) _panel(context),
+          ],
+        ),
       ),
     );
   }
@@ -193,9 +198,16 @@ class _TopBarState extends State<TopBar> with WindowListener {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: palette.lineHi, width: palette.lineWidth),
-        ),
+        // The surrounding frame already draws the bright outer edge; only add
+        // an inner seam when the details panel is expanded below the bar.
+        border: _expanded
+            ? Border(
+                bottom: BorderSide(
+                  color: palette.line,
+                  width: palette.lineWidth,
+                ),
+              )
+            : null,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -254,8 +266,8 @@ class _TopBarState extends State<TopBar> with WindowListener {
             boxShadow: highlighted
                 ? <BoxShadow>[
                     BoxShadow(
-                      color: palette.lineHi.withValues(alpha: 0.22),
-                      blurRadius: 8,
+                      color: palette.glowSoft,
+                      blurRadius: GuiGlowStyles.softBlur,
                     ),
                   ]
                 : const <BoxShadow>[],

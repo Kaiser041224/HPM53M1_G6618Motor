@@ -5,6 +5,7 @@ import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
+import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stale_gate.dart';
 import 'panel_title.dart';
@@ -75,29 +76,33 @@ class StatusTile extends StatelessWidget {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
 
-    final TextStyle valueStyle;
+    // v3 tone mapping: a measured tile value is flat neutral white and renders
+    // through `GlowValue(tone:)` so numeric formatting + unit live in one place.
+    // The warn path keeps the same-hue status glow — a status hue is
+    // deliberately not one of the value tones, so it is not cross-colorised.
+    final Widget valueRow;
     if (warn) {
-      valueStyle = GuiGlowStyles.status(palette.stWarn, scale.data);
+      valueRow = Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: <Widget>[
+          Text(
+            value == null ? '—' : value!.toStringAsFixed(precision),
+            style: GuiGlowStyles.status(palette.stWarn, scale.data),
+          ),
+          const SizedBox(width: 4),
+          Text(unit.toUpperCase(), style: GuiGlowStyles.weak(scale.label)),
+        ],
+      );
     } else {
-      // v3 tone mapping: a measured tile value is flat neutral white.
-      valueStyle = scale.data.copyWith(
-        color: GlowValue.colorFor(palette, Tone.neutral),
+      valueRow = GlowValue(
+        value: value,
+        unit: unit,
+        precision: precision,
+        tone: Tone.neutral,
       );
     }
-
-    final valueRow = Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: <Widget>[
-        Text(
-          value == null ? '—' : value!.toStringAsFixed(precision),
-          style: valueStyle,
-        ),
-        const SizedBox(width: 4),
-        Text(unit.toUpperCase(), style: GuiGlowStyles.weak(scale.label)),
-      ],
-    );
 
     return Container(
       color: palette.bgBase,
@@ -265,10 +270,15 @@ class HeatLoadBar extends StatelessWidget {
         const SizedBox(width: 11),
         SizedBox(
           width: 66,
-          child: Text(
-            '${(value01 * 100).round()} %',
-            textAlign: TextAlign.right,
-            style: scale.data.copyWith(fontSize: 10.5, color: fill),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerRight,
+            child: GlowValue(
+              value: (value01 * 100).round(),
+              unit: '%',
+              precision: 0,
+              tone: toneForRatio(value01),
+            ),
           ),
         ),
       ],
@@ -435,20 +445,26 @@ class StatusZone extends StatelessWidget {
       if (freshness == Freshness.stale) failed++;
       if (warn) warned++;
       tiles.add(
-        StatusTile(
-          key: Key(tileKey),
-          label: spec.label,
-          zh: spec.zh,
-          value: spec.value,
-          unit: spec.unit,
-          precision: spec.precision,
-          note: spec.note,
-          freshness: freshness,
-          staleSeconds: state.staleFor(tileKey)?.inSeconds.toDouble(),
-          warn: warn,
-          warnText: warn
-              ? '接近门限 ${spec.threshold!.toStringAsFixed(0)}'
-              : null,
+        // v3 nested-panel motif: every tile carries its own bright frame inside
+        // the group frame (see `_grid`).
+        HairlineFrame(
+          key: Key('status_frame_${spec.keyName}'),
+          padding: EdgeInsets.zero,
+          child: StatusTile(
+            key: Key(tileKey),
+            label: spec.label,
+            zh: spec.zh,
+            value: spec.value,
+            unit: spec.unit,
+            precision: spec.precision,
+            note: spec.note,
+            freshness: freshness,
+            staleSeconds: state.staleFor(tileKey)?.inSeconds.toDouble(),
+            warn: warn,
+            warnText: warn
+                ? '接近门限 ${spec.threshold!.toStringAsFixed(0)}'
+                : null,
+          ),
         ),
       );
     }
@@ -466,38 +482,47 @@ class StatusZone extends StatelessWidget {
           trailing: Text(header.toString(), style: scale.label),
         ),
         const SizedBox(height: 14),
-        _grid(context, tiles),
+        _grid(tiles),
         const SizedBox(height: 24),
-        const PanelTitle(title: '热与负载 · 相对门限', en: '%'),
-        const SizedBox(height: 12),
-        for (final bar in _heatLoads(context, status)) ...[
-          bar,
-          const SizedBox(height: 10),
-        ],
+        HairlineFrame(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              const PanelTitle(title: '热与负载 · 相对门限', en: '%'),
+              const SizedBox(height: 12),
+              for (final bar in _heatLoads(context, status)) ...[
+                bar,
+                const SizedBox(height: 10),
+              ],
+            ],
+          ),
+        ),
       ],
     );
   }
 
-  Widget _grid(BuildContext context, List<Widget> cells) {
-    final palette = GuiPalette.of(context);
-    Widget gap() => Container(width: 1, color: palette.lineDim);
+  Widget _grid(List<Widget> cells) {
     Widget row(List<Widget> rowCells) => IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           for (var i = 0; i < rowCells.length; i++) ...<Widget>[
-            if (i > 0) gap(),
+            if (i > 0) const SizedBox(width: 8),
             Expanded(child: rowCells[i]),
           ],
         ],
       ),
     );
-    return Container(
-      color: palette.lineDim,
+    // v3: the tile group is one bright frame, each tile nests its own bright
+    // frame inside it — the signature nested cyan panels of the reference.
+    return HairlineFrame(
+      key: const Key('status_grid_frame'),
+      padding: const EdgeInsets.all(8),
       child: Column(
         children: <Widget>[
           row(cells.sublist(0, 4)),
-          Container(height: 1, color: palette.lineDim),
+          const SizedBox(height: 8),
           row(cells.sublist(4, 8)),
         ],
       ),

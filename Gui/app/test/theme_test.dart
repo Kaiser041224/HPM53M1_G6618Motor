@@ -227,7 +227,7 @@ void main() {
     expect(text.style?.shadows?.length, 1);
   });
 
-  testWidgets('HairlineDivider is a bright line plus two dim lines', (
+  testWidgets('HairlineDivider is a single bright line (v3)', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -240,7 +240,9 @@ void main() {
       of: find.byType(HairlineDivider),
       matching: find.byType(Container),
     );
-    expect(containers, findsNWidgets(3));
+    expect(containers, findsOneWidget);
+    final line = tester.widget<Container>(containers);
+    expect(line.color, const GuiPalette().lineHi);
   });
 
   testWidgets('HairlineFrame main wraps its child', (

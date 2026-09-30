@@ -59,7 +59,7 @@ void main() {
       expect(style.border, palette.stFault);
     });
 
-    test('disabled dims the text to fgMute and drops the glow', () {
+    test('disabled dims border + text and drops the glow', () {
       final style = GuiButton.styleFor(
         palette,
         GuiButtonVariant.primary,
@@ -67,6 +67,8 @@ void main() {
         hovered: true,
       );
       expect(style.text, palette.fgMute);
+      // A disabled button must not keep a bright border (minor 3).
+      expect(style.border, palette.lineDim);
       expect(style.glow, isEmpty);
     });
   });
@@ -97,11 +99,22 @@ void main() {
     expect(taps, 1);
   });
 
-  testWidgets('disabled button does not fire', (tester) async {
+  testWidgets('disabled button dims its hairline border', (tester) async {
     await _pump(tester, const GuiButton(label: '写入', onPressed: null));
 
     final text = tester.widget<Text>(find.text('写入'));
     expect(text.style?.color, palette.fgMute);
+
+    final box = tester.widget<Container>(
+      find
+          .descendant(
+            of: find.byType(GuiButton),
+            matching: find.byType(Container),
+          )
+          .first,
+    );
+    final border = (box.decoration as BoxDecoration).border! as Border;
+    expect(border.top.color, palette.lineDim);
 
     await tester.tap(find.byType(GuiButton));
     await tester.pumpAndSettle();

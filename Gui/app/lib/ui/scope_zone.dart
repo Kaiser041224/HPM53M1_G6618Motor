@@ -6,6 +6,7 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
 import '../widgets/solid_pie.dart';
@@ -70,34 +71,48 @@ class ScopeZone extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Expanded(flex: 2, child: _ScopePlaceholder()),
-            const SizedBox(width: 34),
-            Expanded(
-              flex: 1,
-              child: _PhaseSharePanel(
-                key: const Key('phase_share_panel'),
-                state: state,
+        HairlineFrame(
+          key: const Key('scope_curve_frame'),
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Expanded(flex: 2, child: _ScopePlaceholder()),
+              const SizedBox(width: 34),
+              Expanded(
+                flex: 1,
+                child: _PhaseSharePanel(
+                  key: const Key('phase_share_panel'),
+                  state: state,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         const SizedBox(height: 26),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Expanded(
-              child: FaultComposition(
-                flags: _faultMask(state),
-                // `_faultMask` prefers the latched set; label it accordingly so
-                // a latched bit is never captioned `CURRENT`.
-                latched: state.latchedFlags != 0,
+              child: HairlineFrame(
+                key: const Key('fault_frame'),
+                padding: const EdgeInsets.all(10),
+                child: FaultComposition(
+                  flags: _faultMask(state),
+                  // `_faultMask` prefers the latched set; label it accordingly
+                  // so a latched bit is never captioned `CURRENT`.
+                  latched: state.latchedFlags != 0,
+                ),
               ),
             ),
             const SizedBox(width: 34),
-            Expanded(child: ControlPanel(state: state)),
+            Expanded(
+              child: HairlineFrame(
+                key: const Key('control_frame'),
+                padding: const EdgeInsets.all(10),
+                child: ControlPanel(state: state),
+              ),
+            ),
           ],
         ),
       ],
@@ -259,17 +274,14 @@ class _PhaseSharePanel extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(
-                  fractions == null
-                      ? '—'
-                      : '${(fractions[i] * 100).toStringAsFixed(1)} %',
-                  style: fractions == null
-                      ? scale.label
-                      : scale.data.copyWith(
-                          fontSize: 10.5,
-                          color: GlowValue.colorFor(palette, Tone.neutral),
-                        ),
-                ),
+                fractions == null
+                    ? Text('—', style: scale.label)
+                    : GlowValue(
+                        value: fractions[i] * 100,
+                        unit: '%',
+                        precision: 1,
+                        tone: Tone.neutral,
+                      ),
               ],
             ),
           ),
@@ -432,7 +444,6 @@ class _ControlPanelState extends State<ControlPanel> {
     required VoidCallback onSend,
   }) {
     final scale = GuiTypeScale.of(context);
-    final palette = GuiPalette.of(context);
     final value01 = (value / max).clamp(0.0, 1.0).toDouble();
     return Row(
       children: <Widget>[
@@ -460,16 +471,18 @@ class _ControlPanelState extends State<ControlPanel> {
         const SizedBox(width: 12),
         SizedBox(
           width: 70,
-          child: Text(
-            '${value.toStringAsFixed(precision)} $unit',
-            textAlign: TextAlign.right,
-            // v3 tone mapping: the setpoint readout is flat amber while the
-            // LED bar itself keeps the cyan accent.
-            style: GuiGlowStyles.none(
-              scale.data.copyWith(
-                fontSize: 12,
-                color: GlowValue.colorFor(palette, Tone.amber),
-              ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerRight,
+            // v3 tone mapping: the setpoint readout is amber while the LED bar
+            // itself keeps the cyan accent. `glow: true` stacks the single soft
+            // layer the design reserves for bar / value readouts.
+            child: GlowValue(
+              value: value,
+              unit: unit,
+              precision: precision,
+              tone: Tone.amber,
+              glow: true,
             ),
           ),
         ),

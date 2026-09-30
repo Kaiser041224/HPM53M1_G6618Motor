@@ -9,6 +9,7 @@ import 'package:g6618_gui/ui/scope_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
 import 'package:g6618_gui/widgets/glow_value.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
+import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/solid_pie.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 
@@ -304,11 +305,11 @@ void main() {
       );
       expect(find.byType(SolidPie), findsOneWidget);
       expect(
-        find.descendant(of: panel, matching: find.text('50.0 %')),
+        find.descendant(of: panel, matching: find.text('50.0')),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: panel, matching: find.text('25.0 %')),
+        find.descendant(of: panel, matching: find.text('25.0')),
         findsNWidgets(2),
       );
     });
@@ -384,18 +385,47 @@ void main() {
       );
 
       expect(
-        tester.widget<Text>(find.text('30 %')).style?.color,
+        tester.widget<Text>(find.text('30')).style?.color,
         const GuiPalette().valueGreen,
       );
       expect(
-        tester.widget<Text>(find.text('70 %')).style?.color,
+        tester.widget<Text>(find.text('70')).style?.color,
         const GuiPalette().valueAmber,
       );
       expect(
-        tester.widget<Text>(find.text('90 %')).style?.color,
+        tester.widget<Text>(find.text('90')).style?.color,
         const GuiPalette().valueRed,
       );
       expect(find.text('—'), findsOneWidget);
+    });
+  });
+
+  group('v3 面板框（HairlineFrame main）', () {
+    testWidgets('状态监视：组外框 + 每瓦片内框双层嵌套', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, StatusZone(state: state));
+
+      expect(find.byKey(const Key('status_grid_frame')), findsOneWidget);
+      expect(find.byKey(const Key('status_frame_VBUS')), findsOneWidget);
+      expect(find.byKey(const Key('status_frame_F_ELEC')), findsOneWidget);
+      final tileFrame = tester.widget<HairlineFrame>(
+        find.byKey(const Key('status_frame_VBUS')),
+      );
+      expect(tileFrame.variant, HairlineVariant.main);
+    });
+
+    testWidgets('曲线区 / 故障构成 / 控制条各自为亮青面板', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      expect(find.byKey(const Key('scope_curve_frame')), findsOneWidget);
+      expect(find.byKey(const Key('fault_frame')), findsOneWidget);
+      expect(find.byKey(const Key('control_frame')), findsOneWidget);
+      expect(find.byType(HairlineFrame), findsWidgets);
     });
   });
 
@@ -449,8 +479,10 @@ void main() {
             .variant,
         GuiButtonVariant.danger,
       );
-      final freq = tester.widget<Text>(find.text('0.00 Hz'));
+      final freq = tester.widget<Text>(find.text('0.00'));
       expect(freq.style?.color, const GuiPalette().valueAmber);
+      // Setpoint readout is a GlowValue: unit renders separately, uppercased.
+      expect(find.text('HZ'), findsOneWidget);
     });
   });
 }

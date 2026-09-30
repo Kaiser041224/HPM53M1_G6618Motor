@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 
@@ -84,9 +85,11 @@ class GuiButton extends StatefulWidget {
       GuiButtonVariant.danger => (palette.btnDangerBorder, palette.btnDangerText),
     };
     if (!enabled) {
+      // A disabled button must not read as live: dim the border as well as the
+      // label, so the hairline stops competing with the enabled actions.
       return GuiButtonStyle(
         fill: palette.btnFill,
-        border: border,
+        border: palette.lineDim,
         text: palette.fgMute,
         glow: const <BoxShadow>[],
       );
@@ -100,9 +103,11 @@ class GuiButton extends StatefulWidget {
       text: text,
       glow: hovered
           ? <BoxShadow>[
+              // Same-hue faint glow: reuse the shared soft alpha / blur tokens
+              // instead of repeating the `0 0 8px @ 0.22` magic numbers.
               BoxShadow(
-                color: hoverBorder.withValues(alpha: 0.22),
-                blurRadius: 8,
+                color: hoverBorder.withValues(alpha: palette.glowSoft.a),
+                blurRadius: GuiGlowStyles.softBlur,
               ),
             ]
           : const <BoxShadow>[],

@@ -7,6 +7,7 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/param_zone.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
+import 'package:g6618_gui/widgets/hairline_frame.dart';
 
 ParamMetaDto makeMeta(
   int index,
@@ -231,5 +232,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.widgetWithText(GuiButton, '确认写入'), findsOneWidget);
     expect(find.widgetWithText(GuiButton, '取消'), findsOneWidget);
+  });
+
+  testWidgets('参数分组各自包一层亮青外框（v3 面板密度）', (tester) async {
+    final state = AppState.test(
+      metas: [
+        makeMeta(0, 'motor.pole_pairs', ty: 1, min: 1, max: 64),
+        makeMeta(1, 'hardware.current_sense.a_per_volt', ty: 0, min: 0, max: 1),
+        makeMeta(2, 'software.fault.vbus_ov_v', ty: 0, min: 0, max: 80),
+      ],
+    );
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    expect(find.byKey(const Key('param_group_motor')), findsOneWidget);
+    expect(
+      find.byKey(const Key('param_group_hardware.current_sense')),
+      findsOneWidget,
+    );
+    final frame = tester.widget<HairlineFrame>(
+      find.byKey(const Key('param_group_motor')),
+    );
+    expect(frame.variant, HairlineVariant.main);
   });
 }

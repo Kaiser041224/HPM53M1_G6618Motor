@@ -9,6 +9,7 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 
 /// Human-readable name of a parameter wire type.
@@ -217,27 +218,33 @@ class _ParamZoneState extends State<ParamZone> {
   ) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                groupLabelOf(key),
-                style: scale.section.copyWith(fontSize: 11),
-                overflow: TextOverflow.ellipsis,
+    // v3: every parameter domain (MOTOR / HARDWARE / SOFTWARE …) is one bright
+    // hairline panel, matching the reference's dense framed blocks.
+    return HairlineFrame(
+      key: Key('param_group_$key'),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  groupLabelOf(key),
+                  style: scale.section.copyWith(fontSize: 11),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            Text('${metas.length} 项', style: scale.label),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Container(height: palette.lineWidth, color: palette.line),
-        for (final meta in metas) _row(context, state, meta),
-      ],
+              Text('${metas.length} 项', style: scale.label),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(height: palette.lineWidth, color: palette.line),
+          for (final meta in metas) _row(context, state, meta),
+        ],
+      ),
     );
   }
 
@@ -250,16 +257,34 @@ class _ParamZoneState extends State<ParamZone> {
     final shown = value == null ? '—' : formatValue(value.ty, value.raw);
 
     // v3 tone mapping: a parameter value is flat amber; a local edit not yet
-    // flushed takes the warning hue plus the dirty dot below.
+    // flushed takes the warning hue plus the dirty dot below. Float values
+    // render through `GlowValue(tone:)`; integer / bool values keep the plain
+    // tabular text (GlowValue is a measured-value widget, not a decoder).
     final valueBase = scale.data.copyWith(fontSize: 12.5);
-    final TextStyle valueStyle;
+    final Widget valueWidget;
     if (value == null) {
-      valueStyle = valueBase.copyWith(color: palette.fgMute);
+      valueWidget = Text(
+        '—',
+        maxLines: 1,
+        style: valueBase.copyWith(color: palette.fgMute),
+      );
     } else if (dirty) {
-      valueStyle = valueBase.copyWith(color: palette.stWarn);
+      valueWidget = Text(
+        shown,
+        maxLines: 1,
+        style: valueBase.copyWith(color: palette.stWarn),
+      );
+    } else if (meta.ty == 0) {
+      valueWidget = GlowValue(
+        value: f32FromRaw(value.raw),
+        precision: 2,
+        tone: Tone.amber,
+      );
     } else {
-      valueStyle = valueBase.copyWith(
-        color: GlowValue.colorFor(palette, Tone.amber),
+      valueWidget = Text(
+        shown,
+        maxLines: 1,
+        style: valueBase.copyWith(color: palette.valueAmber),
       );
     }
 
@@ -320,11 +345,10 @@ class _ParamZoneState extends State<ParamZone> {
             const SizedBox(width: 10),
             SizedBox(
               width: 80,
-              child: Text(
-                shown,
-                textAlign: TextAlign.right,
-                maxLines: 1,
-                style: valueStyle,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: valueWidget,
               ),
             ),
           ],

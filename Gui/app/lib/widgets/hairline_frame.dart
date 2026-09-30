@@ -62,24 +62,17 @@ class HairlineFrame extends StatelessWidget {
   }
 }
 
-/// The primary section divider: one bright line plus two dim lines below it
-/// (design-system §3.2 "一亮两暗"). Dividers are scarce — use sparingly.
+/// The primary section divider: a single bright cyan hairline (v3, minor 6).
+///
+/// v3 carries structure on the bright frame motif, so the divider drops the
+/// legacy "一亮两暗" stack and becomes one bright 1px line. Dividers are still
+/// scarce — use sparingly.
 class HairlineDivider extends StatelessWidget {
   const HairlineDivider({super.key});
 
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Container(height: palette.lineWidth, color: palette.lineHi),
-        SizedBox(height: palette.lineWidth),
-        Container(height: palette.lineWidth, color: palette.lineDim),
-        const SizedBox(height: 4),
-        Container(height: palette.lineWidth, color: palette.lineDim),
-      ],
-    );
+    return Container(height: palette.lineWidth, color: palette.lineHi);
   }
 }
