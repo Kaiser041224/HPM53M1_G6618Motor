@@ -31,6 +31,10 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.valueRed = const Color(0xFFB86858),
     this.valuePink = const Color(0xFFC07898),
     this.valueViolet = const Color(0xFF8878B8),
+    this.gearGreen = const Color(0xFF589E5E),
+    this.gearGreenRim = const Color(0xFF3C6E44),
+    this.gearViolet = const Color(0xFF8878B8),
+    this.gearVioletRim = const Color(0xFF5E5288),
     this.white = const Color(0xFFCFDCDA),
     this.accent = const Color(0xFF3F9E98),
     this.accent2 = const Color(0xFFBFA84C),
@@ -119,6 +123,18 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
 
   /// Flat semantic value: accent series.
   final Color valueViolet;
+
+  /// Input gear soft fill (encoder schematic, v4 soft-green).
+  final Color gearGreen;
+
+  /// Input gear deep rim — one step darker than [gearGreen].
+  final Color gearGreenRim;
+
+  /// Output gear soft fill (encoder schematic, v4 soft-violet).
+  final Color gearViolet;
+
+  /// Output gear deep rim — one step darker than [gearViolet].
+  final Color gearVioletRim;
 
   /// Neutral solid light-grey (v4), alias of [fgStrong].
   final Color white;

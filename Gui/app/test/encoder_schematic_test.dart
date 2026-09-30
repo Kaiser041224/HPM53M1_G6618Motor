@@ -27,6 +27,12 @@ EncoderSchematicPainter _painter(WidgetTester tester) {
   return paint.painter! as EncoderSchematicPainter;
 }
 
+/// The two spans of the `i = … : 1` annotation rich text.
+List<TextSpan> _ratioSpans(WidgetTester tester) {
+  final rich = tester.widget<Text>(find.byKey(EncoderSchematic.ratioLabelKey));
+  return (rich.textSpan! as TextSpan).children!.cast<TextSpan>();
+}
+
 void main() {
   group('dial geometry', () {
     test('0° points up and 90° points right (0°=12点, clockwise positive)', () {
@@ -49,23 +55,80 @@ void main() {
   });
 
   group('gearTeethPair', () {
-    test('unloaded ratio is a 1:1 pair', () {
-      expect(gearTeethPair('—'), (14, 14));
+    test('unloaded / unparseable ratio falls back to a 12 / 18 pair', () {
+      expect(gearTeethPair('—'), (12, 18));
+      expect(gearTeethPair('abc'), (12, 18));
     });
 
-    test('teeth approximate the ratio, clamped to 8..20', () {
-      expect(gearTeethPair('3.50'), (14, 20));
-      expect(gearTeethPair('0.50'), (14, 8));
-      expect(gearTeethPair('1.00'), (14, 14));
+    test('tooth counts derive from the ratio, the output grows with it', () {
+      final (int evenIn, int evenOut) = gearTeethPair('1.00');
+      expect(evenOut, evenIn);
+
+      final (int twoIn, int twoOut) = gearTeethPair('2.00');
+      expect(twoOut, greaterThan(twoIn));
+      expect(twoOut / twoIn, closeTo(2.0, 0.6));
+
+      final (int bigIn, int bigOut) = gearTeethPair('3.50');
+      expect(bigOut, greaterThan(bigIn));
+      expect(bigOut, 28);
     });
 
-    test('every derived tooth count stays inside 8..20', () {
-      for (final label in const <String>['0.01', '0.98', '1.0', '12', '99']) {
-        final (left, right) = gearTeethPair(label);
-        expect(left, inInclusiveRange(8, 20), reason: label);
-        expect(right, inInclusiveRange(8, 20), reason: label);
+    test('every derived pair stays inside z1 9..18 / z2 12..28', () {
+      for (final label in const <String>[
+        '0.01',
+        '0.5',
+        '0.98',
+        '1.0',
+        '1.5',
+        '3.5',
+        '12',
+        '99',
+      ]) {
+        final (int input, int output) = gearTeethPair(label);
+        expect(input, inInclusiveRange(9, 18), reason: label);
+        expect(output, inInclusiveRange(12, 28), reason: label);
       }
     });
+  });
+
+  group('gear geometry', () {
+    const size = Size(700, 220);
+
+    test('addendum sits outside, dedendum inside the pitch circle', () {
+      expect(EncoderSchematicPainter.addendumFactor, greaterThan(1.0));
+      expect(EncoderSchematicPainter.dedendumFactor, lessThan(1.0));
+
+      final (double rIn, double rOut) = EncoderSchematicPainter.pitchRadiiFor(
+        size,
+        '2.00',
+      );
+      expect(rIn, greaterThan(0));
+      expect(rOut, greaterThan(rIn));
+      final double tip = EncoderSchematicPainter.gearTipRadiusFor(size, '2.00');
+      expect(tip, greaterThan(rOut));
+      expect(
+        tip,
+        lessThanOrEqualTo(EncoderSchematicPainter.gearRadius(size) + 0.001),
+      );
+      expect(
+        EncoderSchematicPainter.pitchCircleWidth,
+        lessThan(EncoderSchematicPainter.strokeWidth),
+      );
+      expect(EncoderSchematicPainter.lighteningHoleCount, 4);
+    });
+
+    test(
+      'pitch circles are tangent at the mesh point (distance = r1 + r2)',
+      () {
+        final (double xIn, double xOut) =
+            EncoderSchematicPainter.gearCentersXFor(size, '2.00');
+        final (double rIn, double rOut) = EncoderSchematicPainter.pitchRadiiFor(
+          size,
+          '2.00',
+        );
+        expect(xOut - xIn, closeTo(rIn + rOut, 1e-6));
+      },
+    );
   });
 
   group('EncoderSchematic widget', () {
@@ -85,32 +148,36 @@ void main() {
     testWidgets('pointer channels track their own angle', (tester) async {
       await _pump(
         tester,
-        const EncoderSchematic(
-          rotorDeg: 90,
-          outputDeg: 15,
-          ratioLabel: '1.00',
-        ),
+        const EncoderSchematic(rotorDeg: 90, outputDeg: 15, ratioLabel: '1.00'),
       );
       final painter = _painter(tester);
       expect(painter.rotorDeg, 90);
       expect(painter.outputDeg, 15);
     });
 
-    testWidgets('ratio label renders as i = 3.50 : 1', (tester) async {
+    testWidgets('ratio prefix is fgDim and the value is amber', (tester) async {
       await _pump(
         tester,
         const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '3.50'),
       );
-      expect(find.text('i = 3.50 : 1'), findsOneWidget);
+      const palette = GuiPalette();
+      final spans = _ratioSpans(tester);
+      expect(spans[0].text, 'i = ');
+      expect(spans[1].text, '3.50 : 1');
+      expect(spans[0].style!.color, palette.fgDim);
+      expect(spans[1].style!.color, palette.valueAmber);
     });
 
-    testWidgets('null ratio renders i = —', (tester) async {
+    testWidgets('null ratio renders i = — with a muted value', (tester) async {
       await _pump(
         tester,
         const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '—'),
       );
-      expect(find.text('i = —'), findsOneWidget);
-      expect(find.textContaining('i = 3.50'), findsNothing);
+      const palette = GuiPalette();
+      final spans = _ratioSpans(tester);
+      expect(spans[0].text, 'i = ');
+      expect(spans[1].text, '—');
+      expect(spans[1].style!.color, palette.fgMute);
     });
 
     testWidgets('null angle parks the pointer and shows a — badge', (
@@ -148,7 +215,107 @@ void main() {
       expect(painter.line, palette.line);
       expect(painter.fgDim, palette.fgDim);
       expect(painter.valueAmber, palette.valueAmber);
+      expect(painter.bgBase, palette.bgBase);
+      expect(painter.glowSoft, palette.glowSoft);
       expect(EncoderSchematicPainter.strokeWidth, 1.2);
+    });
+
+    testWidgets('input and output wheels carry distinct fill + rim colours', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      const palette = GuiPalette();
+      final painter = _painter(tester);
+      expect(painter.gearGreen, palette.gearGreen);
+      expect(painter.gearGreenRim, palette.gearGreenRim);
+      expect(painter.gearViolet, palette.gearViolet);
+      expect(painter.gearVioletRim, palette.gearVioletRim);
+      expect(painter.gearGreen, isNot(painter.gearViolet));
+      expect(painter.gearGreenRim, isNot(painter.gearVioletRim));
+      expect(painter.gearGreenRim, isNot(painter.gearGreen));
+      expect(painter.gearVioletRim, isNot(painter.gearViolet));
+    });
+  });
+
+  group('gear rotation animation', () {
+    test('coupled output angle reverses and scales by the tooth ratio', () {
+      for (final label in const <String>['1.00', '2.00', '3.50']) {
+        final (int zIn, int zOut) = gearTeethPair(label);
+        expect(
+          coupledOutputGearAngleDeg(137.5, zIn, zOut),
+          closeTo(-137.5 * zIn / zOut, 1e-6),
+          reason: label,
+        );
+      }
+    });
+
+    testWidgets('live rotor spins the input wheel continuously', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      final before = _painter(tester).inputAngleDeg;
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(_painter(tester).inputAngleDeg, isNot(closeTo(before, 1e-9)));
+    });
+
+    testWidgets('null rotor honest-stops the gears', (tester) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(
+          rotorDeg: null,
+          outputDeg: 0,
+          ratioLabel: '1.00',
+        ),
+      );
+      final before = _painter(tester).inputAngleDeg;
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(_painter(tester).inputAngleDeg, closeTo(before, 1e-9));
+    });
+
+    testWidgets('the gear pair keeps θ_out = −θ_in · z1/z2 in flight', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '2.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      final painter = _painter(tester);
+      final (int zIn, int zOut) = gearTeethPair('2.00');
+      expect(
+        painter.outputGearAngleDeg,
+        closeTo(-painter.inputAngleDeg * zIn / zOut, 1e-6),
+      );
+    });
+
+    testWidgets('recovering live resumes from the frozen phase (no jump)', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(
+          rotorDeg: null,
+          outputDeg: 0,
+          ratioLabel: '1.00',
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      final frozen = _painter(tester).inputAngleDeg;
+      expect(frozen, closeTo(0, 1e-9));
+
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      expect(_painter(tester).inputAngleDeg, closeTo(frozen, 1e-6));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(_painter(tester).inputAngleDeg, isNot(closeTo(frozen, 1e-9)));
     });
   });
 
@@ -162,6 +329,12 @@ void main() {
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
         valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
       );
       final rotorMoved = EncoderSchematicPainter(
         rotorDeg: 90,
@@ -171,6 +344,12 @@ void main() {
         line: a.line,
         fgDim: a.fgDim,
         valueAmber: a.valueAmber,
+        gearGreen: a.gearGreen,
+        gearGreenRim: a.gearGreenRim,
+        gearViolet: a.gearViolet,
+        gearVioletRim: a.gearVioletRim,
+        bgBase: a.bgBase,
+        glowSoft: a.glowSoft,
       );
       final outputMoved = EncoderSchematicPainter(
         rotorDeg: 0,
@@ -180,6 +359,12 @@ void main() {
         line: a.line,
         fgDim: a.fgDim,
         valueAmber: a.valueAmber,
+        gearGreen: a.gearGreen,
+        gearGreenRim: a.gearGreenRim,
+        gearViolet: a.gearViolet,
+        gearVioletRim: a.gearVioletRim,
+        bgBase: a.bgBase,
+        glowSoft: a.glowSoft,
       );
       final ratioMoved = EncoderSchematicPainter(
         rotorDeg: 0,
@@ -189,6 +374,12 @@ void main() {
         line: a.line,
         fgDim: a.fgDim,
         valueAmber: a.valueAmber,
+        gearGreen: a.gearGreen,
+        gearGreenRim: a.gearGreenRim,
+        gearViolet: a.gearViolet,
+        gearVioletRim: a.gearVioletRim,
+        bgBase: a.bgBase,
+        glowSoft: a.glowSoft,
       );
       expect(a.shouldRepaint(rotorMoved), isTrue);
       expect(a.shouldRepaint(outputMoved), isTrue);
@@ -205,6 +396,12 @@ void main() {
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
         valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
       );
       const noData = EncoderSchematicPainter(
         rotorDeg: null,
@@ -214,8 +411,51 @@ void main() {
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
         valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
       );
       expect(parked.shouldRepaint(noData), isTrue);
+    });
+
+    test('a changed gear rotation phase is a repaint', () {
+      const base = EncoderSchematicPainter(
+        rotorDeg: 0,
+        outputDeg: 0,
+        ratioLabel: '1.00',
+        accent: Color(0xFF3F9E98),
+        line: Color(0xFF1E5458),
+        fgDim: Color(0xFF6E908E),
+        valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
+      );
+      const turned = EncoderSchematicPainter(
+        rotorDeg: 0,
+        outputDeg: 0,
+        ratioLabel: '1.00',
+        inputAngleDeg: 15,
+        outputGearAngleDeg: -10,
+        accent: Color(0xFF3F9E98),
+        line: Color(0xFF1E5458),
+        fgDim: Color(0xFF6E908E),
+        valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
+      );
+      expect(base.shouldRepaint(turned), isTrue);
+      expect(base.shouldRepaint(base), isFalse);
     });
   });
 }

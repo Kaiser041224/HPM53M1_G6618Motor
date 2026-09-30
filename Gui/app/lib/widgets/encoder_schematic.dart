@@ -19,30 +19,56 @@ Offset pointerTip(Offset center, double radius, double deg) {
 
 /// Tooth counts of the meshing gear pair for a reduction ratio [ratioLabel].
 ///
-/// The pair approximates the labelled ratio (a larger output ratio gets a
-/// larger output gear) with every count clamped to `8..20` so the sketch stays
-/// legible; an unloaded (`—`) or unparseable label falls back to a 1:1 mesh.
+/// The input wheel is sized so the pair approximates the labelled ratio with
+/// every count clamped to a legible band — `z1` inside `9..18`, `z2` inside
+/// `12..28` — then the output count follows `z1 × ratio`. A larger ratio grows
+/// the output wheel (up to the cap) and shrinks the input. An unloaded (`—`) or
+/// unparseable label falls back to a `12 / 18` pair rather than a fabricated
+/// 1:1 mesh.
 (int, int) gearTeethPair(String ratioLabel) {
-  const int base = 14;
   final double? ratio = double.tryParse(ratioLabel);
   if (ratio == null || !ratio.isFinite || ratio <= 0) {
-    return (base, base);
+    return (12, 18);
   }
-  final int output = (base * ratio).round().clamp(8, 20);
-  return (base, output);
+  final int input = (18 / ratio).round().clamp(9, 18);
+  final int output = (input * ratio).round().clamp(12, 28);
+  return (input, output);
 }
 
-/// Line-drawn encoder schematic (v4, three-part thin wireframe).
+/// One full input-wheel revolution — a constant `360° / 12 s == 30°/s`.
+const Duration _inputWheelTurnPeriod = Duration(seconds: 12);
+
+/// Output-wheel rotation [°] meshing-coupled to an input rotation.
+///
+/// External meshing reverses the sense and scales by the tooth ratio:
+/// `θ_out = −θ_in · zInput / zOutput`. The pitch-line speeds therefore match,
+/// so the input tooth stays seated in the output gap at every phase.
+double coupledOutputGearAngleDeg(
+  double inputAngleDeg,
+  int zInput,
+  int zOutput,
+) => -inputAngleDeg * zInput / zOutput;
+
+/// Line-drawn encoder schematic (v6, live meshing pair + screenshot colouring).
 ///
 /// Reads left to right: a 360° dial for the rotor (`R · 转子`), a meshing gear
 /// pair for the reduction, then a 360° dial for the output shaft (`O · 出轴`).
 /// Each dial has a graduated ring (minor every 15°, major every 90° with a
 /// numeral) and a pointer that rotates live with its angle — `0°` up, clockwise
 /// positive. A null angle parks its pointer at 12 o'clock and pins a `—` badge
-/// on the face. The gear pair is annotated `i = {ratio} : 1` underneath
-/// (`i = —` when no ratio is loaded). Every line and label colour comes from
-/// [GuiPalette]; strokes stay 1.2px flat, with no glow.
-class EncoderSchematic extends StatelessWidget {
+/// on the face.
+///
+/// The gear pair is drawn as two real involute-style wheels: addendum (tip),
+/// dedendum (root) and dashed pitch circles, trapezoidal teeth (narrow tip, wide
+/// root) meshing with a half-pitch phase offset, plus hubs with a bore, keyway
+/// and four lightening holes. The input wheel is soft green, the output soft
+/// violet; each body is low-alpha filled and rim-stroked. While the rotor
+/// reading is live the pair turns as one rigid mesh — input at a constant visual
+/// speed, output coupled in reverse by the tooth ratio — and honest-stops at its
+/// frozen phase when the rotor goes stale. The pair is annotated
+/// `i = {ratio} : 1` underneath (prefix `i =` fgDim, value amber; `i = —` when no
+/// ratio is loaded). Every line and label colour comes from [GuiPalette].
+class EncoderSchematic extends StatefulWidget {
   const EncoderSchematic({
     super.key,
     required this.rotorDeg,
@@ -51,6 +77,9 @@ class EncoderSchematic extends StatelessWidget {
   });
 
   /// Rotor angle [°]; null when the reading is stale / never read.
+  ///
+  /// Also the gear-pair "live" predicate: a `null` rotor honest-stops the
+  /// rotation in place, a non-null rotor runs it continuously.
   final double? rotorDeg;
 
   /// Output-shaft angle [°]; null when the reading is stale / never read.
@@ -61,6 +90,57 @@ class EncoderSchematic extends StatelessWidget {
 
   /// Drawing height; the width follows the parent.
   static const double height = 220;
+
+  /// Key on the ratio annotation rich text (prefix + value spans).
+  static const Key ratioLabelKey = Key('encoder_ratio_label');
+
+  @override
+  State<EncoderSchematic> createState() => _EncoderSchematicState();
+}
+
+/// Drives the meshing gear pair's rotation and hosts the painting.
+///
+/// The input wheel turns at a constant visual speed (one revolution per
+/// [_inputWheelTurnPeriod]); the output wheel follows the meshing-coupled
+/// reversal. The animation is a pure painting concern — the dials and their
+/// pointers still track the measured angles.
+class _EncoderSchematicState extends State<EncoderSchematic>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _rotation;
+
+  @override
+  void initState() {
+    super.initState();
+    _rotation = AnimationController(
+      vsync: this,
+      duration: _inputWheelTurnPeriod,
+    );
+    _syncRotation();
+  }
+
+  @override
+  void didUpdateWidget(covariant EncoderSchematic oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncRotation();
+  }
+
+  /// Runs the pair while the rotor is live; honest-stops it on `null`.
+  ///
+  /// [AnimationController.repeat] resumes from the current value, so a
+  /// stale → live transition picks the gears back up at the frozen phase.
+  void _syncRotation() {
+    if (widget.rotorDeg == null) {
+      _rotation.stop();
+    } else if (!_rotation.isAnimating) {
+      _rotation.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _rotation.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -75,14 +155,20 @@ class EncoderSchematic extends StatelessWidget {
       fontSize: 16,
       shadows: const <Shadow>[],
     );
-    final ratioStyle = scale.label.copyWith(
-      color: ratioLabel == '—' ? palette.fgMute : palette.valueAmber,
+    final ratioPrefixStyle = scale.label.copyWith(
+      color: palette.fgDim,
       fontSize: 10,
     );
-    final ratioText = ratioLabel == '—' ? 'i = —' : 'i = $ratioLabel : 1';
+    final ratioValueStyle = scale.label.copyWith(
+      color: widget.ratioLabel == '—' ? palette.fgMute : palette.valueAmber,
+      fontSize: 10,
+    );
+    final ratioValue = widget.ratioLabel == '—'
+        ? '—'
+        : '${widget.ratioLabel} : 1';
 
     return SizedBox(
-      height: height,
+      height: EncoderSchematic.height,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -90,7 +176,10 @@ class EncoderSchematic extends StatelessWidget {
           final rotorCenter = EncoderSchematicPainter.rotorCenter(size);
           final outputCenter = EncoderSchematicPainter.outputCenter(size);
           final gearCenter = EncoderSchematicPainter.gearCenter(size);
-          final gearRadius = EncoderSchematicPainter.gearRadius(size);
+          final gearTip = EncoderSchematicPainter.gearTipRadiusFor(
+            size,
+            widget.ratioLabel,
+          );
 
           Widget caption(String text, Key key, Offset center) => Positioned(
             left: center.dx - 60,
@@ -120,40 +209,58 @@ class EncoderSchematic extends StatelessWidget {
             clipBehavior: Clip.none,
             children: <Widget>[
               Positioned.fill(
-                child: CustomPaint(
-                  painter: EncoderSchematicPainter(
-                    rotorDeg: rotorDeg,
-                    outputDeg: outputDeg,
-                    ratioLabel: ratioLabel,
-                    accent: palette.accent,
-                    line: palette.line,
-                    fgDim: palette.fgDim,
-                    valueAmber: palette.valueAmber,
-                  ),
+                child: AnimatedBuilder(
+                  animation: _rotation,
+                  builder: (context, _) {
+                    final double inputAngleDeg = _rotation.value * 360;
+                    final (int zInput, int zOutput) = gearTeethPair(
+                      widget.ratioLabel,
+                    );
+                    return CustomPaint(
+                      painter: EncoderSchematicPainter(
+                        rotorDeg: widget.rotorDeg,
+                        outputDeg: widget.outputDeg,
+                        ratioLabel: widget.ratioLabel,
+                        inputAngleDeg: inputAngleDeg,
+                        outputGearAngleDeg: coupledOutputGearAngleDeg(
+                          inputAngleDeg,
+                          zInput,
+                          zOutput,
+                        ),
+                        accent: palette.accent,
+                        line: palette.line,
+                        fgDim: palette.fgDim,
+                        valueAmber: palette.valueAmber,
+                        gearGreen: palette.gearGreen,
+                        gearGreenRim: palette.gearGreenRim,
+                        gearViolet: palette.gearViolet,
+                        gearVioletRim: palette.gearVioletRim,
+                        bgBase: palette.bgBase,
+                        glowSoft: palette.glowSoft,
+                      ),
+                    );
+                  },
                 ),
               ),
-              caption(
-                'R · 转子',
-                const Key('encoder_dial_rotor'),
-                rotorCenter,
-              ),
-              caption(
-                'O · 出轴',
-                const Key('encoder_dial_output'),
-                outputCenter,
-              ),
-              if (rotorDeg == null)
+              caption('R · 转子', const Key('encoder_dial_rotor'), rotorCenter),
+              caption('O · 出轴', const Key('encoder_dial_output'), outputCenter),
+              if (widget.rotorDeg == null)
                 nodata(rotorCenter, const Key('encoder_dial_rotor_nodata')),
-              if (outputDeg == null)
+              if (widget.outputDeg == null)
                 nodata(outputCenter, const Key('encoder_dial_output_nodata')),
               Positioned(
                 left: gearCenter.dx - 70,
-                top: gearCenter.dy + gearRadius + 20,
+                top: gearCenter.dy + gearTip + 18,
                 width: 140,
-                child: Text(
-                  ratioText,
+                child: Text.rich(
+                  TextSpan(
+                    children: <TextSpan>[
+                      TextSpan(text: 'i = ', style: ratioPrefixStyle),
+                      TextSpan(text: ratioValue, style: ratioValueStyle),
+                    ],
+                  ),
+                  key: EncoderSchematic.ratioLabelKey,
                   textAlign: TextAlign.center,
-                  style: ratioStyle,
                 ),
               ),
             ],
@@ -166,17 +273,26 @@ class EncoderSchematic extends StatelessWidget {
 
 /// Paints the three-part schematic: rotor dial, meshing gear pair, output dial.
 ///
-/// Flat 1.2px strokes only — the ring, graduations and gears are a technical
-/// wireframe, never a filled or glowing shape.
+/// Dials stay flat 1.2px wireframes (cyan for `R`, amber for `O`); the gear pair
+/// is a soft-filled, rim-stroked realistic mesh. The only glow is a small
+/// [glowSoft] dot at each pointer tip.
 class EncoderSchematicPainter extends CustomPainter {
   const EncoderSchematicPainter({
     required this.rotorDeg,
     required this.outputDeg,
     required this.ratioLabel,
+    this.inputAngleDeg = 0,
+    this.outputGearAngleDeg = 0,
     required this.accent,
     required this.line,
     required this.fgDim,
     required this.valueAmber,
+    required this.gearGreen,
+    required this.gearGreenRim,
+    required this.gearViolet,
+    required this.gearVioletRim,
+    required this.bgBase,
+    required this.glowSoft,
   });
 
   /// Rotor angle [°]; null parks the pointer at 12 o'clock.
@@ -188,17 +304,46 @@ class EncoderSchematicPainter extends CustomPainter {
   /// Reduction-ratio label, mirrored into the gear tooth counts.
   final String ratioLabel;
 
-  /// Primary wire colour (rotor dial ring, pointers, gears).
+  /// Live rotation of the input (green) wheel [°], driven by the widget tick.
+  ///
+  /// Read-only hook for the animation; it also sets the painted phase of the
+  /// wheel's teeth, hub and lightening holes.
+  final double inputAngleDeg;
+
+  /// Meshing-coupled rotation of the output (violet) wheel [°].
+  ///
+  /// Held at `−inputAngleDeg · z1 / z2` so the teeth never leave the mesh.
+  final double outputGearAngleDeg;
+
+  /// Rotor (`R`) dial ring + pointer colour, soft cyan.
   final Color accent;
 
-  /// Secondary seam colour (gear hubs).
+  /// Thin dark seam / dashed pitch-circle colour.
   final Color line;
 
-  /// Graduation / caption colour.
+  /// Graduation / caption / prefix colour.
   final Color fgDim;
 
-  /// Output pointer colour.
+  /// Output (`O`) dial ring + pointer colour, olive amber; also the ratio value.
   final Color valueAmber;
+
+  /// Input gear soft fill.
+  final Color gearGreen;
+
+  /// Input gear deep rim.
+  final Color gearGreenRim;
+
+  /// Output gear soft fill.
+  final Color gearViolet;
+
+  /// Output gear deep rim.
+  final Color gearVioletRim;
+
+  /// Page base colour, used to punch out bores, keyways and lightening holes.
+  final Color bgBase;
+
+  /// Single soft glow colour, used only at the pointer tips.
+  final Color glowSoft;
 
   /// Thin wire weight (design-system: 1.2px, never scaled for emphasis).
   static const double strokeWidth = 1.2;
@@ -211,6 +356,33 @@ class EncoderSchematicPainter extends CustomPainter {
 
   /// Major graduation step [°] (carries a numeral).
   static const double majorTickStepDeg = 90;
+
+  /// Gear tip (addendum) radius as a multiple of the pitch radius.
+  static const double addendumFactor = 1.16;
+
+  /// Gear root (dedendum) radius as a multiple of the pitch radius.
+  static const double dedendumFactor = 0.84;
+
+  /// Hub outer radius as a multiple of the pitch radius.
+  static const double hubFactor = 0.30;
+
+  /// Centre bore radius as a multiple of the pitch radius.
+  static const double hubBoreFactor = 0.13;
+
+  /// Lightening-hole radius as a multiple of the pitch radius.
+  static const double lighteningHoleFactor = 0.15;
+
+  /// Lightening-hole orbit radius as a multiple of the pitch radius.
+  static const double lighteningHoleOrbitFactor = 0.55;
+
+  /// Number of circular lightening holes drilled in each wheel.
+  static const int lighteningHoleCount = 4;
+
+  /// Dashed pitch-circle stroke width.
+  static const double pitchCircleWidth = 0.6;
+
+  /// Body-fill alpha for a gear (soft, translucent).
+  static const double gearFillAlpha = 0.22;
 
   /// Centre of the rotor dial within [size].
   static Offset rotorCenter(Size size) =>
@@ -228,93 +400,98 @@ class EncoderSchematicPainter extends CustomPainter {
   static Offset gearCenter(Size size) =>
       Offset(size.width * 0.5, size.height * 0.40);
 
-  /// Radius of each gear within [size].
+  /// Half-width budget of the whole meshing pair within [size].
   static double gearRadius(Size size) =>
-      math.min(size.width * 0.055, size.height * 0.13);
+      math.min(size.width * 0.13, size.height * 0.20);
+
+  /// Pitch radii `(input, output)` of the pair for [size] / [ratioLabel].
+  ///
+  /// Both share one module so `rInput : rOutput == z1 : z2`; the centre distance
+  /// is chosen so the addendum circles fill (but never exceed) [gearRadius].
+  static (double, double) pitchRadiiFor(Size size, String ratioLabel) {
+    final (int zInput, int zOutput) = gearTeethPair(ratioLabel);
+    final double half = gearRadius(size);
+    final double distance = half * 2 / (addendumFactor + 1);
+    final int total = zInput + zOutput;
+    return (distance * zInput / total, distance * zOutput / total);
+  }
+
+  /// X offsets `(input, output)` of the two wheel centres within [size].
+  static (double, double) gearCentersXFor(Size size, String ratioLabel) {
+    final (double rInput, double rOutput) = pitchRadiiFor(size, ratioLabel);
+    final double half = gearRadius(size);
+    final double cx = gearCenter(size).dx;
+    return (
+      cx - half + rInput * addendumFactor,
+      cx + half - rOutput * addendumFactor,
+    );
+  }
+
+  /// Tip (addendum) radius of the pair's largest wheel for [size].
+  static double gearTipRadiusFor(Size size, String ratioLabel) {
+    final (double rInput, double rOutput) = pitchRadiiFor(size, ratioLabel);
+    return addendumFactor * math.max(rInput, rOutput);
+  }
+
+  /// Mutable helper: a stroke [Paint] of [color] / [width].
+  Paint _stroke(Color color, double width) => Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = width
+    ..strokeCap = StrokeCap.round
+    ..isAntiAlias = true
+    ..color = color;
+
+  /// Mutable helper: a solid fill [Paint] of [color].
+  Paint _fill(Color color) => Paint()
+    ..style = PaintingStyle.fill
+    ..isAntiAlias = true
+    ..color = color;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final wire = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..color = accent;
-    final faint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..color = fgDim;
-    final seam = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..color = line;
-    final amberWire = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..color = valueAmber;
-
     final radius = dialRadius(size);
     final rotorCenter = EncoderSchematicPainter.rotorCenter(size);
     final outputCenter = EncoderSchematicPainter.outputCenter(size);
     final gearCenter = EncoderSchematicPainter.gearCenter(size);
-    final gearR = EncoderSchematicPainter.gearRadius(size);
 
-    _drawDial(canvas, rotorCenter, radius, rotorDeg, wire, amberWire, faint, seam);
-    _drawDial(
-      canvas,
-      outputCenter,
-      radius,
-      outputDeg,
-      wire,
-      amberWire,
-      faint,
-      seam,
-    );
+    _drawDial(canvas, rotorCenter, radius, rotorDeg, accent, fgDim, line);
+    _drawDial(canvas, outputCenter, radius, outputDeg, valueAmber, fgDim, line);
 
-    _drawGearPair(canvas, gearCenter, gearR, wire, seam);
+    _drawGearPair(canvas, size, gearCenter);
 
     final y = rotorCenter.dy;
+    final half = gearRadius(size);
     _drawConnector(
       canvas,
       Offset(rotorCenter.dx + radius + 8, y),
-      Offset(gearCenter.dx - gearR * 2 - 8, y),
-      faint,
+      Offset(gearCenter.dx - half - 8, y),
+      _stroke(fgDim, 1),
     );
     _drawConnector(
       canvas,
-      Offset(gearCenter.dx + gearR * 2 + 8, y),
+      Offset(gearCenter.dx + half + 8, y),
       Offset(outputCenter.dx - radius - 8, y),
-      faint,
+      _stroke(fgDim, 1),
     );
   }
 
-  /// Draws one graduated dial and its pointer.
+  /// Draws one graduated dial and its pointer in [channel] colour.
   ///
-  /// [pointerColor] is passed separately so the output dial can read amber
-  /// while the rotor dial stays accent-cyan.
+  /// Passing [channel] separately lets the rotor dial read cyan while the
+  /// output dial reads amber.
   void _drawDial(
     Canvas canvas,
     Offset center,
     double radius,
     double? deg,
-    Paint ring,
-    Paint pointerColor,
-    Paint faint,
-    Paint hub,
+    Color channel,
+    Color faintColor,
+    Color seamColor,
   ) {
-    canvas.drawCircle(center, radius, ring);
+    final faint = _stroke(faintColor, 1);
+    canvas.drawCircle(center, radius, _stroke(channel, strokeWidth));
 
-    for (
-      double tick = 0;
-      tick < 360;
-      tick += minorTickStepDeg
-    ) {
+    for (double tick = 0; tick < 360; tick += minorTickStepDeg) {
       final bool major = tick % majorTickStepDeg == 0;
       final inner = radius - (major ? 9 : 4);
       canvas.drawLine(
@@ -323,25 +500,33 @@ class EncoderSchematicPainter extends CustomPainter {
         faint,
       );
       if (major) {
-        _drawTickNumeral(canvas, center, radius - 17, tick);
+        _drawTickNumeral(canvas, center, radius - 17, tick, faintColor);
       }
     }
 
     final angle = deg ?? 0.0;
     final tip = pointerTip(center, radius * pointerRadiusFactor, angle);
-    canvas.drawLine(center, tip, pointerColor);
+    canvas.drawCircle(tip, radius * 0.06, _fill(glowSoft));
+    final pointer = _stroke(channel, strokeWidth);
+    canvas.drawLine(center, tip, pointer);
     final head = radius * 0.16;
-    canvas.drawLine(tip, pointerTip(tip, head, angle + 152), pointerColor);
-    canvas.drawLine(tip, pointerTip(tip, head, angle - 152), pointerColor);
-    canvas.drawCircle(center, radius * 0.07, hub);
+    canvas.drawLine(tip, pointerTip(tip, head, angle + 152), pointer);
+    canvas.drawLine(tip, pointerTip(tip, head, angle - 152), pointer);
+    canvas.drawCircle(center, radius * 0.07, _stroke(seamColor, 1));
   }
 
   /// Draws the `0 / 90 / 180 / 270` numeral at dial angle [deg].
-  void _drawTickNumeral(Canvas canvas, Offset center, double radius, double deg) {
+  void _drawTickNumeral(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    double deg,
+    Color color,
+  ) {
     final painter = TextPainter(
       text: TextSpan(
         text: deg.toInt().toString(),
-        style: TextStyle(color: fgDim, fontSize: 7),
+        style: TextStyle(color: color, fontSize: 7),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -349,51 +534,172 @@ class EncoderSchematicPainter extends CustomPainter {
     painter.paint(canvas, at - Offset(painter.width / 2, painter.height / 2));
   }
 
-  /// Draws the meshing gear pair: two toothed wheels offset half a tooth pitch.
-  void _drawGearPair(
-    Canvas canvas,
-    Offset center,
-    double radius,
-    Paint wire,
-    Paint hub,
-  ) {
-    final (int leftTeeth, int rightTeeth) = gearTeethPair(ratioLabel);
-    final gap = radius;
-    _drawGear(canvas, center - Offset(gap, 0), radius, leftTeeth, 0, wire, hub);
+  /// Draws the meshing gear pair, centres on the shaft line.
+  void _drawGearPair(Canvas canvas, Size size, Offset gearCenter) {
+    final (int zInput, int zOutput) = gearTeethPair(ratioLabel);
+    final (double rInput, double rOutput) = pitchRadiiFor(size, ratioLabel);
+    final (double xInput, double xOutput) = gearCentersXFor(size, ratioLabel);
+    final double y = gearCenter.dy;
+    final double inputRotation = inputAngleDeg * math.pi / 180;
+    final double outputRotation = outputGearAngleDeg * math.pi / 180;
+
+    // Input wheel: a tooth centred on the pitch point (angle 0), turned by the
+    // live input phase.
     _drawGear(
       canvas,
-      center + Offset(gap, 0),
-      radius,
-      rightTeeth,
-      math.pi / rightTeeth,
-      wire,
-      hub,
+      Offset(xInput, y),
+      rInput,
+      zInput,
+      0,
+      inputRotation,
+      gearGreen,
+      gearGreenRim,
+    );
+    // Output wheel: a gap centred on the pitch point (angle π), i.e. phase
+    // shifted by half a tooth pitch so the two teeth interlock, then turned by
+    // the meshing-coupled output phase.
+    _drawGear(
+      canvas,
+      Offset(xOutput, y),
+      rOutput,
+      zOutput,
+      math.pi - math.pi / zOutput,
+      outputRotation,
+      gearViolet,
+      gearVioletRim,
     );
   }
 
-  /// Draws one gear wheel with [teeth] radial teeth at [phase] radians.
+  /// Draws one real gear wheel: toothed body, hubs, bore, keyway, holes.
+  ///
+  /// [rotation] turns the whole wheel — teeth, lightening holes and keyway —
+  /// as one rigid body about its centre.
   void _drawGear(
     Canvas canvas,
     Offset center,
-    double radius,
+    double pitchRadius,
     int teeth,
     double phase,
-    Paint wire,
-    Paint hub,
+    double rotation,
+    Color fillColor,
+    Color rimColor,
   ) {
-    canvas.drawCircle(center, radius, wire);
-    final pitch = 2 * math.pi / teeth;
-    final toothLength = radius * 0.22;
-    for (var i = 0; i < teeth; i++) {
-      final a = phase + i * pitch;
-      final outward = Offset(math.cos(a), math.sin(a));
-      canvas.drawLine(
-        center + outward * radius,
-        center + outward * (radius + toothLength),
-        wire,
-      );
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rotation);
+
+    final outline = _gearOutline(Offset.zero, pitchRadius, teeth, phase);
+
+    // Soft body fill, then the deep rim that carries the silhouette.
+    canvas.drawPath(outline, _fill(fillColor.withValues(alpha: gearFillAlpha)));
+    final rim = _stroke(rimColor, strokeWidth);
+    canvas.drawPath(outline, rim);
+
+    // Four circular lightening holes punched through the web.
+    final holeRadius = pitchRadius * lighteningHoleFactor;
+    final orbit = pitchRadius * lighteningHoleOrbitFactor;
+    final holeOutline = _stroke(rimColor, 1);
+    for (var i = 0; i < lighteningHoleCount; i++) {
+      final angle = math.pi / 4 + i * math.pi / 2;
+      final hole = Offset(math.cos(angle), math.sin(angle)) * orbit;
+      canvas.drawCircle(hole, holeRadius, _fill(bgBase));
+      canvas.drawCircle(hole, holeRadius, holeOutline);
     }
-    canvas.drawCircle(center, radius * 0.16, hub);
+
+    // Hub outer circle.
+    final hubRadius = pitchRadius * hubFactor;
+    canvas.drawCircle(Offset.zero, hubRadius, _stroke(rimColor, 1));
+
+    // Centre bore + keyway, punched to the page base and rimmed in the wheel
+    // colour.
+    final boreRadius = pitchRadius * hubBoreFactor;
+    final keywayOutline = _stroke(rimColor, 1);
+    canvas.drawCircle(Offset.zero, boreRadius, _fill(bgBase));
+    canvas.drawCircle(Offset.zero, boreRadius, keywayOutline);
+    final keyway = Rect.fromLTRB(
+      -boreRadius * 0.35,
+      -hubRadius,
+      boreRadius * 0.35,
+      -boreRadius * 0.4,
+    );
+    canvas.drawRect(keyway, _fill(bgBase));
+    canvas.drawRect(keyway, keywayOutline);
+
+    // Dashed pitch circle.
+    _drawDashedCircle(
+      canvas,
+      Offset.zero,
+      pitchRadius,
+      _stroke(line, pitchCircleWidth),
+    );
+
+    canvas.restore();
+  }
+
+  /// Builds the closed, filled outline of a gear with [teeth] trapezoidal teeth.
+  ///
+  /// Tip land is narrower than the root (an involute approximation) and the root
+  /// gaps are sampled on the dedendum circle for a rounded look.
+  Path _gearOutline(
+    Offset center,
+    double pitchRadius,
+    int teeth,
+    double phase,
+  ) {
+    final tipRadius = pitchRadius * addendumFactor;
+    final rootRadius = pitchRadius * dedendumFactor;
+    final pitch = 2 * math.pi / teeth;
+    final halfTooth = math.pi / (2 * teeth);
+    final tipHalf = halfTooth * 0.55;
+    final rootHalf = halfTooth * 1.45;
+
+    final path = Path();
+    for (var i = 0; i < teeth; i++) {
+      final theta = phase + i * pitch;
+      final rootLeft = _polar(center, rootRadius, theta - rootHalf);
+      if (i == 0) {
+        path.moveTo(rootLeft.dx, rootLeft.dy);
+      } else {
+        path.lineTo(rootLeft.dx, rootLeft.dy);
+      }
+      final tipLeft = _polar(center, tipRadius, theta - tipHalf);
+      final tipRight = _polar(center, tipRadius, theta + tipHalf);
+      final rootRight = _polar(center, rootRadius, theta + rootHalf);
+      path.lineTo(tipLeft.dx, tipLeft.dy);
+      path.lineTo(tipRight.dx, tipRight.dy);
+      path.lineTo(rootRight.dx, rootRight.dy);
+
+      // Sample the root gap across to the next tooth.
+      final nextRootLeft = theta + pitch - rootHalf;
+      const int samples = 3;
+      for (var s = 1; s <= samples; s++) {
+        final angle =
+            theta + rootHalf + (nextRootLeft - theta - rootHalf) * s / samples;
+        final point = _polar(center, rootRadius, angle);
+        path.lineTo(point.dx, point.dy);
+      }
+    }
+    path.close();
+    return path;
+  }
+
+  /// Point at [radius] and [angle] around [center].
+  Offset _polar(Offset center, double radius, double angle) =>
+      center + Offset(math.cos(angle), math.sin(angle)) * radius;
+
+  /// Draws a dashed circle of [radius] around [center] with [paint].
+  void _drawDashedCircle(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    Paint paint,
+  ) {
+    const int dashes = 40;
+    final step = 2 * math.pi / dashes;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    for (var i = 0; i < dashes; i++) {
+      canvas.drawArc(rect, i * step, step * 0.55, false, paint);
+    }
   }
 
   /// Draws a short dashed connector between two joints on the shaft line.
@@ -405,11 +711,7 @@ class EncoderSchematicPainter extends CustomPainter {
     final direction = (to - from) / total;
     for (double start = 0; start < total; start += dash + gap) {
       final end = math.min(start + dash, total);
-      canvas.drawLine(
-        from + direction * start,
-        from + direction * end,
-        paint,
-      );
+      canvas.drawLine(from + direction * start, from + direction * end, paint);
     }
   }
 
@@ -418,8 +720,16 @@ class EncoderSchematicPainter extends CustomPainter {
       oldDelegate.rotorDeg != rotorDeg ||
       oldDelegate.outputDeg != outputDeg ||
       oldDelegate.ratioLabel != ratioLabel ||
+      oldDelegate.inputAngleDeg != inputAngleDeg ||
+      oldDelegate.outputGearAngleDeg != outputGearAngleDeg ||
       oldDelegate.accent != accent ||
       oldDelegate.line != line ||
       oldDelegate.fgDim != fgDim ||
-      oldDelegate.valueAmber != valueAmber;
+      oldDelegate.valueAmber != valueAmber ||
+      oldDelegate.gearGreen != gearGreen ||
+      oldDelegate.gearGreenRim != gearGreenRim ||
+      oldDelegate.gearViolet != gearViolet ||
+      oldDelegate.gearVioletRim != gearVioletRim ||
+      oldDelegate.bgBase != bgBase ||
+      oldDelegate.glowSoft != glowSoft;
 }

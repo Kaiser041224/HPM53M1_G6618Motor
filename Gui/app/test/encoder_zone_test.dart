@@ -44,6 +44,12 @@ Finder _schematicPaint() => find.byWidgetPredicate(
   (w) => w is CustomPaint && w.painter is EncoderSchematicPainter,
 );
 
+/// Full `i = … : 1` text of the schematic's ratio annotation rich text.
+String _ratioFullText(WidgetTester tester) {
+  final rich = tester.widget<Text>(find.byKey(EncoderSchematic.ratioLabelKey));
+  return (rich.textSpan! as TextSpan).toPlainText();
+}
+
 void main() {
   group('EncoderZone 面板', () {
     testWidgets('面板存在：标题「双编码器 / DUAL ENCODERS」+ HairlineFrame main', (
@@ -122,7 +128,7 @@ void main() {
           reason: key,
         );
       }
-      expect(find.text('i = —'), findsOneWidget);
+      expect(_ratioFullText(tester), 'i = —');
     });
 
     testWidgets('齿比载入：转子 1.000 / 出轴 0.980，示意图标 i = 0.98 : 1', (tester) async {
@@ -141,7 +147,7 @@ void main() {
 
       expect(find.text('1.000'), findsOneWidget);
       expect(find.text('0.980'), findsOneWidget);
-      expect(find.text('i = 0.98 : 1'), findsOneWidget);
+      expect(_ratioFullText(tester), 'i = 0.98 : 1');
     });
 
     testWidgets('零点协议无源：显示 —', (tester) async {
@@ -210,6 +216,8 @@ void main() {
       expect(painter.line, palette.line);
       expect(painter.fgDim, palette.fgDim);
       expect(painter.valueAmber, palette.valueAmber);
+      expect(painter.gearGreen, palette.gearGreen);
+      expect(painter.gearViolet, palette.gearViolet);
       expect(EncoderSchematicPainter.strokeWidth, 1.2);
     });
 
@@ -222,6 +230,12 @@ void main() {
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
         valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
       );
       const b = EncoderSchematicPainter(
         rotorDeg: 0,
@@ -231,6 +245,12 @@ void main() {
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
         valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
       );
       expect(a.shouldRepaint(b), isTrue);
       expect(a.shouldRepaint(a), isFalse);
