@@ -51,6 +51,19 @@ void main() {
     expect(state.statusTimer, isNotNull);
   });
 
+  test('connect() 成功后自动触发 loadMetas（恰 1 次，不阻塞连接返回）', () async {
+    final state = AppState.test();
+    addTearDown(state.dispose);
+    state.onConnect = (addr) async => (1, 0, 0x03, 'G6618 Motor Controller');
+    var loads = 0;
+    state.onLoadMetas = () => loads++;
+
+    final ok = await state.connect('127.0.0.1:9000');
+
+    expect(ok, isTrue);
+    expect(loads, 1);
+  });
+
   test('disconnect() 清空会话时长与握手段，使顶栏诚实回落为 —', () async {
     final state = AppState.test();
     addTearDown(state.dispose);

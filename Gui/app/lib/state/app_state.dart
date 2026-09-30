@@ -276,6 +276,12 @@ class AppState extends ChangeNotifier {
   @visibleForTesting
   Future<(int, int, int, String)> Function(String addr)? onConnect;
 
+  /// Test-only: invoked in place of the bridge work when [loadMetas] runs, so
+  /// tests can observe auto-load triggers without touching the bridge. Always
+  /// null in production.
+  @visibleForTesting
+  void Function()? onLoadMetas;
+
   bool _disposed = false;
 
   /// Test-only constructor seeding [metas] and [status] without touching the
@@ -309,8 +315,15 @@ class AppState extends ChangeNotifier {
     if (rttMs != null) _markFresh(<String>[keyRtt]);
   }
 
-  /// Loads the metadata table, then reads every parameter value.
+  /// Loads the metadata table, then reads every parameter value. Exceptions are
+  /// swallowed into [_recordFailure] so callers (notably the auto-load in
+  /// [connect]) never see a throw.
   Future<void> loadMetas() async {
+    final injected = onLoadMetas;
+    if (injected != null) {
+      injected();
+      return;
+    }
     loadingParams = true;
     notifyListeners();
     try {
@@ -326,6 +339,21 @@ class AppState extends ChangeNotifier {
     }
     loadingParams = false;
     notifyListeners();
+  }
+
+  /// Fire-and-forget parameter auto-load triggered by a successful [connect].
+  ///
+  /// [loadMetas] already records bridge [Exception]s, but a synchronous bridge
+  /// state [Error] would otherwise escape an unawaited future and surface as an
+  /// unhandled async error. Swallow anything remaining so the connection state
+  /// is never disturbed, and keep polling alive.
+  Future<void> _autoLoadMetas() async {
+    try {
+      await loadMetas();
+    } catch (e) {
+      _recordFailure(e);
+      if (!_disposed) notifyListeners();
+    }
   }
 
   /// Re-reads every parameter value into [values].
@@ -454,6 +482,11 @@ class AppState extends ChangeNotifier {
       sessionUptime = Duration.zero;
       _clearError();
       _startPolling();
+      // Fire-and-forget: the parameter table (thresholds, warn judgments) must
+      // populate without the user pressing「读全部」. loadMetas owns its
+      // loadingParams state and records failures, so a bridge error can never
+      // escape into the connection state.
+      unawaited(_autoLoadMetas());
       notifyListeners();
       return true;
     } catch (e) {
