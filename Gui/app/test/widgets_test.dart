@@ -99,7 +99,7 @@ void main() {
     final cases = <ItemState, String>{
       ItemState.normal: '✓',
       ItemState.warn: '!',
-      ItemState.fault: '✕',
+      ItemState.fault: '✖',
       ItemState.latched: '⚠',
       ItemState.stale: '∅',
       ItemState.pending: '…',
@@ -137,6 +137,15 @@ void main() {
         }
       });
     }
+
+    testWidgets('uppercases the label (design-system §5)', (tester) async {
+      await _pump(
+        tester,
+        const StatusBadge(state: ItemState.normal, label: 'fault active'),
+      );
+      expect(find.text('FAULT ACTIVE'), findsOneWidget);
+      expect(find.text('fault active'), findsNothing);
+    });
   });
 
   group('StaleGate', () {

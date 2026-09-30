@@ -37,14 +37,15 @@ class StatusBadge extends StatelessWidget {
   /// Semantic state.
   final ItemState state;
 
-  /// Human-readable label, rendered verbatim next to the glyph.
+  /// Human-readable label, rendered uppercase next to the glyph
+  /// (design-system §5: all-caps; CJK is unaffected).
   final String label;
 
   /// The single glyph that encodes [state].
   static String iconFor(ItemState state) => switch (state) {
     ItemState.normal => '✓',
     ItemState.warn => '!',
-    ItemState.fault => '✕',
+    ItemState.fault => '✖',
     ItemState.latched => '⚠',
     ItemState.stale => '∅',
     ItemState.pending => '…',
@@ -74,7 +75,7 @@ class StatusBadge extends StatelessWidget {
       children: <Widget>[
         Text(iconFor(state), style: style),
         const SizedBox(width: 4),
-        Text(label, style: style),
+        Text(label.toUpperCase(), style: style),
       ],
     );
   }
