@@ -122,10 +122,10 @@ void main() {
           reason: key,
         );
       }
-      expect(find.text('×—'), findsOneWidget);
+      expect(find.text('i = —'), findsOneWidget);
     });
 
-    testWidgets('齿比载入：转子 1.000 / 出轴 0.980，示意图标 ×0.980', (tester) async {
+    testWidgets('齿比载入：转子 1.000 / 出轴 0.980，示意图标 i = 0.98 : 1', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.values['motor.encoder.rotor_ratio'] = ParamValueDto(
@@ -141,7 +141,7 @@ void main() {
 
       expect(find.text('1.000'), findsOneWidget);
       expect(find.text('0.980'), findsOneWidget);
-      expect(find.text('×0.980'), findsOneWidget);
+      expect(find.text('i = 0.98 : 1'), findsOneWidget);
     });
 
     testWidgets('零点协议无源：显示 —', (tester) async {
@@ -209,19 +209,28 @@ void main() {
       expect(painter.accent, palette.accent);
       expect(painter.line, palette.line);
       expect(painter.fgDim, palette.fgDim);
+      expect(painter.valueAmber, palette.valueAmber);
       expect(EncoderSchematicPainter.strokeWidth, 1.2);
     });
 
     test('painter 在线色变化时重绘，相同则否', () {
       const a = EncoderSchematicPainter(
+        rotorDeg: 0,
+        outputDeg: 0,
+        ratioLabel: '—',
         accent: Color(0xFF3F9E98),
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
+        valueAmber: Color(0xFFBFA84C),
       );
       const b = EncoderSchematicPainter(
+        rotorDeg: 0,
+        outputDeg: 0,
+        ratioLabel: '—',
         accent: Color(0xFFFFFFFF),
         line: Color(0xFF1E5458),
         fgDim: Color(0xFF6E908E),
+        valueAmber: Color(0xFFBFA84C),
       );
       expect(a.shouldRepaint(b), isTrue);
       expect(a.shouldRepaint(a), isFalse);

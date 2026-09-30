@@ -61,7 +61,15 @@ class EncoderZone extends StatelessWidget {
                 flex: 5,
                 child: EncoderSchematic(
                   key: const Key('encoder_schematic'),
-                  ratio: state.outputRatio,
+                  rotorDeg: rotorFreshness == Freshness.live
+                      ? state.status?.encRotorDeg
+                      : null,
+                  outputDeg: outputFreshness == Freshness.live
+                      ? state.status?.encOutputDeg
+                      : null,
+                  ratioLabel: state.outputRatio == null
+                      ? '—'
+                      : state.outputRatio!.toStringAsFixed(2),
                 ),
               ),
               const SizedBox(width: 28),
