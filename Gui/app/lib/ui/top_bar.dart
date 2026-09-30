@@ -174,7 +174,7 @@ class _TopBarState extends State<TopBar> {
               ),
               const SizedBox(height: 6),
               Text(
-                'FW v0.1.0 · SERIAL 未提供',
+                'FW — · SERIAL 未提供',
                 style: scale.label.copyWith(color: palette.fgMute),
               ),
             ],
@@ -371,13 +371,14 @@ class _TopBarState extends State<TopBar> {
           connected ? 'v${s.protoMajor}.${s.protoMinor}' : '—',
         ),
         _kvRow(context, 'CAPABILITIES', connected ? caps : '—'),
-        _kvRow(context, 'PARAM META', '${s.metas.length} / ${s.metas.length}'),
+        _kvRow(context, 'PARAM META', '${s.metas.length} 项'),
       ],
     );
   }
 
   Widget _linkQualitySection(BuildContext context) {
     final s = widget.state;
+    final connected = s.connected;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -389,8 +390,8 @@ class _TopBarState extends State<TopBar> {
           'RTT',
           s.rttMs == null ? '—' : '${s.rttMs!.toStringAsFixed(1)} ms',
         ),
-        _kvRow(context, 'CRC · 丢包', '${s.crcErrors}'),
-        _kvRow(context, '重连次数', '${s.reconnects}'),
+        _kvRow(context, 'CRC · 丢包', connected ? '${s.crcErrors}' : '—'),
+        _kvRow(context, '重连次数', connected ? '${s.reconnects}' : '—'),
       ],
     );
   }

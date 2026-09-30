@@ -5,6 +5,16 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
 
+ParamMetaDto makeMeta(int index, String name) => ParamMetaDto(
+  index: index,
+  name: name,
+  ty: 0,
+  apply: 0,
+  unit: '',
+  min: 0,
+  max: 0,
+);
+
 /// Pumps [TopBar] on the Gui theme at a wide surface so the device art and the
 /// telemetry column both fit without overflow.
 Future<void> _pump(WidgetTester tester, AppState state) async {
@@ -72,6 +82,8 @@ void main() {
     expect(find.text('G6618 Motor Controller'), findsOneWidget);
     expect(find.textContaining('PROTO v1.0'), findsOneWidget);
     expect(find.textContaining('TCP'), findsOneWidget);
+    expect(find.text('FW — · SERIAL 未提供'), findsOneWidget);
+    expect(find.textContaining('FW v0.1.0'), findsNothing);
   });
 
   testWidgets('已连接：UPTIME 为会话时长 HH:MM:SS，帧为 attempts', (
@@ -145,6 +157,56 @@ void main() {
     expect(find.text('ADDRESS'), findsOneWidget);
     expect(find.text('HANDSHAKE'), findsOneWidget);
     expect(find.text('LINK QUALITY'), findsOneWidget);
+  });
+
+  testWidgets('PARAM META 为单计数（N 项），不显示 N / N', (
+    WidgetTester tester,
+  ) async {
+    final state = AppState.test(
+      metas: [makeMeta(0, 'a'), makeMeta(1, 'b'), makeMeta(2, 'c')],
+    );
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+    await tester.tap(find.byKey(const Key('top_bar_connect_tab')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('3 项'), findsOneWidget);
+    expect(find.text('3 / 3'), findsNothing);
+  });
+
+  testWidgets('断开：CRC / 重连协议无数据，诚实显示 — 而非 0', (
+    WidgetTester tester,
+  ) async {
+    final state = AppState.test();
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+    await tester.tap(find.byKey(const Key('top_bar_connect_tab')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0'), findsNothing);
+  });
+
+  testWidgets('已连接：CRC / 重连显示设备计数', (WidgetTester tester) async {
+    final state = AppState.test(
+      connected: true,
+      deviceName: 'G6618 Motor Controller',
+      protoMajor: 1,
+      protoMinor: 2,
+      capabilities: 0x03,
+      sessionUptime: const Duration(seconds: 1),
+      attempts: 7,
+    )..crcErrors = 3
+     ..reconnects = 2;
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+    await tester.tap(find.byKey(const Key('top_bar_connect_tab')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
   });
 
   test('formatUptime renders HH:MM:SS', () {
