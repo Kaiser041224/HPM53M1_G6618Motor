@@ -36,3 +36,5 @@ sim_params.json
 Gui/app/build/
 Gui/app/.dart_tool/
 Gui/app/windows/flutter/ephemeral/
+
+Gui/app/test/failures/
