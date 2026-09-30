@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/bridge/frb/api.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/widgets/chart_history.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
@@ -175,6 +176,68 @@ void main() {
       expect(TrendChart.caption, contains('缩放'));
       expect(TrendChart.caption, contains('一级流预留'));
     });
+
+    test('高倍缩放：可见样本 ≤120 出采样点标记，>120 回纯线', () {
+      const colors = <Color>[Colors.red, Colors.green, Colors.blue];
+      final fine = TrendChartPainter(
+        history: _history(100),
+        colors: colors,
+        gridColor: palette.lineDim,
+        viewStartSec: 0.05,
+        viewSpanSec: 0.01,
+      );
+      expect(fine.showsMarkers, isTrue);
+      final markers = fine.buildMarkerPaints();
+      expect(markers, hasLength(3));
+      for (final p in markers) {
+        expect(p.style, PaintingStyle.fill);
+        expect(p.maskFilter, isNull);
+      }
+      expect(TrendChartPainter.markerSize, 3);
+
+      final coarse = TrendChartPainter(
+        history: _history(3000),
+        colors: colors,
+        gridColor: palette.lineDim,
+        viewStartSec: 0,
+        viewSpanSec: 2,
+      );
+      expect(coarse.showsMarkers, isFalse);
+    });
+
+    test('时间单位自适应：<1s 用 ms，≥1s 用 s', () {
+      expect(formatAxisSeconds(0), '0');
+      expect(formatAxisSeconds(0.01), '10ms');
+      expect(formatAxisSeconds(0.05), '50ms');
+      expect(formatAxisSeconds(0.2), '200ms');
+      expect(formatAxisSeconds(0.5), '500ms');
+      expect(formatAxisSeconds(2), '2s');
+      expect(formatAxisSeconds(10), '10s');
+      expect(formatAxisSeconds(60), '60s');
+    });
+
+    test('轴标单位由 span 决定：inspect 远偏移仍用 ms', () {
+      expect(formatAxisOffset(0, 0.1), '0');
+      expect(formatAxisOffset(5.1, 0.1), '5100ms');
+      expect(formatAxisOffset(0.05, 0.1), '50ms');
+      expect(formatAxisOffset(1, 2), '1s');
+    });
+
+    test('绘图区高度 ≥320 px', () {
+      expect(TrendChart.plotHeight, greaterThanOrEqualTo(320));
+    });
+
+    test('网格自适应：竖线 ≤8 条并随窗口变密', () {
+      final narrow = TrendChartPainter.gridLines(200);
+      expect(narrow.length, lessThanOrEqualTo(8));
+      expect(narrow.first, 0);
+      expect(narrow.last, 200);
+
+      final wide = TrendChartPainter.gridLines(800);
+      expect(wide.length, narrow.length);
+      // 细窗口下同一组竖线间距更小（更密）。
+      expect(narrow[1] - narrow[0], lessThan(wide[1] - wide[0]));
+    });
   });
 
   group('TrendChart 空态', () {
@@ -266,27 +329,74 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
     });
 
-    testWidgets('滚轮缩放 span 钳位 0.5..60', (tester) async {
+    testWidgets('滚轮缩放 span 钳位 0.01..60', (tester) async {
       await _pump(tester, TrendChart(history: _history(3000)));
       final state = _state(tester);
       final center = tester.getCenter(find.byType(TrendChart));
       final pointer = TestPointer(1, PointerDeviceKind.mouse);
       pointer.hover(center);
 
-      // Scroll up (negative dy) zooms in to the 0.5 s floor.
-      await tester.sendEventToBinding(pointer.scroll(const Offset(0, -500)));
+      // Scroll up (negative dy) zooms in to the 10 ms floor.
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, -5000)));
       await tester.pump();
-      expect(state.viewSpanSec, closeTo(0.5, 1e-9));
+      expect(state.viewSpanSec, closeTo(0.01, 1e-9));
 
       // Scroll down (positive dy) zooms out to the 60 s ceiling.
       await tester.sendEventToBinding(pointer.scroll(const Offset(0, 5000)));
       await tester.pump();
       expect(state.viewSpanSec, closeTo(60.0, 1e-9));
     });
+
+    testWidgets('绘图区实际高度 ≥320', (tester) async {
+      await _pump(tester, TrendChart(history: _history(10)));
+      expect(
+        tester.getSize(find.byKey(TrendChart.plotKey)).height,
+        greaterThanOrEqualTo(320),
+      );
+    });
+
+    testWidgets('时间单位：span=0.1 轴标/读数含 ms，span=2 含 s', (tester) async {
+      await _pump(tester, TrendChart(history: _history(3000)));
+      final state = _state(tester);
+
+      state.setSpanSec(0.1);
+      await tester.pump();
+      expect(find.textContaining('ms'), findsWidgets);
+
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      addTearDown(gesture.removePointer);
+      final rect = tester.getRect(find.byKey(TrendChart.plotKey));
+      await gesture.moveTo(rect.center);
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byKey(TrendChart.readoutKey),
+          matching: find.textContaining('ms'),
+        ),
+        findsOneWidget,
+      );
+      await gesture.moveTo(const Offset(0, 0));
+      await tester.pump();
+
+      state.setSpanSec(2);
+      await tester.pump();
+      expect(find.text('1s'), findsOneWidget);
+
+      await gesture.moveTo(rect.center);
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byKey(TrendChart.readoutKey),
+          matching: find.text('t = −1.00 s'),
+        ),
+        findsOneWidget,
+      );
+    });
   });
 
   group('TrendChart 控制件', () {
-    testWidgets('SPAN 滑块存在：程序化设值生效并钳位 0.5..60', (tester) async {
+    testWidgets('SPAN 滑块存在：程序化设值生效并钳位 0.01..60', (tester) async {
       await _pump(tester, TrendChart(history: _history(3000)));
       final state = _state(tester);
 
@@ -302,7 +412,11 @@ void main() {
 
       state.setSpanSec(0.01);
       await tester.pump();
-      expect(state.viewSpanSec, 0.5);
+      expect(state.viewSpanSec, 0.01);
+
+      state.setSpanSec(0.001);
+      await tester.pump();
+      expect(state.viewSpanSec, 0.01);
     });
 
     testWidgets('− / + 按钮 span×2 / ÷2 并钳位', (tester) async {
@@ -314,19 +428,41 @@ void main() {
       await tester.pump();
       expect(state.viewSpanSec, 1.0);
 
-      await tester.tap(find.byKey(TrendChart.zoomInKey));
-      await tester.pump();
-      expect(state.viewSpanSec, 0.5);
-
-      await tester.tap(find.byKey(TrendChart.zoomInKey));
-      await tester.pump();
-      expect(state.viewSpanSec, 0.5);
-
+      // Keep halving until the 10 ms floor: 2 → … → 0.015625 → 0.01.
       for (var i = 0; i < 10; i++) {
+        await tester.tap(find.byKey(TrendChart.zoomInKey));
+        await tester.pump();
+      }
+      expect(state.viewSpanSec, closeTo(0.01, 1e-9));
+
+      for (var i = 0; i < 20; i++) {
         await tester.tap(find.byKey(TrendChart.zoomOutKey));
         await tester.pump();
       }
       expect(state.viewSpanSec, 60.0);
+    });
+
+    testWidgets('六档预设各自设 span 并回尾', (tester) async {
+      await _pump(tester, TrendChart(history: _history(3000)));
+      final state = _state(tester);
+
+      const presets = <double>[0.01, 0.05, 0.2, 2, 10, 60];
+      expect(TrendChart.spanPresets, presets);
+
+      for (final preset in presets) {
+        await tester.drag(find.byType(TrendChart), const Offset(120, 0));
+        await tester.pump();
+        expect(state.isLive, isFalse);
+
+        await tester.tap(
+          find.widgetWithText(GuiButton, formatAxisSeconds(preset)),
+        );
+        await tester.pump();
+        expect(state.viewSpanSec, closeTo(preset, 1e-9));
+        expect(state.isLive, isTrue);
+      }
+
+      await tester.pump(const Duration(milliseconds: 350));
     });
 
     testWidgets('预设 60s 设 span 并回尾', (tester) async {

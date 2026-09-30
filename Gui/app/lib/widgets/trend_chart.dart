@@ -13,14 +13,36 @@ import 'hairline_frame.dart';
 import 'stale_gate.dart';
 import 'status_badge.dart';
 
-/// Formats a viewport axis offset [seconds] for display, e.g. `2s` / `0.5s`.
-String formatAxisSeconds(double seconds) {
+/// Formats a span or axis time [seconds] with an adaptive unit: `10ms` /
+/// `50ms` / `200ms` below one second, `2s` / `60s` at or above it. Zero
+/// renders as `0`.
+String formatAxisSeconds(double seconds) => formatAxisOffset(seconds, seconds);
+
+/// Formats an axis time offset [seconds] for a viewport of [spanSec], choosing
+/// the unit from the span (`ms` below one second, `s` above) so zoomed-in
+/// labels stay in `ms` even while inspecting far from now. Zero renders `0`.
+String formatAxisOffset(double seconds, double spanSec) {
   if (seconds <= 0) return '0';
+  if (spanSec < 1) {
+    final millis = seconds * 1000;
+    return '${_trimFixed(millis, millis >= 100 ? 0 : 2)}ms';
+  }
   final rounded = (seconds * 10).round() / 10;
   final text = rounded == rounded.roundToDouble()
       ? rounded.toStringAsFixed(0)
       : rounded.toStringAsFixed(1);
   return '${text}s';
+}
+
+/// Formats [value] with [decimals] places, then drops trailing zeros and a
+/// dangling decimal point (`10.00` → `10`, `33.30` → `33.3`).
+String _trimFixed(double value, int decimals) {
+  var text = value.toStringAsFixed(decimals);
+  if (text.contains('.')) {
+    text = text.replaceAll(RegExp(r'0+$'), '');
+    text = text.replaceAll(RegExp(r'\.$'), '');
+  }
+  return text;
 }
 
 /// Live 1 kHz trend of the three phase currents (i_u / i_v / i_w).
@@ -33,12 +55,15 @@ String formatAxisSeconds(double seconds) {
 /// tail. The chart draws a bidirectional dark-cyan grid, a flat thin polyline
 /// per channel (series1/2/3 colours, no glow) and an auto-scaled symmetric y
 /// axis clamped to at least ±1 A. With far more samples than pixels, each
-/// channel is decimated to one min/max pair per pixel column so peaks survive.
+/// channel is decimated to one min/max pair per pixel column so peaks survive;
+/// at high zoom (≤ [markerSampleLimit] visible samples) flat 3 px sampling
+/// markers join the polyline for an oscilloscope-style dot+line local waveform.
 ///
 /// The same frame carries the control chrome: a logarithmic `SPAN` slider
-/// (`0.5..60 s`), a `−` / `+` / `LIVE` [GuiButton] group with `2s/10s/60s`
-/// presets, and a mouse-following crosshair whose readout is the nearest
-/// [ChartHistory] sample under the pointer.
+/// (`0.01..60 s`), a `−` / `+` / `LIVE` [GuiButton] group with
+/// `10ms/50ms/200ms/2s/10s/60s` presets, and a mouse-following crosshair whose
+/// readout is the nearest [ChartHistory] sample under the pointer (units adapt
+/// between `ms` and `s` with the window).
 class TrendChart extends StatefulWidget {
   const TrendChart({
     super.key,
@@ -61,20 +86,23 @@ class TrendChart extends StatefulWidget {
   /// Default live-tail window [s].
   static const double defaultSpanSec = 2.0;
 
-  /// Tightest zoom window [s].
-  static const double minSpanSec = 0.5;
+  /// Tightest zoom window [s]: 10 ms = 10 samples at 1 kHz is the finest
+  /// local waveform the current 1 kHz source can resolve. Sub-millisecond
+  /// (`µs`) zoom is a first-class stream (B 阶段) capability.
+  static const double minSpanSec = 0.01;
 
   /// Widest zoom window [s]: the whole retained history.
   static const double maxSpanSec = 60.0;
 
-  /// Plot area height [logical px].
-  static const double plotHeight = 200;
+  /// Plot area height [logical px]; tall enough to resolve fine local detail.
+  static const double plotHeight = 320;
 
-  /// Height [logical px] of the bottom control bar sharing the chart frame.
-  static const double controlBarHeight = 36;
+  /// Nominal height [logical px] of the two-row bottom control bar sharing the
+  /// chart frame (slider row plus preset / zoom row).
+  static const double controlBarHeight = 66;
 
   /// One-tap preset spans [s]; each snaps the viewport back to the tail.
-  static const List<double> spanPresets = <double>[2, 10, 60];
+  static const List<double> spanPresets = <double>[0.01, 0.05, 0.2, 2, 10, 60];
 
   /// Key of the plot area (hover / cursor hit region).
   static const Key plotKey = Key('trend_plot');
@@ -314,15 +342,18 @@ class TrendChartState extends State<TrendChart> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Text(
-                formatAxisSeconds(_anchorSec + _viewSpanSec),
+                formatAxisOffset(_anchorSec + _viewSpanSec, _viewSpanSec),
                 style: scale.label.copyWith(color: palette.fgMute),
               ),
               Text(
-                formatAxisSeconds(_anchorSec + _viewSpanSec / 2),
+                formatAxisOffset(
+                  _anchorSec + _viewSpanSec / 2,
+                  _viewSpanSec,
+                ),
                 style: scale.label.copyWith(color: palette.fgMute),
               ),
               Text(
-                isLive ? '0' : formatAxisSeconds(_anchorSec),
+                isLive ? '0' : formatAxisOffset(_anchorSec, _viewSpanSec),
                 style: scale.label.copyWith(color: palette.fgMute),
               ),
             ],
@@ -354,58 +385,85 @@ class TrendChartState extends State<TrendChart> {
     );
   }
 
-  /// The bottom control bar: `SPAN` slider, readout, presets and `− + LIVE`.
+  /// The bottom control bar: row 1 is the logarithmic `SPAN` slider with its
+  /// readout; row 2 the six one-tap presets (wrapping when narrow) plus the
+  /// `− + LIVE` group.
   Widget _controlBar(GuiPalette palette, GuiTypeScale scale) {
-    return SizedBox(
-      height: TrendChart.controlBarHeight,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: <Widget>[
-          Text('SPAN', style: scale.label),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SpanSlider(
-              key: TrendChart.spanSliderKey,
-              value: _viewSpanSec,
-              min: TrendChart.minSpanSec,
-              max: TrendChart.maxSpanSec,
-              onChanged: _applySpan,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text('SPAN', style: scale.label),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _SpanSlider(
+                key: TrendChart.spanSliderKey,
+                value: _viewSpanSec,
+                min: TrendChart.minSpanSec,
+                max: TrendChart.maxSpanSec,
+                onChanged: _applySpan,
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            formatAxisSeconds(_viewSpanSec),
-            style: scale.data.copyWith(
-              fontSize: 12,
-              color: palette.valueAmber,
-              shadows: const <Shadow>[],
+            const SizedBox(width: 8),
+            Text(
+              formatAxisSeconds(_viewSpanSec),
+              style: scale.data.copyWith(
+                fontSize: 12,
+                color: palette.valueAmber,
+                shadows: const <Shadow>[],
+              ),
             ),
-          ),
-          const SizedBox(width: 14),
-          for (final preset in TrendChart.spanPresets) ...<Widget>[
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: <Widget>[
+                  for (final preset in TrendChart.spanPresets)
+                    GuiButton(
+                      label: formatAxisSeconds(preset),
+                      onPressed: () => _applySpan(preset, forceLive: true),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
             GuiButton(
-              label: formatAxisSeconds(preset),
-              onPressed: () => _applySpan(preset, forceLive: true),
+              key: TrendChart.zoomOutKey,
+              label: '−',
+              onPressed: zoomOut,
             ),
             const SizedBox(width: 6),
+            GuiButton(key: TrendChart.zoomInKey, label: '+', onPressed: zoomIn),
+            const SizedBox(width: 6),
+            GuiButton(
+              key: TrendChart.liveKey,
+              label: 'LIVE',
+              variant: isLive
+                  ? GuiButtonVariant.normal
+                  : GuiButtonVariant.primary,
+              onPressed: isLive ? null : goLive,
+            ),
           ],
-          GuiButton(key: TrendChart.zoomOutKey, label: '−', onPressed: zoomOut),
-          const SizedBox(width: 6),
-          GuiButton(key: TrendChart.zoomInKey, label: '+', onPressed: zoomIn),
-          const SizedBox(width: 6),
-          GuiButton(
-            key: TrendChart.liveKey,
-            label: 'LIVE',
-            variant: isLive ? GuiButtonVariant.normal : GuiButtonVariant.primary,
-            onPressed: isLive ? null : goLive,
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
+  /// Formats a cursor offset [seconds] before the newest sample, using `ms`
+  /// while the window is below one second and `s` above.
+  String _formatOffset(double seconds) => _viewSpanSec < 1
+      ? '−${(seconds * 1000).toStringAsFixed(2)} ms'
+      : '−${seconds.toStringAsFixed(2)} s';
+
   /// The crosshair readout: `t` relative to the newest sample plus the nearest
-  /// `U/V/W` sample. Shows `—` when the window holds no sample.
+  /// `U/V/W` sample. Shows `—` when the window holds no sample. The `t` unit
+  /// follows the window: `ms` below one second, `s` above.
   Widget _readout(
     GuiPalette palette,
     GuiTypeScale scale,
@@ -423,7 +481,7 @@ class TrendChartState extends State<TrendChart> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            live ? 't = −${offset.toStringAsFixed(2)} s' : 't = —',
+            live ? 't = ${_formatOffset(offset)}' : 't = —',
             style: scale.label.copyWith(color: palette.valueAmber),
           ),
           const SizedBox(height: 4),
@@ -488,7 +546,7 @@ class TrendChartState extends State<TrendChart> {
 /// Logarithmic span slider in the TNO muted vocabulary: a 3px track (lineDim
 /// base / accent active segment) and a square 14×20 thumb (bgPanel fill with a
 /// 1.5px accent border, no glow). Its position maps logarithmically onto
-/// `[min, max]`, so every octave of the `0.5..60 s` range gets equal travel.
+/// `[min, max]`, so every octave of the `0.01..60 s` range gets equal travel.
 class _SpanSlider extends StatelessWidget {
   const _SpanSlider({
     super.key,
@@ -637,12 +695,41 @@ class TrendChartPainter extends CustomPainter {
   /// Thin line weight (design-system): 1.5px, never scaled for emphasis.
   static const double strokeWidth = 1.5;
 
-  /// Grid pitch in logical pixels.
-  static const double gridStep = 28;
+  /// Grid lines per axis (both edges inclusive). The pitch is derived from the
+  /// plot size, so a narrow viewport keeps the vertical lines dense while the
+  /// count never exceeds 8 — matching the oscilloscope reference grid.
+  static const int gridLineCount = 8;
+
+  /// Evenly spaced grid offsets [px] across [extent]: [gridLineCount] lines
+  /// including both edges, so a narrower extent yields a denser pitch.
+  static List<double> gridLines(double extent) => <double>[
+    for (var i = 0; i < gridLineCount; i++) i * extent / (gridLineCount - 1),
+  ];
 
   /// Minimum symmetric y half-range, so an all-zero trace does not collapse
   /// onto the mid line.
   static const double minYLimit = 1;
+
+  /// Sampling-marker square edge [logical px] at high zoom.
+  static const double markerSize = 3;
+
+  /// Visible-sample threshold at or below which the trace gains sampling
+  /// markers, giving the oscilloscope-style dot+line local waveform.
+  static const int markerSampleLimit = 120;
+
+  /// True when `[startSec, startSec + spanSec]` holds at most
+  /// [markerSampleLimit] samples, so the trace is drawn as dot+line instead of
+  /// a bare polyline. Above the threshold the decimated envelope stands alone.
+  static bool showsSamplingMarkers(
+    ChartHistory history,
+    double startSec,
+    double spanSec,
+  ) =>
+      history.countInWindow(startSec, startSec + spanSec) <= markerSampleLimit;
+
+  /// Whether this painter draws sampling markers for its window.
+  bool get showsMarkers =>
+      showsSamplingMarkers(history, viewStartSec, viewSpanSec);
 
   /// Symmetric y half-range over the visible window: the largest finite
   /// |sample| across all channels, clamped to at least [minYLimit].
@@ -688,13 +775,30 @@ class TrendChartPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round,
   ];
 
+  /// The per-channel marker paints (flat filled squares, series colour); a
+  /// test seam mirroring [buildSeriesPaints].
+  List<Paint> buildMarkerPaints() => <Paint>[
+    for (final color in colors)
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+  ];
+
   @override
   void paint(Canvas canvas, Size size) {
     _paintGrid(canvas, size);
     final limit = yLimit(history, viewStartSec, viewSpanSec);
     final paints = buildSeriesPaints();
+    final markerPaints = showsMarkers ? buildMarkerPaints() : null;
     for (var channel = 0; channel < colors.length; channel++) {
-      _paintSeries(canvas, channel, size, paints[channel], limit);
+      _paintSeries(
+        canvas,
+        channel,
+        size,
+        paints[channel],
+        limit,
+        markerPaints?[channel],
+      );
     }
     _paintCrosshair(canvas, size);
   }
@@ -703,10 +807,10 @@ class TrendChartPainter extends CustomPainter {
     final paint = Paint()
       ..color = gridColor
       ..strokeWidth = 1;
-    for (var x = 0.0; x <= size.width; x += gridStep) {
+    for (final x in gridLines(size.width)) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }
-    for (var y = 0.0; y <= size.height; y += gridStep) {
+    for (final y in gridLines(size.height)) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
   }
@@ -801,6 +905,7 @@ class TrendChartPainter extends CustomPainter {
     Size size,
     Paint paint,
     double limit,
+    Paint? markerPaint,
   ) {
     final points = seriesPoints(
       history,
@@ -816,6 +921,13 @@ class TrendChartPainter extends CustomPainter {
       path.lineTo(points[i].dx, points[i].dy);
     }
     canvas.drawPath(path, paint);
+    if (markerPaint == null) return;
+    for (final point in points) {
+      canvas.drawRect(
+        Rect.fromCenter(center: point, width: markerSize, height: markerSize),
+        markerPaint,
+      );
+    }
   }
 
   @override
