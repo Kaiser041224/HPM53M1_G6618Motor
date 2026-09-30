@@ -17,9 +17,9 @@ void main() {
 
     expect(find.byType(SinglePage), findsOneWidget);
     expect(find.byType(TopBar), findsOneWidget);
-    // The encoder page is a kept-alive (offstage) L2 tab of the monitor
-    // category, so it is built but not on stage by default.
-    expect(find.byType(EncoderZone, skipOffstage: false), findsOneWidget);
+    // The encoder zone is stacked on the flat monitor page, so it is built and
+    // on stage by default.
+    expect(find.byType(EncoderZone), findsOneWidget);
     expect(find.byType(BottomBar), findsOneWidget);
     expect(find.text('DEVICE ID PENDING'), findsOneWidget);
 
