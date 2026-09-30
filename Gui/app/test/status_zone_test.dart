@@ -71,6 +71,9 @@ void main() {
         ty: 0,
         raw: f32(36.0),
       );
+      // Simulated sample: the firmware does not expose `ntc_ot_c` (the NTC
+      // over-temperature bit is reserved), so this only exercises the decode
+      // path — it is not a real device parameter.
       state.values['software.fault.ntc_ot_c'] = ParamValueDto(
         ty: 0,
         raw: f32(85.0),
@@ -143,12 +146,12 @@ void main() {
         ),
       );
 
-      expect(find.text('—'), findsOneWidget);
+      expect(find.text('— A'), findsOneWidget);
       expect(find.byType(DashedFrame), findsOneWidget);
       expect(find.textContaining('未更新'), findsOneWidget);
     });
 
-    testWidgets('unknown 显示 —（虚线用弱色，区分 stale）', (tester) async {
+    testWidgets('unknown 显示裸 —（弱色虚线，无警告、不带单位）', (tester) async {
       await _pump(
         tester,
         const StatusTile(
@@ -162,6 +165,8 @@ void main() {
       );
 
       expect(find.text('—'), findsOneWidget);
+      // A never-read value is not a failed poll: no stale/warn wording.
+      expect(find.textContaining('未更新'), findsNothing);
       final frame = tester.widget<DashedFrame>(find.byType(DashedFrame));
       expect(frame.color, const GuiPalette().fgMute);
     });
@@ -182,7 +187,8 @@ void main() {
       );
 
       expect(find.text('78.4'), findsOneWidget);
-      expect(find.textContaining('接近门限'), findsOneWidget);
+      // Triple encoding: colour + icon + text (design-system §6 rule 1).
+      expect(find.text('▲ 接近门限 85'), findsOneWidget);
       final value = tester.widget<Text>(find.text('78.4'));
       expect(value.style?.color, const GuiPalette().stWarn);
     });
@@ -223,6 +229,23 @@ void main() {
 
       expect(find.textContaining('过流'), findsWidgets);
       expect(find.textContaining('U 相'), findsOneWidget);
+      expect(find.text('CURRENT'), findsOneWidget);
+    });
+
+    testWidgets('锁存位标题为 LATCHED，不冒充 CURRENT', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(faultFlags: 0x1),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+      // Latched set takes precedence over the live fault mask.
+      state.latchedFlags = 1 << 1;
+
+      await _pump(tester, ScopeZone(state: state));
+
+      expect(find.text('LATCHED'), findsOneWidget);
+      expect(find.text('CURRENT'), findsNothing);
+      expect(find.textContaining('V 相'), findsOneWidget);
     });
 
     testWidgets('无法解码的位显示 bit N (0x..)', (tester) async {

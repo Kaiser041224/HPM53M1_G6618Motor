@@ -16,10 +16,12 @@ String _seconds(double value) => value == value.roundToDouble()
 /// tabular value with unit, and a footer note.
 ///
 /// The value carries the `live / stale / unknown` tri-state from the design
-/// system (§6 rule 2): stale shows `—` inside a dashed frame plus a yellow
-/// "N 秒未更新" note and no glow, unknown shows a bare `—`. A real `0` is
-/// never confused with the fallback. [warn] colours the value yellow with a
-/// same-hue glow and shows [warnText] (design-system §2.4/§6).
+/// system (§6 rule 2): stale shows `— <unit>` inside a dashed frame plus a
+/// yellow "N 秒未更新" note and no glow, unknown shows a bare `—` with no
+/// footer warning at all (never-read is not the same as a failed poll). A real
+/// `0` is never confused with the fallback. [warn] colours the value yellow
+/// with a same-hue glow and shows `▲` + [warnText], the icon completing the
+/// colour + icon + text triple encoding (design-system §2.4/§6).
 class StatusTile extends StatelessWidget {
   const StatusTile({
     super.key,
@@ -123,7 +125,15 @@ class StatusTile extends StatelessWidget {
               ),
             ],
           ),
-          StaleGate(freshness: freshness, fallback: '—', live: valueRow),
+          StaleGate(
+            freshness: freshness,
+            // Stale keeps the unit (PREVIEW: `— A`) so the dimension is not
+            // lost; unknown stays a bare `—` with no pretence of a reading.
+            fallback: freshness == Freshness.stale && unit.isNotEmpty
+                ? '— ${unit.toUpperCase()}'
+                : '—',
+            live: valueRow,
+          ),
           _footer(context, palette, scale),
         ],
       ),
@@ -135,7 +145,7 @@ class StatusTile extends StatelessWidget {
     GuiPalette palette,
     GuiTypeScale scale,
   ) {
-    if (freshness != Freshness.live) {
+    if (freshness == Freshness.stale) {
       final seconds = staleSeconds;
       final text = seconds == null
           ? '⚠ 未更新'
@@ -145,9 +155,15 @@ class StatusTile extends StatelessWidget {
         style: GuiGlowStyles.status(palette.stWarn, scale.label),
       );
     }
+    // Never-read (`unknown`) is not a failure: keep the footer silent so a
+    // start-up or disconnected panel does not raise eight false "stale"
+    // alarms.
+    if (freshness == Freshness.unknown) {
+      return const SizedBox.shrink();
+    }
     if (warn) {
       return Text(
-        warnText ?? '接近门限',
+        '▲ ${warnText ?? '接近门限'}',
         style: GuiGlowStyles.status(palette.stWarn, scale.label),
       );
     }
@@ -358,7 +374,7 @@ class StatusZone extends StatelessWidget {
         value: status?.encRotorDeg,
         unit: '°',
         precision: 1,
-        note: 'ROTOR',
+        note: 'ROTOR · 正常',
       ),
       _TileSpec(
         keyName: 'ENC_O',
@@ -367,7 +383,7 @@ class StatusZone extends StatelessWidget {
         value: status?.encOutputDeg,
         unit: '°',
         precision: 1,
-        note: 'OUTPUT',
+        note: 'OUTPUT · 正常',
       ),
       _TileSpec(
         keyName: 'F_ELEC',
@@ -389,7 +405,10 @@ class StatusZone extends StatelessWidget {
           : Freshness.live;
       final load = spec.load;
       final warn = load != null && load >= 0.9;
-      if (freshness != Freshness.live) failed++;
+      // Only a failed poll counts as 失效; a never-read value is not a fault,
+      // so start-up / disconnect does not report `8 项失效` (PREVIEW counts
+      // its single stale tile and single warning).
+      if (freshness == Freshness.stale) failed++;
       if (warn) warned++;
       tiles.add(
         StatusTile(

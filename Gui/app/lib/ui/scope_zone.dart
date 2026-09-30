@@ -70,7 +70,14 @@ class ScopeZone extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Expanded(child: FaultComposition(flags: _faultMask(state))),
+            Expanded(
+              child: FaultComposition(
+                flags: _faultMask(state),
+                // `_faultMask` prefers the latched set; label it accordingly so
+                // a latched bit is never captioned `CURRENT`.
+                latched: state.latchedFlags != 0,
+              ),
+            ),
             const SizedBox(width: 34),
             Expanded(child: ControlPanel(state: state)),
           ],

@@ -91,9 +91,15 @@ class AppState extends ChangeNotifier {
 
   /// NTC over-temperature trip threshold [°C] (`software.fault.ntc_ot_c`).
   ///
+  /// NOTE: the firmware does not currently expose this parameter — the NTC
+  /// over-temperature bit is reserved in `app_fault.h` and neither
+  /// `config/software.yaml` nor `app_fault.h` carries an `ntc_ot_c` key — so
+  /// this getter is effectively always null and the UI honestly shows `—`.
+  /// The PREVIEW's `▲ 接近门限 85` sample is illustrative only; no limit is
+  /// fabricated here.
+  ///
   /// Read from the already-loaded parameter table; null when that parameter
-  /// has not been read yet, so the UI can honestly show `—` rather than
-  /// inventing a limit.
+  /// has not been read yet.
   double? get thresholdNtc => _paramDouble('software.fault.ntc_ot_c');
 
   /// Bus over-voltage trip threshold [V] (`software.fault.vbus_ov_v`).
@@ -111,7 +117,7 @@ class AppState extends ChangeNotifier {
     final value = values[name];
     if (value == null) return null;
     return switch (value.ty) {
-      0 => (ByteData(4)..setInt32(0, value.raw, Endian.little)).getFloat32(
+      0 => (ByteData(4)..setUint32(0, value.raw, Endian.little)).getFloat32(
         0,
         Endian.little,
       ),
