@@ -11,10 +11,13 @@ import '../widgets/status_badge.dart';
 /// (mirrors the captions in `status_zone.dart`).
 const Map<String, String> _tileNames = <String, String>{
   'VBUS': '母线电压',
+  'I_IN': '输入电流',
+  'P_IN': '输入功率',
+  'NTC': 'NTC PCB',
+  'NTC_STATOR': 'NTC 定子',
   'I_U': 'U 相电流',
   'I_V': 'V 相电流',
   'I_W': 'W 相电流',
-  'NTC': '温度',
   'ENC_R': '转子角',
   'ENC_O': '出轴角',
   'F_ELEC': '电频率',

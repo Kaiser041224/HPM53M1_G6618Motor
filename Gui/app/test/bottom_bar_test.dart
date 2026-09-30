@@ -115,6 +115,46 @@ void main() {
       expect(find.textContaining('母线电压失效'), findsOneWidget);
   });
 
+  testWidgets('DEGRADED 点名失效瓦片：全部使用友好中文名，不回落原始 key', (tester) async {
+    // Guards against tile-key drift: every key in [AppState.statusTileKeys]
+    // must have a friendly caption in `_tileNames` (a missing entry would leak
+    // the raw `status_tile_*` key into the reason text).
+    const friendly = <String, String>{
+      'VBUS': '母线电压',
+      'I_IN': '输入电流',
+      'P_IN': '输入功率',
+      'NTC': 'NTC PCB',
+      'NTC_STATOR': 'NTC 定子',
+      'ENC_R': '转子角',
+      'ENC_O': '出轴角',
+      'F_ELEC': '电频率',
+    };
+    expect(
+      friendly.keys.toSet(),
+      AppState.statusTileKeys
+          .map((key) => key.substring('status_tile_'.length))
+          .toSet(),
+      reason: '测试表须覆盖全部 statusTileKeys',
+    );
+
+    for (final entry in friendly.entries) {
+      final state = AppState.test(connected: true, status: makeStatus());
+      addTearDown(state.dispose);
+      state.seedFreshness(
+        AppState.statusTileKey(entry.key),
+        DateTime.now().subtract(const Duration(seconds: 2)),
+      );
+
+      await _pump(tester, state);
+
+      final detail = tester.widget<Text>(
+        find.byKey(const Key('bottom_bar_detail')),
+      );
+      expect(detail.data, contains('${entry.value}失效'), reason: entry.key);
+      expect(detail.data, isNot(contains('status_tile_')), reason: entry.key);
+    }
+  });
+
   testWidgets('已连接 + 锁存故障：DEGRADED 并说明锁存', (tester) async {
     final state = AppState.test(connected: true, status: makeStatus());
     addTearDown(state.dispose);
