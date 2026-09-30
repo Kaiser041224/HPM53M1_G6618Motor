@@ -435,6 +435,90 @@ void main() {
     });
   });
 
+  group('响度条峰值保持与分档刻度', () {
+    const palette = GuiPalette();
+
+    testWidgets('峰值线随当前值即时上移', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'U 相', value: 90, threshold: 100),
+      );
+
+      final peak = tester.widget<HeatPeakLine>(find.byType(HeatPeakLine));
+      expect(peak.position, closeTo(0.9, 1e-6));
+    });
+
+    testWidgets('峰值保持 800ms 后缓回落，且不低于当前值', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'U 相', value: 90, threshold: 100),
+      );
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'U 相', value: 10, threshold: 100),
+      );
+
+      // 800 ms hold: the marker has not moved yet.
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(
+        tester.widget<HeatPeakLine>(find.byType(HeatPeakLine)).position,
+        closeTo(0.9, 1e-6),
+      );
+
+      // 1 s of peak decay, sampled at the meter's 5 Hz cadence (each frame
+      // accepts the previous tick's peak): lower than the old peak, never
+      // below the live value.
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      final peak = tester
+          .widget<HeatPeakLine>(find.byType(HeatPeakLine))
+          .position;
+      expect(peak, lessThan(0.9));
+      expect(peak, greaterThanOrEqualTo(0.1));
+    });
+
+    testWidgets('50% 与 85% 分档刻度线位于槽体内', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'U 相', value: 90, threshold: 100),
+      );
+
+      expect(find.byKey(const Key('heat_tick_50_U 相')), findsOneWidget);
+      expect(find.byKey(const Key('heat_tick_85_U 相')), findsOneWidget);
+    });
+
+    testWidgets('填充为三带色、alpha 0.55', (tester) async {
+      await _pump(
+        tester,
+        const Column(
+          children: <Widget>[
+            HeatLoadBar(name: 'U 相', value: 30, threshold: 100),
+            HeatLoadBar(name: 'V 相', value: 70, threshold: 100),
+            HeatLoadBar(name: 'W 相', value: 90, threshold: 100),
+          ],
+        ),
+      );
+
+      Color fillOf(String name) => tester
+          .widget<ColoredBox>(find.byKey(Key('heat_fill_$name')))
+          .color;
+      expect(fillOf('U 相'), palette.valueGreen.withValues(alpha: 0.55));
+      expect(fillOf('V 相'), palette.valueAmber.withValues(alpha: 0.55));
+      expect(fillOf('W 相'), palette.valueRed.withValues(alpha: 0.55));
+    });
+
+    testWidgets('无门限为空槽 + —，不画峰值线', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: '模组', value: null, threshold: null),
+      );
+
+      expect(find.text('—'), findsOneWidget);
+      expect(find.byType(HeatPeakLine), findsNothing);
+    });
+  });
+
   group('v3 面板框（HairlineFrame main）', () {
     testWidgets('状态监视：组外框 + 6 瓦片内框双层嵌套（ENC 已迁出）', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);

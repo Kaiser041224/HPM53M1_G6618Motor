@@ -16,20 +16,90 @@ const Duration kTextRefreshPeriod = Duration(
   milliseconds: 1000 ~/ kTextRefreshHz,
 );
 
+/// Throttles the rebuild of an arbitrary subtree to [kTextRefreshHz].
+///
+/// The parent rebuilds at the full UI cadence (25 Hz) and hands the latest
+/// state in [refreshKey] together with a [builder] that closes over the current
+/// values. The builder's subtree is cached and only rebuilt once per
+/// [kTextRefreshPeriod] when [refreshKey] differs from the last accepted key;
+/// the very first subtree is built immediately. Returning the same cached
+/// instance on non-tick frames lets Flutter short-circuit the child update,
+/// which is what actually keeps the subtree off the 25 Hz path.
+///
+/// [StableDigits] is the numeric specialisation built on top of this.
+class StableRefresh extends StatefulWidget {
+  const StableRefresh({
+    super.key,
+    required this.refreshKey,
+    required this.builder,
+  });
+
+  /// Latest refresh key. The subtree is only rebuilt when this changes and the
+  /// next [kTextRefreshPeriod] tick has elapsed.
+  final Object? refreshKey;
+
+  /// Builds the throttled subtree from the values captured in its closure.
+  final WidgetBuilder builder;
+
+  @override
+  State<StableRefresh> createState() => _StableRefreshState();
+}
+
+class _StableRefreshState extends State<StableRefresh> {
+  /// The key currently on screen; [widget.refreshKey] only replaces it on a
+  /// tick.
+  late Object? _shownKey;
+
+  /// 5 Hz sampler. Cancelled in [dispose] so widget tests leave no pending
+  /// timer and the tree stops rebuilding once unmounted.
+  late final Timer _timer;
+
+  /// Cached subtree, rebuilt only when [_pending] is set.
+  Widget? _cached;
+
+  /// Set on an accepted tick to force one subtree rebuild on the next build.
+  bool _pending = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _shownKey = widget.refreshKey;
+    _timer = Timer.periodic(kTextRefreshPeriod, _onTick);
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  void _onTick(Timer timer) {
+    if (widget.refreshKey == _shownKey) return;
+    setState(() {
+      _shownKey = widget.refreshKey;
+      _pending = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_cached == null || _pending) {
+      _cached = widget.builder(context);
+      _pending = false;
+    }
+    return _cached!;
+  }
+}
+
 /// Throttles the refresh of a monitor value to [kTextRefreshHz].
 ///
-/// The parent rebuilds at the full UI cadence and hands the latest value in
-/// [text] on every build. This widget keeps showing the last accepted value
-/// until the next [kTextRefreshPeriod] tick, then copies [text] across in a
-/// single repaint. The very first value is shown immediately.
-///
-/// Two shapes:
+/// A [StableRefresh] keyed on [text]. Two shapes:
 /// * plain — pass [text] plus an optional [style] and it renders a [Text];
-/// * builder — pass [text] as the refresh key plus a [builder] that paints a
-///   richer readout (for example a `GlowValue` number + unit pair). The
-///   builder's subtree is cached and only rebuilt on an accepted update, so a
-///   25 Hz parent feed does not repaint it 25 times a second.
-class StableDigits extends StatefulWidget {
+/// * builder — pass a [builder] that paints a richer readout (for example a
+///   `GlowValue` number + unit pair). Its subtree is only rebuilt on an
+///   accepted update, so a 25 Hz parent feed does not repaint it 25 times a
+///   second.
+class StableDigits extends StatelessWidget {
   const StableDigits({
     super.key,
     required this.text,
@@ -61,60 +131,20 @@ class StableDigits extends StatefulWidget {
   final Widget Function(BuildContext context)? builder;
 
   @override
-  State<StableDigits> createState() => _StableDigitsState();
-}
-
-class _StableDigitsState extends State<StableDigits> {
-  /// The value currently on screen; [widget.text] is only copied here on a tick.
-  late String _shown;
-
-  /// 5 Hz sampler. Cancelled in [dispose] so widget tests leave no pending
-  /// timer and the tree stops rebuilding once unmounted.
-  late final Timer _timer;
-
-  /// Cached subtree, rebuilt only when [_pending] is set. Returning the same
-  /// instance from [build] lets Flutter short-circuit the child update, which
-  /// is what actually keeps the painter off the 25 Hz path.
-  Widget? _cached;
-
-  /// Set on an accepted tick to force one subtree rebuild on the next build.
-  bool _pending = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _shown = widget.text;
-    _timer = Timer.periodic(kTextRefreshPeriod, _onTick);
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
-
-  void _onTick(Timer timer) {
-    if (widget.text == _shown) return;
-    setState(() {
-      _shown = widget.text;
-      _pending = true;
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_cached == null || _pending) {
-      _cached = widget.builder?.call(context) ?? _plain();
-      _pending = false;
+    final builder = this.builder;
+    if (builder != null) {
+      return StableRefresh(refreshKey: text, builder: builder);
     }
-    return _cached!;
+    return StableRefresh(
+      refreshKey: text,
+      builder: (context) => Text(
+        text,
+        style: style,
+        textAlign: textAlign,
+        maxLines: maxLines,
+        overflow: overflow,
+      ),
+    );
   }
-
-  Widget _plain() => Text(
-    _shown,
-    style: widget.style,
-    textAlign: widget.textAlign,
-    maxLines: widget.maxLines,
-    overflow: widget.overflow,
-  );
 }

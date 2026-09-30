@@ -84,4 +84,61 @@ void main() {
     expect(builds, 2, reason: 'one rebuild on the tick');
     expect(find.text('5'), findsOneWidget);
   });
+
+  group('StableRefresh 通用节流', () {
+    testWidgets('初始立即构建', (tester) async {
+      var builds = 0;
+      await _pump(
+        tester,
+        StableRefresh(
+          refreshKey: 'a',
+          builder: (context) {
+            builds++;
+            return const Text('a');
+          },
+        ),
+      );
+      expect(builds, 1);
+      expect(find.text('a'), findsOneWidget);
+    });
+
+    testWidgets('<200ms 不重建，≥200ms 才重建', (tester) async {
+      var builds = 0;
+      Widget frame(String key) => StableRefresh(
+        refreshKey: key,
+        builder: (context) {
+          builds++;
+          return Text(key);
+        },
+      );
+
+      await _pump(tester, frame('a'));
+      expect(builds, 1);
+
+      await _pump(tester, frame('b'));
+      await tester.pump(const Duration(milliseconds: 199));
+      expect(builds, 1, reason: '199 ms < 200 ms tick');
+      expect(find.text('a'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(builds, 2, reason: '200 ms tick rebuilds the subtree');
+      expect(find.text('b'), findsOneWidget);
+    });
+
+    testWidgets('key 不变时不重建', (tester) async {
+      var builds = 0;
+      Widget frame() => StableRefresh(
+        refreshKey: 'same',
+        builder: (context) {
+          builds++;
+          return const Text('same');
+        },
+      );
+
+      await _pump(tester, frame());
+      await _pump(tester, frame());
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(builds, 1);
+    });
+  });
 }
