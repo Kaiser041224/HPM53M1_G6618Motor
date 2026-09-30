@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../bridge/frb/api.dart' as frb;
+import '../widgets/stale_gate.dart' show Freshness;
 
 // Re-exported so the UI layer depends only on AppState (ui -> state -> bridge)
 // and never imports the generated bridge code directly.
@@ -38,9 +39,48 @@ class AppState extends ChangeNotifier {
   /// Null while disconnected so the top bar can honestly show `—`.
   Duration? sessionUptime;
 
-  /// Round-trip time of the last STATUS_GET, in milliseconds. Filled by the
-  /// telemetry task; null until then so the UI shows `—`.
+  /// Round-trip time of the last STATUS_GET, in milliseconds. Measured around
+  /// the bridge call and smoothed with an EMA (α = [rttEmaAlpha]); null while
+  /// disconnected so the UI honestly shows `—`.
   double? rttMs;
+
+  /// EMA smoothing factor for [rttMs]: each sample moves the estimate 20%.
+  static const double rttEmaAlpha = 0.2;
+
+  /// A live value that has not been refreshed for longer than this degrades to
+  /// [Freshness.stale] — two missed 500 ms polls (design-system §6 rule 2).
+  static const Duration staleAfter = Duration(seconds: 1);
+
+  /// Freshness key of a status tile; matches the `status_zone.dart` widget keys
+  /// (`status_tile_<tile>`).
+  static String statusTileKey(String tile) => 'status_tile_$tile';
+
+  /// Freshness key of the measured STATUS_GET round-trip time.
+  static const String keyRtt = 'rtt';
+
+  /// Freshness key of the device CRC-error counter (`stats.crcErrors`).
+  static const String keyCrc = 'crc';
+
+  /// Freshness key of the device reconnect counter (`stats.reconnects`).
+  static const String keyResync = 'resync';
+
+  /// Freshness key of the failed-request counter.
+  static const String keyRetry = 'retry';
+
+  /// Every status tile freshness key, in `status_zone.dart` order.
+  static const List<String> statusTileKeys = <String>[
+    'status_tile_VBUS',
+    'status_tile_I_U',
+    'status_tile_I_V',
+    'status_tile_I_W',
+    'status_tile_NTC',
+    'status_tile_ENC_R',
+    'status_tile_ENC_O',
+    'status_tile_F_ELEC',
+  ];
+
+  /// Last-updated wall clock per [freshnessOf] key. Absent = never read.
+  final Map<String, DateTime> _freshAt = {};
 
   /// Device-side counters, refreshed by the 500 ms status poll.
   int reconnects = 0;
@@ -82,6 +122,55 @@ class AppState extends ChangeNotifier {
       bits >>= 1;
     }
     return count;
+  }
+
+  /// Trust level of the live value behind [key] (design-system §6 rule 2).
+  ///
+  /// [Freshness.unknown] until the value has ever been read, [Freshness.live]
+  /// within [staleAfter] of its last update, and [Freshness.stale] once that
+  /// window has elapsed. This is the single place the tri-state is decided, so
+  /// a failed poll can never keep passing an old value off as current.
+  Freshness freshnessOf(String key) {
+    final at = _freshAt[key];
+    if (at == null) return Freshness.unknown;
+    return DateTime.now().difference(at) > staleAfter
+        ? Freshness.stale
+        : Freshness.live;
+  }
+
+  /// Age of the live value behind [key], or null when never read.
+  Duration? staleFor(String key) {
+    final at = _freshAt[key];
+    return at == null ? null : DateTime.now().difference(at);
+  }
+
+  /// Status-tile keys that have aged out to [Freshness.stale] (a failed poll).
+  /// A never-read tile is not listed — unknown is not the same as stale.
+  List<String> get staleStatusTiles => statusTileKeys
+      .where((key) => freshnessOf(key) == Freshness.stale)
+      .toList();
+
+  /// Test-only: forces the last-updated time of [key] so staleness can be
+  /// exercised without waiting on the wall clock.
+  @visibleForTesting
+  void seedFreshness(String key, DateTime at) => _freshAt[key] = at;
+
+  /// Records a measured STATUS_GET round-trip time [ms], smoothed with an EMA
+  /// (α = [rttEmaAlpha]). The first sample is adopted directly.
+  @visibleForTesting
+  void recordRtt(double ms) => _updateRtt(ms);
+
+  void _updateRtt(double ms) {
+    final previous = rttMs;
+    rttMs = previous == null ? ms : previous + (ms - previous) * rttEmaAlpha;
+  }
+
+  /// Marks every key in [keys] as freshly updated at [at] (defaults to now).
+  void _markFresh(Iterable<String> keys, [DateTime? at]) {
+    final stamp = at ?? DateTime.now();
+    for (final key in keys) {
+      _freshAt[key] = stamp;
+    }
   }
 
   /// True when the device interlock would accept a COMMIT: the motor is
@@ -161,7 +250,15 @@ class AppState extends ChangeNotifier {
     this.capabilities = 0,
     this.sessionUptime,
     this.attempts = 0,
-  }) : metas = List.of(metas);
+    this.rttMs,
+  }) : metas = List.of(metas) {
+    // Seed freshness from the injected snapshot so tri-state wiring is live in
+    // tests: a supplied status means its tiles are current, and a connected
+    // session means its counters are known.
+    if (status != null) _markFresh(statusTileKeys);
+    if (connected) _markFresh(<String>[keyCrc, keyResync, keyRetry]);
+    if (rttMs != null) _markFresh(<String>[keyRtt]);
+  }
 
   /// Loads the metadata table, then reads every parameter value.
   Future<void> loadMetas() async {
@@ -226,11 +323,19 @@ class AppState extends ChangeNotifier {
   }
 
   /// Refreshes [status] and [latchedFlags] from the device.
+  ///
+  /// The STATUS_GET round-trip is measured and folded into [rttMs]; on success
+  /// every telemetry value is stamped fresh. On failure the previous values
+  /// stay, but their freshness ages out to `stale` after [staleAfter], so the
+  /// UI degrades them to `—` instead of pretending they are current.
   Future<void> refreshStatus() async {
     try {
+      final started = DateTime.now();
       status = await frb.statusGet();
+      _updateRtt(DateTime.now().difference(started).inMicroseconds / 1000.0);
       final fault = await frb.faultGet();
       latchedFlags = fault.$2;
+      _markFresh(<String>[...statusTileKeys, keyRtt]);
       _clearError();
     } on Exception catch (e) {
       _recordFailure(e);
@@ -325,8 +430,10 @@ class AppState extends ChangeNotifier {
       sessionStart = null;
       sessionUptime = null;
       attempts = 0;
+      rttMs = null;
       status = null;
       latchedFlags = 0;
+      _freshAt.clear();
       notifyListeners();
     }
   }
@@ -351,6 +458,7 @@ class AppState extends ChangeNotifier {
       reconnects = stats.reconnects.toInt();
       crcErrors = stats.crcErrors.toInt();
       attempts = stats.attempts.toInt();
+      _markFresh(<String>[keyCrc, keyResync, keyRetry]);
       final start = sessionStart;
       if (start != null) {
         sessionUptime = DateTime.now().difference(start);

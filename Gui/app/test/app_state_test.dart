@@ -1,6 +1,23 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/bridge/frb/api.dart';
 import 'package:g6618_gui/state/app_state.dart';
+import 'package:g6618_gui/widgets/stale_gate.dart';
+
+/// Minimal status snapshot for freshness-seeding tests.
+StatusDto makeStatus({int faultFlags = 0}) => StatusDto(
+  faultFlags: faultFlags,
+  motorRunning: false,
+  motorState: 0,
+  freqHz: 0,
+  modPct: 0,
+  iU: 0,
+  iV: 0,
+  iW: 0,
+  vbus: 0,
+  ntcTemp: 0,
+  encRotorDeg: 0,
+  encOutputDeg: 0,
+);
 
 void main() {
   test('connect() 失败后不启动轮询定时器，requestFailures 计 1 次', () async {
@@ -61,5 +78,102 @@ void main() {
     expect(state.requestFailures, 1);
     expect(state.lastErrorCode, 4);
     expect(state.lastError, contains('interlock active'));
+  });
+
+  group('数据三态 freshnessOf', () {
+    test('从未更新 → unknown；刚更新 → live', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      expect(state.freshnessOf('status_tile_VBUS'), Freshness.unknown);
+
+      state.seedFreshness('status_tile_VBUS', DateTime.now());
+
+      expect(state.freshnessOf('status_tile_VBUS'), Freshness.live);
+    });
+
+    test('超过 1s（2 个 500ms 轮询周期）未更新 → stale', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      state.seedFreshness(
+        'status_tile_I_V',
+        DateTime.now().subtract(const Duration(seconds: 2)),
+      );
+
+      expect(state.freshnessOf('status_tile_I_V'), Freshness.stale);
+    });
+
+    test('阈值边界：900ms 仍 live，1100ms 转 stale', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      state.seedFreshness(
+        'rtt',
+        DateTime.now().subtract(const Duration(milliseconds: 900)),
+      );
+      expect(state.freshnessOf('rtt'), Freshness.live);
+
+      state.seedFreshness(
+        'rtt',
+        DateTime.now().subtract(const Duration(milliseconds: 1100)),
+      );
+      expect(state.freshnessOf('rtt'), Freshness.stale);
+    });
+
+    test('带 status 的测试构造令瓦片 live；无 status 则 unknown', () {
+      final withStatus = AppState.test(status: makeStatus());
+      addTearDown(withStatus.dispose);
+      expect(withStatus.freshnessOf('status_tile_I_V'), Freshness.live);
+
+      final bare = AppState.test();
+      addTearDown(bare.dispose);
+      expect(bare.freshnessOf('status_tile_I_V'), Freshness.unknown);
+    });
+
+    test('断连清空时间戳 → 全体 unknown', () async {
+      final state = AppState.test(status: makeStatus());
+      addTearDown(state.dispose);
+      state.seedFreshness('rtt', DateTime.now());
+
+      await state.disconnect();
+
+      expect(state.freshnessOf('status_tile_I_V'), Freshness.unknown);
+      expect(state.freshnessOf('rtt'), Freshness.unknown);
+    });
+
+    test('staleStatusTiles 只列出已失效的瓦片', () {
+      final state = AppState.test(status: makeStatus());
+      addTearDown(state.dispose);
+      state.seedFreshness(
+        'status_tile_I_V',
+        DateTime.now().subtract(const Duration(seconds: 3)),
+      );
+
+      expect(state.staleStatusTiles, <String>['status_tile_I_V']);
+    });
+  });
+
+  group('rtt 往返实测（EMA α=0.2）', () {
+    test('首个样本直接采用，后续样本指数平滑', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      state.recordRtt(100);
+      expect(state.rttMs, closeTo(100, 1e-6));
+
+      state.recordRtt(200);
+      expect(state.rttMs, closeTo(120, 1e-6));
+    });
+
+    test('断连清空 rttMs', () async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.recordRtt(50);
+
+      await state.disconnect();
+
+      expect(state.rttMs, isNull);
+    });
   });
 }

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
+import 'bottom_bar.dart';
 import 'param_zone.dart';
 import 'scope_zone.dart';
-import 'status_bar.dart';
 import 'status_zone.dart';
 import 'top_bar.dart';
 
@@ -36,7 +36,7 @@ class SinglePage extends StatelessWidget {
               ),
             ),
           ),
-          StatusBar(state: state),
+          BottomBar(state: state),
         ],
       ),
     );

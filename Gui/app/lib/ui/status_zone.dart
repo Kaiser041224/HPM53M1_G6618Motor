@@ -400,9 +400,12 @@ class StatusZone extends StatelessWidget {
     var failed = 0;
     var warned = 0;
     for (final spec in specs) {
-      final freshness = status == null || spec.value == null
+      final tileKey = 'status_tile_${spec.keyName}';
+      // Tri-state from the single source in AppState: live until the poll ages
+      // out, never-read stays unknown (design-system §6 rule 2).
+      final freshness = status == null
           ? Freshness.unknown
-          : Freshness.live;
+          : state.freshnessOf(tileKey);
       final load = spec.load;
       final warn = load != null && load >= 0.9;
       // Only a failed poll counts as 失效; a never-read value is not a fault,
@@ -412,7 +415,7 @@ class StatusZone extends StatelessWidget {
       if (warn) warned++;
       tiles.add(
         StatusTile(
-          key: Key('status_tile_${spec.keyName}'),
+          key: Key(tileKey),
           label: spec.label,
           zh: spec.zh,
           value: spec.value,
@@ -420,6 +423,7 @@ class StatusZone extends StatelessWidget {
           precision: spec.precision,
           note: spec.note,
           freshness: freshness,
+          staleSeconds: state.staleFor(tileKey)?.inSeconds.toDouble(),
           warn: warn,
           warnText: warn
               ? '接近门限 ${spec.threshold!.toStringAsFixed(0)}'

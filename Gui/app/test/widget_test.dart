@@ -4,19 +4,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/main.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
+import 'package:g6618_gui/ui/bottom_bar.dart';
 import 'package:g6618_gui/ui/single_page.dart';
-import 'package:g6618_gui/ui/status_bar.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
 
 void main() {
-  testWidgets('single page renders top bar, zones and persistent status bar', (
+  testWidgets('single page renders top bar, zones and persistent bottom bar', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const GuiApp());
 
     expect(find.byType(SinglePage), findsOneWidget);
     expect(find.byType(TopBar), findsOneWidget);
-    expect(find.byType(StatusBar), findsOneWidget);
+    expect(find.byType(BottomBar), findsOneWidget);
     expect(find.text('DEVICE ID PENDING'), findsOneWidget);
 
     final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
