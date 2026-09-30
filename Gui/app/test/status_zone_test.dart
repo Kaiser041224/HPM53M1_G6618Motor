@@ -7,6 +7,7 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/scope_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
+import 'package:g6618_gui/widgets/solid_pie.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 
 /// Bridge-like failure carrying a device error [code] (matches the old
@@ -228,7 +229,13 @@ void main() {
       await _pump(tester, ScopeZone(state: state));
 
       expect(find.textContaining('过流'), findsWidgets);
-      expect(find.textContaining('U 相'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(FaultComposition),
+          matching: find.textContaining('U 相'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('CURRENT'), findsOneWidget);
     });
 
@@ -245,7 +252,13 @@ void main() {
 
       expect(find.text('LATCHED'), findsOneWidget);
       expect(find.text('CURRENT'), findsNothing);
-      expect(find.textContaining('V 相'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(FaultComposition),
+          matching: find.textContaining('V 相'),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('无法解码的位显示 bit N (0x..)', (tester) async {
@@ -268,6 +281,72 @@ void main() {
 
       expect(find.textContaining('过流'), findsNothing);
       expect(find.textContaining('bit '), findsNothing);
+    });
+  });
+
+  group('相电流占比', () {
+    testWidgets('1:2:1 → 25.0/50.0/25.0 %，实心饼图在场', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(iU: 1, iV: 2, iW: 1),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      final panel = find.byKey(const Key('phase_share_panel'));
+      expect(panel, findsOneWidget);
+      expect(
+        find.descendant(of: panel, matching: find.text('相电流占比')),
+        findsOneWidget,
+      );
+      expect(find.byType(SolidPie), findsOneWidget);
+      expect(
+        find.descendant(of: panel, matching: find.text('50.0 %')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: panel, matching: find.text('25.0 %')),
+        findsNWidgets(2),
+      );
+    });
+
+    testWidgets('全零：占比区显示 —，不显示 0.0 %', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      final panel = find.byKey(const Key('phase_share_panel'));
+      expect(
+        find.descendant(of: panel, matching: find.textContaining('%')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: panel, matching: find.text('—')),
+        findsWidgets,
+      );
+    });
+
+    testWidgets('status 失效：占比区降级为 —', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(iU: 1, iV: 2, iW: 1),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+      state.seedFreshness(
+        AppState.statusTileKey('I_V'),
+        DateTime.now().subtract(const Duration(seconds: 2)),
+      );
+
+      await _pump(tester, ScopeZone(state: state));
+
+      final panel = find.byKey(const Key('phase_share_panel'));
+      expect(
+        find.descendant(of: panel, matching: find.textContaining('%')),
+        findsNothing,
+      );
+      expect(find.byType(SolidPie), findsNothing);
     });
   });
 

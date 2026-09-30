@@ -142,6 +142,20 @@ void main() {
       expect(state.freshnessOf('rtt'), Freshness.unknown);
     });
 
+    test('连接态测试构造令 CRC/RESYNC/RETRY/帧 计数 live', () {
+      final state = AppState.test(connected: true);
+      addTearDown(state.dispose);
+
+      for (final key in const <String>[
+        AppState.keyCrc,
+        AppState.keyResync,
+        AppState.keyRetry,
+        AppState.keyFrames,
+      ]) {
+        expect(state.freshnessOf(key), Freshness.live, reason: key);
+      }
+    });
+
     test('staleStatusTiles 只列出已失效的瓦片', () {
       final state = AppState.test(status: makeStatus());
       addTearDown(state.dispose);

@@ -67,6 +67,9 @@ class AppState extends ChangeNotifier {
   /// Freshness key of the failed-request counter.
   static const String keyRetry = 'retry';
 
+  /// Freshness key of the client-side frame attempt counter (`stats.attempts`).
+  static const String keyFrames = 'frames';
+
   /// Every status tile freshness key, in `status_zone.dart` order.
   static const List<String> statusTileKeys = <String>[
     'status_tile_VBUS',
@@ -256,7 +259,9 @@ class AppState extends ChangeNotifier {
     // tests: a supplied status means its tiles are current, and a connected
     // session means its counters are known.
     if (status != null) _markFresh(statusTileKeys);
-    if (connected) _markFresh(<String>[keyCrc, keyResync, keyRetry]);
+    if (connected) {
+      _markFresh(<String>[keyCrc, keyResync, keyRetry, keyFrames]);
+    }
     if (rttMs != null) _markFresh(<String>[keyRtt]);
   }
 
@@ -458,7 +463,7 @@ class AppState extends ChangeNotifier {
       reconnects = stats.reconnects.toInt();
       crcErrors = stats.crcErrors.toInt();
       attempts = stats.attempts.toInt();
-      _markFresh(<String>[keyCrc, keyResync, keyRetry]);
+      _markFresh(<String>[keyCrc, keyResync, keyRetry, keyFrames]);
       final start = sessionStart;
       if (start != null) {
         sessionUptime = DateTime.now().difference(start);

@@ -106,6 +106,17 @@ class BottomBar extends StatelessWidget {
       return (ItemState.stale, '未连接', '设备未连接');
     }
 
+    // READY is a claim about live telemetry: require at least one status tile
+    // to have ever been read. Connected-but-no-status-yet is a neutral "waiting
+    // for data", never a fabricated READY over a bare 0 (design-system §6
+    // rule 2).
+    final everRead = AppState.statusTileKeys.any(
+      (key) => state.freshnessOf(key) != Freshness.unknown,
+    );
+    if (!everRead) {
+      return (ItemState.pending, '等待数据', '尚未收到状态数据');
+    }
+
     final stale = state.staleStatusTiles;
     final latched = state.latchedCount;
     final live = state.status?.faultFlags ?? 0;
@@ -134,16 +145,36 @@ class BottomBar extends StatelessWidget {
     final rtt = (n && rttLive && state.rttMs != null)
         ? '${state.rttMs!.toStringAsFixed(1)} MS'
         : '—';
+    // Every polled counter is gated by its own freshness, exactly like RTT:
+    // a failed poll ages the value out to `—` rather than passing an old
+    // reading off as live (design-system §6 rule 2). DIRTY is client-local
+    // state (not a polled reading), so it is gated only on the connection.
     final crcLive = state.freshnessOf(AppState.keyCrc) == Freshness.live;
+    final resyncLive =
+        state.freshnessOf(AppState.keyResync) == Freshness.live;
+    final retryLive = state.freshnessOf(AppState.keyRetry) == Freshness.live;
+    final framesLive = state.freshnessOf(AppState.keyFrames) == Freshness.live;
 
     final segments = <(String, String, String)>[
       ('bottom_bar_rtt', 'RTT', rtt),
-      ('bottom_bar_crc', 'CRC', crcLive ? '${state.crcErrors}' : '—'),
-      ('bottom_bar_resync', 'RESYNC', n ? '${state.reconnects}' : '—'),
-      ('bottom_bar_retry', 'RETRY', n ? '${state.requestFailures}' : '—'),
+      ('bottom_bar_crc', 'CRC', n && crcLive ? '${state.crcErrors}' : '—'),
+      (
+        'bottom_bar_resync',
+        'RESYNC',
+        n && resyncLive ? '${state.reconnects}' : '—',
+      ),
+      (
+        'bottom_bar_retry',
+        'RETRY',
+        n && retryLive ? '${state.requestFailures}' : '—',
+      ),
       ('bottom_bar_dirty', 'DIRTY', n ? '${state.dirty.length}' : '—'),
       ('bottom_bar_seq', 'SEQ', '—'),
-      ('bottom_bar_frames', '帧', n ? '${state.attempts}' : '—'),
+      (
+        'bottom_bar_frames',
+        '帧',
+        n && framesLive ? '${state.attempts}' : '—',
+      ),
     ];
 
     final children = <Widget>[];

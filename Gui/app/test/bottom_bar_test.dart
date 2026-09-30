@@ -130,4 +130,45 @@ void main() {
 
     expect(find.byType(StatusBadge), findsOneWidget);
   });
+
+  testWidgets('已连接但轮询失败：CRC/RESYNC/RETRY/帧 一并降级为 —，不冒充实时', (
+    tester,
+  ) async {
+    final state = AppState.test(
+      connected: true,
+      status: makeStatus(),
+      attempts: 14208,
+    );
+    addTearDown(state.dispose);
+    final aged = DateTime.now().subtract(const Duration(seconds: 2));
+    for (final key in const <String>[
+      AppState.keyCrc,
+      AppState.keyResync,
+      AppState.keyRetry,
+      AppState.keyFrames,
+    ]) {
+      state.seedFreshness(key, aged);
+    }
+
+    await _pump(tester, state);
+
+    for (final key in const <String>[
+      'bottom_bar_crc',
+      'bottom_bar_resync',
+      'bottom_bar_retry',
+      'bottom_bar_frames',
+    ]) {
+      expect(_value(key, '—'), findsOneWidget, reason: '$key 应降级为 —');
+    }
+  });
+
+  testWidgets('已连接但尚未读到 status：不报 READY，显示等待数据', (tester) async {
+    final state = AppState.test(connected: true);
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    expect(find.text('READY'), findsNothing);
+    expect(find.text('等待数据'), findsOneWidget);
+  });
 }

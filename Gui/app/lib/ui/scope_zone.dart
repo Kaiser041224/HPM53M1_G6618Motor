@@ -6,6 +6,8 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
+import '../widgets/solid_pie.dart';
+import '../widgets/stale_gate.dart' show Freshness;
 
 /// Semantic label for a single fault bit, extracted read-only from
 /// `App/Control/Inc/app_fault.h` (bit0..bit9). Unknown bits fall back to
@@ -65,7 +67,20 @@ class ScopeZone extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        const _ScopePlaceholder(),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Expanded(flex: 2, child: _ScopePlaceholder()),
+            const SizedBox(width: 34),
+            Expanded(
+              flex: 1,
+              child: _PhaseSharePanel(
+                key: const Key('phase_share_panel'),
+                state: state,
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 26),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -139,6 +154,128 @@ class _ScopeGridPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ScopeGridPainter oldDelegate) =>
       oldDelegate.color != color;
+}
+
+/// Phase-current share: a solid-wedge pie plus a right-hand percentage column.
+///
+/// The wedges use the same U/V/W series colours as the status tiles and are
+/// fed by `|I_U| : |I_V| : |I_W|`. When all three readings are zero — or the
+/// underlying status is not fresh — the share is undefined and the whole panel
+/// honestly shows `—` instead of a fabricated 0.0 % (design-system §6 rule 2).
+class _PhaseSharePanel extends StatelessWidget {
+  const _PhaseSharePanel({super.key, required this.state});
+
+  final AppState state;
+
+  static const List<String> _phaseKeys = <String>['I_U', 'I_V', 'I_W'];
+  static const List<String> _phaseNames = <String>['U 相', 'V 相', 'W 相'];
+
+  /// Fresh only when every phase tile has been read within [AppState.staleAfter].
+  bool _fresh() {
+    if (state.status == null) return false;
+    return _phaseKeys.every(
+      (key) =>
+          state.freshnessOf(AppState.statusTileKey(key)) == Freshness.live,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    final colors = <Color>[palette.series1, palette.series2, palette.series3];
+    final status = state.status;
+    final fractions = _fresh()
+        ? phaseCurrentFractions(status!.iU, status.iV, status.iW)
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text('相电流占比', style: scale.section.copyWith(fontSize: 11)),
+            const Spacer(),
+            Text('RMS', style: scale.label),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            _pie(context, fractions, colors),
+            const SizedBox(width: 20),
+            Expanded(child: _list(context, palette, scale, fractions, colors)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _pie(BuildContext context, List<double>? fractions, List<Color> colors) {
+    if (fractions == null) {
+      return SizedBox(
+        width: SolidPie.defaultSize,
+        height: SolidPie.defaultSize,
+        child: Center(
+          child: Text(
+            '—',
+            style: GuiGlowStyles.none(GuiTypeScale.of(context).data),
+          ),
+        ),
+      );
+    }
+    return SolidPie(
+      key: const Key('phase_share_pie'),
+      fractions: fractions,
+      colors: colors,
+    );
+  }
+
+  Widget _list(
+    BuildContext context,
+    GuiPalette palette,
+    GuiTypeScale scale,
+    List<double>? fractions,
+    List<Color> colors,
+  ) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        for (var i = 0; i < _phaseNames.length; i++)
+          Padding(
+            padding: EdgeInsets.only(
+              bottom: i == _phaseNames.length - 1 ? 0 : 7,
+            ),
+            child: Row(
+              children: <Widget>[
+                Container(width: 10, height: 10, color: colors[i]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _phaseNames[i],
+                    overflow: TextOverflow.ellipsis,
+                    style: scale.body.copyWith(
+                      fontSize: 10.5,
+                      color: palette.fgMute,
+                    ),
+                  ),
+                ),
+                Text(
+                  fractions == null
+                      ? '—'
+                      : '${(fractions[i] * 100).toStringAsFixed(1)} %',
+                  style: fractions == null
+                      ? scale.label
+                      : GuiGlowStyles.soft(scale.data.copyWith(fontSize: 10.5)),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 /// Decodes a fault bitmask into per-bit entries (color + icon + text).
