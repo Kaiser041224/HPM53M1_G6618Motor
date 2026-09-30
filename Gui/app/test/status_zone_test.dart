@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
+import 'package:g6618_gui/ui/control_zone.dart';
+import 'package:g6618_gui/ui/limit_zone.dart';
 import 'package:g6618_gui/ui/scope_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
 import 'package:g6618_gui/widgets/glow_value.dart';
@@ -193,13 +195,13 @@ void main() {
     });
   });
 
-  group('ScopeZone 控制条与故障构成', () {
+  group('ControlZone 控制条与故障构成', () {
     testWidgets('控制失败 code 4 保留联锁 SnackBar 文案', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async => throw const FrbLikeError(code: 4);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
       await tester.tap(find.text('启动'));
       await tester.pumpAndSettle();
 
@@ -224,7 +226,7 @@ void main() {
       );
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
 
       expect(find.textContaining('过流'), findsWidgets);
       expect(
@@ -246,7 +248,7 @@ void main() {
       // Latched set takes precedence over the live fault mask.
       state.latchedFlags = 1 << 1;
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
 
       expect(find.text('LATCHED'), findsOneWidget);
       expect(find.text('CURRENT'), findsNothing);
@@ -266,7 +268,7 @@ void main() {
       );
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
 
       expect(find.textContaining('bit 20'), findsOneWidget);
     });
@@ -275,34 +277,34 @@ void main() {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
 
       expect(find.textContaining('过流'), findsNothing);
       expect(find.textContaining('bit '), findsNothing);
     });
   });
 
-  group('热与负载移驻曲线区右列', () {
-    testWidgets('饼图已移除：曲线区不再出现相电流占比面板', (tester) async {
+  group('热与负载移驻门限区（LimitZone）', () {
+    testWidgets('饼图已移除：门限区不再出现相电流占比面板', (tester) async {
       final state = AppState.test(
         status: makeStatus(iU: 1, iV: 2, iW: 1),
         metas: const [],
       );
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, LimitZone(state: state));
 
       expect(find.byKey(const Key('phase_share_panel')), findsNothing);
       expect(find.text('相电流占比'), findsNothing);
     });
 
-    testWidgets('六条 HeatLoadBar 迁入 scope_heat_panel', (tester) async {
+    testWidgets('六条 HeatLoadBar 迁入 limit_heat_panel', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, LimitZone(state: state));
 
-      final panel = find.byKey(const Key('scope_heat_panel'));
+      final panel = find.byKey(const Key('limit_heat_panel'));
       expect(panel, findsOneWidget);
       expect(
         find.descendant(of: panel, matching: find.text('热与负载 · 相对门限')),
@@ -315,9 +317,9 @@ void main() {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, LimitZone(state: state));
 
-      final panel = find.byKey(const Key('scope_heat_panel'));
+      final panel = find.byKey(const Key('limit_heat_panel'));
       expect(
         find.descendant(of: panel, matching: find.text('—')),
         findsNWidgets(6),
@@ -334,9 +336,9 @@ void main() {
       addTearDown(state.dispose);
       state.values['motor.i_peak_10s_a'] = ParamValueDto(ty: 0, raw: f32(100));
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, LimitZone(state: state));
 
-      final panel = find.byKey(const Key('scope_heat_panel'));
+      final panel = find.byKey(const Key('limit_heat_panel'));
       expect(
         find.descendant(of: panel, matching: find.text('30')),
         findsOneWidget,
@@ -352,7 +354,7 @@ void main() {
     });
   });
 
-  group('曲线区 1kHz 趋势图', () {
+  group('波形区 1kHz 趋势图', () {
     testWidgets('ScopeZone 渲染 TrendChart，图注含 1 kHz 采样与 STREAM_SUB 预留', (
       tester,
     ) async {
@@ -533,16 +535,28 @@ void main() {
       expect(tileFrame.variant, HairlineVariant.main);
     });
 
-    testWidgets('曲线区 / 故障构成 / 控制条各自为亮青面板', (tester) async {
+    testWidgets('波形面板为亮青框', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, ScopeZone(state: state));
 
       expect(find.byKey(const Key('scope_curve_frame')), findsOneWidget);
-      expect(find.byKey(const Key('scope_heat_panel')), findsOneWidget);
+      expect(find.byType(HairlineFrame), findsWidgets);
+    });
+
+    testWidgets('控制 / 故障 / 门限各自为亮青面板', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, ControlZone(state: state));
       expect(find.byKey(const Key('fault_frame')), findsOneWidget);
       expect(find.byKey(const Key('control_frame')), findsOneWidget);
+      expect(find.byType(HairlineFrame), findsWidgets);
+
+      await _pump(tester, LimitZone(state: state));
+      expect(find.byKey(const Key('limit_heat_panel')), findsOneWidget);
+      expect(find.byKey(const Key('limit_phase_panel')), findsOneWidget);
       expect(find.byType(HairlineFrame), findsWidgets);
     });
   });
@@ -572,7 +586,7 @@ void main() {
       );
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
 
       expect(find.text('故障构成与指令'), findsOneWidget);
       final entry = tester.widget<Text>(find.text('过流 L1 · U 相'));
@@ -583,7 +597,7 @@ void main() {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, ControlZone(state: state));
 
       expect(
         tester
@@ -597,8 +611,8 @@ void main() {
             .variant,
         GuiButtonVariant.danger,
       );
-      // The scope phase panel also renders a `0.00` F_ELEC, so scope the
-      // setpoint assertions to the control frame.
+      // The setpoint readout lives in the control frame; scope it so the
+      // assertion is stable even if other panels render an F_ELEC value.
       final control = find.byKey(const Key('control_frame'));
       final freq = tester.widget<Text>(
         find.descendant(of: control, matching: find.text('0.00')),

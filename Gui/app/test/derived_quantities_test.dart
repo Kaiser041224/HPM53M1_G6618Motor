@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/encoder_zone.dart';
-import 'package:g6618_gui/ui/scope_zone.dart';
+import 'package:g6618_gui/ui/limit_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
 
 StatusDto makeStatus({
@@ -235,17 +235,17 @@ void main() {
     });
   });
 
-  group('相电流移驻曲线区右列', () {
-    testWidgets('三行相电流 + F_ELEC 组，位于相对门限条下方', (tester) async {
+  group('相电流移驻门限区', () {
+    testWidgets('三行相电流 + F_ELEC 组，位于相对门限条同列', (tester) async {
       final state = AppState.test(
         status: makeStatus(iU: 1, iV: 2, iW: 3, freq: 50),
         metas: const [],
       );
       addTearDown(state.dispose);
 
-      await _pump(tester, ScopeZone(state: state));
+      await _pump(tester, LimitZone(state: state));
 
-      final panel = find.byKey(const Key('scope_phase_panel'));
+      final panel = find.byKey(const Key('limit_phase_panel'));
       expect(panel, findsOneWidget);
       expect(
         find.descendant(of: panel, matching: find.text('相电流')),
@@ -278,8 +278,8 @@ void main() {
         find.descendant(of: panel, matching: find.text('50.00')),
         findsOneWidget,
       );
-      // The phase panel sits below the relative-threshold panel.
-      expect(find.byKey(const Key('scope_heat_panel')), findsOneWidget);
+      // The phase panel sits beside the relative-threshold panel.
+      expect(find.byKey(const Key('limit_heat_panel')), findsOneWidget);
     });
   });
 
