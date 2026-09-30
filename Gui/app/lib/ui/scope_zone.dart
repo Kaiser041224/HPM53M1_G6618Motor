@@ -8,6 +8,7 @@ import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
+import '../widgets/stable_digits.dart';
 import '../widgets/trend_chart.dart';
 import 'panel_title.dart';
 import 'status_zone.dart' show HeatLoadBar;
@@ -376,13 +377,17 @@ class _ControlPanelState extends State<ControlPanel> {
             alignment: Alignment.centerRight,
             // v3 tone mapping: the setpoint readout is amber while the LED bar
             // itself keeps the cyan accent. `glow: true` stacks the single soft
-            // layer the design reserves for bar / value readouts.
-            child: GlowValue(
-              value: value,
-              unit: unit,
-              precision: precision,
-              tone: Tone.amber,
-              glow: true,
+            // layer the design reserves for bar / value readouts. The readout
+            // is a monitor value sampled at 5 Hz; the slider bar stays instant.
+            child: StableDigits(
+              text: value.toString(),
+              builder: (context) => GlowValue(
+                value: value,
+                unit: unit,
+                precision: precision,
+                tone: Tone.amber,
+                glow: true,
+              ),
             ),
           ),
         ),

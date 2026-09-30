@@ -6,6 +6,7 @@ import '../theme/gui_theme.dart';
 import '../widgets/device_ascii.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
+import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/window_caption.dart';
@@ -394,9 +395,10 @@ class _TopBarState extends State<TopBar> with WindowListener {
         StaleGate(
           key: key,
           freshness: value == null ? Freshness.unknown : Freshness.live,
-          live: Text(
-            value ?? '',
-            // Telemetry is quiet second-tier text (v3).
+          // Telemetry is a monitor value: sample it at 5 Hz. Telemetry is quiet
+          // second-tier text (v3).
+          live: StableDigits(
+            text: value ?? '',
             style: scale.data.copyWith(fontSize: 13, color: palette.fgDim),
           ),
         ),
@@ -567,8 +569,8 @@ class _TopBarState extends State<TopBar> with WindowListener {
         children: <Widget>[
           SizedBox(width: 110, child: Text(label, style: scale.label)),
           const SizedBox(width: 8),
-          Text(
-            value,
+          StableDigits(
+            text: value,
             style: GuiGlowStyles.soft(scale.data.copyWith(fontSize: 12)),
           ),
         ],

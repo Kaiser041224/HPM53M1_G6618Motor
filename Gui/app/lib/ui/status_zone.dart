@@ -7,6 +7,7 @@ import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
+import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
 
 /// Formats a stale age: whole seconds without decimals, otherwise one.
@@ -103,6 +104,14 @@ class StatusTile extends StatelessWidget {
       );
     }
 
+    // Monitor readout: the tile value is sampled at 5 Hz so it does not
+    // flicker under the 25 Hz telemetry feed. Tri-state / precision / tone
+    // semantics are unchanged — only the cadence at which the string swaps.
+    final Widget throttledValue = StableDigits(
+      text: value == null ? '—' : value!.toStringAsFixed(precision),
+      builder: (context) => valueRow,
+    );
+
     return Container(
       color: palette.bgBase,
       constraints: const BoxConstraints(minHeight: 84),
@@ -136,7 +145,7 @@ class StatusTile extends StatelessWidget {
             fallback: freshness == Freshness.stale && unit.isNotEmpty
                 ? '— ${unit.toUpperCase()}'
                 : '—',
-            live: valueRow,
+            live: throttledValue,
           ),
           _footer(context, palette, scale),
         ],
@@ -272,11 +281,16 @@ class HeatLoadBar extends StatelessWidget {
           child: FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerRight,
-            child: GlowValue(
-              value: (value01 * 100).round(),
-              unit: '%',
-              precision: 0,
-              tone: toneForRatio(value01),
+            // % readout is a monitor value: sample it at 5 Hz; the fill bar
+            // above stays on the full UI cadence.
+            child: StableDigits(
+              text: value01.toString(),
+              builder: (context) => GlowValue(
+                value: (value01 * 100).round(),
+                unit: '%',
+                precision: 0,
+                tone: toneForRatio(value01),
+              ),
             ),
           ),
         ),

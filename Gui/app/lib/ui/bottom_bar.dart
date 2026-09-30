@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../state/app_state.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart' show Freshness;
 import '../widgets/status_badge.dart';
 
@@ -208,17 +209,22 @@ class BottomBar extends StatelessWidget {
       children: <Widget>[
         Text(label, style: scale.label),
         const SizedBox(width: 6),
-        Text(
-          value,
-          // v3: counters are flat neutral; only the verdict badge carries
-          // status colour.
-          style: known
-              ? scale.data.copyWith(
-                  fontSize: 12,
-                  color: palette.fgStrong,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                )
-              : scale.label.copyWith(color: palette.fgMute),
+        // Monitor counter: sample at 5 Hz. The style is rebuilt with the
+        // accepted string so a `—` and a live number never share a look.
+        StableDigits(
+          text: value,
+          builder: (context) => Text(
+            value,
+            // v3: counters are flat neutral; only the verdict badge carries
+            // status colour.
+            style: known
+                ? scale.data.copyWith(
+                    fontSize: 12,
+                    color: palette.fgStrong,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  )
+                : scale.label.copyWith(color: palette.fgMute),
+          ),
         ),
       ],
     );

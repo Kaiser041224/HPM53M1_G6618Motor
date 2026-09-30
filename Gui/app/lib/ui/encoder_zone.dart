@@ -7,6 +7,7 @@ import '../widgets/encoder_schematic.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
+import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 
@@ -171,11 +172,15 @@ class EncoderZone extends StatelessWidget {
         StaleGate(
           freshness: freshness,
           fallback: '—',
-          live: GlowValue(
-            value: value,
-            unit: '°',
-            precision: 1,
-            tone: Tone.neutral,
+          // Angle readout is a monitor value: sample it at 5 Hz.
+          live: StableDigits(
+            text: value == null ? '—' : value.toStringAsFixed(1),
+            builder: (context) => GlowValue(
+              value: value,
+              unit: '°',
+              precision: 1,
+              tone: Tone.neutral,
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -205,7 +210,11 @@ class EncoderZone extends StatelessWidget {
             style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
           ),
         ),
-        GlowValue(value: value, precision: 3, tone: Tone.neutral),
+        StableDigits(
+          text: value == null ? '—' : value.toStringAsFixed(3),
+          builder: (context) =>
+              GlowValue(value: value, precision: 3, tone: Tone.neutral),
+        ),
       ],
     );
   }
@@ -231,8 +240,9 @@ class EncoderZone extends StatelessWidget {
             style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
           ),
         ),
-        Text(
-          value ?? '—',
+        // Resolution / zero readouts are monitor values: sample at 5 Hz.
+        StableDigits(
+          text: value ?? '—',
           style: scale.label.copyWith(
             color: value == null ? palette.fgMute : palette.fg,
           ),

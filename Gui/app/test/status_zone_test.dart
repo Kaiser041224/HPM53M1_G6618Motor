@@ -10,6 +10,7 @@ import 'package:g6618_gui/ui/status_zone.dart';
 import 'package:g6618_gui/widgets/glow_value.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
+import 'package:g6618_gui/widgets/stable_digits.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
 
@@ -522,6 +523,77 @@ void main() {
       expect(freq.style?.color, const GuiPalette().valueAmber);
       // Setpoint readout is a GlowValue: unit renders separately, uppercased.
       expect(find.text('HZ'), findsOneWidget);
+    });
+  });
+
+  group('瓦片数值 5 Hz 限频（StableDigits）', () {
+    testWidgets('瓦片数值子树包含 StableDigits', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(vbus: 24.0),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+
+      await _pump(tester, StatusZone(state: state));
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('status_tile_VBUS')),
+          matching: find.byType(StableDigits),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('新值 <200ms 保持旧字，≥200ms 才换字', (tester) async {
+      await _pump(
+        tester,
+        const StatusTile(
+          label: 'VBUS',
+          zh: '母线电压',
+          value: 24.0,
+          unit: 'V',
+          precision: 1,
+        ),
+      );
+      expect(find.text('24.0'), findsOneWidget);
+
+      await _pump(
+        tester,
+        const StatusTile(
+          label: 'VBUS',
+          zh: '母线电压',
+          value: 25.0,
+          unit: 'V',
+          precision: 1,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 199));
+      expect(find.text('25.0'), findsNothing);
+      expect(find.text('24.0'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(find.text('25.0'), findsOneWidget);
+      expect(find.text('24.0'), findsNothing);
+    });
+
+    testWidgets('三态语义不变：stale 仍显示 — 单位，不被限频掩盖', (tester) async {
+      await _pump(
+        tester,
+        const StatusTile(
+          label: 'I_V',
+          zh: 'V 相电流',
+          value: 0.0,
+          unit: 'A',
+          precision: 3,
+          note: 'RMS',
+          freshness: Freshness.stale,
+          staleSeconds: 1.5,
+        ),
+      );
+
+      expect(find.text('— A'), findsOneWidget);
+      expect(find.byType(DashedFrame), findsOneWidget);
     });
   });
 }

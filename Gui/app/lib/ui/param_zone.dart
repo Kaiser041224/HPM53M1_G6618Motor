@@ -11,6 +11,7 @@ import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
+import '../widgets/stable_digits.dart';
 
 /// Human-readable name of a parameter wire type.
 String typeName(int ty) => switch (ty) {
@@ -288,6 +289,14 @@ class _ParamZoneState extends State<ParamZone> {
       );
     }
 
+    // Monitor readout: the value column is sampled at 5 Hz. `shown` is the
+    // exact string rendered (including `—` / `true` / `false`), so the refresh
+    // key and the display never disagree.
+    final Widget throttledValue = StableDigits(
+      text: shown,
+      builder: (context) => valueWidget,
+    );
+
     final range = '${_num(meta.min)}..${_num(meta.max)}';
     final reboot = meta.apply == 1;
 
@@ -348,7 +357,7 @@ class _ParamZoneState extends State<ParamZone> {
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerRight,
-                child: valueWidget,
+                child: throttledValue,
               ),
             ),
           ],
