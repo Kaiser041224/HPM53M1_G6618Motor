@@ -4,7 +4,7 @@ import 'bridge/frb/api.dart' as frb;
 import 'bridge/frb/frb_generated.dart';
 import 'state/app_state.dart';
 import 'theme/gui_theme.dart';
-import 'ui/shell.dart';
+import 'ui/single_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,8 +19,8 @@ Future<void> main() async {
   }
 }
 
-/// Root widget. Owns the single [AppState] instance and builds the [Shell]
-/// (navigation rail + status bar).
+/// Root widget. Owns the single [AppState] instance and builds the
+/// [SinglePage] (top bar + flat zones + status bar).
 class GuiApp extends StatefulWidget {
   const GuiApp({super.key});
 
@@ -82,7 +82,7 @@ class _GuiAppState extends State<GuiApp> {
         title: 'Gui',
         debugShowCheckedModeBanner: false,
         theme: buildGuiTheme(),
-        home: Shell(state: _state),
+        home: SinglePage(state: _state),
       ),
     );
   }

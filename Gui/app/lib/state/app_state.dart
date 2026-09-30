@@ -25,9 +25,29 @@ class AppState extends ChangeNotifier {
 
   String deviceName = '';
 
+  /// PROTO_INFO handshake fields: protocol version and capability bitmask.
+  int protoMajor = 0;
+  int protoMinor = 0;
+  int capabilities = 0;
+
+  /// Wall-clock start of the current connection session; null when
+  /// disconnected.
+  DateTime? sessionStart;
+
+  /// Elapsed time since [sessionStart], refreshed by the 500 ms status poll.
+  /// Null while disconnected so the top bar can honestly show `—`.
+  Duration? sessionUptime;
+
+  /// Round-trip time of the last STATUS_GET, in milliseconds. Filled by the
+  /// telemetry task; null until then so the UI shows `—`.
+  double? rttMs;
+
   /// Device-side counters, refreshed by the 500 ms status poll.
   int reconnects = 0;
   int crcErrors = 0;
+
+  /// Client-side frame attempt counter (`stats.attempts`).
+  int attempts = 0;
 
   /// Client-side count of failed polls / requests.
   int requestFailures = 0;
@@ -61,17 +81,30 @@ class AppState extends ChangeNotifier {
   @visibleForTesting
   Object? connectError;
 
+  /// Test-only: overrides the bridge connect + PROTO_INFO handshake. Receives
+  /// the requested address and returns the `(major, minor, caps, name)` tuple.
+  @visibleForTesting
+  Future<(int, int, int, String)> Function(String addr)? onConnect;
+
   bool _disposed = false;
 
   /// Test-only constructor seeding [metas] and [status] without touching the
-  /// bridge. [onCtrl] and [connectError] may be supplied here or assigned
-  /// afterwards.
+  /// bridge. [onCtrl], [onConnect] and [connectError] may be supplied here or
+  /// assigned afterwards; the connection/session fields seed the top bar.
   @visibleForTesting
   AppState.test({
     List<frb.ParamMetaDto> metas = const [],
     this.status,
     this.onCtrl,
     this.connectError,
+    this.onConnect,
+    this.connected = false,
+    this.deviceName = '',
+    this.protoMajor = 0,
+    this.protoMinor = 0,
+    this.capabilities = 0,
+    this.sessionUptime,
+    this.attempts = 0,
   }) : metas = List.of(metas);
 
   /// Loads the metadata table, then reads every parameter value.
@@ -191,12 +224,23 @@ class AppState extends ChangeNotifier {
   /// Returns true on success; on failure [lastError] is populated.
   Future<bool> connect(String addr) async {
     try {
-      final injected = connectError;
-      if (injected != null) throw injected;
-      await frb.connect(addr: addr);
-      final info = await frb.protoInfo();
+      final (int, int, int, String) info;
+      final injected = onConnect;
+      if (injected != null) {
+        info = await injected(addr);
+      } else {
+        final injectedError = connectError;
+        if (injectedError != null) throw injectedError;
+        await frb.connect(addr: addr);
+        info = await frb.protoInfo();
+      }
+      protoMajor = info.$1;
+      protoMinor = info.$2;
+      capabilities = info.$3;
       deviceName = info.$4;
       connected = true;
+      sessionStart = DateTime.now();
+      sessionUptime = Duration.zero;
       _clearError();
       _startPolling();
       notifyListeners();
@@ -219,6 +263,12 @@ class AppState extends ChangeNotifier {
     } finally {
       connected = false;
       deviceName = '';
+      protoMajor = 0;
+      protoMinor = 0;
+      capabilities = 0;
+      sessionStart = null;
+      sessionUptime = null;
+      attempts = 0;
       status = null;
       latchedFlags = 0;
       notifyListeners();
@@ -244,6 +294,11 @@ class AppState extends ChangeNotifier {
       if (_disposed) return;
       reconnects = stats.reconnects.toInt();
       crcErrors = stats.crcErrors.toInt();
+      attempts = stats.attempts.toInt();
+      final start = sessionStart;
+      if (start != null) {
+        sessionUptime = DateTime.now().difference(start);
+      }
       notifyListeners();
     } catch (e) {
       if (_disposed) return;
