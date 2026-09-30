@@ -126,6 +126,25 @@ void main() {
       }
     });
 
+    test('minimize hover glow follows the supplied palette, not the default', () {
+      const custom = GuiPalette(
+        glow2: Color(0xFF112233),
+        glow3: Color(0xFF445566),
+      );
+      final style = WindowCaptionButton.styleFor(
+        custom,
+        WindowCaptionButtonKind.minimize,
+        hovered: true,
+      );
+      expect(style.background, custom.bgHover);
+      final colors = style.glowShadows.map((s) => s.color).toSet();
+      expect(colors, contains(custom.glow3));
+      expect(colors, contains(custom.glow2));
+      const defaults = GuiPalette();
+      expect(colors, isNot(contains(defaults.glow2)));
+      expect(colors, isNot(contains(defaults.glow3)));
+    });
+
     test('close hover is stFault with a near-white symbol and red glow', () {
       final style = WindowCaptionButton.styleFor(
         palette,

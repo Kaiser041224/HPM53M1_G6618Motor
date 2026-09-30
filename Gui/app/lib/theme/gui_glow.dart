@@ -63,12 +63,20 @@ class GuiGlowStyles {
       _outlined(base, base.color ?? _palette.fgStrong);
 
   /// Soft glow: inner + outer halo only.
-  static TextStyle soft(TextStyle base) => base.copyWith(
-    shadows: <Shadow>[
-      Shadow(color: _palette.glow3, blurRadius: 18),
-      Shadow(color: _palette.glow2, blurRadius: 6),
-    ],
-  );
+  static TextStyle soft(TextStyle base) => softWith(_palette, base);
+
+  /// Soft glow using an explicit [palette].
+  ///
+  /// Callers that resolved a context palette pass it here so every glow layer
+  /// is sourced from the same palette as the rest of the resolved style
+  /// (design-system §2.4); [soft] stays the default-palette convenience.
+  static TextStyle softWith(GuiPalette palette, TextStyle base) =>
+      base.copyWith(
+        shadows: <Shadow>[
+          Shadow(color: palette.glow3, blurRadius: 18),
+          Shadow(color: palette.glow2, blurRadius: 6),
+        ],
+      );
 
   /// Wide glow: all four layers, for large surfaces / big text.
   static TextStyle wide(TextStyle base) => base.copyWith(

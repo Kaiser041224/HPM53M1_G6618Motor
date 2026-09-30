@@ -203,7 +203,7 @@ class WindowCaptionButton extends StatefulWidget {
       glowShadows =
           GuiGlowStyles.status(palette.stFault, const TextStyle()).shadows!;
     } else {
-      glowShadows = GuiGlowStyles.soft(const TextStyle()).shadows!;
+      glowShadows = GuiGlowStyles.softWith(palette, const TextStyle()).shadows!;
     }
     return WindowCaptionStyle(
       background: background,
