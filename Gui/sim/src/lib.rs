@@ -65,6 +65,8 @@ pub struct SimDevice {
     motor_running: bool,
     freq_hz: f32,
     mod_pct: f32,
+    /// STATUS_GET 采样计数；合成信号是它的确定函数（无墙钟依赖，测试可复现）。
+    tick: u64,
 }
 
 impl SimDevice {
@@ -98,6 +100,7 @@ impl SimDevice {
             motor_running: false,
             freq_hz: 0.0,
             mod_pct: 0.0,
+            tick: 0,
         })
     }
 
@@ -142,7 +145,10 @@ impl SimDevice {
             cmd::PARAM_READ => self.param_read(payload),
             cmd::PARAM_WRITE => self.param_write(payload),
             cmd::PARAM_COMMIT => self.param_commit(),
-            cmd::STATUS_GET => (status::OK, self.status_body()),
+            cmd::STATUS_GET => {
+                self.tick = self.tick.wrapping_add(1);
+                (status::OK, self.status_body())
+            }
             cmd::CTRL_CMD => self.ctrl_cmd(payload),
             cmd::FAULT_GET => {
                 let mut body = Vec::with_capacity(8);
@@ -297,16 +303,30 @@ impl SimDevice {
         }
     }
 
-    /// STATUS_GET 体：`fault_flags | motor_running | motor_state | freq | mod | 7×0f32`。
+    /// STATUS_GET 体：`fault_flags | motor_running | motor_state | freq | mod
+    /// | i_u | i_v | i_w | vbus | ntc_temp | enc_rotor_deg | enc_output_deg`。
+    ///
+    /// 末尾 7 个 f32 为 tick 的确定函数（三相对称正弦 + 母线/温度/角度合成），
+    /// 供上位机图表演示；`freq`/`mod`/状态位仍来自 CTRL 与故障注入。
     fn status_body(&self) -> Vec<u8> {
+        const TAU: f32 = std::f32::consts::TAU;
+        let t = self.tick as f32;
+        let i_u = 10.0 * (TAU * t / 20.0).sin();
+        let i_v = 10.0 * (TAU * t / 20.0 - TAU / 3.0).sin();
+        let i_w = 10.0 * (TAU * t / 20.0 + TAU / 3.0).sin();
+        let vbus = 48.0 + 2.0 * (TAU * t / 50.0).sin();
+        let ntc_temp = 55.0 + 10.0 * (0.5 + 0.5 * (TAU * t / 100.0).sin());
+        let enc_rotor_deg = (t * 3.6) % 360.0;
+        let enc_output_deg = (t * 0.9) % 360.0;
+
         let mut body = Vec::with_capacity(42);
         body.extend_from_slice(&self.fault_flags.to_le_bytes());
         body.push(self.motor_running as u8);
         body.push(if self.motor_running { 0x01 } else { 0x00 });
         body.extend_from_slice(&self.freq_hz.to_le_bytes());
         body.extend_from_slice(&self.mod_pct.to_le_bytes());
-        for _ in 0..7 {
-            body.extend_from_slice(&0f32.to_le_bytes());
+        for value in [i_u, i_v, i_w, vbus, ntc_temp, enc_rotor_deg, enc_output_deg] {
+            body.extend_from_slice(&value.to_le_bytes());
         }
         body
     }

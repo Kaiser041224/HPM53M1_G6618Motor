@@ -146,6 +146,11 @@ fn param_commit_locked_by_latch_even_when_stopped() {
     let _ = std::fs::remove_file("sim_params.json"); // 清理 COMMIT 产物
 }
 
+/// 从 STATUS_GET 应答 payload 中读取偏移 `off` 处的 f32 LE 字段。
+fn f32_at(payload: &[u8], off: usize) -> f32 {
+    f32::from_le_bytes([payload[off], payload[off + 1], payload[off + 2], payload[off + 3]])
+}
+
 fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -233,6 +238,57 @@ fn status_get_layout_and_motor_state() {
     let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
     assert_eq!(resp.payload[5], 1);
     assert_eq!(resp.payload[6], 1); // MP_MOTOR_RUN
+    // 合成信号为 tick 确定函数，仅校验物理范围而非精确值
+    let i_u = f32_at(&resp.payload, 15);
+    let vbus = f32_at(&resp.payload, 27);
+    let ntc = f32_at(&resp.payload, 31);
+    assert!((-10.0..=10.0).contains(&i_u), "i_u={i_u}");
+    assert!((46.0..=50.0).contains(&vbus), "vbus={vbus}");
+    assert!((55.0..=65.0).contains(&ntc), "ntc={ntc}");
+}
+
+#[test]
+fn status_get_advances_tick_between_calls() {
+    let mut dev = load();
+    let a = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    let b = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    // 每次 STATUS_GET 自增 tick，合成信号应随之前进
+    assert_ne!(a.payload, b.payload);
+}
+
+#[test]
+fn status_currents_are_symmetric_over_ticks() {
+    let mut dev = load();
+    let mut max_abs = 0f32;
+    for _ in 0..20 {
+        let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+        let i_u = f32_at(&resp.payload, 15);
+        let i_v = f32_at(&resp.payload, 19);
+        let i_w = f32_at(&resp.payload, 23);
+        assert!((i_u + i_v + i_w).abs() < 1e-3, "sum={}", i_u + i_v + i_w);
+        assert!((-10.0..=10.0).contains(&i_u));
+        max_abs = max_abs.max(i_u.abs());
+    }
+    assert!(max_abs > 1.0, "tick 推进后合成电流应为非平凡正弦");
+}
+
+#[test]
+fn status_encoder_angles_stay_in_one_revolution() {
+    let mut dev = load();
+    let mut prev = 0f32;
+    let mut advanced = false;
+    for _ in 0..100 {
+        let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+        let rotor = f32_at(&resp.payload, 35);
+        let output = f32_at(&resp.payload, 39);
+        assert!((0.0..360.0).contains(&rotor), "rotor={rotor}");
+        assert!((0.0..360.0).contains(&output), "output={output}");
+        if rotor > prev {
+            advanced = true;
+        }
+        prev = rotor;
+    }
+    assert!(advanced, "enc_rotor_deg 应随 tick 前进");
 }
 
 #[test]
