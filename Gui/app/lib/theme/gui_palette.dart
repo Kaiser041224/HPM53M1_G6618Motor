@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
-/// TNO 硅晶之梦 palette (v3, screenshot-derived).
+/// TNO 硅晶之梦 palette (v4, muted screenshot-derived).
 ///
 /// Base surface values are copied verbatim from
-/// `Gui/ref/design-system/tokens.css` (pixel-measured); the v3 restyle
-/// reinterprets their usage toward flat, bright hairline frames and solid
-/// semantic text. Nothing here may be invented: page code must read
-/// semantic tokens through [GuiPalette.of] instead of hard-coding.
+/// `Gui/ref/design-system/tokens.css` (pixel-measured). The v4 restyle mutes
+/// the v3 colors back toward `Gui/ref/screenshots/`: soft cyan hairlines,
+/// grey-white text, olive-amber / soft-green / soft-red values, with saturated
+/// pixels reserved for thin borders and small icons. Nothing here may be
+/// invented: page code must read semantic tokens through [GuiPalette.of]
+/// instead of hard-coding.
 @immutable
 class GuiPalette extends ThemeExtension<GuiPalette> {
   const GuiPalette({
@@ -16,44 +18,44 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.bgRaise = const Color(0xFF102024),
     this.bgHover = const Color(0xFF162C30),
     this.bgActive = const Color(0xFF1C383C),
-    this.lineHi = const Color(0xFF58C8C0),
-    this.line = const Color(0xFF1E5C60),
-    this.lineDim = const Color(0xFF14393C),
+    this.lineHi = const Color(0xFF3F9E98),
+    this.line = const Color(0xFF1E5458),
+    this.lineDim = const Color(0xFF123234),
     this.lineWidth = 1.0,
-    this.fg = const Color(0xFFC8DEDC),
-    this.fgStrong = const Color(0xFFEAF6F4),
-    this.fgDim = const Color(0xFF7FA8A6),
-    this.fgMute = const Color(0xFF5E8886),
-    this.valueAmber = const Color(0xFFE8C84A),
-    this.valueGreen = const Color(0xFF5ED85E),
-    this.valueRed = const Color(0xFFF06858),
-    this.valuePink = const Color(0xFFE888B8),
-    this.valueViolet = const Color(0xFFA888E8),
-    this.white = const Color(0xFFEAF6F4),
-    this.accent = const Color(0xFF58C8C0),
-    this.accent2 = const Color(0xFFC8C000),
+    this.fg = const Color(0xFFA6BAB8),
+    this.fgStrong = const Color(0xFFCFDCDA),
+    this.fgDim = const Color(0xFF6E908E),
+    this.fgMute = const Color(0xFF507270),
+    this.valueAmber = const Color(0xFFBFA84C),
+    this.valueGreen = const Color(0xFF589E5E),
+    this.valueRed = const Color(0xFFB86858),
+    this.valuePink = const Color(0xFFC07898),
+    this.valueViolet = const Color(0xFF8878B8),
+    this.white = const Color(0xFFCFDCDA),
+    this.accent = const Color(0xFF3F9E98),
+    this.accent2 = const Color(0xFFBFA84C),
     this.accentBlue = const Color(0xFF085890),
-    this.accentGlow = const Color.fromRGBO(88, 200, 192, 0.45),
-    this.stNormal = const Color(0xFF40B040),
-    this.stWarn = const Color(0xFFC8C000),
-    this.stFault = const Color(0xFFF88070),
-    this.stLatched = const Color(0xFFFF9E96),
-    this.stStale = const Color(0xFF4A6668),
-    this.stPending = const Color(0xFFB8B848),
-    this.btnFill = const Color(0xFF243234),
-    this.btnBorder = const Color(0xFF4E7A7C),
-    this.btnText = const Color(0xFFC8DEDC),
-    this.btnPrimaryBorder = const Color(0xFF58C8C0),
-    this.btnPrimaryText = const Color(0xFF7AD8D0),
-    this.btnDangerBorder = const Color(0xFFC85848),
-    this.btnDangerText = const Color(0xFFF08878),
-    this.series1 = const Color(0xFF58C8C0),
-    this.series2 = const Color(0xFFC8C000),
-    this.series3 = const Color(0xFFFF87D7),
-    this.series4 = const Color(0xFFAF87FF),
-    this.series5 = const Color(0xFF87FFAF),
-    this.series6 = const Color(0xFFF88070),
-    this.glowSoft = const Color.fromRGBO(88, 200, 192, 0.22),
+    this.accentGlow = const Color.fromRGBO(63, 158, 152, 0.45),
+    this.stNormal = const Color(0xFF4E9454),
+    this.stWarn = const Color(0xFFB0A038),
+    this.stFault = const Color(0xFFC06858),
+    this.stLatched = const Color(0xFFD08880),
+    this.stStale = const Color(0xFF445C5E),
+    this.stPending = const Color(0xFFA0A048),
+    this.btnFill = const Color(0xFF222C2E),
+    this.btnBorder = const Color(0xFF3E6466),
+    this.btnText = const Color(0xFFA6BAB8),
+    this.btnPrimaryBorder = const Color(0xFF3F9E98),
+    this.btnPrimaryText = const Color(0xFF6FB8B2),
+    this.btnDangerBorder = const Color(0xFFC06858),
+    this.btnDangerText = const Color(0xFFD08880),
+    this.series1 = const Color(0xFF3F9E98),
+    this.series2 = const Color(0xFFBFA84C),
+    this.series3 = const Color(0xFFC07898),
+    this.series4 = const Color(0xFF8878B8),
+    this.series5 = const Color(0xFF589E90),
+    this.series6 = const Color(0xFFB86858),
+    this.glowSoft = const Color.fromRGBO(63, 158, 152, 0.12),
     this.glow1 = const Color.fromRGBO(127, 227, 219, 0.85),
     this.glow2 = const Color.fromRGBO(88, 200, 192, 0.48),
     this.glow3 = const Color.fromRGBO(88, 200, 192, 0.24),
@@ -79,7 +81,7 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Active surface.
   final Color bgActive;
 
-  /// Bright cyan hairline — the v3 frame / underline color.
+  /// Soft cyan hairline — the v4 frame / underline color.
   final Color lineHi;
 
   /// Regular border.
@@ -91,10 +93,10 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Hairlines are always 1px; depth comes from stacking, never scaling.
   final double lineWidth;
 
-  /// Primary text (solid v3 value).
+  /// Primary text (solid v4 value).
   final Color fg;
 
-  /// Brightest text — white titles and neutral values.
+  /// Brightest text — grey-white titles and neutral values.
   final Color fgStrong;
 
   /// Secondary text.
@@ -118,13 +120,13 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Flat semantic value: accent series.
   final Color valueViolet;
 
-  /// Neutral solid white (v3), alias of [fgStrong].
+  /// Neutral solid light-grey (v4), alias of [fgStrong].
   final Color white;
 
   /// Cyan primary accent.
   final Color accent;
 
-  /// Yellow secondary accent — NOT magenta.
+  /// Olive secondary accent — NOT magenta.
   final Color accent2;
 
   /// Deep blue block accent.
@@ -190,7 +192,7 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Data series 6 (measured red).
   final Color series6;
 
-  /// v3 single-layer soft glow — titles and large values only.
+  /// v4 single-layer soft glow — titles and large values only.
   final Color glowSoft;
 
   /// Glow layer 1 — legacy core (ASCII device glow only).

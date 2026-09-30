@@ -47,7 +47,7 @@ void main() {
       );
       expect(style.border, palette.lineHi);
       expect(style.glow.length, 1);
-      expect(style.glow.single.color.a, closeTo(0.22, 0.001));
+      expect(style.glow.single.color.a, closeTo(0.12, 0.001));
     });
 
     test('danger hover brightens to stFault, never cyan', () {

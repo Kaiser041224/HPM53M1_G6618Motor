@@ -63,18 +63,18 @@ void main() {
       expect(a.shouldRepaint(a), isFalse);
     });
 
-    test('v3 seam color participates in repaint', () {
+    test('v4 seam color participates in repaint', () {
       final a = SolidPiePainter(
         fractions: const <double>[0.5, 0.5],
         colors: const <Color>[Colors.red, Colors.green],
-        seamColor: const Color(0xFF14393C),
+        seamColor: const Color(0xFF123234),
       );
       final b = SolidPiePainter(
         fractions: const <double>[0.5, 0.5],
         colors: const <Color>[Colors.red, Colors.green],
         seamColor: const Color(0xFF000000),
       );
-      expect(a.seamColor, const Color(0xFF14393C));
+      expect(a.seamColor, const Color(0xFF123234));
       expect(a.shouldRepaint(b), isTrue);
     });
   });

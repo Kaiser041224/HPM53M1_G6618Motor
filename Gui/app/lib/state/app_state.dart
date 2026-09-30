@@ -224,6 +224,21 @@ class AppState extends ChangeNotifier {
       _paramDouble('motor.i_peak_10s_a') ??
       _paramDouble('software.fault.oc_trip_a');
 
+  /// Rotor-encoder gear ratio (`motor.encoder.rotor_ratio`), the factor from
+  /// rotor angle to rotor-encoder angle; dimensionless. Null until the
+  /// parameter table has been read, so the UI honestly shows `—`.
+  ///
+  /// NOTE: the wave brief writes this key as `motor.rotor_ratio`, but the
+  /// parameter pipeline (`scripts/gen_params.py`) emits the nested name
+  /// `motor.encoder.rotor_ratio`; the real wire key is used here so the ratio
+  /// is never a fabricated `—`.
+  double? get rotorRatio => _paramDouble('motor.encoder.rotor_ratio');
+
+  /// Output-shaft encoder gear ratio (`motor.encoder.output_ratio`), the factor
+  /// from rotor angle to output-encoder angle; dimensionless. Null until the
+  /// parameter table has been read.
+  double? get outputRatio => _paramDouble('motor.encoder.output_ratio');
+
   /// Decodes parameter [name] to its physical float, or null when unloaded.
   double? _paramDouble(String name) {
     final value = values[name];

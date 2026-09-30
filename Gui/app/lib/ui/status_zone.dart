@@ -8,7 +8,6 @@ import '../widgets/glow_value.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stale_gate.dart';
-import 'panel_title.dart';
 
 /// Formats a stale age: whole seconds without decimals, otherwise one.
 String _seconds(double value) => value == value.roundToDouble()
@@ -320,13 +319,13 @@ class _TileSpec {
   }
 }
 
-/// The 状态监视 zone: eight tri-state tiles plus the heat/load bars.
+/// The 状态监视 zone: six tri-state tiles (VBUS / I_U / I_V / I_W / NTC /
+/// F_ELEC).
 ///
 /// Everything is derived from [AppState]; when no status snapshot has been
 /// read the tiles fall back to `—` rather than showing stale numbers
-/// (design-system §6 rule 2). Thresholds come from the parameter table via
-/// [AppState.thresholdNtc] / [AppState.thresholdVbus] / [AppState
-/// .thresholdCurrent]; an unloaded threshold leaves its bar grey.
+/// (design-system §6 rule 2). The two encoder tiles moved out to
+/// [EncoderZone]; the relative-threshold heat/load bars moved to [ScopeZone].
 class StatusZone extends StatelessWidget {
   const StatusZone({super.key, required this.state});
 
@@ -399,24 +398,6 @@ class StatusZone extends StatelessWidget {
         threshold: state.thresholdNtc,
       ),
       _TileSpec(
-        keyName: 'ENC_R',
-        label: 'ENC R',
-        zh: '转子角',
-        value: status?.encRotorDeg,
-        unit: '°',
-        precision: 1,
-        note: 'ROTOR · 正常',
-      ),
-      _TileSpec(
-        keyName: 'ENC_O',
-        label: 'ENC O',
-        zh: '出轴角',
-        value: status?.encOutputDeg,
-        unit: '°',
-        precision: 1,
-        note: 'OUTPUT · 正常',
-      ),
-      _TileSpec(
         keyName: 'F_ELEC',
         label: 'F_ELEC',
         zh: '电频率',
@@ -469,7 +450,7 @@ class StatusZone extends StatelessWidget {
       );
     }
 
-    final header = StringBuffer('8 项');
+    final header = StringBuffer('6 项');
     if (failed > 0) header.write(' · $failed 项失效');
     if (warned > 0) header.write(' · $warned 项告警');
 
@@ -483,21 +464,6 @@ class StatusZone extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         _grid(tiles),
-        const SizedBox(height: 24),
-        HairlineFrame(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              const PanelTitle(title: '热与负载 · 相对门限', en: '%'),
-              const SizedBox(height: 12),
-              for (final bar in _heatLoads(context, status)) ...[
-                bar,
-                const SizedBox(height: 10),
-              ],
-            ],
-          ),
-        ),
       ],
     );
   }
@@ -521,42 +487,11 @@ class StatusZone extends StatelessWidget {
       padding: const EdgeInsets.all(8),
       child: Column(
         children: <Widget>[
-          row(cells.sublist(0, 4)),
+          row(cells.sublist(0, 3)),
           const SizedBox(height: 8),
-          row(cells.sublist(4, 8)),
+          row(cells.sublist(3, 6)),
         ],
       ),
     );
-  }
-
-  List<Widget> _heatLoads(BuildContext context, StatusDto? status) {
-    return <Widget>[
-      HeatLoadBar(
-        name: 'NTC',
-        value: status?.ntcTemp,
-        threshold: state.thresholdNtc,
-      ),
-      HeatLoadBar(
-        name: 'U 相',
-        value: status?.iU,
-        threshold: state.thresholdCurrent,
-      ),
-      HeatLoadBar(
-        name: 'V 相',
-        value: status?.iV,
-        threshold: state.thresholdCurrent,
-      ),
-      HeatLoadBar(
-        name: 'W 相',
-        value: status?.iW,
-        threshold: state.thresholdCurrent,
-      ),
-      HeatLoadBar(
-        name: 'VBUS',
-        value: status?.vbus,
-        threshold: state.thresholdVbus,
-      ),
-      const HeatLoadBar(name: '模组', value: null, threshold: null),
-    ];
   }
 }

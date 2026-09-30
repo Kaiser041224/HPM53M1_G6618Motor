@@ -68,7 +68,7 @@ void main() {
       expect(boxes.where((b) => b.width == 2).length, 7);
     });
 
-    testWidgets('lit segments carry one weak same-hue glow (v3)', (tester) async {
+    testWidgets('lit segments carry one weak same-hue glow (v4)', (tester) async {
       await _pump(tester, const SegmentBar(value01: 1, segments: 3));
       final lit = tester.widget<Container>(
         find
@@ -81,7 +81,7 @@ void main() {
       final shadow = (lit.decoration as BoxDecoration).boxShadow!.single;
       expect(
         shadow.color.toARGB32(),
-        palette.accent.withValues(alpha: 0.22).toARGB32(),
+        palette.accent.withValues(alpha: 0.12).toARGB32(),
       );
       expect(shadow.blurRadius, 8);
     });

@@ -22,17 +22,17 @@ void main() {
     });
 
     test('hairline borders are three colors, 1px', () {
-      expect(palette.lineHi, const Color(0xFF58C8C0));
-      expect(palette.line, const Color(0xFF1E5C60));
-      expect(palette.lineDim, const Color(0xFF14393C));
+      expect(palette.lineHi, const Color(0xFF3F9E98));
+      expect(palette.line, const Color(0xFF1E5458));
+      expect(palette.lineDim, const Color(0xFF123234));
       expect(palette.lineWidth, 1.0);
     });
 
-    test('text tiers are solid v3 colors, not translucent', () {
-      expect(palette.fg, const Color(0xFFC8DEDC));
-      expect(palette.fgStrong, const Color(0xFFEAF6F4));
-      expect(palette.fgDim, const Color(0xFF7FA8A6));
-      expect(palette.fgMute, const Color(0xFF5E8886));
+    test('text tiers are solid v4 colors, not translucent', () {
+      expect(palette.fg, const Color(0xFFA6BAB8));
+      expect(palette.fgStrong, const Color(0xFFCFDCDA));
+      expect(palette.fgDim, const Color(0xFF6E908E));
+      expect(palette.fgMute, const Color(0xFF507270));
       for (final tier in <Color>[
         palette.fg,
         palette.fgStrong,
@@ -43,57 +43,57 @@ void main() {
       }
     });
 
-    test('accents: cyan primary, yellow secondary (not magenta)', () {
-      expect(palette.accent, const Color(0xFF58C8C0));
-      expect(palette.accent2, const Color(0xFFC8C000));
+    test('accents: muted cyan primary, olive secondary (not magenta)', () {
+      expect(palette.accent, const Color(0xFF3F9E98));
+      expect(palette.accent2, const Color(0xFFBFA84C));
       expect(palette.accentBlue, const Color(0xFF085890));
-      expect(palette.accentGlow, const Color.fromRGBO(88, 200, 192, 0.45));
+      expect(palette.accentGlow, const Color.fromRGBO(63, 158, 152, 0.45));
     });
 
     test('status semantics', () {
-      expect(palette.stNormal, const Color(0xFF40B040));
-      expect(palette.stWarn, const Color(0xFFC8C000));
-      expect(palette.stFault, const Color(0xFFF88070));
-      expect(palette.stLatched, const Color(0xFFFF9E96));
-      expect(palette.stStale, const Color(0xFF4A6668));
-      expect(palette.stPending, const Color(0xFFB8B848));
+      expect(palette.stNormal, const Color(0xFF4E9454));
+      expect(palette.stWarn, const Color(0xFFB0A038));
+      expect(palette.stFault, const Color(0xFFC06858));
+      expect(palette.stLatched, const Color(0xFFD08880));
+      expect(palette.stStale, const Color(0xFF445C5E));
+      expect(palette.stPending, const Color(0xFFA0A048));
     });
 
-    test('flat semantic value colors (v3)', () {
-      expect(palette.valueAmber, const Color(0xFFE8C84A));
-      expect(palette.valueGreen, const Color(0xFF5ED85E));
-      expect(palette.valueRed, const Color(0xFFF06858));
-      expect(palette.valuePink, const Color(0xFFE888B8));
-      expect(palette.valueViolet, const Color(0xFFA888E8));
-      expect(palette.white, const Color(0xFFEAF6F4));
+    test('flat semantic value colors (v4)', () {
+      expect(palette.valueAmber, const Color(0xFFBFA84C));
+      expect(palette.valueGreen, const Color(0xFF589E5E));
+      expect(palette.valueRed, const Color(0xFFB86858));
+      expect(palette.valuePink, const Color(0xFFC07898));
+      expect(palette.valueViolet, const Color(0xFF8878B8));
+      expect(palette.white, const Color(0xFFCFDCDA));
     });
 
-    test('three-tier button colors (v3)', () {
-      expect(palette.btnFill, const Color(0xFF243234));
-      expect(palette.btnBorder, const Color(0xFF4E7A7C));
-      expect(palette.btnText, const Color(0xFFC8DEDC));
-      expect(palette.btnPrimaryBorder, const Color(0xFF58C8C0));
-      expect(palette.btnPrimaryText, const Color(0xFF7AD8D0));
-      expect(palette.btnDangerBorder, const Color(0xFFC85848));
-      expect(palette.btnDangerText, const Color(0xFFF08878));
+    test('three-tier button colors (v4)', () {
+      expect(palette.btnFill, const Color(0xFF222C2E));
+      expect(palette.btnBorder, const Color(0xFF3E6466));
+      expect(palette.btnText, const Color(0xFFA6BAB8));
+      expect(palette.btnPrimaryBorder, const Color(0xFF3F9E98));
+      expect(palette.btnPrimaryText, const Color(0xFF6FB8B2));
+      expect(palette.btnDangerBorder, const Color(0xFFC06858));
+      expect(palette.btnDangerText, const Color(0xFFD08880));
     });
 
     test('data series six', () {
-      expect(palette.series1, const Color(0xFF58C8C0));
-      expect(palette.series2, const Color(0xFFC8C000));
-      expect(palette.series3, const Color(0xFFFF87D7));
-      expect(palette.series4, const Color(0xFFAF87FF));
-      expect(palette.series5, const Color(0xFF87FFAF));
-      expect(palette.series6, const Color(0xFFF88070));
+      expect(palette.series1, const Color(0xFF3F9E98));
+      expect(palette.series2, const Color(0xFFBFA84C));
+      expect(palette.series3, const Color(0xFFC07898));
+      expect(palette.series4, const Color(0xFF8878B8));
+      expect(palette.series5, const Color(0xFF589E90));
+      expect(palette.series6, const Color(0xFFB86858));
     });
 
-    test('glow layers and stroke come from tokens.css; glowSoft is v3', () {
+    test('glow layers and stroke come from tokens.css; glowSoft is v4', () {
       expect(palette.glow1, const Color.fromRGBO(127, 227, 219, 0.85));
       expect(palette.glow2, const Color.fromRGBO(88, 200, 192, 0.48));
       expect(palette.glow3, const Color.fromRGBO(88, 200, 192, 0.24));
       expect(palette.glow4, const Color.fromRGBO(88, 200, 192, 0.11));
       expect(palette.stroke, const Color.fromRGBO(127, 227, 219, 0.46));
-      expect(palette.glowSoft, const Color.fromRGBO(88, 200, 192, 0.22));
+      expect(palette.glowSoft, const Color.fromRGBO(63, 158, 152, 0.12));
     });
   });
 
@@ -113,7 +113,7 @@ void main() {
       ),
     );
     expect(resolved.bgBase, const Color(0xFF081018));
-    expect(resolved.accent, const Color(0xFF58C8C0));
+    expect(resolved.accent, const Color(0xFF3F9E98));
   });
 
   test('buildGuiTheme is Material 3 dark, square, bgBase scaffold', () {
@@ -140,7 +140,7 @@ void main() {
     expect(scale.data.fontFeatures, contains(const FontFeature.tabularFigures()));
   });
 
-  test('GuiTypeScale.sectionTitle is white Chinese 16px w600 (v3)', () {
+    test('GuiTypeScale.sectionTitle is grey-white Chinese 16px w600 (v4)', () {
     const palette = GuiPalette();
     final scale = GuiTypeScale(const GuiPalette());
     expect(scale.sectionTitle.fontFamily, 'Noto Sans SC');
@@ -172,13 +172,13 @@ void main() {
     });
 
     test('status glow is one layer and keeps the status hue', () {
-      const fault = Color(0xFFF88070);
+      const fault = Color(0xFFC06858);
       final shadows = GuiGlowStyles.status(fault, base).shadows!;
       expect(shadows.length, 1);
       for (final shadow in shadows) {
         expect(shadow.color.r, closeTo(fault.r, 0.001));
         expect(shadow.color.g, closeTo(fault.g, 0.001));
-        expect(shadow.color.a, closeTo(0.30, 0.001));
+        expect(shadow.color.a, closeTo(0.18, 0.001));
       }
     });
 

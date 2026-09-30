@@ -104,7 +104,7 @@ class GuiButton extends StatefulWidget {
       glow: hovered
           ? <BoxShadow>[
               // Same-hue faint glow: reuse the shared soft alpha / blur tokens
-              // instead of repeating the `0 0 8px @ 0.22` magic numbers.
+              // instead of repeating the `0 0 8px @ 0.12` magic numbers.
               BoxShadow(
                 color: hoverBorder.withValues(alpha: palette.glowSoft.a),
                 blurRadius: GuiGlowStyles.softBlur,

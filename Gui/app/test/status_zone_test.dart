@@ -10,7 +10,6 @@ import 'package:g6618_gui/ui/status_zone.dart';
 import 'package:g6618_gui/widgets/glow_value.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
-import 'package:g6618_gui/widgets/solid_pie.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
 
@@ -288,8 +287,8 @@ void main() {
     });
   });
 
-  group('相电流占比', () {
-    testWidgets('1:2:1 → 25.0/50.0/25.0 %，实心饼图在场', (tester) async {
+  group('热与负载移驻曲线区右列', () {
+    testWidgets('饼图已移除：曲线区不再出现相电流占比面板', (tester) async {
       final state = AppState.test(
         status: makeStatus(iU: 1, iV: 2, iW: 1),
         metas: const [],
@@ -298,59 +297,63 @@ void main() {
 
       await _pump(tester, ScopeZone(state: state));
 
-      final panel = find.byKey(const Key('phase_share_panel'));
-      expect(panel, findsOneWidget);
-      expect(
-        find.descendant(of: panel, matching: find.text('相电流占比')),
-        findsOneWidget,
-      );
-      expect(find.byType(SolidPie), findsOneWidget);
-      expect(
-        find.descendant(of: panel, matching: find.text('50.0')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: panel, matching: find.text('25.0')),
-        findsNWidgets(2),
-      );
+      expect(find.byKey(const Key('phase_share_panel')), findsNothing);
+      expect(find.text('相电流占比'), findsNothing);
     });
 
-    testWidgets('全零：占比区显示 —，不显示 0.0 %', (tester) async {
+    testWidgets('六条 HeatLoadBar 迁入 scope_heat_panel', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, ScopeZone(state: state));
 
-      final panel = find.byKey(const Key('phase_share_panel'));
+      final panel = find.byKey(const Key('scope_heat_panel'));
+      expect(panel, findsOneWidget);
       expect(
-        find.descendant(of: panel, matching: find.textContaining('%')),
-        findsNothing,
+        find.descendant(of: panel, matching: find.text('热与负载 · 相对门限')),
+        findsOneWidget,
       );
-      expect(
-        find.descendant(of: panel, matching: find.text('—')),
-        findsWidgets,
-      );
+      expect(find.byType(HeatLoadBar), findsNWidgets(6));
     });
 
-    testWidgets('status 失效：占比区降级为 —', (tester) async {
-      final state = AppState.test(
-        status: makeStatus(iU: 1, iV: 2, iW: 1),
-        metas: const [],
-      );
+    testWidgets('无门限：六行读数一律 —，不冒充 0 %', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
-      state.seedFreshness(
-        AppState.statusTileKey('I_V'),
-        DateTime.now().subtract(const Duration(seconds: 2)),
-      );
 
       await _pump(tester, ScopeZone(state: state));
 
-      final panel = find.byKey(const Key('phase_share_panel'));
+      final panel = find.byKey(const Key('scope_heat_panel'));
       expect(
-        find.descendant(of: panel, matching: find.textContaining('%')),
+        find.descendant(of: panel, matching: find.text('—')),
+        findsNWidgets(6),
+      );
+      // No fabricated `0 %`: the mould row and every unloaded threshold stay —.
+      expect(
+        find.descendant(of: panel, matching: find.text('0')),
         findsNothing,
       );
-      expect(find.byType(SolidPie), findsNothing);
+    });
+
+    testWidgets('门限载入：读数按比例取三色语义', (tester) async {
+      final state = AppState.test(status: makeStatus(iU: 30, iV: 70, iW: 90));
+      addTearDown(state.dispose);
+      state.values['motor.i_peak_10s_a'] = ParamValueDto(ty: 0, raw: f32(100));
+
+      await _pump(tester, ScopeZone(state: state));
+
+      final panel = find.byKey(const Key('scope_heat_panel'));
+      expect(
+        find.descendant(of: panel, matching: find.text('30')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: panel, matching: find.text('70')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: panel, matching: find.text('90')),
+        findsOneWidget,
+      );
     });
   });
 
@@ -432,7 +435,7 @@ void main() {
   });
 
   group('v3 面板框（HairlineFrame main）', () {
-    testWidgets('状态监视：组外框 + 每瓦片内框双层嵌套', (tester) async {
+    testWidgets('状态监视：组外框 + 6 瓦片内框双层嵌套（ENC 已迁出）', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
@@ -441,6 +444,10 @@ void main() {
       expect(find.byKey(const Key('status_grid_frame')), findsOneWidget);
       expect(find.byKey(const Key('status_frame_VBUS')), findsOneWidget);
       expect(find.byKey(const Key('status_frame_F_ELEC')), findsOneWidget);
+      // Two encoder tiles moved to EncoderZone: only six remain here.
+      expect(find.byType(StatusTile), findsNWidgets(6));
+      expect(find.byKey(const Key('status_frame_ENC_R')), findsNothing);
+      expect(find.byKey(const Key('status_frame_ENC_O')), findsNothing);
       final tileFrame = tester.widget<HairlineFrame>(
         find.byKey(const Key('status_frame_VBUS')),
       );
@@ -454,6 +461,7 @@ void main() {
       await _pump(tester, ScopeZone(state: state));
 
       expect(find.byKey(const Key('scope_curve_frame')), findsOneWidget);
+      expect(find.byKey(const Key('scope_heat_panel')), findsOneWidget);
       expect(find.byKey(const Key('fault_frame')), findsOneWidget);
       expect(find.byKey(const Key('control_frame')), findsOneWidget);
       expect(find.byType(HairlineFrame), findsWidgets);

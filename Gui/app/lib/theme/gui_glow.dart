@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 
 import 'gui_palette.dart';
 
-/// Glow tiers (v3).
+/// Glow tiers (v4).
 ///
-/// The screenshot-derived v3 visual keeps only a little light: a single soft
-/// layer for titles / large values. The old multi-layer tiers are gone from
-/// the general vocabulary and survive only in [GuiGlowStyles.ascii] for the
-/// device ASCII block art.
+/// The screenshot-derived muted visual keeps only a little light: a single
+/// faint layer for titles / large values. The old multi-layer tiers are gone
+/// from the general vocabulary and survive only in [GuiGlowStyles.ascii] for
+/// the device ASCII block art.
 enum GlowStrength {
   /// Single soft layer: large values, headings.
   strong,
@@ -19,9 +19,9 @@ enum GlowStrength {
   weak,
 }
 
-/// Glow helpers, v3.
+/// Glow helpers, v4.
 ///
-/// Glow is carried by `TextStyle.shadows`. v3 avoids stacking layers (a single
+/// Glow is carried by `TextStyle.shadows`. v4 avoids stacking layers (a single
 /// layer no longer smears because it is deliberately faint):
 ///
 /// - [strong] / [soft] → one [GuiPalette.glowSoft] layer;
@@ -34,10 +34,10 @@ class GuiGlowStyles {
 
   static const GuiPalette _palette = GuiPalette();
 
-  /// Blur of the v3 soft layer (`0 0 8px`).
+  /// Blur of the v4 soft layer (`0 0 8px`).
   static const double softBlur = 8;
 
-  /// Strong glow: a single soft layer (v3 — the old stroke is gone).
+  /// Strong glow: a single soft layer (v4 — the old stroke is gone).
   static TextStyle strong(TextStyle base) =>
       base.copyWith(shadows: <Shadow>[
         Shadow(color: _palette.glowSoft, blurRadius: softBlur),
@@ -58,7 +58,7 @@ class GuiGlowStyles {
   /// Weak glow: one faint halo, labels recede.
   static TextStyle weak(TextStyle base) => base.copyWith(
     shadows: <Shadow>[
-      Shadow(color: _palette.glowSoft.withValues(alpha: 0.15), blurRadius: 4),
+      Shadow(color: _palette.glowSoft.withValues(alpha: 0.08), blurRadius: 4),
     ],
   );
 
@@ -70,12 +70,12 @@ class GuiGlowStyles {
   static TextStyle status(Color color, TextStyle base) => base.copyWith(
     color: color,
     shadows: <Shadow>[
-      Shadow(color: color.withValues(alpha: 0.30), blurRadius: softBlur),
+      Shadow(color: color.withValues(alpha: 0.18), blurRadius: softBlur),
     ],
   );
 
   /// Device ASCII glow: the legacy three-layer same-hue glow, preserved as the
-  /// only place the strong multi-layer motif survives (v3).
+  /// only place the strong multi-layer motif survives (v4).
   static TextStyle ascii(Color color, TextStyle base) => base.copyWith(
     color: color,
     shadows: <Shadow>[

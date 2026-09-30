@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
-import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
@@ -9,10 +8,9 @@ import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
-import '../widgets/solid_pie.dart';
-import '../widgets/stale_gate.dart' show Freshness;
 import '../widgets/trend_chart.dart';
 import 'panel_title.dart';
+import 'status_zone.dart' show HeatLoadBar;
 
 /// Semantic label for a single fault bit, extracted read-only from
 /// `App/Control/Inc/app_fault.h` (bit0..bit9). Unknown bits fall back to
@@ -91,8 +89,8 @@ class ScopeZone extends StatelessWidget {
               flex: 1,
               child: HairlineFrame(
                 padding: const EdgeInsets.all(10),
-                child: _PhaseSharePanel(
-                  key: const Key('phase_share_panel'),
+                child: _HeatLoadPanel(
+                  key: const Key('scope_heat_panel'),
                   state: state,
                 ),
               ),
@@ -135,119 +133,63 @@ int _faultMask(AppState state) => state.latchedFlags != 0
     ? state.latchedFlags
     : (state.status?.faultFlags ?? 0);
 
-/// Phase-current share: a solid-wedge pie plus a right-hand percentage column.
+/// Relative load against a threshold, in the right-hand column once occupied by
+/// the retired 相电流占比 pie.
 ///
-/// The wedges use the same U/V/W series colours as the status tiles and are
-/// fed by `|I_U| : |I_V| : |I_W|`. When all three readings are zero — or the
-/// underlying status is not fresh — the share is undefined and the whole panel
-/// honestly shows `—` instead of a fabricated 0.0 % (design-system §6 rule 2).
-class _PhaseSharePanel extends StatelessWidget {
-  const _PhaseSharePanel({super.key, required this.state});
+/// Six rows (NTC / U / V / W / VBUS / 模组) reuse [HeatLoadBar]: the fill and
+/// the right cell take the three-band semantic tone from the ratio, and a row
+/// with no threshold (or no value) stays an empty grey bar with an honest `—`
+/// — never a fabricated `0 %` (design-system §6 rule 2).
+class _HeatLoadPanel extends StatelessWidget {
+  const _HeatLoadPanel({super.key, required this.state});
 
   final AppState state;
 
-  static const List<String> _phaseKeys = <String>['I_U', 'I_V', 'I_W'];
-  static const List<String> _phaseNames = <String>['U 相', 'V 相', 'W 相'];
-
-  /// Fresh only when every phase tile has been read within [AppState.staleAfter].
-  bool _fresh() {
-    if (state.status == null) return false;
-    return _phaseKeys.every(
-      (key) =>
-          state.freshnessOf(AppState.statusTileKey(key)) == Freshness.live,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    final colors = <Color>[palette.series1, palette.series2, palette.series3];
     final status = state.status;
-    final fractions = _fresh()
-        ? phaseCurrentFractions(status!.iU, status.iV, status.iW)
-        : null;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const PanelTitle(title: '相电流占比', en: 'RMS'),
+        const PanelTitle(title: '热与负载 · 相对门限', en: '%'),
         const SizedBox(height: 12),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: <Widget>[
-            _pie(context, fractions, colors),
-            const SizedBox(width: 20),
-            Expanded(child: _list(context, palette, scale, fractions, colors)),
-          ],
-        ),
+        for (final bar in _bars(status)) ...<Widget>[
+          bar,
+          const SizedBox(height: 10),
+        ],
       ],
     );
   }
 
-  Widget _pie(BuildContext context, List<double>? fractions, List<Color> colors) {
-    if (fractions == null) {
-      return SizedBox(
-        width: SolidPie.defaultSize,
-        height: SolidPie.defaultSize,
-        child: Center(
-          child: Text(
-            '—',
-            style: GuiGlowStyles.none(GuiTypeScale.of(context).data),
-          ),
-        ),
-      );
-    }
-    return SolidPie(
-      key: const Key('phase_share_pie'),
-      fractions: fractions,
-      colors: colors,
-    );
-  }
-
-  Widget _list(
-    BuildContext context,
-    GuiPalette palette,
-    GuiTypeScale scale,
-    List<double>? fractions,
-    List<Color> colors,
-  ) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        for (var i = 0; i < _phaseNames.length; i++)
-          Padding(
-            padding: EdgeInsets.only(
-              bottom: i == _phaseNames.length - 1 ? 0 : 7,
-            ),
-            child: Row(
-              children: <Widget>[
-                Container(width: 10, height: 10, color: colors[i]),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _phaseNames[i],
-                    overflow: TextOverflow.ellipsis,
-                    style: scale.body.copyWith(
-                      fontSize: 10.5,
-                      color: palette.fgMute,
-                    ),
-                  ),
-                ),
-                fractions == null
-                    ? Text('—', style: scale.label)
-                    : GlowValue(
-                        value: fractions[i] * 100,
-                        unit: '%',
-                        precision: 1,
-                        tone: Tone.neutral,
-                      ),
-              ],
-            ),
-          ),
-      ],
-    );
+  List<Widget> _bars(StatusDto? status) {
+    return <Widget>[
+      HeatLoadBar(
+        name: 'NTC',
+        value: status?.ntcTemp,
+        threshold: state.thresholdNtc,
+      ),
+      HeatLoadBar(
+        name: 'U 相',
+        value: status?.iU,
+        threshold: state.thresholdCurrent,
+      ),
+      HeatLoadBar(
+        name: 'V 相',
+        value: status?.iV,
+        threshold: state.thresholdCurrent,
+      ),
+      HeatLoadBar(
+        name: 'W 相',
+        value: status?.iW,
+        threshold: state.thresholdCurrent,
+      ),
+      HeatLoadBar(
+        name: 'VBUS',
+        value: status?.vbus,
+        threshold: state.thresholdVbus,
+      ),
+      const HeatLoadBar(name: '模组', value: null, threshold: null),
+    ];
   }
 }
 

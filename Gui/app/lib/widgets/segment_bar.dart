@@ -32,8 +32,8 @@ class SegmentBar extends StatelessWidget {
   /// Gap between segments (`--seg-gap`, measured 2px).
   static const double segmentGap = 2;
 
-  /// Alpha of the lit-segment halo (v3: a weak same-hue glow).
-  static const double glowAlpha = 0.22;
+  /// Alpha of the lit-segment halo (v4: a weak same-hue glow).
+  static const double glowAlpha = 0.12;
 
   /// Number of lit segments for [value01]: rounds, then clamps.
   static int litCount(double value01, int segments) =>

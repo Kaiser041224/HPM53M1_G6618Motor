@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import 'bottom_bar.dart';
+import 'encoder_zone.dart';
 import 'param_zone.dart';
 import 'scope_zone.dart';
 import 'status_zone.dart';
@@ -28,6 +29,8 @@ class SinglePage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   StatusZone(state: state),
+                  const SizedBox(height: 24),
+                  EncoderZone(state: state),
                   const SizedBox(height: 24),
                   ScopeZone(state: state),
                   const SizedBox(height: 24),

@@ -5,6 +5,7 @@ import 'package:g6618_gui/main.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/bottom_bar.dart';
+import 'package:g6618_gui/ui/encoder_zone.dart';
 import 'package:g6618_gui/ui/single_page.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
 
@@ -16,6 +17,7 @@ void main() {
 
     expect(find.byType(SinglePage), findsOneWidget);
     expect(find.byType(TopBar), findsOneWidget);
+    expect(find.byType(EncoderZone), findsOneWidget);
     expect(find.byType(BottomBar), findsOneWidget);
     expect(find.text('DEVICE ID PENDING'), findsOneWidget);
 
