@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'bridge/frb/api.dart' as frb;
 import 'bridge/frb/frb_generated.dart';
 import 'state/app_state.dart';
+import 'theme/gui_theme.dart';
 import 'ui/shell.dart';
-import 'ui/theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
