@@ -110,6 +110,26 @@ class AppState extends ChangeNotifier {
   /// Last device status snapshot, refreshed by [refreshStatus].
   frb.StatusDto? status;
 
+  /// Oldest-first ring buffer of the last [statusHistoryLimit] status
+  /// snapshots, pushed by the 500 ms poll on success. Drives the ScopeZone
+  /// trend chart — a polled 2 Hz preview, not the reserved 25 kHz
+  /// `STREAM_SUB` stream. Cleared on [disconnect].
+  final List<frb.StatusDto> statusHistory = [];
+
+  /// Maximum plotted samples (60 ≈ 30 s at the 500 ms poll), matching
+  /// `TrendChart.capacity`.
+  static const int statusHistoryLimit = 60;
+
+  /// Appends [snapshot] to [statusHistory], dropping the oldest sample once
+  /// the buffer exceeds [statusHistoryLimit].
+  @visibleForTesting
+  void recordHistory(frb.StatusDto snapshot) {
+    statusHistory.add(snapshot);
+    if (statusHistory.length > statusHistoryLimit) {
+      statusHistory.removeRange(0, statusHistory.length - statusHistoryLimit);
+    }
+  }
+
   /// Latched fault bitmask reported alongside [status].
   int latchedFlags = 0;
 
@@ -242,6 +262,7 @@ class AppState extends ChangeNotifier {
   @visibleForTesting
   AppState.test({
     List<frb.ParamMetaDto> metas = const [],
+    List<frb.StatusDto> history = const [],
     this.status,
     this.onCtrl,
     this.connectError,
@@ -255,6 +276,7 @@ class AppState extends ChangeNotifier {
     this.attempts = 0,
     this.rttMs,
   }) : metas = List.of(metas) {
+    statusHistory.addAll(history);
     // Seed freshness from the injected snapshot so tri-state wiring is live in
     // tests: a supplied status means its tiles are current, and a connected
     // session means its counters are known.
@@ -337,6 +359,7 @@ class AppState extends ChangeNotifier {
     try {
       final started = DateTime.now();
       status = await frb.statusGet();
+      recordHistory(status!);
       _updateRtt(DateTime.now().difference(started).inMicroseconds / 1000.0);
       final fault = await frb.faultGet();
       latchedFlags = fault.$2;
@@ -438,6 +461,7 @@ class AppState extends ChangeNotifier {
       rttMs = null;
       status = null;
       latchedFlags = 0;
+      statusHistory.clear();
       _freshAt.clear();
       notifyListeners();
     }

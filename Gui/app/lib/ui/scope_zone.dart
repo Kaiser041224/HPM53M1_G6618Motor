@@ -11,6 +11,7 @@ import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
 import '../widgets/solid_pie.dart';
 import '../widgets/stale_gate.dart' show Freshness;
+import '../widgets/trend_chart.dart';
 import 'panel_title.dart';
 
 /// Semantic label for a single fault bit, extracted read-only from
@@ -71,23 +72,32 @@ class ScopeZone extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        HairlineFrame(
-          key: const Key('scope_curve_frame'),
-          padding: const EdgeInsets.all(10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const Expanded(flex: 2, child: _ScopePlaceholder()),
-              const SizedBox(width: 34),
-              Expanded(
-                flex: 1,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(
+              flex: 2,
+              child: TrendChart(
+                key: const Key('scope_curve_frame'),
+                history: <TrendSample>[
+                  for (final sample in state.statusHistory)
+                    (iU: sample.iU, iV: sample.iV, iW: sample.iW),
+                ],
+                freshness: state.freshnessOf(AppState.statusTileKey('I_U')),
+              ),
+            ),
+            const SizedBox(width: 34),
+            Expanded(
+              flex: 1,
+              child: HairlineFrame(
+                padding: const EdgeInsets.all(10),
                 child: _PhaseSharePanel(
                   key: const Key('phase_share_panel'),
                   state: state,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
         const SizedBox(height: 26),
         Row(
@@ -124,55 +134,6 @@ class ScopeZone extends StatelessWidget {
 int _faultMask(AppState state) => state.latchedFlags != 0
     ? state.latchedFlags
     : (state.status?.faultFlags ?? 0);
-
-/// Grid-backed empty scope frame. The live waveform is intentionally absent:
-/// the firmware answers `STREAM_SUB` with `UNSUPPORTED`.
-class _ScopePlaceholder extends StatelessWidget {
-  const _ScopePlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    return SizedBox(
-      height: 220,
-      child: CustomPaint(
-        painter: _ScopeGridPainter(palette.lineDim),
-        child: Center(
-          child: Text(
-            '曲线波形 · 一级流预留（STREAM_SUB 返回 UNSUPPORTED）',
-            style: scale.body.copyWith(color: palette.fgMute),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Bidirectional 1px grid on the dark cyan line colour (design-system §3.5).
-class _ScopeGridPainter extends CustomPainter {
-  const _ScopeGridPainter(this.color);
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1;
-    const step = 28.0;
-    for (var x = 0.0; x <= size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (var y = 0.0; y <= size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ScopeGridPainter oldDelegate) =>
-      oldDelegate.color != color;
-}
 
 /// Phase-current share: a solid-wedge pie plus a right-hand percentage column.
 ///

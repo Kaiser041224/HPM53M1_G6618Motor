@@ -4,13 +4,13 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 
 /// Minimal status snapshot for freshness-seeding tests.
-StatusDto makeStatus({int faultFlags = 0}) => StatusDto(
+StatusDto makeStatus({int faultFlags = 0, double iU = 0}) => StatusDto(
   faultFlags: faultFlags,
   motorRunning: false,
   motorState: 0,
   freqHz: 0,
   modPct: 0,
-  iU: 0,
+  iU: iU,
   iV: 0,
   iW: 0,
   vbus: 0,
@@ -165,6 +165,42 @@ void main() {
       );
 
       expect(state.staleStatusTiles, <String>['status_tile_I_V']);
+    });
+  });
+
+  group('statusHistory 轮询环形缓冲', () {
+    test('recordHistory 追加样本，超过 60 点丢弃最旧', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      for (var i = 0; i < 65; i++) {
+        state.recordHistory(makeStatus(iU: i.toDouble()));
+      }
+
+      expect(state.statusHistory.length, AppState.statusHistoryLimit);
+      expect(state.statusHistory.first.iU, 5.0);
+      expect(state.statusHistory.last.iU, 64.0);
+    });
+
+    test('AppState.test 可注入 history（默认空）', () {
+      final injected = AppState.test(
+        history: <StatusDto>[makeStatus(iU: 1), makeStatus(iU: 2)],
+      );
+      addTearDown(injected.dispose);
+      expect(injected.statusHistory.length, 2);
+
+      final bare = AppState.test();
+      addTearDown(bare.dispose);
+      expect(bare.statusHistory, isEmpty);
+    });
+
+    test('disconnect 清空 statusHistory', () async {
+      final state = AppState.test(history: <StatusDto>[makeStatus(iU: 1)]);
+      addTearDown(state.dispose);
+
+      await state.disconnect();
+
+      expect(state.statusHistory, isEmpty);
     });
   });
 

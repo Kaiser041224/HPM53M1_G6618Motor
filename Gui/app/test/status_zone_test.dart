@@ -12,6 +12,7 @@ import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/solid_pie.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
+import 'package:g6618_gui/widgets/trend_chart.dart';
 
 /// Bridge-like failure carrying a device error [code] (matches the old
 /// dashboard test's fake so the interlock classification path is exercised).
@@ -350,6 +351,36 @@ void main() {
         findsNothing,
       );
       expect(find.byType(SolidPie), findsNothing);
+    });
+  });
+
+  group('曲线区轮询趋势图', () {
+    testWidgets('ScopeZone 渲染 TrendChart，图注含 2 Hz 轮询与 STREAM_SUB 预留', (
+      tester,
+    ) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      expect(find.byType(TrendChart), findsOneWidget);
+      expect(find.textContaining('轮询'), findsOneWidget);
+      expect(find.textContaining('STREAM_SUB'), findsWidgets);
+    });
+
+    testWidgets('statusHistory 注入后趋势图绘制三通道数据', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(),
+        history: <StatusDto>[makeStatus(iU: 1), makeStatus(iU: 2)],
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      final chart = tester.widget<TrendChart>(find.byType(TrendChart));
+      expect(chart.history, hasLength(2));
+      expect(chart.history.last.iU, 2);
     });
   });
 
