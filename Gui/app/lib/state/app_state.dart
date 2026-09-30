@@ -70,6 +70,25 @@ class AppState extends ChangeNotifier {
   /// Latched fault bitmask reported alongside [status].
   int latchedFlags = 0;
 
+  /// Whether the motor is currently running; false until a status is read.
+  bool get motorRunning => status?.motorRunning ?? false;
+
+  /// Number of latched fault bits currently reported by the device.
+  int get latchedCount {
+    var bits = latchedFlags;
+    var count = 0;
+    while (bits != 0) {
+      count += bits & 1;
+      bits >>= 1;
+    }
+    return count;
+  }
+
+  /// True when the device interlock would accept a COMMIT: the motor is
+  /// stopped and no fault is latched. Mirrors the firmware rule — stop the
+  /// drive and clear latched faults before flushing parameters to flash.
+  bool get commitAllowed => !motorRunning && latchedFlags == 0;
+
   /// NTC over-temperature trip threshold [°C] (`software.fault.ntc_ot_c`).
   ///
   /// Read from the already-loaded parameter table; null when that parameter
