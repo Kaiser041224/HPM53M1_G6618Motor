@@ -8,6 +8,7 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import 'chart_history.dart';
 import 'glow_value.dart';
+import 'gui_button.dart';
 import 'hairline_frame.dart';
 import 'stale_gate.dart';
 import 'status_badge.dart';
@@ -28,11 +29,16 @@ String formatAxisSeconds(double seconds) {
 /// [ChartHistory] ring (60 s at 1 kHz). The viewport shows the newest
 /// [defaultSpanSec] seconds live-tail; the mouse wheel zooms (anchor at the
 /// pointer) within [minSpanSec]..[maxSpanSec], horizontal drag pans into an
-/// inspect window, and a double-tap or the `LIVE` chip snaps back to the tail.
-/// The chart draws a bidirectional dark-cyan grid, a flat thin polyline per
-/// channel (series1/2/3 colours, no glow) and an auto-scaled symmetric y axis
-/// clamped to at least ±1 A. With far more samples than pixels, each channel is
-/// decimated to one min/max pair per pixel column so peaks survive.
+/// inspect window, and a double-tap or the `LIVE` button snaps back to the
+/// tail. The chart draws a bidirectional dark-cyan grid, a flat thin polyline
+/// per channel (series1/2/3 colours, no glow) and an auto-scaled symmetric y
+/// axis clamped to at least ±1 A. With far more samples than pixels, each
+/// channel is decimated to one min/max pair per pixel column so peaks survive.
+///
+/// The same frame carries the control chrome: a logarithmic `SPAN` slider
+/// (`0.5..60 s`), a `−` / `+` / `LIVE` [GuiButton] group with `2s/10s/60s`
+/// presets, and a mouse-following crosshair whose readout is the nearest
+/// [ChartHistory] sample under the pointer.
 class TrendChart extends StatefulWidget {
   const TrendChart({
     super.key,
@@ -64,18 +70,43 @@ class TrendChart extends StatefulWidget {
   /// Plot area height [logical px].
   static const double plotHeight = 200;
 
-  /// Key of the `LIVE` chip that returns the viewport to live-tail.
+  /// Height [logical px] of the bottom control bar sharing the chart frame.
+  static const double controlBarHeight = 36;
+
+  /// One-tap preset spans [s]; each snaps the viewport back to the tail.
+  static const List<double> spanPresets = <double>[2, 10, 60];
+
+  /// Key of the plot area (hover / cursor hit region).
+  static const Key plotKey = Key('trend_plot');
+
+  /// Key of the logarithmic span slider.
+  static const Key spanSliderKey = Key('trend_span_slider');
+
+  /// Key of the `−` (span×2) button.
+  static const Key zoomOutKey = Key('trend_zoom_out');
+
+  /// Key of the `+` (span÷2) button.
+  static const Key zoomInKey = Key('trend_zoom_in');
+
+  /// Key of the `LIVE` button that returns the viewport to live-tail.
   static const Key liveKey = Key('trend_live_chip');
+
+  /// Key of the hover crosshair readout panel.
+  static const Key readoutKey = Key('trend_cursor_readout');
 
   @override
   State<TrendChart> createState() => TrendChartState();
 }
 
-/// Viewport model for [TrendChart]: span, inspect anchor and gesture handling.
+/// Viewport model for [TrendChart]: span, inspect anchor, cursor and gestures.
 class TrendChartState extends State<TrendChart> {
   double _viewSpanSec = TrendChart.defaultSpanSec;
   double _anchorSec = 0;
   double _plotWidth = 0;
+
+  /// Crosshair position as a normalized fraction of the plot area, or null
+  /// while the pointer is outside.
+  Offset? _cursor;
 
   /// Current viewport width [s], clamped to [TrendChart.minSpanSec]..[maxSpanSec].
   @visibleForTesting
@@ -90,12 +121,47 @@ class TrendChartState extends State<TrendChart> {
   @visibleForTesting
   bool get isLive => _anchorSec == 0;
 
+  /// Normalized crosshair position, or null while hidden.
+  @visibleForTesting
+  Offset? get cursorFraction => _cursor;
+
   double get _lastTime => widget.history.lastTime;
 
   double get _maxAnchor => math.max(0.0, TrendChart.maxSpanSec - _viewSpanSec);
 
   /// Snaps back to the live tail.
   void goLive() => setState(() => _anchorSec = 0);
+
+  /// Sets the viewport span [s], clamped to the zoom limits. Anchored at the
+  /// viewport centre while inspecting; a live viewport stays live.
+  @visibleForTesting
+  void setSpanSec(double seconds) => _applySpan(seconds);
+
+  /// Zoom out one click (`−`: span ×2, clamped to [TrendChart.maxSpanSec]).
+  void zoomOut() => _applySpan(_viewSpanSec * 2);
+
+  /// Zoom in one click (`+`: span ÷2, clamped to [TrendChart.minSpanSec]).
+  void zoomIn() => _applySpan(_viewSpanSec / 2);
+
+  /// Applies a new span, clamped to the zoom limits. [forceLive] also snaps
+  /// back to the tail (used by the presets).
+  void _applySpan(double raw, {bool forceLive = false}) {
+    final newSpan = raw
+        .clamp(TrendChart.minSpanSec, TrendChart.maxSpanSec)
+        .toDouble();
+    setState(() {
+      if (forceLive || _anchorSec == 0) {
+        _viewSpanSec = newSpan;
+        _anchorSec = 0;
+        return;
+      }
+      final centre = _lastTime - _anchorSec - _viewSpanSec / 2;
+      final newEnd = centre + newSpan / 2;
+      _viewSpanSec = newSpan;
+      final maxAnchor = math.max(0.0, TrendChart.maxSpanSec - newSpan);
+      _anchorSec = (_lastTime - newEnd).clamp(0.0, maxAnchor);
+    });
+  }
 
   /// Pans the viewport: dragging right reveals older samples.
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
@@ -128,6 +194,23 @@ class TrendChartState extends State<TrendChart> {
     });
   }
 
+  /// Updates the crosshair from a pointer position local to the plot area.
+  void _updateCursor(Offset local) {
+    if (_plotWidth <= 0) return;
+    final next = Offset(
+      (local.dx / _plotWidth).clamp(0.0, 1.0),
+      (local.dy / TrendChart.plotHeight).clamp(0.0, 1.0),
+    );
+    if (_cursor == next) return;
+    setState(() => _cursor = next);
+  }
+
+  /// Hides the crosshair when the pointer leaves the plot area.
+  void _clearCursor() {
+    if (_cursor == null) return;
+    setState(() => _cursor = null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
@@ -143,6 +226,14 @@ class TrendChartState extends State<TrendChart> {
     final lastV = len == 0 ? null : history.channelAt(1, len - 1);
     final lastW = len == 0 ? null : history.channelAt(2, len - 1);
 
+    final cursor = _cursor;
+    final readoutIndex = (cursor != null && hasData)
+        ? TrendChartPainter.nearestIndex(
+            history,
+            viewStart + cursor.dx * _viewSpanSec,
+          )
+        : -1;
+
     return HairlineFrame(
       variant: HairlineVariant.main,
       padding: const EdgeInsets.all(10),
@@ -150,44 +241,66 @@ class TrendChartState extends State<TrendChart> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           SizedBox(
+            key: TrendChart.plotKey,
             height: TrendChart.plotHeight,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 _plotWidth = constraints.maxWidth;
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
-                  onDoubleTap: goLive,
-                  child: Listener(
-                    onPointerSignal: _onPointerSignal,
-                    child: Stack(
-                      children: <Widget>[
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: TrendChartPainter(
-                              history: history,
-                              colors: <Color>[
-                                palette.series1,
-                                palette.series2,
-                                palette.series3,
-                              ],
-                              gridColor: palette.lineDim,
-                              viewStartSec: viewStart,
-                              viewSpanSec: _viewSpanSec,
-                            ),
-                          ),
-                        ),
-                        if (!hasData)
-                          Center(
-                            child: Text(
-                              '—',
-                              style: scale.data.copyWith(
-                                color: palette.fgMute,
-                                shadows: const <Shadow>[],
+                return MouseRegion(
+                  onHover: (event) => _updateCursor(event.localPosition),
+                  onExit: (_) => _clearCursor(),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                    onDoubleTap: goLive,
+                    child: Listener(
+                      onPointerSignal: _onPointerSignal,
+                      onPointerDown: (event) =>
+                          _updateCursor(event.localPosition),
+                      onPointerMove: (event) =>
+                          _updateCursor(event.localPosition),
+                      child: Stack(
+                        children: <Widget>[
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: TrendChartPainter(
+                                history: history,
+                                colors: <Color>[
+                                  palette.series1,
+                                  palette.series2,
+                                  palette.series3,
+                                ],
+                                gridColor: palette.lineDim,
+                                viewStartSec: viewStart,
+                                viewSpanSec: _viewSpanSec,
+                                cursor: cursor,
+                                cursorColor: palette.fgDim,
                               ),
                             ),
                           ),
-                      ],
+                          if (!hasData)
+                            Center(
+                              child: Text(
+                                '—',
+                                style: scale.data.copyWith(
+                                  color: palette.fgMute,
+                                  shadows: const <Shadow>[],
+                                ),
+                              ),
+                            ),
+                          if (cursor != null)
+                            Positioned(
+                              top: 6,
+                              right: 6,
+                              child: _readout(
+                                palette,
+                                scale,
+                                history,
+                                readoutIndex,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -222,12 +335,6 @@ class TrendChartState extends State<TrendChart> {
                 const StatusBadge(state: ItemState.stale, label: 'stale'),
                 const SizedBox(width: 8),
               ],
-              _LiveChip(
-                live: isLive,
-                onTap: goLive,
-                palette: palette,
-                scale: scale,
-              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -240,8 +347,120 @@ class TrendChartState extends State<TrendChart> {
               _legend(context, palette, scale, 'W', palette.series3, lastW),
             ],
           ),
+          const SizedBox(height: 10),
+          _controlBar(palette, scale),
         ],
       ),
+    );
+  }
+
+  /// The bottom control bar: `SPAN` slider, readout, presets and `− + LIVE`.
+  Widget _controlBar(GuiPalette palette, GuiTypeScale scale) {
+    return SizedBox(
+      height: TrendChart.controlBarHeight,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          Text('SPAN', style: scale.label),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _SpanSlider(
+              key: TrendChart.spanSliderKey,
+              value: _viewSpanSec,
+              min: TrendChart.minSpanSec,
+              max: TrendChart.maxSpanSec,
+              onChanged: _applySpan,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            formatAxisSeconds(_viewSpanSec),
+            style: scale.data.copyWith(
+              fontSize: 12,
+              color: palette.valueAmber,
+              shadows: const <Shadow>[],
+            ),
+          ),
+          const SizedBox(width: 14),
+          for (final preset in TrendChart.spanPresets) ...<Widget>[
+            GuiButton(
+              label: formatAxisSeconds(preset),
+              onPressed: () => _applySpan(preset, forceLive: true),
+            ),
+            const SizedBox(width: 6),
+          ],
+          GuiButton(key: TrendChart.zoomOutKey, label: '−', onPressed: zoomOut),
+          const SizedBox(width: 6),
+          GuiButton(key: TrendChart.zoomInKey, label: '+', onPressed: zoomIn),
+          const SizedBox(width: 6),
+          GuiButton(
+            key: TrendChart.liveKey,
+            label: 'LIVE',
+            variant: isLive ? GuiButtonVariant.normal : GuiButtonVariant.primary,
+            onPressed: isLive ? null : goLive,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The crosshair readout: `t` relative to the newest sample plus the nearest
+  /// `U/V/W` sample. Shows `—` when the window holds no sample.
+  Widget _readout(
+    GuiPalette palette,
+    GuiTypeScale scale,
+    ChartHistory history,
+    int index,
+  ) {
+    final live = index >= 0;
+    final offset = live ? history.lastTime - history.timeAt(index) : 0.0;
+    return HairlineFrame(
+      key: TrendChart.readoutKey,
+      variant: HairlineVariant.sub,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            live ? 't = −${offset.toStringAsFixed(2)} s' : 't = —',
+            style: scale.label.copyWith(color: palette.valueAmber),
+          ),
+          const SizedBox(height: 4),
+          _readoutChannel(palette, scale, 'U', palette.series1, history, index, 0),
+          _readoutChannel(palette, scale, 'V', palette.series2, history, index, 1),
+          _readoutChannel(palette, scale, 'W', palette.series3, history, index, 2),
+        ],
+      ),
+    );
+  }
+
+  Widget _readoutChannel(
+    GuiPalette palette,
+    GuiTypeScale scale,
+    String name,
+    Color color,
+    ChartHistory history,
+    int index,
+    int channel,
+  ) {
+    final value = index < 0
+        ? '—'
+        : history.channelAt(channel, index).toStringAsFixed(3);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Text(name, style: scale.label.copyWith(color: color)),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          style: scale.data.copyWith(
+            fontSize: 11,
+            color: palette.fgStrong,
+            shadows: const <Shadow>[],
+          ),
+        ),
+      ],
     );
   }
 
@@ -266,41 +485,123 @@ class TrendChartState extends State<TrendChart> {
   }
 }
 
-/// The `LIVE` chip: tapping it snaps the viewport back to the live tail.
-class _LiveChip extends StatelessWidget {
-  const _LiveChip({
-    required this.live,
-    required this.onTap,
-    required this.palette,
-    required this.scale,
+/// Logarithmic span slider in the TNO muted vocabulary: a 3px track (lineDim
+/// base / accent active segment) and a square 14×20 thumb (bgPanel fill with a
+/// 1.5px accent border, no glow). Its position maps logarithmically onto
+/// `[min, max]`, so every octave of the `0.5..60 s` range gets equal travel.
+class _SpanSlider extends StatelessWidget {
+  const _SpanSlider({
+    super.key,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
   });
 
-  final bool live;
-  final VoidCallback onTap;
-  final GuiPalette palette;
-  final GuiTypeScale scale;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+
+  double _spanFor(double fraction) {
+    final lo = math.log(min);
+    final hi = math.log(max);
+    return math.exp(lo + fraction.clamp(0.0, 1.0) * (hi - lo));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final color = live ? palette.accent : palette.fgDim;
-    return GestureDetector(
-      key: TrendChart.liveKey,
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          border: Border.all(color: color),
-        ),
-        child: Text('LIVE', style: scale.label.copyWith(color: color)),
-      ),
+    final palette = GuiPalette.of(context);
+    final lo = math.log(min);
+    final hi = math.log(max);
+    final fraction = ((math.log(value) - lo) / (hi - lo)).clamp(0.0, 1.0);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        void setFrom(double dx) {
+          if (width <= 0) return;
+          onChanged(_spanFor(dx / width));
+        }
+
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) => setFrom(details.localPosition.dx),
+            onHorizontalDragStart: (details) =>
+                setFrom(details.localPosition.dx),
+            onHorizontalDragUpdate: (details) =>
+                setFrom(details.localPosition.dx),
+            child: SizedBox(
+              width: width,
+              height: 20,
+              child: CustomPaint(
+                painter: _SpanSliderPainter(
+                  fraction: fraction,
+                  palette: palette,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
+/// Paints the [_SpanSlider] track and thumb. Flat lines only — no glow.
+class _SpanSliderPainter extends CustomPainter {
+  _SpanSliderPainter({required this.fraction, required this.palette});
+
+  final double fraction;
+  final GuiPalette palette;
+
+  /// Track weight [px] (design-system thin line).
+  static const double trackWidth = 3;
+
+  /// Thumb size [px]: tall square block, never rounded.
+  static const Size thumbSize = Size(14, 20);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final midY = size.height / 2;
+    final track = Paint()
+      ..color = palette.lineDim
+      ..strokeWidth = trackWidth
+      ..strokeCap = StrokeCap.square;
+    canvas.drawLine(Offset(0, midY), Offset(size.width, midY), track);
+
+    final thumbX = thumbSize.width / 2 + fraction * (size.width - thumbSize.width);
+    final active = Paint()
+      ..color = palette.accent
+      ..strokeWidth = trackWidth
+      ..strokeCap = StrokeCap.square;
+    canvas.drawLine(Offset(0, midY), Offset(thumbX, midY), active);
+
+    final rect = Rect.fromCenter(
+      center: Offset(thumbX, midY),
+      width: thumbSize.width,
+      height: thumbSize.height,
+    );
+    canvas.drawRect(rect, Paint()..color = palette.bgPanel);
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = palette.accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SpanSliderPainter oldDelegate) =>
+      oldDelegate.fraction != fraction || oldDelegate.palette != palette;
+}
+
 /// Paints the 1 kHz trend: a bidirectional grid plus one flat polyline per
 /// channel, with a symmetric auto-scaled y axis (time on x). Each channel is
-/// decimated to one min/max pair per pixel column so peaks survive.
+/// decimated to one min/max pair per pixel column so peaks survive. An optional
+/// mouse-following crosshair is drawn on top.
 class TrendChartPainter extends CustomPainter {
   TrendChartPainter({
     required this.history,
@@ -308,6 +609,8 @@ class TrendChartPainter extends CustomPainter {
     required this.gridColor,
     required this.viewStartSec,
     required this.viewSpanSec,
+    this.cursor,
+    this.cursorColor,
   });
 
   /// Timestamped ring the polyline is sliced from.
@@ -324,6 +627,12 @@ class TrendChartPainter extends CustomPainter {
 
   /// Viewport width [s].
   final double viewSpanSec;
+
+  /// Crosshair position as a normalized fraction of the plot area, or null.
+  final Offset? cursor;
+
+  /// Crosshair colour ([GuiPalette.fgDim]); null hides the crosshair.
+  final Color? cursorColor;
 
   /// Thin line weight (design-system): 1.5px, never scaled for emphasis.
   static const double strokeWidth = 1.5;
@@ -354,6 +663,20 @@ class TrendChartPainter extends CustomPainter {
     return maxAbs < minYLimit ? minYLimit : maxAbs;
   }
 
+  /// Oldest-first index of the sample nearest (in arrival time) to [seconds],
+  /// or -1 when the ring is empty. Shares the [ChartHistory.lowerBoundTime]
+  /// conversion the decimator uses, so cursor and trace agree on the sample.
+  static int nearestIndex(ChartHistory history, double seconds) {
+    final len = history.len;
+    if (len == 0) return -1;
+    final at = history.lowerBoundTime(seconds);
+    if (at <= 0) return 0;
+    if (at >= len) return len - 1;
+    final before = history.timeAt(at - 1);
+    final after = history.timeAt(at);
+    return (seconds - before) <= (after - seconds) ? at - 1 : at;
+  }
+
   /// The per-channel stroke paints; a test seam mirroring [SolidPiePainter].
   List<Paint> buildSeriesPaints() => <Paint>[
     for (final color in colors)
@@ -373,6 +696,7 @@ class TrendChartPainter extends CustomPainter {
     for (var channel = 0; channel < colors.length; channel++) {
       _paintSeries(canvas, channel, size, paints[channel], limit);
     }
+    _paintCrosshair(canvas, size);
   }
 
   void _paintGrid(Canvas canvas, Size size) {
@@ -385,6 +709,28 @@ class TrendChartPainter extends CustomPainter {
     for (var y = 0.0; y <= size.height; y += gridStep) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
+  }
+
+  /// Draws the mouse-following crosshair: a dashed 1px vertical (fgDim) and a
+  /// weaker 1px horizontal guide.
+  void _paintCrosshair(Canvas canvas, Size size) {
+    final at = cursor;
+    final color = cursorColor;
+    if (at == null || color == null) return;
+    final x = at.dx * size.width;
+    final y = at.dy * size.height;
+    final vertical = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    const dash = 4.0;
+    for (var start = 0.0; start < size.height; start += dash * 2) {
+      final end = math.min(start + dash, size.height);
+      canvas.drawLine(Offset(x, start), Offset(x, end), vertical);
+    }
+    final horizontal = Paint()
+      ..color = color.withValues(alpha: 0.5)
+      ..strokeWidth = 1;
+    canvas.drawLine(Offset(0, y), Offset(size.width, y), horizontal);
   }
 
   /// Decimates one channel over the viewport to at most one min/max pair per
@@ -478,6 +824,8 @@ class TrendChartPainter extends CustomPainter {
     if (!listEquals(oldDelegate.colors, colors)) return true;
     if (oldDelegate.viewStartSec != viewStartSec) return true;
     if (oldDelegate.viewSpanSec != viewSpanSec) return true;
+    if (oldDelegate.cursor != cursor) return true;
+    if (oldDelegate.cursorColor != cursorColor) return true;
     if (oldDelegate.history.version != history.version) return true;
     return false;
   }

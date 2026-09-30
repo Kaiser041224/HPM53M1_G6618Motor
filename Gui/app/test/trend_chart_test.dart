@@ -200,8 +200,9 @@ void main() {
       expect(find.text(TrendChart.caption), findsOneWidget);
       expect(find.textContaining('1 kHz 采样'), findsOneWidget);
       expect(find.textContaining('一级流预留'), findsOneWidget);
-      // Time axis: live-tail 2 s window, 1 s midpoint, now.
-      expect(find.text('2s'), findsOneWidget);
+      // Time axis: live-tail 2 s window, 1 s midpoint, now. `2s` also appears
+      // on the SPAN readout and the 2s preset, so match at least one.
+      expect(find.text('2s'), findsWidgets);
       expect(find.text('1s'), findsOneWidget);
       expect(find.text('0'), findsOneWidget);
       expect(find.text('U'), findsOneWidget);
@@ -281,6 +282,130 @@ void main() {
       await tester.sendEventToBinding(pointer.scroll(const Offset(0, 5000)));
       await tester.pump();
       expect(state.viewSpanSec, closeTo(60.0, 1e-9));
+    });
+  });
+
+  group('TrendChart 控制件', () {
+    testWidgets('SPAN 滑块存在：程序化设值生效并钳位 0.5..60', (tester) async {
+      await _pump(tester, TrendChart(history: _history(3000)));
+      final state = _state(tester);
+
+      expect(find.byKey(TrendChart.spanSliderKey), findsOneWidget);
+
+      state.setSpanSec(10);
+      await tester.pump();
+      expect(state.viewSpanSec, 10.0);
+
+      state.setSpanSec(1000);
+      await tester.pump();
+      expect(state.viewSpanSec, 60.0);
+
+      state.setSpanSec(0.01);
+      await tester.pump();
+      expect(state.viewSpanSec, 0.5);
+    });
+
+    testWidgets('− / + 按钮 span×2 / ÷2 并钳位', (tester) async {
+      await _pump(tester, TrendChart(history: _history(3000)));
+      final state = _state(tester);
+      expect(state.viewSpanSec, 2.0);
+
+      await tester.tap(find.byKey(TrendChart.zoomInKey));
+      await tester.pump();
+      expect(state.viewSpanSec, 1.0);
+
+      await tester.tap(find.byKey(TrendChart.zoomInKey));
+      await tester.pump();
+      expect(state.viewSpanSec, 0.5);
+
+      await tester.tap(find.byKey(TrendChart.zoomInKey));
+      await tester.pump();
+      expect(state.viewSpanSec, 0.5);
+
+      for (var i = 0; i < 10; i++) {
+        await tester.tap(find.byKey(TrendChart.zoomOutKey));
+        await tester.pump();
+      }
+      expect(state.viewSpanSec, 60.0);
+    });
+
+    testWidgets('预设 60s 设 span 并回尾', (tester) async {
+      await _pump(tester, TrendChart(history: _history(3000)));
+      final state = _state(tester);
+
+      await tester.drag(find.byType(TrendChart), const Offset(120, 0));
+      await tester.pump();
+      expect(state.isLive, isFalse);
+
+      await tester.tap(find.text('60s'));
+      await tester.pump();
+      expect(state.viewSpanSec, 60.0);
+      expect(state.isLive, isTrue);
+
+      await tester.pump(const Duration(milliseconds: 350));
+    });
+
+    testWidgets('LIVE 按钮：inspect → live', (tester) async {
+      await _pump(tester, TrendChart(history: _history(3000)));
+      final state = _state(tester);
+
+      await tester.drag(find.byType(TrendChart), const Offset(120, 0));
+      await tester.pump();
+      expect(state.anchorSec, greaterThan(0));
+
+      await tester.tap(find.byKey(TrendChart.liveKey));
+      await tester.pump();
+      expect(state.anchorSec, 0.0);
+      expect(state.isLive, isTrue);
+
+      await tester.pump(const Duration(milliseconds: 350));
+    });
+  });
+
+  group('TrendChart 十字光标', () {
+    testWidgets('悬停显示读数（t + U/V/W 最近样本），离开隐藏', (tester) async {
+      final history = ChartHistory(sampleRateHz: 1)
+        ..pushBatch(<StatusDto>[
+          _sample(iU: 5, iV: -5, iW: 2.5),
+          _sample(iU: 10, iV: -10, iW: 5),
+          _sample(iU: 15, iV: -15, iW: 7.5),
+          _sample(iU: 20, iV: -20, iW: 10),
+          _sample(iU: 25, iV: -25, iW: 12.5),
+        ]);
+      await _pump(tester, TrendChart(history: history));
+
+      expect(find.byKey(TrendChart.readoutKey), findsNothing);
+
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      addTearDown(gesture.removePointer);
+      final rect = tester.getRect(find.byKey(TrendChart.plotKey));
+      // Centre of the live-tail 2 s window = t 3.0 s → nearest sample index 3.
+      await gesture.moveTo(rect.center);
+      await tester.pump();
+
+      final readout = find.byKey(TrendChart.readoutKey);
+      expect(readout, findsOneWidget);
+      expect(
+        find.descendant(of: readout, matching: find.text('t = −1.00 s')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: readout, matching: find.text('20.000')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: readout, matching: find.text('-20.000')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: readout, matching: find.text('10.000')),
+        findsOneWidget,
+      );
+
+      await gesture.moveTo(const Offset(0, 0));
+      await tester.pump();
+      expect(find.byKey(TrendChart.readoutKey), findsNothing);
     });
   });
 }

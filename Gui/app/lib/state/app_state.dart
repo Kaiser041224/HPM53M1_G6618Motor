@@ -12,9 +12,11 @@ export '../bridge/frb/api.dart'
     show ParamMetaDto, ParamValueDto, StatusBatchDto, StatusDto, StatsDto;
 
 /// UI refresh ceiling for batched telemetry [Hz]: the coalescing timer fires
-/// every `1000 / kUiRefreshHz` ms, so at most this many notifications per
-/// second reach the widget tree no matter how fast batches arrive.
-const int kUiRefreshHz = 100;
+/// every `1000 / kUiRefreshHz` ms (40 ms at 25 Hz), so at most this many
+/// notifications per second reach the widget tree no matter how fast batches
+/// arrive. The 1 kHz sample feed still lands in [AppState.chartHistory] in
+/// full; only the repaint cadence is throttled.
+const int kUiRefreshHz = 25;
 
 /// App-wide observable state.
 ///
