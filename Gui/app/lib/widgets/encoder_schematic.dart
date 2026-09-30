@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
@@ -15,6 +16,23 @@ double dialRadians(double deg) => (deg - 90) * math.pi / 180;
 Offset pointerTip(Offset center, double radius, double deg) {
   final radians = dialRadians(deg);
   return center + Offset(math.cos(radians), math.sin(radians)) * radius;
+}
+
+/// Fraction of a measured angle delta that feeds the display pointer.
+///
+/// The dials are a *perceptual* readout — turn direction and a sense of speed,
+/// not the literal crank angle — so a full measured revolution only nudges the
+/// display pointer a twentieth of the way around.
+const double kPointerSpeedScale = 0.05;
+
+/// Ceiling on how fast a display pointer may advance [°/s].
+const double kPointerMaxDps = 180;
+
+/// Wraps a raw angle difference onto the shortest arc, in `(-180, 180]`.
+double shortestArcDeg(double delta) {
+  var wrapped = delta % 360;
+  if (wrapped > 180) wrapped -= 360;
+  return wrapped;
 }
 
 /// Tooth counts of the meshing gear pair for a reduction ratio [ratioLabel].
@@ -95,18 +113,48 @@ class EncoderSchematic extends StatefulWidget {
   static const Key ratioLabelKey = Key('encoder_ratio_label');
 
   @override
-  State<EncoderSchematic> createState() => _EncoderSchematicState();
+  State<EncoderSchematic> createState() => EncoderSchematicState();
 }
 
-/// Drives the meshing gear pair's rotation and hosts the painting.
+/// One dial pointer's perceptual integrator: the accumulated target angle the
+/// display is converging on, the currently rendered angle, and the last raw
+/// reading used to derive a delta.
+class _PointerState {
+  double? target;
+  double? display;
+  double? last;
+}
+
+/// Drives the meshing gear pair's rotation, integrates the perceptual dial
+/// pointers and hosts the painting.
 ///
 /// The input wheel turns at a constant visual speed (one revolution per
 /// [_inputWheelTurnPeriod]); the output wheel follows the meshing-coupled
-/// reversal. The animation is a pure painting concern — the dials and their
-/// pointers still track the measured angles.
-class _EncoderSchematicState extends State<EncoderSchematic>
-    with SingleTickerProviderStateMixin {
+/// reversal. Independently, each dial pointer accumulates
+/// `Δ × [kPointerSpeedScale]` of the measured angle change per frame, clamped
+/// to [kPointerMaxDps] and lerped 25% toward that target — a *direction and
+/// trend* cue, not a literal crank readout. A `null` reading freezes the
+/// pointer honestly; the data columns elsewhere stay exact.
+class EncoderSchematicState extends State<EncoderSchematic>
+    with TickerProviderStateMixin {
   late final AnimationController _rotation;
+  late final Ticker _pointerTicker;
+
+  final _PointerState _rotorPointer = _PointerState();
+  final _PointerState _outputPointer = _PointerState();
+  Duration _lastTick = Duration.zero;
+
+  /// Lerp fraction applied to each pointer per animation frame.
+  @visibleForTesting
+  static const double pointerLerp = 0.25;
+
+  /// Current rendered rotor pointer angle [°]; null until the first reading.
+  @visibleForTesting
+  double? get displayRotorDeg => _rotorPointer.display;
+
+  /// Current rendered output pointer angle [°]; null until the first reading.
+  @visibleForTesting
+  double? get displayOutputDeg => _outputPointer.display;
 
   @override
   void initState() {
@@ -115,13 +163,33 @@ class _EncoderSchematicState extends State<EncoderSchematic>
       vsync: this,
       duration: _inputWheelTurnPeriod,
     );
+    _pointerTicker = createTicker(_onPointerTick);
+    _seedPointers();
     _syncRotation();
+    _syncTicker();
   }
 
   @override
   void didUpdateWidget(covariant EncoderSchematic oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _seedPointers();
     _syncRotation();
+    _syncTicker();
+  }
+
+  /// Snaps a never-rendered pointer directly to the current reading, so the
+  /// first frame paints at the measured angle instead of 0°.
+  void _seedPointers() {
+    _seedPointer(_rotorPointer, widget.rotorDeg);
+    _seedPointer(_outputPointer, widget.outputDeg);
+  }
+
+  void _seedPointer(_PointerState pointer, double? reading) {
+    if (pointer.display == null && reading != null) {
+      pointer.display = reading;
+      pointer.target = reading;
+      pointer.last = reading;
+    }
   }
 
   /// Runs the pair while the rotor is live; honest-stops it on `null`.
@@ -136,8 +204,59 @@ class _EncoderSchematicState extends State<EncoderSchematic>
     }
   }
 
+  /// Runs the pointer integrator while either dial is live.
+  void _syncTicker() {
+    final live = widget.rotorDeg != null || widget.outputDeg != null;
+    if (live && !_pointerTicker.isActive) {
+      _lastTick = Duration.zero;
+      _pointerTicker.start();
+    } else if (!live && _pointerTicker.isActive) {
+      _pointerTicker.stop();
+    }
+  }
+
+  /// Advances both dial pointers for one animation frame.
+  ///
+  /// [elapsed] is measured from the ticker start; the per-frame `dt` is clamped
+  /// so a scheduler hiccup cannot inject an unbounded jump.
+  void _onPointerTick(Duration elapsed) {
+    final dt =
+        ((elapsed - _lastTick).inMicroseconds / Duration.microsecondsPerSecond)
+            .clamp(0.0, 0.1);
+    _lastTick = elapsed;
+    _advancePointer(_rotorPointer, widget.rotorDeg, dt);
+    _advancePointer(_outputPointer, widget.outputDeg, dt);
+    if (mounted) setState(() {});
+  }
+
+  /// Integrates one pointer from its measured [reading] over [dt] seconds.
+  ///
+  /// A `null` reading freezes the display in place (and forgets the last
+  /// reading so a stale → live transition re-snaps rather than lurching). The
+  /// first-ever reading snaps the display to the measured angle.
+  void _advancePointer(_PointerState pointer, double? reading, double dt) {
+    if (reading == null) {
+      pointer.last = null;
+      return;
+    }
+    final last = pointer.last;
+    if (pointer.display == null || last == null) {
+      pointer.last = reading;
+      pointer.display = reading;
+      pointer.target = reading;
+      return;
+    }
+    final delta = shortestArcDeg(reading - last);
+    pointer.last = reading;
+    final maxStep = kPointerMaxDps * dt;
+    final advance = (delta * kPointerSpeedScale).clamp(-maxStep, maxStep);
+    pointer.target = pointer.target! + advance;
+    pointer.display = pointer.display! + (pointer.target! - pointer.display!) * pointerLerp;
+  }
+
   @override
   void dispose() {
+    _pointerTicker.dispose();
     _rotation.dispose();
     super.dispose();
   }
@@ -218,8 +337,8 @@ class _EncoderSchematicState extends State<EncoderSchematic>
                     );
                     return CustomPaint(
                       painter: EncoderSchematicPainter(
-                        rotorDeg: widget.rotorDeg,
-                        outputDeg: widget.outputDeg,
+                        rotorDeg: _rotorPointer.display,
+                        outputDeg: _outputPointer.display,
                         ratioLabel: widget.ratioLabel,
                         inputAngleDeg: inputAngleDeg,
                         outputGearAngleDeg: coupledOutputGearAngleDeg(
@@ -295,10 +414,12 @@ class EncoderSchematicPainter extends CustomPainter {
     required this.glowSoft,
   });
 
-  /// Rotor angle [°]; null parks the pointer at 12 o'clock.
+  /// Rotor *display* pointer angle [°] (scaled/lerped for perception); null
+  /// parks the pointer at 12 o'clock.
   final double? rotorDeg;
 
-  /// Output-shaft angle [°]; null parks the pointer at 12 o'clock.
+  /// Output-shaft *display* pointer angle [°]; null parks the pointer at
+  /// 12 o'clock.
   final double? outputDeg;
 
   /// Reduction-ratio label, mirrored into the gear tooth counts.

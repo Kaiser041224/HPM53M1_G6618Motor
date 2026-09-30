@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/bridge/frb/api.dart';
 import 'package:g6618_gui/state/app_state.dart';
+import 'package:g6618_gui/widgets/chart_history.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 
 /// Minimal status snapshot for freshness-seeding tests.
@@ -183,19 +184,19 @@ void main() {
     });
   });
 
-  group('statusHistory 1kHz 环形缓冲', () {
-    test('recordHistory 追加样本，超过 2000 点丢弃最旧', () {
+  group('chartHistory 60s 环形历史', () {
+    test('recordHistory 追加样本，超过 60k 丢弃最旧', () {
       final state = AppState.test();
       addTearDown(state.dispose);
 
-      for (var i = 0; i < 2005; i++) {
+      for (var i = 0; i < 60005; i++) {
         state.recordHistory(makeStatus(iU: i.toDouble()));
       }
 
-      expect(state.statusHistory.length, AppState.statusHistoryLimit);
-      expect(AppState.statusHistoryLimit, 2000);
-      expect(state.statusHistory.first.iU, 5.0);
-      expect(state.statusHistory.last.iU, 2004.0);
+      expect(state.chartHistory.len, ChartHistory.capacity);
+      expect(ChartHistory.capacity, 60000);
+      expect(state.chartHistory.channelAt(0, 0), 5.0);
+      expect(state.chartHistory.channelAt(0, state.chartHistory.len - 1), 60004.0);
     });
 
     test('AppState.test 可注入 history（默认空）', () {
@@ -203,20 +204,21 @@ void main() {
         history: <StatusDto>[makeStatus(iU: 1), makeStatus(iU: 2)],
       );
       addTearDown(injected.dispose);
-      expect(injected.statusHistory.length, 2);
+      expect(injected.chartHistory.len, 2);
+      expect(injected.chartHistory.channelAt(0, 1), 2.0);
 
       final bare = AppState.test();
       addTearDown(bare.dispose);
-      expect(bare.statusHistory, isEmpty);
+      expect(bare.chartHistory.isEmpty, isTrue);
     });
 
-    test('disconnect 清空 statusHistory', () async {
+    test('disconnect 清空 chartHistory', () async {
       final state = AppState.test(history: <StatusDto>[makeStatus(iU: 1)]);
       addTearDown(state.dispose);
 
       await state.disconnect();
 
-      expect(state.statusHistory, isEmpty);
+      expect(state.chartHistory.isEmpty, isTrue);
     });
   });
 
@@ -236,27 +238,54 @@ void main() {
         ),
       );
 
-      expect(state.statusHistory, hasLength(3));
+      expect(state.chartHistory.len, 3);
       expect(state.status!.iU, 3);
     });
 
-    test('每批仅一次 notifyListeners（不逐样本通知）', () {
+    testWidgets('UI 刷新节流：5ms 内喂 10 批 → notify ≤ 2 次', (tester) async {
       final state = AppState.test();
-      addTearDown(state.dispose);
+      var notifies = 0;
+      state.addListener(() => notifies++);
+
+      for (var b = 0; b < 10; b++) {
+        state.feedBatch(
+          StatusBatchDto(
+            samples: <StatusDto>[
+              for (var i = 0; i < 16; i++) makeStatus(iU: i.toDouble()),
+            ],
+            seq: BigInt.from(b + 1),
+          ),
+        );
+      }
+
+      // Data within the batch is applied immediately ...
+      expect(state.chartHistory.len, 160);
+      // ... but notifications are coalesced onto the 100 Hz (10 ms) tick.
+      await tester.pump(const Duration(milliseconds: 5));
+      expect(notifies, lessThanOrEqualTo(2));
+
+      // Dispose inside the body: the pending periodic timer would otherwise
+      // trip the widget tester's end-of-test timer check.
+      state.dispose();
+    });
+
+    testWidgets('批次通知最终送达（10ms 一次）', (tester) async {
+      final state = AppState.test();
       var notifies = 0;
       state.addListener(() => notifies++);
 
       state.feedBatch(
         StatusBatchDto(
-          samples: <StatusDto>[
-            for (var i = 0; i < 16; i++) makeStatus(iU: i.toDouble()),
-          ],
-          seq: BigInt.from(1),
+          samples: <StatusDto>[makeStatus(iU: 1)],
+          seq: BigInt.one,
         ),
       );
+      expect(notifies, 0);
 
-      expect(notifies, 1);
-      expect(state.statusHistory, hasLength(16));
+      await tester.pump(const Duration(milliseconds: 11));
+      expect(notifies, greaterThanOrEqualTo(1));
+
+      state.dispose();
     });
 
     test('seq 非连续时计数丢批，连续则不计', () {
@@ -297,7 +326,7 @@ void main() {
       expect(state.freshnessOf(AppState.statusTileKey('I_U')), Freshness.live);
 
       await state.disconnect();
-      expect(state.statusHistory, isEmpty);
+      expect(state.chartHistory.isEmpty, isTrue);
       expect(state.droppedBatches, 0);
     });
   });

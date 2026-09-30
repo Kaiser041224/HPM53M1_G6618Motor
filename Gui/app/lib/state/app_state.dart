@@ -3,12 +3,18 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../bridge/frb/api.dart' as frb;
+import '../widgets/chart_history.dart';
 import '../widgets/stale_gate.dart' show Freshness;
 
 // Re-exported so the UI layer depends only on AppState (ui -> state -> bridge)
 // and never imports the generated bridge code directly.
 export '../bridge/frb/api.dart'
     show ParamMetaDto, ParamValueDto, StatusBatchDto, StatusDto, StatsDto;
+
+/// UI refresh ceiling for batched telemetry [Hz]: the coalescing timer fires
+/// every `1000 / kUiRefreshHz` ms, so at most this many notifications per
+/// second reach the widget tree no matter how fast batches arrive.
+const int kUiRefreshHz = 100;
 
 /// App-wide observable state.
 ///
@@ -114,24 +120,16 @@ class AppState extends ChangeNotifier {
   /// [disconnect].
   frb.StatusDto? status;
 
-  /// Oldest-first ring buffer of the last [statusHistoryLimit] status samples,
-  /// appended once per batch by the 1 kHz watch (≈20 ms batches). Drives the
-  /// ScopeZone trend chart — a 1 kHz, 2 s window preview, not the reserved
+  /// Flat, timestamped 60 s ring of the three phase currents, appended once per
+  /// batch by the 1 kHz watch (≈20 ms batches). Drives the ScopeZone trend
+  /// chart — a 1 kHz, [ChartHistory.capacity]-sample preview, not the reserved
   /// `STREAM_SUB` stream. Cleared on [disconnect].
-  final List<frb.StatusDto> statusHistory = [];
+  final ChartHistory chartHistory = ChartHistory();
 
-  /// Maximum retained samples: 2000 = 2 s at 1 kHz, matching
-  /// `TrendChart.capacity`.
-  static const int statusHistoryLimit = 2000;
-
-  /// Appends [snapshot] to [statusHistory], dropping the oldest sample once
-  /// the buffer exceeds [statusHistoryLimit].
+  /// Appends [snapshot] to [chartHistory].
   @visibleForTesting
   void recordHistory(frb.StatusDto snapshot) {
-    statusHistory.add(snapshot);
-    if (statusHistory.length > statusHistoryLimit) {
-      statusHistory.removeRange(0, statusHistory.length - statusHistoryLimit);
-    }
+    chartHistory.pushBatch(<frb.StatusDto>[snapshot]);
   }
 
   /// Batch seq of the last accepted frame, used for gap detection.
@@ -154,22 +152,49 @@ class AppState extends ChangeNotifier {
   @visibleForTesting
   Stream<frb.StatusBatchDto>? batch;
 
-  /// Applies one device batch: appends every sample to the ring, takes the
-  /// batch's newest sample as [status], counts a seq gap and emits a **single**
-  /// [notifyListeners] for the whole batch (≈50 Hz UI refresh — never one
-  /// notification per sample).
+  /// Applies one device batch: pushes every sample into [chartHistory], takes
+  /// the batch's newest sample as [status], counts a seq gap and marks the UI
+  /// dirty. Notifications are **coalesced** by [_markUiDirty] onto the
+  /// [kUiRefreshHz] tick and never fire once per sample.
   void _applyBatch(frb.StatusBatchDto batch) {
     if (_disposed) return;
-    for (final sample in batch.samples) {
-      recordHistory(sample);
-    }
+    chartHistory.pushBatch(batch.samples);
     if (batch.samples.isNotEmpty) {
       status = batch.samples.last;
       _markFresh(<String>[...statusTileKeys, keyRtt]);
       _clearError();
     }
     _trackSeqGap(batch.seq);
+    _markUiDirty();
+  }
+
+  /// Coalescing timer that flushes pending telemetry notifications.
+  Timer? _uiTimer;
+
+  /// True when new batched data has arrived since the last notification.
+  bool _dirty = false;
+
+  /// Marks telemetry dirty and lazily starts the [kUiRefreshHz] flush timer.
+  void _markUiDirty() {
+    _dirty = true;
+    _uiTimer ??= Timer.periodic(
+      Duration(microseconds: Duration.microsecondsPerSecond ~/ kUiRefreshHz),
+      (_) => _flushUi(),
+    );
+  }
+
+  /// Emits at most one notification per tick when data is pending.
+  void _flushUi() {
+    if (!_dirty || _disposed) return;
+    _dirty = false;
     notifyListeners();
+  }
+
+  /// Stops the coalescing timer and drops any pending notification.
+  void _stopUiTimer() {
+    _uiTimer?.cancel();
+    _uiTimer = null;
+    _dirty = false;
   }
 
   /// Test seam feeding one batch through the production path.
@@ -393,7 +418,7 @@ class AppState extends ChangeNotifier {
     this.rttMs,
     this.batch,
   }) : metas = List.of(metas) {
-    statusHistory.addAll(history);
+    chartHistory.pushBatch(history);
     // Seed freshness from the injected snapshot so tri-state wiring is live in
     // tests: a supplied status means its tiles are current, and a connected
     // session means its counters are known. The stamp carries a small margin
@@ -572,6 +597,7 @@ class AppState extends ChangeNotifier {
   Future<void> disconnect() async {
     _stopPolling();
     _stopWatch();
+    _stopUiTimer();
     try {
       await frb.disconnect();
     } catch (e) {
@@ -588,7 +614,7 @@ class AppState extends ChangeNotifier {
       rttMs = null;
       status = null;
       latchedFlags = 0;
-      statusHistory.clear();
+      chartHistory.clear();
       _lastSeq = null;
       droppedBatches = 0;
       _freshAt.clear();
@@ -642,6 +668,7 @@ class AppState extends ChangeNotifier {
     _disposed = true;
     _stopPolling();
     _stopWatch();
+    _stopUiTimer();
     super.dispose();
   }
 

@@ -458,4 +458,109 @@ void main() {
       expect(base.shouldRepaint(base), isFalse);
     });
   });
+
+  group('pointer perceptual scaling', () {
+    EncoderSchematicState state(WidgetTester tester) =>
+        tester.state<EncoderSchematicState>(find.byType(EncoderSchematic));
+
+    test('scale constants', () {
+      expect(kPointerSpeedScale, 0.05);
+      expect(kPointerMaxDps, 180.0);
+    });
+
+    testWidgets('first live reading snaps the display pointer to measured', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 90, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(state(tester).displayRotorDeg, closeTo(90, 1e-6));
+    });
+
+    testWidgets('measured +90° advances forward, clamped by kPointerMaxDps', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 90, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+
+      final advanced = state(tester).displayRotorDeg!;
+      expect(advanced, greaterThan(0));
+      expect(advanced, lessThanOrEqualTo(kPointerMaxDps * 0.016 + 1e-6));
+      expect(advanced, lessThan(90 * kPointerSpeedScale));
+    });
+
+    testWidgets('direction follows the measured sign (shortest arc)', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: -90, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+
+      expect(state(tester).displayRotorDeg, lessThan(0));
+    });
+
+    testWidgets('a +360° sweep keeps advancing forward without a jump', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+
+      var previous = state(tester).displayRotorDeg!;
+      for (final measured in const <double>[90, 180, 270, 360]) {
+        await _pump(
+          tester,
+          EncoderSchematic(
+            rotorDeg: measured,
+            outputDeg: 0,
+            ratioLabel: '1.00',
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 16));
+        final now = state(tester).displayRotorDeg!;
+        expect(now, greaterThanOrEqualTo(previous));
+        expect(now - previous, lessThanOrEqualTo(kPointerMaxDps * 0.016 + 1e-6));
+        previous = now;
+      }
+      expect(previous, greaterThan(0));
+    });
+
+    testWidgets('null reading freezes the display pointer', (tester) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 45, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      final frozen = state(tester).displayRotorDeg;
+      expect(frozen, isNotNull);
+
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: null, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(state(tester).displayRotorDeg, frozen);
+    });
+  });
 }

@@ -77,10 +77,7 @@ class ScopeZone extends StatelessWidget {
               flex: 2,
               child: TrendChart(
                 key: const Key('scope_curve_frame'),
-                history: <TrendSample>[
-                  for (final sample in state.statusHistory)
-                    (iU: sample.iU, iV: sample.iV, iW: sample.iW),
-                ],
+                history: state.chartHistory,
                 freshness: state.freshnessOf(AppState.statusTileKey('I_U')),
               ),
             ),

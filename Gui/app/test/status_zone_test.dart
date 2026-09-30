@@ -371,7 +371,7 @@ void main() {
       expect(find.textContaining('STREAM_SUB'), findsWidgets);
     });
 
-    testWidgets('statusHistory 注入后趋势图绘制三通道数据', (tester) async {
+    testWidgets('chartHistory 注入后趋势图携带三通道数据', (tester) async {
       final state = AppState.test(
         status: makeStatus(),
         history: <StatusDto>[makeStatus(iU: 1), makeStatus(iU: 2)],
@@ -382,8 +382,8 @@ void main() {
       await _pump(tester, ScopeZone(state: state));
 
       final chart = tester.widget<TrendChart>(find.byType(TrendChart));
-      expect(chart.history, hasLength(2));
-      expect(chart.history.last.iU, 2);
+      expect(chart.history.len, 2);
+      expect(chart.history.channelAt(0, 1), 2.0);
     });
   });
 
