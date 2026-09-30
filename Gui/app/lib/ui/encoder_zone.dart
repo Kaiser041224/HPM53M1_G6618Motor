@@ -15,9 +15,9 @@ import '../widgets/status_badge.dart';
 /// The rotor (`ENC R`) and output-shaft (`ENC O`) angles are shown with a
 /// [StatusBadge] and gated by their own [Freshness] — a stale or never-read
 /// angle degrades to `—` rather than passing an old reading off as current
-/// (design-system §6 rule 2). The gear ratios come from the parameter table;
-/// a mechanical constant the protocol does not expose (zero point, resolution)
-/// stays an honest `—`.
+/// (design-system §6 rule 2). The gear ratios and the resolution width come
+/// from the parameter table; a mechanical constant the protocol does not expose
+/// (zero point) stays an honest `—`.
 class EncoderZone extends StatelessWidget {
   const EncoderZone({super.key, required this.state});
 
@@ -129,6 +129,9 @@ class EncoderZone extends StatelessWidget {
           key: const Key('encoder_resolution'),
           label: '分辨率',
           zh: 'RES',
+          value: state.encoderResolutionBits == null
+              ? null
+              : '${state.encoderResolutionBits} bit',
         ),
       ],
     );
@@ -204,6 +207,7 @@ class EncoderZone extends StatelessWidget {
     required Key key,
     required String label,
     required String zh,
+    String? value,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -219,7 +223,12 @@ class EncoderZone extends StatelessWidget {
             style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
           ),
         ),
-        Text('—', style: scale.label.copyWith(color: palette.fgMute)),
+        Text(
+          value ?? '—',
+          style: scale.label.copyWith(
+            color: value == null ? palette.fgMute : palette.fg,
+          ),
+        ),
       ],
     );
   }

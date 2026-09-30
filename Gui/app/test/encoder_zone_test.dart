@@ -144,22 +144,54 @@ void main() {
       expect(find.text('×0.980'), findsOneWidget);
     });
 
-    testWidgets('零点 / 分辨率协议无源：一律显示 —', (tester) async {
+    testWidgets('零点协议无源：显示 —', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, EncoderZone(state: state));
 
-      for (final key in const <String>[
-        'encoder_zero',
-        'encoder_resolution',
-      ]) {
-        expect(
-          find.descendant(of: find.byKey(Key(key)), matching: find.text('—')),
-          findsOneWidget,
-          reason: key,
-        );
-      }
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_zero')),
+          matching: find.text('—'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('分辨率缺省：显示 —', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_resolution')),
+          matching: find.text('—'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('14 bit'), findsNothing);
+    });
+
+    testWidgets('分辨率载入：显示 14 bit', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.values['motor.encoder.resolution_bits'] = ParamValueDto(
+        ty: 1,
+        raw: 14,
+      );
+
+      await _pump(tester, EncoderZone(state: state));
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_resolution')),
+          matching: find.text('14 bit'),
+        ),
+        findsOneWidget,
+      );
     });
   });
 

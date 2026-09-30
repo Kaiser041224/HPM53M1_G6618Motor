@@ -239,6 +239,13 @@ class AppState extends ChangeNotifier {
   /// parameter table has been read.
   double? get outputRatio => _paramDouble('motor.encoder.output_ratio');
 
+  /// Rotor-encoder single-turn absolute resolution [bit]
+  /// (`motor.encoder.resolution_bits`); the number of bits spanning one
+  /// mechanical revolution. Null until the parameter table has been read, so
+  /// the UI honestly shows `—` rather than a fabricated width.
+  int? get encoderResolutionBits =>
+      _paramDouble('motor.encoder.resolution_bits')?.round();
+
   /// Decodes parameter [name] to its physical float, or null when unloaded.
   double? _paramDouble(String name) {
     final value = values[name];
