@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -81,12 +82,16 @@ class AppState extends ChangeNotifier {
   static const String keyFrames = 'frames';
 
   /// Every status tile freshness key, in `status_zone.dart` order.
+  ///
+  /// The five status tiles are VBUS / I_IN / P_IN / NTC (PCB) / NTC_STATOR;
+  /// the two encoder angles keep their keys for [EncoderZone] gating and
+  /// F_ELEC keeps its key for the [ScopeZone] phase/frequency panel.
   static const List<String> statusTileKeys = <String>[
     'status_tile_VBUS',
-    'status_tile_I_U',
-    'status_tile_I_V',
-    'status_tile_I_W',
+    'status_tile_I_IN',
+    'status_tile_P_IN',
     'status_tile_NTC',
+    'status_tile_NTC_STATOR',
     'status_tile_ENC_R',
     'status_tile_ENC_O',
     'status_tile_F_ELEC',
@@ -121,6 +126,70 @@ class AppState extends ChangeNotifier {
   /// tile read here is current to within one ~20 ms batch. Cleared on
   /// [disconnect].
   frb.StatusDto? status;
+
+  /// EMA smoothing factor for the angular-speed estimates ([rpmRotor] /
+  /// [rpmOutput]): each accepted sample moves the estimate 15%.
+  static const double rpmEmaAlpha = 0.15;
+
+  /// A longer interval between angle samples than this is a discontinuity (a
+  /// stalled or coalesced feed): the derivative restarts from null rather than
+  /// computing a bogus speed over the gap.
+  static const Duration kRpmMaxGap = Duration(milliseconds: 500);
+
+  /// Previous rotor angle [°] and its arrival time, driving [rpmRotor].
+  double? _previousRotorDeg;
+  DateTime? _previousRotorAt;
+
+  /// EMA of the rotor angular speed [rpm]; null until two samples bound a gap.
+  double? _rpmRotorEma;
+
+  /// Previous output-shaft angle [°] and its arrival time, driving [rpmOutput].
+  double? _previousOutputDeg;
+  DateTime? _previousOutputAt;
+
+  /// EMA of the output-shaft angular speed [rpm]; null until two samples.
+  double? _rpmOutputEma;
+
+  /// Wall-clock source for the angle-difference derivative. Overridable in
+  /// tests so rpm can be driven without sleeping on the real clock.
+  @visibleForTesting
+  DateTime Function() clock = DateTime.now;
+
+  /// INPUT CURRENT estimate [A] derived host-side from the three phase currents
+  /// and the modulation depth (`i_in = 1.5 · m · I_rms`), under a unity
+  /// power-factor assumption. **EST** — never a measurement; null until a
+  /// status sample exists (honest `—`).
+  double? get iInEst {
+    final sample = status;
+    return sample == null
+        ? null
+        : deriveIIn(sample.iU, sample.iV, sample.iW, sample.modPct);
+  }
+
+  /// INPUT POWER estimate [W] (`vbus · i_in`). **EST**; null without a status.
+  double? get pInEst {
+    final sample = status;
+    final current = iInEst;
+    return (sample == null || current == null)
+        ? null
+        : derivePIn(sample.vbus, current);
+  }
+
+  /// STATOR TEMPERATURE estimate [°C] (`ntc + 8 · (I_rms/10)²`), a
+  /// demonstration thermal coefficient. **EST**; null without a status.
+  double? get ntcStatorEst {
+    final sample = status;
+    return sample == null
+        ? null
+        : deriveNtcStator(sample.ntcTemp, sample.iU, sample.iV, sample.iW);
+  }
+
+  /// Rotor angular speed estimate [rpm] from the shortest-arc unwrapped angle
+  /// difference, EMA-smoothed. **EST**; null on the first sample / after a gap.
+  double? get rpmRotor => _rpmRotorEma;
+
+  /// Output-shaft angular speed estimate [rpm]; **EST**; null as [rpmRotor].
+  double? get rpmOutput => _rpmOutputEma;
 
   /// Flat, timestamped 60 s ring of the three phase currents, appended once per
   /// batch by the 1 kHz watch (≈20 ms batches). Drives the ScopeZone trend
@@ -163,11 +232,70 @@ class AppState extends ChangeNotifier {
     chartHistory.pushBatch(batch.samples);
     if (batch.samples.isNotEmpty) {
       status = batch.samples.last;
+      _updateSpeeds(batch.samples.last);
       _markFresh(<String>[...statusTileKeys, keyRtt]);
       _clearError();
     }
     _trackSeqGap(batch.seq);
     _markUiDirty();
+  }
+
+  /// Advances the two angular-speed estimates from the newest [sample].
+  void _updateSpeeds(frb.StatusDto sample) {
+    final now = clock();
+    _rpmRotorEma = _advanceRpm(
+      angleDeg: sample.encRotorDeg,
+      now: now,
+      previousDeg: _previousRotorDeg,
+      previousAt: _previousRotorAt,
+      priorEma: _rpmRotorEma,
+    );
+    _previousRotorDeg = sample.encRotorDeg;
+    _previousRotorAt = now;
+
+    _rpmOutputEma = _advanceRpm(
+      angleDeg: sample.encOutputDeg,
+      now: now,
+      previousDeg: _previousOutputDeg,
+      previousAt: _previousOutputAt,
+      priorEma: _rpmOutputEma,
+    );
+    _previousOutputDeg = sample.encOutputDeg;
+    _previousOutputAt = now;
+  }
+
+  /// One angular-speed step: null on the first sample or across a [kRpmMaxGap]
+  /// discontinuity (which also clears the EMA so it restarts from null),
+  /// otherwise the shortest-arc derivative EMA-smoothed by [rpmEmaAlpha].
+  double? _advanceRpm({
+    required double angleDeg,
+    required DateTime now,
+    required double? previousDeg,
+    required DateTime? previousAt,
+    required double? priorEma,
+  }) {
+    final previous = previousDeg;
+    final at = previousAt;
+    if (previous == null || at == null) return null;
+    final elapsed = now.difference(at);
+    if (elapsed <= Duration.zero || elapsed > kRpmMaxGap) return null;
+    final rpm = deriveRpm(
+      previous,
+      angleDeg,
+      elapsed.inMicroseconds / Duration.microsecondsPerSecond,
+    );
+    if (rpm == null) return null;
+    return emaStep(priorEma, rpm, rpmEmaAlpha);
+  }
+
+  /// Clears the angular-speed derivatives (new session / disconnect).
+  void _resetSpeeds() {
+    _previousRotorDeg = null;
+    _previousRotorAt = null;
+    _rpmRotorEma = null;
+    _previousOutputDeg = null;
+    _previousOutputAt = null;
+    _rpmOutputEma = null;
   }
 
   /// Coalescing timer that flushes pending telemetry notifications.
@@ -219,6 +347,7 @@ class AppState extends ChangeNotifier {
     _stopWatch();
     _lastSeq = null;
     droppedBatches = 0;
+    _resetSpeeds();
     try {
       final stream = batch ?? frb.startStatusWatch(rateHz: watchRateHz);
       _batchSub = stream.listen(
@@ -619,6 +748,7 @@ class AppState extends ChangeNotifier {
       chartHistory.clear();
       _lastSeq = null;
       droppedBatches = 0;
+      _resetSpeeds();
       _freshAt.clear();
       notifyListeners();
     }
@@ -733,3 +863,59 @@ int exceptionCode(Object error) {
   final match = RegExp(r'code[\s:=]+(\d+)').firstMatch(error.toString());
   return match == null ? -1 : int.parse(match.group(1)!);
 }
+
+/// Balanced three-phase RMS of currents [iu], [iv], [iw]:
+/// `sqrt((iu²+iv²+iw²) / 3)`.
+double _phaseRms(double iu, double iv, double iw) =>
+    math.sqrt((iu * iu + iv * iv + iw * iw) / 3.0);
+
+/// INPUT CURRENT estimate [A]: `1.5 · (modPct/100) · I_rms`, derived host-side
+/// from the three phase currents under a unity power-factor assumption. A
+/// symmetric set of RMS `I` at full modulation yields `1.5 · I`. Clamped to
+/// `≥ 0`. **EST** — a derived quantity, never a device measurement.
+@visibleForTesting
+double deriveIIn(double iu, double iv, double iw, double modPct) {
+  final value = 1.5 * (modPct / 100.0) * _phaseRms(iu, iv, iw);
+  return value < 0 ? 0.0 : value;
+}
+
+/// INPUT POWER estimate [W]: `vbus · iIn`, clamped to `≥ 0`. **EST**.
+@visibleForTesting
+double derivePIn(double vbus, double iIn) {
+  final value = vbus * iIn;
+  return value < 0 ? 0.0 : value;
+}
+
+/// STATOR TEMPERATURE estimate [°C]: `ntcTemp + 8 · (I_rms/10)²` — a
+/// demonstration `I²R`-style coefficient, not a calibrated thermal model.
+/// Clamped to `≥ 0`. **EST**.
+@visibleForTesting
+double deriveNtcStator(double ntcTemp, double iu, double iv, double iw) {
+  final ratio = _phaseRms(iu, iv, iw) / 10.0;
+  final value = ntcTemp + 8.0 * ratio * ratio;
+  return value < 0 ? 0.0 : value;
+}
+
+/// Signed shortest-arc angular difference from [prev] to [next] in degrees,
+/// in `(-180, 180]`. Unwraps a wrap-around (`170° → -170°` reads as `+20°`)
+/// so a differentiated angle never jumps by a full revolution.
+@visibleForTesting
+double unwrapDeltaDeg(double prev, double next) {
+  final delta = (next - prev) % 360.0;
+  return delta > 180.0 ? delta - 360.0 : delta;
+}
+
+/// Angular speed [rpm] from an unwrapped shortest-arc step: `Δθ/360/Δt·60`.
+/// Returns null for a non-positive [deltaSeconds] so a zero/negative interval
+/// can never fabricate a speed.
+@visibleForTesting
+double? deriveRpm(double prevDeg, double nextDeg, double deltaSeconds) {
+  if (deltaSeconds <= 0) return null;
+  return unwrapDeltaDeg(prevDeg, nextDeg) / 360.0 / deltaSeconds * 60.0;
+}
+
+/// One EMA step: the first sample is adopted directly, later samples move the
+/// estimate by [alpha] of the residual.
+@visibleForTesting
+double emaStep(double? previous, double next, double alpha) =>
+    previous == null ? next : previous + (next - previous) * alpha;

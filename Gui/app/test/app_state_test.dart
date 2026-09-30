@@ -113,11 +113,11 @@ void main() {
       addTearDown(state.dispose);
 
       state.seedFreshness(
-        'status_tile_I_V',
+        'status_tile_I_IN',
         DateTime.now().subtract(const Duration(milliseconds: 200)),
       );
 
-      expect(state.freshnessOf('status_tile_I_V'), Freshness.stale);
+      expect(state.freshnessOf('status_tile_I_IN'), Freshness.stale);
     });
 
     test('阈值边界：90ms 仍 live，110ms 转 stale', () {
@@ -140,11 +140,11 @@ void main() {
     test('带 status 的测试构造令瓦片 live；无 status 则 unknown', () {
       final withStatus = AppState.test(status: makeStatus());
       addTearDown(withStatus.dispose);
-      expect(withStatus.freshnessOf('status_tile_I_V'), Freshness.live);
+      expect(withStatus.freshnessOf('status_tile_I_IN'), Freshness.live);
 
       final bare = AppState.test();
       addTearDown(bare.dispose);
-      expect(bare.freshnessOf('status_tile_I_V'), Freshness.unknown);
+      expect(bare.freshnessOf('status_tile_I_IN'), Freshness.unknown);
     });
 
     test('断连清空时间戳 → 全体 unknown', () async {
@@ -154,7 +154,7 @@ void main() {
 
       await state.disconnect();
 
-      expect(state.freshnessOf('status_tile_I_V'), Freshness.unknown);
+      expect(state.freshnessOf('status_tile_I_IN'), Freshness.unknown);
       expect(state.freshnessOf('rtt'), Freshness.unknown);
     });
 
@@ -176,11 +176,11 @@ void main() {
       final state = AppState.test(status: makeStatus());
       addTearDown(state.dispose);
       state.seedFreshness(
-        'status_tile_I_V',
+        'status_tile_I_IN',
         DateTime.now().subtract(const Duration(seconds: 3)),
       );
 
-      expect(state.staleStatusTiles, <String>['status_tile_I_V']);
+      expect(state.staleStatusTiles, <String>['status_tile_I_IN']);
     });
   });
 
@@ -327,7 +327,7 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(state.status!.iU, 7);
-      expect(state.freshnessOf(AppState.statusTileKey('I_U')), Freshness.live);
+      expect(state.freshnessOf(AppState.statusTileKey('I_IN')), Freshness.live);
 
       await state.disconnect();
       expect(state.chartHistory.isEmpty, isTrue);

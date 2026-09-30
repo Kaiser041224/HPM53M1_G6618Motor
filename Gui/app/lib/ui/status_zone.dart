@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -500,7 +501,6 @@ class _TileSpec {
     required this.precision,
     required this.note,
     this.threshold,
-    this.absThreshold = false,
   });
 
   final String keyName;
@@ -511,24 +511,28 @@ class _TileSpec {
   final int precision;
   final String note;
   final double? threshold;
-  final bool absThreshold;
 
   /// Fraction of the threshold reached, or null when undefined.
   double? get load {
     final t = threshold;
     final v = value;
     if (t == null || v == null || t <= 0) return null;
-    return (absThreshold ? v.abs() : v) / t;
+    return v / t;
   }
 }
 
-/// The 状态监视 zone: six tri-state tiles (VBUS / I_U / I_V / I_W / NTC /
-/// F_ELEC).
+/// The 状态监视 zone: five tri-state tiles (VBUS / I_IN / P_IN / NTC /
+/// NTC_STATOR).
 ///
 /// Everything is derived from [AppState]; when no status snapshot has been
 /// read the tiles fall back to `—` rather than showing stale numbers
-/// (design-system §6 rule 2). The two encoder tiles moved out to
-/// [EncoderZone]; the relative-threshold heat/load bars moved to [ScopeZone].
+/// (design-system §6 rule 2). Two tiles are host-side **estimates** (I_IN,
+/// P_IN, NTC_STATOR) and carry an explicit `EST · …` footer so an estimate can
+/// never pass itself off as a measurement; the value tone stays neutral for
+/// both since the footer already distinguishes them. The two encoder tiles
+/// moved out to [EncoderZone]; the phase currents and F_ELEC move to the
+/// [ScopeZone] right column; the relative-threshold heat/load bars also live in
+/// [ScopeZone].
 class StatusZone extends StatelessWidget {
   const StatusZone({super.key, required this.state});
 
@@ -558,42 +562,27 @@ class StatusZone extends StatelessWidget {
         threshold: state.thresholdVbus,
       ),
       _TileSpec(
-        keyName: 'I_U',
-        label: 'I_U',
-        zh: 'U 相电流',
-        value: status?.iU,
+        keyName: 'I_IN',
+        label: 'I_IN',
+        zh: '输入电流',
+        value: state.iInEst,
         unit: 'A',
         precision: 3,
-        note: 'RMS',
-        threshold: state.thresholdCurrent,
-        absThreshold: true,
+        note: 'EST · 相电流反推',
       ),
       _TileSpec(
-        keyName: 'I_V',
-        label: 'I_V',
-        zh: 'V 相电流',
-        value: status?.iV,
-        unit: 'A',
-        precision: 3,
-        note: 'RMS',
-        threshold: state.thresholdCurrent,
-        absThreshold: true,
-      ),
-      _TileSpec(
-        keyName: 'I_W',
-        label: 'I_W',
-        zh: 'W 相电流',
-        value: status?.iW,
-        unit: 'A',
-        precision: 3,
-        note: 'RMS',
-        threshold: state.thresholdCurrent,
-        absThreshold: true,
+        keyName: 'P_IN',
+        label: 'P_IN',
+        zh: '输入功率',
+        value: state.pInEst,
+        unit: 'W',
+        precision: 1,
+        note: 'EST · 相电流反推',
       ),
       _TileSpec(
         keyName: 'NTC',
         label: 'NTC',
-        zh: '温度',
+        zh: 'PCB',
         value: status?.ntcTemp,
         unit: '℃',
         precision: 1,
@@ -601,13 +590,13 @@ class StatusZone extends StatelessWidget {
         threshold: state.thresholdNtc,
       ),
       _TileSpec(
-        keyName: 'F_ELEC',
-        label: 'F_ELEC',
-        zh: '电频率',
-        value: status?.freqHz,
-        unit: 'Hz',
-        precision: 2,
-        note: 'SETPOINT',
+        keyName: 'NTC_STATOR',
+        label: 'NTC',
+        zh: '定子',
+        value: state.ntcStatorEst,
+        unit: '℃',
+        precision: 1,
+        note: 'EST · 热估算',
       ),
     ];
 
@@ -653,7 +642,7 @@ class StatusZone extends StatelessWidget {
       );
     }
 
-    final header = StringBuffer('6 项');
+    final header = StringBuffer('${specs.length} 项');
     if (failed > 0) header.write(' · $failed 项失效');
     if (warned > 0) header.write(' · $warned 项告警');
 
@@ -672,6 +661,7 @@ class StatusZone extends StatelessWidget {
   }
 
   Widget _grid(List<Widget> cells) {
+    const perRow = 3;
     Widget row(List<Widget> rowCells) => IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -683,18 +673,19 @@ class StatusZone extends StatelessWidget {
         ],
       ),
     );
+    // Chunk the tiles into rows of [perRow]; the 5 tiles form a 3 + 2 grid.
+    final rows = <Widget>[];
+    for (var i = 0; i < cells.length; i += perRow) {
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: 8));
+      final end = math.min(i + perRow, cells.length);
+      rows.add(row(cells.sublist(i, end)));
+    }
     // v3: the tile group is one bright frame, each tile nests its own bright
     // frame inside it — the signature nested cyan panels of the reference.
     return HairlineFrame(
       key: const Key('status_grid_frame'),
       padding: const EdgeInsets.all(8),
-      child: Column(
-        children: <Widget>[
-          row(cells.sublist(0, 3)),
-          const SizedBox(height: 8),
-          row(cells.sublist(3, 6)),
-        ],
-      ),
+      child: Column(children: rows),
     );
   }
 }

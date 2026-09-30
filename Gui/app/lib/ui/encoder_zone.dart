@@ -101,6 +101,15 @@ class EncoderZone extends StatelessWidget {
           value: state.status?.encRotorDeg,
           freshness: rotorFreshness,
         ),
+        const SizedBox(height: 8),
+        _rpmRow(
+          context,
+          key: const Key('encoder_rpm_rotor'),
+          zh: 'RPM',
+          note: '角差分 EST',
+          value: state.rpmRotor,
+          freshness: rotorFreshness,
+        ),
         const SizedBox(height: 14),
         _encoderRow(
           context,
@@ -108,6 +117,15 @@ class EncoderZone extends StatelessWidget {
           label: 'ENC O',
           zh: '出轴角',
           value: state.status?.encOutputDeg,
+          freshness: outputFreshness,
+        ),
+        const SizedBox(height: 8),
+        _rpmRow(
+          context,
+          key: const Key('encoder_rpm_output'),
+          zh: 'RPM',
+          note: '磁编 · 角差分 EST',
+          value: state.rpmOutput,
           freshness: outputFreshness,
         ),
         const SizedBox(height: 14),
@@ -185,6 +203,51 @@ class EncoderZone extends StatelessWidget {
         ),
         const SizedBox(width: 12),
         StatusBadge(state: item, label: text),
+      ],
+    );
+  }
+
+  /// One angular-speed estimate row: a `转速` label, the `RPM` caption, the
+  /// value in rpm (1 decimal, neutral) and the **EST** footnote naming how it
+  /// was derived. Gated by the same encoder [freshness] as the angle above it,
+  /// so a stalled feed degrades the estimate to `—` (design-system §6 rule 2).
+  Widget _rpmRow(
+    BuildContext context, {
+    required Key key,
+    required String zh,
+    required String note,
+    required double? value,
+    required Freshness freshness,
+  }) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    return Row(
+      key: key,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        SizedBox(width: 64, child: Text('转速', style: scale.label)),
+        Expanded(
+          child: Text(
+            zh,
+            overflow: TextOverflow.ellipsis,
+            style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
+          ),
+        ),
+        StaleGate(
+          freshness: freshness,
+          fallback: '—',
+          // Speed estimate is a monitor value: sample it at 5 Hz.
+          live: StableDigits(
+            text: value == null ? '—' : value.toStringAsFixed(1),
+            builder: (context) => GlowValue(
+              value: value,
+              precision: 1,
+              tone: Tone.neutral,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(note, style: scale.label),
       ],
     );
   }

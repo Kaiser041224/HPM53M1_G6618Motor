@@ -104,15 +104,15 @@ void main() {
   testWidgets('已连接 + 失效瓦片：DEGRADED 并点名失效通道', (tester) async {
     final state = AppState.test(connected: true, status: makeStatus());
     addTearDown(state.dispose);
-    state.seedFreshness(
-      AppState.statusTileKey('I_V'),
-      DateTime.now().subtract(const Duration(seconds: 2)),
-    );
+      state.seedFreshness(
+        AppState.statusTileKey('VBUS'),
+        DateTime.now().subtract(const Duration(seconds: 2)),
+      );
 
-    await _pump(tester, state);
+      await _pump(tester, state);
 
-    expect(find.text('DEGRADED'), findsOneWidget);
-    expect(find.textContaining('V 相电流失效'), findsOneWidget);
+      expect(find.text('DEGRADED'), findsOneWidget);
+      expect(find.textContaining('母线电压失效'), findsOneWidget);
   });
 
   testWidgets('已连接 + 锁存故障：DEGRADED 并说明锁存', (tester) async {

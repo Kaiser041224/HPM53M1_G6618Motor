@@ -104,9 +104,9 @@ void main() {
   });
 
   group('StatusTile 三态与精度', () {
-    testWidgets('按量纲渲染精度：V 1 位 / A 3 位 / Hz 2 位', (tester) async {
+    testWidgets('按量纲渲染精度：V 1 位 / A 3 位', (tester) async {
       final state = AppState.test(
-        status: makeStatus(vbus: 24.0, iU: 0.0, freq: 50.0),
+        status: makeStatus(vbus: 24.0, iU: 0.0, mod: 100),
         metas: const [],
       );
       addTearDown(state.dispose);
@@ -120,17 +120,11 @@ void main() {
         ),
         findsOneWidget,
       );
+      // I_IN estimate: 1.5 · 1 · 0 = 0 A, rendered 3 decimals.
       expect(
         find.descendant(
-          of: find.byKey(const Key('status_tile_I_U')),
+          of: find.byKey(const Key('status_tile_I_IN')),
           matching: find.text('0.000'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('status_tile_F_ELEC')),
-          matching: find.text('50.00'),
         ),
         findsOneWidget,
       );
@@ -520,7 +514,7 @@ void main() {
   });
 
   group('v3 面板框（HairlineFrame main）', () {
-    testWidgets('状态监视：组外框 + 6 瓦片内框双层嵌套（ENC 已迁出）', (tester) async {
+    testWidgets('状态监视：组外框 + 5 瓦片内框双层嵌套（ENC 已迁出）', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
@@ -528,9 +522,9 @@ void main() {
 
       expect(find.byKey(const Key('status_grid_frame')), findsOneWidget);
       expect(find.byKey(const Key('status_frame_VBUS')), findsOneWidget);
-      expect(find.byKey(const Key('status_frame_F_ELEC')), findsOneWidget);
-      // Two encoder tiles moved to EncoderZone: only six remain here.
-      expect(find.byType(StatusTile), findsNWidgets(6));
+      expect(find.byKey(const Key('status_frame_NTC_STATOR')), findsOneWidget);
+      // Two encoder tiles moved to EncoderZone: only five remain here.
+      expect(find.byType(StatusTile), findsNWidgets(5));
       expect(find.byKey(const Key('status_frame_ENC_R')), findsNothing);
       expect(find.byKey(const Key('status_frame_ENC_O')), findsNothing);
       final tileFrame = tester.widget<HairlineFrame>(
@@ -603,10 +597,18 @@ void main() {
             .variant,
         GuiButtonVariant.danger,
       );
-      final freq = tester.widget<Text>(find.text('0.00'));
+      // The scope phase panel also renders a `0.00` F_ELEC, so scope the
+      // setpoint assertions to the control frame.
+      final control = find.byKey(const Key('control_frame'));
+      final freq = tester.widget<Text>(
+        find.descendant(of: control, matching: find.text('0.00')),
+      );
       expect(freq.style?.color, const GuiPalette().valueAmber);
       // Setpoint readout is a GlowValue: unit renders separately, uppercased.
-      expect(find.text('HZ'), findsOneWidget);
+      expect(
+        find.descendant(of: control, matching: find.text('HZ')),
+        findsOneWidget,
+      );
     });
   });
 
