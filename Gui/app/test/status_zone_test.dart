@@ -7,6 +7,8 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/scope_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
+import 'package:g6618_gui/widgets/glow_value.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/solid_pie.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 
@@ -355,6 +357,100 @@ void main() {
       expect(faultBitLabel(0), '过流 L1 · U 相');
       expect(faultBitLabel(6), '母线过压');
       expect(faultBitLabel(20), 'bit 20 (0x00100000)');
+    });
+  });
+
+  group('HeatLoadBar 三色门限（v3 tone mapping）', () {
+    test('比例三带：<50% green、50–85% amber、>85% red', () {
+      expect(HeatLoadBar.toneForRatio(null), Tone.neutral);
+      expect(HeatLoadBar.toneForRatio(0.49), Tone.green);
+      expect(HeatLoadBar.toneForRatio(0.5), Tone.amber);
+      expect(HeatLoadBar.toneForRatio(0.85), Tone.amber);
+      expect(HeatLoadBar.toneForRatio(0.86), Tone.red);
+      expect(HeatLoadBar.toneForRatio(1.0), Tone.red);
+    });
+
+    testWidgets('读数与填充随比例取色；无门限保持 —', (tester) async {
+      await _pump(
+        tester,
+        Column(
+          children: const <Widget>[
+            HeatLoadBar(name: 'U 相', value: 30, threshold: 100),
+            HeatLoadBar(name: 'V 相', value: 70, threshold: 100),
+            HeatLoadBar(name: 'W 相', value: 90, threshold: 100),
+            HeatLoadBar(name: '模组', value: null, threshold: null),
+          ],
+        ),
+      );
+
+      expect(
+        tester.widget<Text>(find.text('30 %')).style?.color,
+        const GuiPalette().valueGreen,
+      );
+      expect(
+        tester.widget<Text>(find.text('70 %')).style?.color,
+        const GuiPalette().valueAmber,
+      );
+      expect(
+        tester.widget<Text>(find.text('90 %')).style?.color,
+        const GuiPalette().valueRed,
+      );
+      expect(find.text('—'), findsOneWidget);
+    });
+  });
+
+  group('v3 页面语义色', () {
+    testWidgets('非告警测量瓦片为扁平中性白（tone neutral）', (tester) async {
+      await _pump(
+        tester,
+        const StatusTile(
+          label: 'VBUS',
+          zh: '母线电压',
+          value: 24.0,
+          unit: 'V',
+          precision: 1,
+        ),
+      );
+
+      final value = tester.widget<Text>(find.text('24.0'));
+      expect(value.style?.color, const GuiPalette().fgStrong);
+      expect(value.style?.shadows, anyOf(isNull, isEmpty));
+    });
+
+    testWidgets('故障构成条目标题与红色条目（Tone.red）', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(faultFlags: 0x1),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      expect(find.text('故障构成与指令'), findsOneWidget);
+      final entry = tester.widget<Text>(find.text('过流 L1 · U 相'));
+      expect(entry.style?.color, const GuiPalette().valueRed);
+    });
+
+    testWidgets('控制按钮为 GuiButton 三级（启动 primary/清除故障 danger）', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, ScopeZone(state: state));
+
+      expect(
+        tester
+            .widget<GuiButton>(find.widgetWithText(GuiButton, '启动'))
+            .variant,
+        GuiButtonVariant.primary,
+      );
+      expect(
+        tester
+            .widget<GuiButton>(find.widgetWithText(GuiButton, '清除故障'))
+            .variant,
+        GuiButtonVariant.danger,
+      );
+      final freq = tester.widget<Text>(find.text('0.00 Hz'));
+      expect(freq.style?.color, const GuiPalette().valueAmber);
     });
   });
 }

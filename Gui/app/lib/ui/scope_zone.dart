@@ -4,10 +4,13 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/glow_value.dart';
+import '../widgets/gui_button.dart';
 import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
 import '../widgets/solid_pie.dart';
 import '../widgets/stale_gate.dart' show Freshness;
+import 'panel_title.dart';
 
 /// Semantic label for a single fault bit, extracted read-only from
 /// `App/Control/Inc/app_fault.h` (bit0..bit9). Unknown bits fall back to
@@ -192,13 +195,7 @@ class _PhaseSharePanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Text('相电流占比', style: scale.section.copyWith(fontSize: 11)),
-            const Spacer(),
-            Text('RMS', style: scale.label),
-          ],
-        ),
+        const PanelTitle(title: '相电流占比', en: 'RMS'),
         const SizedBox(height: 12),
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -268,7 +265,10 @@ class _PhaseSharePanel extends StatelessWidget {
                       : '${(fractions[i] * 100).toStringAsFixed(1)} %',
                   style: fractions == null
                       ? scale.label
-                      : GuiGlowStyles.soft(scale.data.copyWith(fontSize: 10.5)),
+                      : scale.data.copyWith(
+                          fontSize: 10.5,
+                          color: GlowValue.colorFor(palette, Tone.neutral),
+                        ),
                 ),
               ],
             ),
@@ -299,15 +299,17 @@ class FaultComposition extends StatelessWidget {
       for (var i = 0; i < 32; i++)
         if ((flags & (1 << i)) != 0) i,
     ];
+    // v3 tone mapping: fault entries are flat semantic red; a latched set uses
+    // the strengthened latched hue so the two are never confused.
+    final color = latched
+        ? palette.stLatched
+        : GlowValue.colorFor(palette, Tone.red);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Text('故障构成', style: scale.section.copyWith(fontSize: 11)),
-            const Spacer(),
-            Text(latched ? 'LATCHED' : 'CURRENT', style: scale.label),
-          ],
+        PanelTitle(
+          title: '故障构成与指令',
+          en: latched ? 'LATCHED' : 'CURRENT',
         ),
         const SizedBox(height: 12),
         if (bits.isEmpty)
@@ -319,15 +321,12 @@ class FaultComposition extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: <Widget>[
-                  Text(
-                    '■',
-                    style: GuiGlowStyles.status(palette.stFault, scale.label),
-                  ),
+                  Text('■', style: scale.label.copyWith(color: color)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       faultBitLabel(bit),
-                      style: GuiGlowStyles.status(palette.stFault, scale.body),
+                      style: scale.body.copyWith(color: color),
                     ),
                   ),
                 ],
@@ -383,16 +382,19 @@ class _ControlPanelState extends State<ControlPanel> {
           spacing: 8,
           runSpacing: 8,
           children: <Widget>[
-            _GuiButton(
+            GuiButton(
               label: '启动',
-              primary: true,
-              onTap: () => _run(widget.state.ctrlStart),
+              variant: GuiButtonVariant.primary,
+              onPressed: () => _run(widget.state.ctrlStart),
             ),
-            _GuiButton(label: '停止', onTap: () => _run(widget.state.ctrlStop)),
-            _GuiButton(
+            GuiButton(
+              label: '停止',
+              onPressed: () => _run(widget.state.ctrlStop),
+            ),
+            GuiButton(
               label: '清除故障',
-              danger: true,
-              onTap: () => _run(widget.state.faultClear),
+              variant: GuiButtonVariant.danger,
+              onPressed: () => _run(widget.state.faultClear),
             ),
           ],
         ),
@@ -430,6 +432,7 @@ class _ControlPanelState extends State<ControlPanel> {
     required VoidCallback onSend,
   }) {
     final scale = GuiTypeScale.of(context);
+    final palette = GuiPalette.of(context);
     final value01 = (value / max).clamp(0.0, 1.0).toDouble();
     return Row(
       children: <Widget>[
@@ -460,54 +463,17 @@ class _ControlPanelState extends State<ControlPanel> {
           child: Text(
             '${value.toStringAsFixed(precision)} $unit',
             textAlign: TextAlign.right,
-            style: GuiGlowStyles.soft(scale.data.copyWith(fontSize: 12)),
+            // v3 tone mapping: the setpoint readout is flat amber while the
+            // LED bar itself keeps the cyan accent.
+            style: GuiGlowStyles.none(
+              scale.data.copyWith(
+                fontSize: 12,
+                color: GlowValue.colorFor(palette, Tone.amber),
+              ),
+            ),
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Square, hairline-framed button matching the `.btn` motif.
-class _GuiButton extends StatelessWidget {
-  const _GuiButton({
-    required this.label,
-    required this.onTap,
-    this.primary = false,
-    this.danger = false,
-  });
-
-  final String label;
-  final VoidCallback onTap;
-  final bool primary;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    final Color border = danger
-        ? palette.stFault
-        : (primary ? palette.accent : palette.line);
-    final Color background = primary
-        ? palette.accent
-        : (danger ? palette.bgPanel : palette.bgRaise);
-    final Color foreground = primary
-        ? palette.bgVoid
-        : (danger ? palette.stFault : palette.fgDim);
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: background,
-          border: Border.all(color: border),
-        ),
-        child: Text(
-          label,
-          style: scale.label.copyWith(color: foreground, fontSize: 11),
-        ),
-      ),
     );
   }
 }

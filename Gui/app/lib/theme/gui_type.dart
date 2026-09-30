@@ -57,6 +57,15 @@ class GuiTypeScale {
     color: palette.fgMute,
   );
 
+  /// 16px section title (v3): white Chinese, semibold Noto Sans SC.
+  TextStyle get sectionTitle => TextStyle(
+    fontFamily: zhFamily,
+    fontFamilyFallback: zhFallback,
+    fontSize: 16,
+    fontWeight: FontWeight.w600,
+    color: palette.fgStrong,
+  );
+
   /// 26px tabular value (`.gui-value`).
   TextStyle get data => TextStyle(
     fontFamily: monoFamily,

@@ -68,7 +68,7 @@ void main() {
       expect(boxes.where((b) => b.width == 2).length, 7);
     });
 
-    testWidgets('lit segments carry a same-hue glow', (tester) async {
+    testWidgets('lit segments carry one weak same-hue glow (v3)', (tester) async {
       await _pump(tester, const SegmentBar(value01: 1, segments: 3));
       final lit = tester.widget<Container>(
         find
@@ -81,8 +81,9 @@ void main() {
       final shadow = (lit.decoration as BoxDecoration).boxShadow!.single;
       expect(
         shadow.color.toARGB32(),
-        palette.accent.withValues(alpha: 0.45).toARGB32(),
+        palette.accent.withValues(alpha: 0.22).toARGB32(),
       );
+      expect(shadow.blurRadius, 8);
     });
 
     test('lit count rounds and clamps to [0, segments]', () {
@@ -115,7 +116,7 @@ void main() {
     };
 
     for (final entry in cases.entries) {
-      testWidgets('${entry.key.name} carries icon + label + status color', (
+      testWidgets('${entry.key.name} carries icon + label + flat status color', (
         tester,
       ) async {
         await _pump(
@@ -127,14 +128,8 @@ void main() {
 
         final icon = tester.widget<Text>(find.text(entry.value));
         expect(icon.style?.color, colors[entry.key]);
-
-        final shadows = icon.style?.shadows ?? const <Shadow>[];
-        expect(shadows, isNotEmpty);
-        for (final shadow in shadows) {
-          expect(shadow.color.r, closeTo(colors[entry.key]!.r, 0.001));
-          expect(shadow.color.g, closeTo(colors[entry.key]!.g, 0.001));
-          expect(shadow.color.b, closeTo(colors[entry.key]!.b, 0.001));
-        }
+        // v3 badges are flat: color + icon + text, no glow.
+        expect(icon.style?.shadows, anyOf(isNull, isEmpty));
       });
     }
 

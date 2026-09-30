@@ -75,6 +75,10 @@ void main() {
     expect(find.text('READY'), findsOneWidget);
     expect(_value('bottom_bar_rtt', '12.4 MS'), findsOneWidget);
     expect(_value('bottom_bar_crc', '0'), findsOneWidget);
+    // v3: counters are flat neutral, no glow.
+    final crc = tester.widget<Text>(_value('bottom_bar_crc', '0'));
+    expect(crc.style?.color, const GuiPalette().fgStrong);
+    expect(crc.style?.shadows, anyOf(isNull, isEmpty));
     expect(_value('bottom_bar_resync', '0'), findsOneWidget);
     expect(_value('bottom_bar_retry', '0'), findsOneWidget);
     expect(_value('bottom_bar_dirty', '0'), findsOneWidget);

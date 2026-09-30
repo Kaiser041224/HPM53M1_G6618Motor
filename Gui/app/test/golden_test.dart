@@ -5,12 +5,11 @@ import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/section_title.dart';
 
-/// Rendering-level regression tests for the hairline motifs. These guard the
-/// design-system §3.2 "一亮两暗" lines against the transparent-container
-/// `boxShadow` defect, where an unfilled box shadow bleeds into the interior.
-/// Regenerate with `flutter test --update-goldens`.
+/// Rendering-level regression tests for the v3 hairline motifs: a single bright
+/// cyan frame with a dark inner seam, and a single bright underline beneath the
+/// section title. Regenerate with `flutter test --update-goldens`.
 void main() {
-  testWidgets('golden: HairlineFrame main keeps its interior transparent', (
+  testWidgets('golden: HairlineFrame main is a bright frame with a dark seam', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -42,7 +41,7 @@ void main() {
     );
   });
 
-  testWidgets('golden: SectionTitle underline is a stack of thin lines', (
+  testWidgets('golden: SectionTitle underline is a single bright line', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(

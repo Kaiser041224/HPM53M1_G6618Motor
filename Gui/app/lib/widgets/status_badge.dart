@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 
@@ -29,8 +28,8 @@ enum ItemState {
 ///
 /// Color must never carry the meaning alone (design-system §6, rule 1) — a
 /// badge always renders a state glyph beside its label so it survives color
-/// blindness, grayscale screenshots and projectors. The glow keeps the badge's
-/// own hue and never cross-colorizes (design-system §2.4).
+/// blindness, grayscale screenshots and projectors. v3 renders the badge flat:
+/// the status hue without a glow.
 class StatusBadge extends StatelessWidget {
   const StatusBadge({super.key, required this.state, required this.label});
 
@@ -64,10 +63,9 @@ class StatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
-    final style = GuiGlowStyles.status(
-      colorFor(palette, state),
-      GuiTypeScale.of(context).label,
-    );
+    final style = GuiTypeScale.of(
+      context,
+    ).label.copyWith(color: colorFor(palette, state));
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.baseline,

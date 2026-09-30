@@ -56,7 +56,7 @@ class DeviceAscii extends StatelessWidget {
         for (var i = 0; i < artLines.length; i++)
           Text(
             artLines[i],
-            style: GuiGlowStyles.status(artColorStops[i], glyph),
+            style: GuiGlowStyles.ascii(artColorStops[i], glyph),
           ),
         if (modelName != null) ...<Widget>[
           const SizedBox(height: 6),

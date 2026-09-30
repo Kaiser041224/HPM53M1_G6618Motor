@@ -38,6 +38,7 @@ void main() {
       final painter = SolidPiePainter(
         fractions: const <double>[0.25, 0.5, 0.25],
         colors: <Color>[palette.series1, palette.series2, palette.series3],
+        seamColor: palette.lineDim,
       );
       final paints = painter.buildPaints();
       expect(paints, hasLength(3));
@@ -51,13 +52,30 @@ void main() {
       final a = SolidPiePainter(
         fractions: const <double>[1, 0, 0],
         colors: const <Color>[Colors.red, Colors.green, Colors.blue],
+        seamColor: palette.lineDim,
       );
       final b = SolidPiePainter(
         fractions: const <double>[0, 1, 0],
         colors: const <Color>[Colors.red, Colors.green, Colors.blue],
+        seamColor: palette.lineDim,
       );
       expect(a.shouldRepaint(b), isTrue);
       expect(a.shouldRepaint(a), isFalse);
+    });
+
+    test('v3 seam color participates in repaint', () {
+      final a = SolidPiePainter(
+        fractions: const <double>[0.5, 0.5],
+        colors: const <Color>[Colors.red, Colors.green],
+        seamColor: const Color(0xFF14393C),
+      );
+      final b = SolidPiePainter(
+        fractions: const <double>[0.5, 0.5],
+        colors: const <Color>[Colors.red, Colors.green],
+        seamColor: const Color(0xFF000000),
+      );
+      expect(a.seamColor, const Color(0xFF14393C));
+      expect(a.shouldRepaint(b), isTrue);
     });
   });
 }

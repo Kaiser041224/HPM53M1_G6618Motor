@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 
 ParamMetaDto makeMeta(int index, String name) => ParamMetaDto(
   index: index,
@@ -100,6 +101,9 @@ void main() {
 
     expect(find.text('DEVICE ID PENDING'), findsNothing);
     expect(find.text('G6618 Motor Controller'), findsOneWidget);
+    // v3: the device name line is white (fgStrong), big and white.
+    final name = tester.widget<Text>(find.text('G6618 Motor Controller'));
+    expect(name.style?.color, const GuiPalette().fgStrong);
     expect(find.textContaining('PROTO v1.0'), findsOneWidget);
     expect(find.textContaining('TCP'), findsOneWidget);
     expect(find.text('FW — · SERIAL 未提供'), findsOneWidget);
@@ -177,6 +181,27 @@ void main() {
     expect(find.text('ADDRESS'), findsOneWidget);
     expect(find.text('HANDSHAKE'), findsOneWidget);
     expect(find.text('LINK QUALITY'), findsOneWidget);
+  });
+
+  testWidgets('连接/断开全换 GuiButton（连接 primary，未连接时断开禁用）', (
+    WidgetTester tester,
+  ) async {
+    final state = AppState.test();
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+    await tester.tap(find.byKey(const Key('top_bar_connect_tab')));
+    await tester.pumpAndSettle();
+
+    final connect = tester.widget<GuiButton>(
+      find.widgetWithText(GuiButton, '连接'),
+    );
+    expect(connect.variant, GuiButtonVariant.primary);
+    final disconnect = tester.widget<GuiButton>(
+      find.widgetWithText(GuiButton, '断开'),
+    );
+    expect(disconnect.variant, GuiButtonVariant.normal);
+    expect(disconnect.onPressed, isNull);
   });
 
   testWidgets('PARAM META 为单计数（N 项），不显示 N / N', (

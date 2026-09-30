@@ -4,8 +4,10 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/glow_value.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stale_gate.dart';
+import 'panel_title.dart';
 
 /// Formats a stale age: whole seconds without decimals, otherwise one.
 String _seconds(double value) => value == value.roundToDouble()
@@ -19,9 +21,10 @@ String _seconds(double value) => value == value.roundToDouble()
 /// system (§6 rule 2): stale shows `— <unit>` inside a dashed frame plus a
 /// yellow "N 秒未更新" note and no glow, unknown shows a bare `—` with no
 /// footer warning at all (never-read is not the same as a failed poll). A real
-/// `0` is never confused with the fallback. [warn] colours the value yellow
-/// with a same-hue glow and shows `▲` + [warnText], the icon completing the
-/// colour + icon + text triple encoding (design-system §2.4/§6).
+/// `0` is never confused with the fallback. [warn] colours the value with the
+/// status warning hue and shows `▲` + [warnText], the icon completing the
+/// colour + icon + text triple encoding (design-system §2.4/§6). Otherwise the
+/// measured value is flat neutral white (v3 tone mapping).
 class StatusTile extends StatelessWidget {
   const StatusTile({
     super.key,
@@ -35,7 +38,6 @@ class StatusTile extends StatelessWidget {
     this.staleSeconds,
     this.warn = false,
     this.warnText,
-    this.valueColor,
   });
 
   /// Wire key, rendered uppercase (e.g. `VBUS`, `I_U`).
@@ -68,9 +70,6 @@ class StatusTile extends StatelessWidget {
   /// Warning note; defaults to `接近门限`.
   final String? warnText;
 
-  /// Optional series colour for the value (e.g. phase tint).
-  final Color? valueColor;
-
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
@@ -79,10 +78,11 @@ class StatusTile extends StatelessWidget {
     final TextStyle valueStyle;
     if (warn) {
       valueStyle = GuiGlowStyles.status(palette.stWarn, scale.data);
-    } else if (valueColor != null) {
-      valueStyle = GuiGlowStyles.status(valueColor!, scale.data);
     } else {
-      valueStyle = GuiGlowStyles.strong(scale.data);
+      // v3 tone mapping: a measured tile value is flat neutral white.
+      valueStyle = scale.data.copyWith(
+        color: GlowValue.colorFor(palette, Tone.neutral),
+      );
     }
 
     final valueRow = Row(
@@ -173,16 +173,17 @@ class StatusTile extends StatelessWidget {
 
 /// Relative load against a threshold, using the LED bar motif.
 ///
-/// The bar is filled by `|value| / threshold` and the right cell shows the
-/// percentage. When no threshold (or no value) is available the bar stays
-/// empty and shows `—` — never a fabricated `0 %` (design-system §6 rule 2).
+/// The bar is filled by `|value| / threshold` and both the fill and the right
+/// cell readout take a three-band semantic tone from the ratio — green below
+/// 50 %, amber for 50–85 %, red above 85 % (v3 tone mapping). When no threshold
+/// (or no value) is available the bar stays empty and shows `—` — never a
+/// fabricated `0 %` (design-system §6 rule 2).
 class HeatLoadBar extends StatelessWidget {
   const HeatLoadBar({
     super.key,
     required this.name,
     required this.value,
     required this.threshold,
-    this.color,
   });
 
   /// Row label.
@@ -194,9 +195,6 @@ class HeatLoadBar extends StatelessWidget {
   /// The trip threshold, or null when the parameter is unloaded.
   final double? threshold;
 
-  /// Fill colour; defaults to the cyan accent.
-  final Color? color;
-
   /// `|value| / threshold` clamped to `[0, 1]`, or null when undefined.
   double? get ratio {
     final t = threshold;
@@ -205,12 +203,47 @@ class HeatLoadBar extends StatelessWidget {
     return (v.abs() / t).clamp(0.0, 1.0).toDouble();
   }
 
+  /// Three-band semantic tone for a load [ratio] (v3 tone mapping):
+  /// `< 0.50` green, `0.50..0.85` amber, `> 0.85` red.
+  static Tone toneForRatio(double? ratio) {
+    if (ratio == null) return Tone.neutral;
+    if (ratio < 0.5) return Tone.green;
+    if (ratio <= 0.85) return Tone.amber;
+    return Tone.red;
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final value01 = ratio;
-    final fill = color ?? palette.accent;
+    if (value01 == null) {
+      return Row(
+        children: <Widget>[
+          SizedBox(width: 52, child: Text(name, style: scale.label)),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Container(
+              height: 13,
+              decoration: BoxDecoration(
+                color: palette.bgVoid,
+                border: Border.all(color: palette.lineDim),
+              ),
+            ),
+          ),
+          const SizedBox(width: 11),
+          SizedBox(
+            width: 66,
+            child: Text(
+              '—',
+              textAlign: TextAlign.right,
+              style: scale.label,
+            ),
+          ),
+        ],
+      );
+    }
+    final fill = GlowValue.colorFor(palette, toneForRatio(value01));
     return Row(
       children: <Widget>[
         SizedBox(width: 52, child: Text(name, style: scale.label)),
@@ -222,26 +255,20 @@ class HeatLoadBar extends StatelessWidget {
               color: palette.bgVoid,
               border: Border.all(color: palette.lineDim),
             ),
-            child: value01 == null
-                ? null
-                : FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: value01,
-                    child: Container(color: fill),
-                  ),
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: value01,
+              child: Container(color: fill),
+            ),
           ),
         ),
         const SizedBox(width: 11),
         SizedBox(
           width: 66,
           child: Text(
-            value01 == null ? '—' : '${(value01 * 100).round()} %',
+            '${(value01 * 100).round()} %',
             textAlign: TextAlign.right,
-            style: value01 == null
-                ? scale.label
-                : GuiGlowStyles.soft(
-                    scale.label.copyWith(color: palette.fgStrong),
-                  ),
+            style: scale.data.copyWith(fontSize: 10.5, color: fill),
           ),
         ),
       ],
@@ -262,7 +289,6 @@ class _TileSpec {
     required this.note,
     this.threshold,
     this.absThreshold = false,
-    this.valueColor,
   });
 
   final String keyName;
@@ -274,7 +300,6 @@ class _TileSpec {
   final String note;
   final double? threshold;
   final bool absThreshold;
-  final Color? valueColor;
 
   /// Fraction of the threshold reached, or null when undefined.
   double? get load {
@@ -306,7 +331,6 @@ class StatusZone extends StatelessWidget {
   }
 
   Widget _build(BuildContext context) {
-    final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final status = state.status;
 
@@ -331,7 +355,6 @@ class StatusZone extends StatelessWidget {
         note: 'RMS',
         threshold: state.thresholdCurrent,
         absThreshold: true,
-        valueColor: palette.series1,
       ),
       _TileSpec(
         keyName: 'I_V',
@@ -343,7 +366,6 @@ class StatusZone extends StatelessWidget {
         note: 'RMS',
         threshold: state.thresholdCurrent,
         absThreshold: true,
-        valueColor: palette.series2,
       ),
       _TileSpec(
         keyName: 'I_W',
@@ -355,7 +377,6 @@ class StatusZone extends StatelessWidget {
         note: 'RMS',
         threshold: state.thresholdCurrent,
         absThreshold: true,
-        valueColor: palette.series3,
       ),
       _TileSpec(
         keyName: 'NTC',
@@ -428,7 +449,6 @@ class StatusZone extends StatelessWidget {
           warnText: warn
               ? '接近门限 ${spec.threshold!.toStringAsFixed(0)}'
               : null,
-          valueColor: spec.valueColor,
         ),
       );
     }
@@ -448,10 +468,7 @@ class StatusZone extends StatelessWidget {
         const SizedBox(height: 14),
         _grid(context, tiles),
         const SizedBox(height: 24),
-        Text(
-          '热与负载 · 相对门限',
-          style: scale.section.copyWith(fontSize: 11),
-        ),
+        const PanelTitle(title: '热与负载 · 相对门限', en: '%'),
         const SizedBox(height: 12),
         for (final bar in _heatLoads(context, status)) ...[
           bar,
@@ -488,37 +505,31 @@ class StatusZone extends StatelessWidget {
   }
 
   List<Widget> _heatLoads(BuildContext context, StatusDto? status) {
-    final palette = GuiPalette.of(context);
     return <Widget>[
       HeatLoadBar(
         name: 'NTC',
         value: status?.ntcTemp,
         threshold: state.thresholdNtc,
-        color: palette.stWarn,
       ),
       HeatLoadBar(
         name: 'U 相',
         value: status?.iU,
         threshold: state.thresholdCurrent,
-        color: palette.series1,
       ),
       HeatLoadBar(
         name: 'V 相',
         value: status?.iV,
         threshold: state.thresholdCurrent,
-        color: palette.series2,
       ),
       HeatLoadBar(
         name: 'W 相',
         value: status?.iW,
         threshold: state.thresholdCurrent,
-        color: palette.series3,
       ),
       HeatLoadBar(
         name: 'VBUS',
         value: status?.vbus,
         threshold: state.thresholdVbus,
-        color: palette.stNormal,
       ),
       const HeatLoadBar(name: '模组', value: null, threshold: null),
     ];

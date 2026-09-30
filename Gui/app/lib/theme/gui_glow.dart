@@ -1,97 +1,64 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 
 import 'gui_palette.dart';
 
-/// Glow tiers, see design-system §2.4 "分层给光，不是整屏发光".
+/// Glow tiers (v3).
+///
+/// The screenshot-derived v3 visual keeps only a little light: a single soft
+/// layer for titles / large values. The old multi-layer tiers are gone from
+/// the general vocabulary and survive only in [GuiGlowStyles.ascii] for the
+/// device ASCII block art.
 enum GlowStrength {
-  /// Four layers + stroke: large values, device art, headings.
+  /// Single soft layer: large values, headings.
   strong,
 
-  /// Inner + outer halo: secondary values, legend, bars.
+  /// Single soft layer: secondary values.
   soft,
 
-  /// A single faint 4px halo: labels, units, table headers.
+  /// A single very faint halo: labels, units.
   weak,
 }
 
-/// Multi-layer outline glow helpers.
+/// Glow helpers, v3.
 ///
-/// Implementation notes (design-system §2.4): glow is carried by
-/// `TextStyle.shadows`, split into core / inner / outer / far layers. A single
-/// layer smears, so the layers are kept distinct. The 0.4px outline is applied
-/// as a `foreground` stroke Paint for the [strong] tier; because Flutter's
-/// `TextStyle` forbids `color` and `foreground` together, the glyph fill is
-/// supplied by a zero-blur, zero-offset [Shadow] placed on top of the glow
-/// layers. This yields fill + true stroke + glow on a single [Text] node.
+/// Glow is carried by `TextStyle.shadows`. v3 avoids stacking layers (a single
+/// layer no longer smears because it is deliberately faint):
+///
+/// - [strong] / [soft] → one [GuiPalette.glowSoft] layer;
+/// - [weak] → one faint halo;
+/// - [none] → no shadow at all;
+/// - [status] → one same-hue layer, statuses must never cross-colorize;
+/// - [ascii] → the legacy three-layer same-hue glow, kept for the device art.
 class GuiGlowStyles {
   GuiGlowStyles._();
 
   static const GuiPalette _palette = GuiPalette();
 
-  /// Builds a stroked + filled style. [fill] defaults to the base text color.
-  static TextStyle _outlined(TextStyle base, Color fill) {
-    final stroke = ui.Paint()
-      ..style = ui.PaintingStyle.stroke
-      ..strokeWidth = 0.4
-      ..color = _palette.stroke;
-    return TextStyle(
-      inherit: base.inherit,
-      fontFamily: base.fontFamily,
-      fontFamilyFallback: base.fontFamilyFallback,
-      fontSize: base.fontSize,
-      fontWeight: base.fontWeight,
-      fontStyle: base.fontStyle,
-      letterSpacing: base.letterSpacing,
-      wordSpacing: base.wordSpacing,
-      height: base.height,
-      fontFeatures: base.fontFeatures,
-      decoration: base.decoration,
-      foreground: stroke,
-      shadows: <Shadow>[
-        Shadow(color: _palette.glow3, blurRadius: 18),
-        Shadow(color: _palette.glow2, blurRadius: 6),
-        Shadow(color: _palette.glow1, blurRadius: 1),
-        Shadow(color: fill, blurRadius: 0, offset: Offset.zero),
-      ],
-    );
-  }
+  /// Blur of the v3 soft layer (`0 0 8px`).
+  static const double softBlur = 8;
 
-  /// Strong glow: core + inner + outer halo, plus the 0.4px stroke.
+  /// Strong glow: a single soft layer (v3 — the old stroke is gone).
   static TextStyle strong(TextStyle base) =>
-      _outlined(base, base.color ?? _palette.fgStrong);
+      base.copyWith(shadows: <Shadow>[
+        Shadow(color: _palette.glowSoft, blurRadius: softBlur),
+      ]);
 
-  /// Soft glow: inner + outer halo only.
+  /// Soft glow: a single soft layer.
   static TextStyle soft(TextStyle base) => softWith(_palette, base);
 
   /// Soft glow using an explicit [palette].
   ///
-  /// Callers that resolved a context palette pass it here so every glow layer
-  /// is sourced from the same palette as the rest of the resolved style
-  /// (design-system §2.4); [soft] stays the default-palette convenience.
+  /// Callers that resolved a context palette pass it here so the glow layer
+  /// is sourced from the same palette as the rest of the resolved style.
   static TextStyle softWith(GuiPalette palette, TextStyle base) =>
-      base.copyWith(
-        shadows: <Shadow>[
-          Shadow(color: palette.glow3, blurRadius: 18),
-          Shadow(color: palette.glow2, blurRadius: 6),
-        ],
-      );
+      base.copyWith(shadows: <Shadow>[
+        Shadow(color: palette.glowSoft, blurRadius: softBlur),
+      ]);
 
-  /// Wide glow: all four layers, for large surfaces / big text.
-  static TextStyle wide(TextStyle base) => base.copyWith(
-    shadows: <Shadow>[
-      Shadow(color: _palette.glow4, blurRadius: 34),
-      Shadow(color: _palette.glow3, blurRadius: 18),
-      Shadow(color: _palette.glow2, blurRadius: 6),
-      Shadow(color: _palette.glow1, blurRadius: 1),
-    ],
-  );
-
-  /// Weak glow: one faint 4px inner halo, labels recede.
+  /// Weak glow: one faint halo, labels recede.
   static TextStyle weak(TextStyle base) => base.copyWith(
     shadows: <Shadow>[
-      Shadow(color: _palette.glow2.withValues(alpha: 0.15), blurRadius: 4),
+      Shadow(color: _palette.glowSoft.withValues(alpha: 0.15), blurRadius: 4),
     ],
   );
 
@@ -99,8 +66,17 @@ class GuiGlowStyles {
   static TextStyle none(TextStyle base) => base.copyWith(shadows: const <Shadow>[]);
 
   /// Same-hue glow for a status color. Statuses must never cross-colorize:
-  /// a red fault glows red, a yellow warning glows yellow (design-system §2.4).
+  /// a red fault glows red, a yellow warning glows yellow.
   static TextStyle status(Color color, TextStyle base) => base.copyWith(
+    color: color,
+    shadows: <Shadow>[
+      Shadow(color: color.withValues(alpha: 0.30), blurRadius: softBlur),
+    ],
+  );
+
+  /// Device ASCII glow: the legacy three-layer same-hue glow, preserved as the
+  /// only place the strong multi-layer motif survives (v3).
+  static TextStyle ascii(Color color, TextStyle base) => base.copyWith(
     color: color,
     shadows: <Shadow>[
       Shadow(color: color.withValues(alpha: 0.2), blurRadius: 18),

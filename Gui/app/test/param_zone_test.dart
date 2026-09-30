@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/param_zone.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 
 ParamMetaDto makeMeta(
   int index,
@@ -162,7 +163,7 @@ void main() {
     expect(find.textContaining('故障锁存'), findsWidgets);
   });
 
-  testWidgets('联锁提示行：运行 + 锁存时黄字拒绝，含当前状态与锁存计数', (tester) async {
+  testWidgets('联锁提示行：运行 + 锁存时琥珀拒绝（▲ 前缀），含当前状态与锁存计数', (tester) async {
     final state = AppState.test(
       metas: [makeMeta(0, 'motor.pole_pairs')],
       status: makeStatus(motorRunning: true),
@@ -173,7 +174,9 @@ void main() {
     await _pump(tester, state);
 
     final line = tester.widget<Text>(find.textContaining('落盘需停机'));
-    expect(line.style?.color, const GuiPalette().stWarn);
+    // v3 tone mapping: a refused flush is flat amber, not the warn status hue.
+    expect(line.style?.color, const GuiPalette().valueAmber);
+    expect(find.textContaining('▲ 落盘需停机'), findsOneWidget);
     expect(find.textContaining('当前 Run'), findsOneWidget);
     expect(find.textContaining('锁存 1 项'), findsOneWidget);
     expect(find.textContaining('COMMIT 将被拒绝'), findsOneWidget);
@@ -189,6 +192,44 @@ void main() {
     await _pump(tester, state);
 
     final line = tester.widget<Text>(find.textContaining('可以落盘'));
-    expect(line.style?.color, const GuiPalette().stNormal);
+    expect(line.style?.color, const GuiPalette().valueGreen);
+  });
+
+  testWidgets('参数值扁平琥珀；脏值走 stWarn（tone mapping）', (tester) async {
+    final state = AppState.test(
+      metas: [
+        makeMeta(0, 'motor.rs_ohm', ty: 0, min: 0, max: 10),
+        makeMeta(1, 'motor.ls_h', ty: 0, min: 0, max: 1),
+      ],
+    );
+    addTearDown(state.dispose);
+    state.values['motor.rs_ohm'] = ParamValueDto(ty: 0, raw: f32(0.158));
+    state.values['motor.ls_h'] = ParamValueDto(ty: 0, raw: f32(0.000119));
+    state.dirty.add('motor.ls_h');
+
+    await _pump(tester, state);
+
+    final clean = tester.widget<Text>(find.text('0.16'));
+    expect(clean.style?.color, const GuiPalette().valueAmber);
+    final dirtyValue = tester.widget<Text>(find.text('0.00'));
+    expect(dirtyValue.style?.color, const GuiPalette().stWarn);
+  });
+
+  testWidgets('工具栏与对话框按钮为 GuiButton（读全部/COMMIT primary）', (tester) async {
+    final state = AppState.test(metas: [makeMeta(0, 'motor.pole_pairs')]);
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    expect(find.widgetWithText(GuiButton, '读全部'), findsOneWidget);
+    final commit = tester.widget<GuiButton>(
+      find.widgetWithText(GuiButton, 'COMMIT 落盘'),
+    );
+    expect(commit.variant, GuiButtonVariant.primary);
+
+    await tester.tap(find.text('COMMIT 落盘'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(GuiButton, '确认写入'), findsOneWidget);
+    expect(find.widgetWithText(GuiButton, '取消'), findsOneWidget);
   });
 }

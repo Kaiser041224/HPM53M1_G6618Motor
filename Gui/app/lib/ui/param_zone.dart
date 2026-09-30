@@ -7,6 +7,8 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/glow_value.dart';
+import '../widgets/gui_button.dart';
 import '../widgets/section_title.dart';
 
 /// Human-readable name of a parameter wire type.
@@ -126,16 +128,17 @@ class _ParamZoneState extends State<ParamZone> {
           ),
         ),
         const SizedBox(width: 12),
-        OutlinedButton.icon(
+        GuiButton(
+          label: '读全部',
+          icon: Icons.refresh,
           onPressed: state.loadingParams ? null : () => state.loadMetas(),
-          icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('读全部'),
         ),
         const SizedBox(width: 8),
-        FilledButton.icon(
+        GuiButton(
+          label: 'COMMIT 落盘',
+          variant: GuiButtonVariant.primary,
+          icon: Icons.save,
           onPressed: () => _confirmCommit(context, state),
-          icon: const Icon(Icons.save, size: 16),
-          label: const Text('COMMIT 落盘'),
         ),
       ],
     );
@@ -246,13 +249,19 @@ class _ParamZoneState extends State<ParamZone> {
     final value = state.values[meta.name];
     final shown = value == null ? '—' : formatValue(value.ty, value.raw);
 
-    final valueBase = scale.data.copyWith(
-      fontSize: 12.5,
-      color: palette.fgStrong,
-    );
-    final valueStyle = dirty
-        ? GuiGlowStyles.status(palette.stWarn, valueBase)
-        : GuiGlowStyles.strong(valueBase);
+    // v3 tone mapping: a parameter value is flat amber; a local edit not yet
+    // flushed takes the warning hue plus the dirty dot below.
+    final valueBase = scale.data.copyWith(fontSize: 12.5);
+    final TextStyle valueStyle;
+    if (value == null) {
+      valueStyle = valueBase.copyWith(color: palette.fgMute);
+    } else if (dirty) {
+      valueStyle = valueBase.copyWith(color: palette.stWarn);
+    } else {
+      valueStyle = valueBase.copyWith(
+        color: GlowValue.colorFor(palette, Tone.amber),
+      );
+    }
 
     final range = '${_num(meta.min)}..${_num(meta.max)}';
     final reboot = meta.apply == 1;
@@ -328,14 +337,19 @@ class _ParamZoneState extends State<ParamZone> {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final allowed = state.commitAllowed;
-    final color = allowed ? palette.stNormal : palette.stWarn;
+    // v3 tone mapping: a refused flush is flat amber (▲ prefix), an accepted
+    // one flat green; the icon keeps the meaning off colour alone.
+    final color = GlowValue.colorFor(
+      palette,
+      allowed ? Tone.green : Tone.amber,
+    );
     final text = allowed
         ? '✓ 可以落盘'
-        : '• 落盘需停机且无故障锁存——当前 ${state.motorRunning ? 'Run' : 'Stop'}，'
+        : '▲ 落盘需停机且无故障锁存——当前 ${state.motorRunning ? 'Run' : 'Stop'}，'
               '锁存 ${state.latchedCount} 项，COMMIT 将被拒绝';
     return Text(
       text,
-      style: GuiGlowStyles.status(color, scale.body.copyWith(fontSize: 12)),
+      style: scale.body.copyWith(fontSize: 12, color: color),
     );
   }
 
@@ -357,13 +371,14 @@ class _ParamZoneState extends State<ParamZone> {
         title: const Text('COMMIT 落盘'),
         content: const Text('将参数写入设备 flash。须在停机且无故障锁存时执行。'),
         actions: <Widget>[
-          TextButton(
+          GuiButton(
+            label: '取消',
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('取消'),
           ),
-          FilledButton(
+          GuiButton(
+            label: '确认写入',
+            variant: GuiButtonVariant.primary,
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('确认写入'),
           ),
         ],
       ),
@@ -563,13 +578,14 @@ class _ParamEditDialogState extends State<_ParamEditDialog> {
         ],
       ),
       actions: <Widget>[
-        TextButton(
+        GuiButton(
+          label: '取消',
           onPressed: _busy ? null : () => Navigator.pop(context),
-          child: const Text('取消'),
         ),
-        FilledButton(
+        GuiButton(
+          label: '写入',
+          variant: GuiButtonVariant.primary,
           onPressed: _busy ? null : _submit,
-          child: const Text('写入'),
         ),
       ],
     );

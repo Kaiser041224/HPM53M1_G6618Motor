@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../theme/gui_palette.dart';
+
 /// Absolute-magnitude share of the three phase currents, or null when the
 /// share is undefined.
 ///
@@ -20,8 +22,8 @@ List<double>? phaseCurrentFractions(num? iu, num? iv, num? iw) {
   return <double>[u / total, v / total, w / total];
 }
 
-/// Solid-wedge pie chart (design-system §3.5: solid wedges, no stroke, no
-/// separating seam, no shadow).
+/// Solid-wedge pie chart (v3: still no outer glow, now with 1px dark seams
+/// between wedges).
 ///
 /// [fractions] must be non-negative and normally sum to 1; [colors] supplies
 /// one fill per wedge. The first wedge starts at 12 o'clock.
@@ -47,16 +49,25 @@ class SolidPie extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = GuiPalette.of(context);
     return CustomPaint(
       size: Size.square(size),
-      painter: SolidPiePainter(fractions: fractions, colors: colors),
+      painter: SolidPiePainter(
+        fractions: fractions,
+        colors: colors,
+        seamColor: palette.lineDim,
+      ),
     );
   }
 }
 
-/// Paints [SolidPie.fractions] as solid wedges with no stroke or seam.
+/// Paints [SolidPie.fractions] as solid wedges separated by 1px dark seams.
 class SolidPiePainter extends CustomPainter {
-  const SolidPiePainter({required this.fractions, required this.colors});
+  const SolidPiePainter({
+    required this.fractions,
+    required this.colors,
+    required this.seamColor,
+  });
 
   /// One share per wedge, in draw order.
   final List<double> fractions;
@@ -64,10 +75,11 @@ class SolidPiePainter extends CustomPainter {
   /// Fill colour per wedge; wraps around if shorter than [fractions].
   final List<Color> colors;
 
-  /// Angular overlap between adjacent wedges. Antialiased `drawArc` edges can
-  /// leave a hairline seam where two wedges meet; a sliver of overlap lets the
-  /// next wedge paint over it so the disc reads as one solid fill.
-  static const double seamOverlap = 0.002;
+  /// Dark color of the 1px radial seam drawn between adjacent wedges (v3).
+  final Color seamColor;
+
+  /// Width of the radial seam (v3).
+  static const double seamWidth = 1;
 
   /// The fill-only paints, one per colour. Exposed so the "solid, no stroke"
   /// invariant (design-system §3.5) can be asserted without a golden.
@@ -91,19 +103,29 @@ class SolidPiePainter extends CustomPainter {
     for (var i = 0; i < fractions.length; i++) {
       final sweep = fractions[i] * 2 * math.pi;
       if (sweep <= 0) continue;
-      canvas.drawArc(
-        rect,
-        angle,
-        sweep + seamOverlap,
-        true,
-        paints[i % paints.length],
-      );
+      canvas.drawArc(rect, angle, sweep, true, paints[i % paints.length]);
       angle += sweep;
+    }
+    if (fractions.length > 1) {
+      final seamPaint = Paint()
+        ..color = seamColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = seamWidth;
+      final center = rect.center;
+      final radius = size.shortestSide / 2;
+      var boundary = start;
+      for (final fraction in fractions) {
+        boundary += fraction * 2 * math.pi;
+        final end =
+            center + Offset(math.cos(boundary), math.sin(boundary)) * radius;
+        canvas.drawLine(center, end, seamPaint);
+      }
     }
   }
 
   @override
   bool shouldRepaint(covariant SolidPiePainter oldDelegate) =>
       !listEquals(oldDelegate.fractions, fractions) ||
-      !listEquals(oldDelegate.colors, colors);
+      !listEquals(oldDelegate.colors, colors) ||
+      oldDelegate.seamColor != seamColor;
 }

@@ -28,11 +28,19 @@ void main() {
       expect(palette.lineWidth, 1.0);
     });
 
-    test('text tiers are translucent rgba, not solid', () {
-      expect(palette.fg, const Color.fromRGBO(184, 212, 210, 0.76));
-      expect(palette.fgStrong, const Color.fromRGBO(127, 227, 219, 0.94));
-      expect(palette.fgDim, const Color.fromRGBO(110, 143, 142, 0.66));
-      expect(palette.fgMute, const Color.fromRGBO(74, 102, 104, 0.78));
+    test('text tiers are solid v3 colors, not translucent', () {
+      expect(palette.fg, const Color(0xFFC8DEDC));
+      expect(palette.fgStrong, const Color(0xFFEAF6F4));
+      expect(palette.fgDim, const Color(0xFF7FA8A6));
+      expect(palette.fgMute, const Color(0xFF5E8886));
+      for (final tier in <Color>[
+        palette.fg,
+        palette.fgStrong,
+        palette.fgDim,
+        palette.fgMute,
+      ]) {
+        expect(tier.a, 1.0);
+      }
     });
 
     test('accents: cyan primary, yellow secondary (not magenta)', () {
@@ -51,6 +59,25 @@ void main() {
       expect(palette.stPending, const Color(0xFFB8B848));
     });
 
+    test('flat semantic value colors (v3)', () {
+      expect(palette.valueAmber, const Color(0xFFE8C84A));
+      expect(palette.valueGreen, const Color(0xFF5ED85E));
+      expect(palette.valueRed, const Color(0xFFF06858));
+      expect(palette.valuePink, const Color(0xFFE888B8));
+      expect(palette.valueViolet, const Color(0xFFA888E8));
+      expect(palette.white, const Color(0xFFEAF6F4));
+    });
+
+    test('three-tier button colors (v3)', () {
+      expect(palette.btnFill, const Color(0xFF243234));
+      expect(palette.btnBorder, const Color(0xFF4E7A7C));
+      expect(palette.btnText, const Color(0xFFC8DEDC));
+      expect(palette.btnPrimaryBorder, const Color(0xFF58C8C0));
+      expect(palette.btnPrimaryText, const Color(0xFF7AD8D0));
+      expect(palette.btnDangerBorder, const Color(0xFFC85848));
+      expect(palette.btnDangerText, const Color(0xFFF08878));
+    });
+
     test('data series six', () {
       expect(palette.series1, const Color(0xFF58C8C0));
       expect(palette.series2, const Color(0xFFC8C000));
@@ -60,12 +87,13 @@ void main() {
       expect(palette.series6, const Color(0xFFF88070));
     });
 
-    test('glow layers and stroke come from tokens.css', () {
+    test('glow layers and stroke come from tokens.css; glowSoft is v3', () {
       expect(palette.glow1, const Color.fromRGBO(127, 227, 219, 0.85));
       expect(palette.glow2, const Color.fromRGBO(88, 200, 192, 0.48));
       expect(palette.glow3, const Color.fromRGBO(88, 200, 192, 0.24));
       expect(palette.glow4, const Color.fromRGBO(88, 200, 192, 0.11));
       expect(palette.stroke, const Color.fromRGBO(127, 227, 219, 0.46));
+      expect(palette.glowSoft, const Color.fromRGBO(88, 200, 192, 0.22));
     });
   });
 
@@ -112,36 +140,61 @@ void main() {
     expect(scale.data.fontFeatures, contains(const FontFeature.tabularFigures()));
   });
 
+  test('GuiTypeScale.sectionTitle is white Chinese 16px w600 (v3)', () {
+    const palette = GuiPalette();
+    final scale = GuiTypeScale(const GuiPalette());
+    expect(scale.sectionTitle.fontFamily, 'Noto Sans SC');
+    expect(scale.sectionTitle.fontSize, 16);
+    expect(scale.sectionTitle.fontWeight, FontWeight.w600);
+    expect(scale.sectionTitle.color, palette.fgStrong);
+  });
+
   group('GuiGlowStyles', () {
     final base = GuiTypeScale(const GuiPalette()).data;
 
-    test('strong has three layers (core + inner + outer)', () {
-      expect(GuiGlowStyles.strong(base).shadows!.length, greaterThanOrEqualTo(3));
+    test('strong is a single soft layer with no stroke (v3)', () {
+      final style = GuiGlowStyles.strong(base);
+      expect(style.shadows!.length, 1);
+      expect(style.foreground, isNull);
     });
 
-    test('soft has fewer layers than strong', () {
-      expect(
-        GuiGlowStyles.soft(base).shadows!.length,
-        lessThan(GuiGlowStyles.strong(base).shadows!.length),
-      );
+    test('soft is a single soft layer too', () {
+      expect(GuiGlowStyles.soft(base).shadows!.length, 1);
     });
 
-    test('weak is a single faint inner halo without stroke', () {
+    test('none clears the shadows', () {
+      expect(GuiGlowStyles.none(base).shadows, isEmpty);
+    });
+
+    test('weak is a single faint halo without stroke', () {
       expect(GuiGlowStyles.weak(base).shadows!.length, 1);
       expect(GuiGlowStyles.weak(base).foreground, isNull);
     });
 
-    test('status glow keeps the status hue (no cross-coloring)', () {
+    test('status glow is one layer and keeps the status hue', () {
       const fault = Color(0xFFF88070);
       final shadows = GuiGlowStyles.status(fault, base).shadows!;
+      expect(shadows.length, 1);
       for (final shadow in shadows) {
         expect(shadow.color.r, closeTo(fault.r, 0.001));
         expect(shadow.color.g, closeTo(fault.g, 0.001));
+        expect(shadow.color.a, closeTo(0.30, 0.001));
+      }
+    });
+
+    test('ascii keeps the multi-layer device glow, same hue', () {
+      const stop = Color(0xFF00D7FF);
+      final shadows = GuiGlowStyles.ascii(stop, base).shadows!;
+      expect(shadows.length, greaterThan(1));
+      for (final shadow in shadows) {
+        expect(shadow.color.r, closeTo(stop.r, 0.001));
+        expect(shadow.color.g, closeTo(stop.g, 0.001));
+        expect(shadow.color.b, closeTo(stop.b, 0.001));
       }
     });
   });
 
-  testWidgets('GlowText strong renders >=3 shadow layers', (
+  testWidgets('GlowText strong renders a single soft layer', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -156,7 +209,7 @@ void main() {
     final maxShadows = texts
         .map((t) => t.style?.shadows?.length ?? 0)
         .reduce(math.max);
-    expect(maxShadows, greaterThanOrEqualTo(3));
+    expect(maxShadows, 1);
   });
 
   testWidgets('GlowText weak renders a single faint halo', (
@@ -190,7 +243,7 @@ void main() {
     expect(containers, findsNWidgets(3));
   });
 
-  testWidgets('HairlineFrame main variant wraps its child', (
+  testWidgets('HairlineFrame main wraps its child', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -233,6 +286,49 @@ void main() {
     final value = tester.widget<Text>(find.text('24.0'));
     expect(value.style?.fontFeatures, contains(const FontFeature.tabularFigures()));
     expect(find.text('V'), findsOneWidget);
+  });
+
+  testWidgets('GlowValue is flat by default (no glow)', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(body: GlowValue(value: 24.0)),
+      ),
+    );
+    final value = tester.widget<Text>(find.text('24.000'));
+    expect(value.style?.shadows, anyOf(isNull, isEmpty));
+  });
+
+  testWidgets('GlowValue tone colors the value flat (v3)', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: GlowValue(value: 1.0, tone: Tone.amber),
+        ),
+      ),
+    );
+    final value = tester.widget<Text>(find.text('1.000'));
+    expect(value.style?.color, const GuiPalette().valueAmber);
+  });
+
+  testWidgets('GlowValue glow:true adds the soft layer', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: GlowValue(value: 1.0, tone: Tone.green, glow: true),
+        ),
+      ),
+    );
+    final value = tester.widget<Text>(find.text('1.000'));
+    expect(value.style?.shadows?.length, 1);
   });
 
   testWidgets('GlowValue shows a dash when the value is stale', (

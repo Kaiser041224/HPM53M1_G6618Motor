@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
-import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/stale_gate.dart' show Freshness;
@@ -199,6 +198,7 @@ class BottomBar extends StatelessWidget {
     String value,
   ) {
     final scale = GuiTypeScale.of(context);
+    final palette = GuiPalette.of(context);
     final known = value != '—';
     return Row(
       key: Key(key),
@@ -210,13 +210,15 @@ class BottomBar extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           value,
+          // v3: counters are flat neutral; only the verdict badge carries
+          // status colour.
           style: known
-              ? GuiGlowStyles.soft(
-                  scale.data.copyWith(fontSize: 12, fontFeatures: const [
-                    FontFeature.tabularFigures(),
-                  ]),
+              ? scale.data.copyWith(
+                  fontSize: 12,
+                  color: palette.fgStrong,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 )
-              : scale.label.copyWith(color: GuiPalette.of(context).fgMute),
+              : scale.label.copyWith(color: palette.fgMute),
         ),
       ],
     );

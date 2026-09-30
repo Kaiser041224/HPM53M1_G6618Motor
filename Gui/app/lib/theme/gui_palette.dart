@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
-/// TNO 硅晶之梦 palette.
+/// TNO 硅晶之梦 palette (v3, screenshot-derived).
 ///
-/// Every value is copied verbatim from `Gui/ref/design-system/tokens.css`
-/// (pixel-measured, not eyeballed). Nothing here may be invented: page code
-/// must read semantic tokens through [GuiPalette.of] instead of hard-coding.
+/// Base surface values are copied verbatim from
+/// `Gui/ref/design-system/tokens.css` (pixel-measured); the v3 restyle
+/// reinterprets their usage toward flat, bright hairline frames and solid
+/// semantic text. Nothing here may be invented: page code must read
+/// semantic tokens through [GuiPalette.of] instead of hard-coding.
 @immutable
 class GuiPalette extends ThemeExtension<GuiPalette> {
   const GuiPalette({
@@ -18,10 +20,16 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.line = const Color(0xFF1E5C60),
     this.lineDim = const Color(0xFF14393C),
     this.lineWidth = 1.0,
-    this.fg = const Color.fromRGBO(184, 212, 210, 0.76),
-    this.fgStrong = const Color.fromRGBO(127, 227, 219, 0.94),
-    this.fgDim = const Color.fromRGBO(110, 143, 142, 0.66),
-    this.fgMute = const Color.fromRGBO(74, 102, 104, 0.78),
+    this.fg = const Color(0xFFC8DEDC),
+    this.fgStrong = const Color(0xFFEAF6F4),
+    this.fgDim = const Color(0xFF7FA8A6),
+    this.fgMute = const Color(0xFF5E8886),
+    this.valueAmber = const Color(0xFFE8C84A),
+    this.valueGreen = const Color(0xFF5ED85E),
+    this.valueRed = const Color(0xFFF06858),
+    this.valuePink = const Color(0xFFE888B8),
+    this.valueViolet = const Color(0xFFA888E8),
+    this.white = const Color(0xFFEAF6F4),
     this.accent = const Color(0xFF58C8C0),
     this.accent2 = const Color(0xFFC8C000),
     this.accentBlue = const Color(0xFF085890),
@@ -32,12 +40,20 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.stLatched = const Color(0xFFFF9E96),
     this.stStale = const Color(0xFF4A6668),
     this.stPending = const Color(0xFFB8B848),
+    this.btnFill = const Color(0xFF243234),
+    this.btnBorder = const Color(0xFF4E7A7C),
+    this.btnText = const Color(0xFFC8DEDC),
+    this.btnPrimaryBorder = const Color(0xFF58C8C0),
+    this.btnPrimaryText = const Color(0xFF7AD8D0),
+    this.btnDangerBorder = const Color(0xFFC85848),
+    this.btnDangerText = const Color(0xFFF08878),
     this.series1 = const Color(0xFF58C8C0),
     this.series2 = const Color(0xFFC8C000),
     this.series3 = const Color(0xFFFF87D7),
     this.series4 = const Color(0xFFAF87FF),
     this.series5 = const Color(0xFF87FFAF),
     this.series6 = const Color(0xFFF88070),
+    this.glowSoft = const Color.fromRGBO(88, 200, 192, 0.22),
     this.glow1 = const Color.fromRGBO(127, 227, 219, 0.85),
     this.glow2 = const Color.fromRGBO(88, 200, 192, 0.48),
     this.glow3 = const Color.fromRGBO(88, 200, 192, 0.24),
@@ -63,34 +79,52 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Active surface.
   final Color bgActive;
 
-  /// Bright 1px hairline (measured primary accent).
+  /// Bright cyan hairline — the v3 frame / underline color.
   final Color lineHi;
 
-  /// Regular 1px border.
+  /// Regular border.
   final Color line;
 
-  /// Dim 1px hairline (second / third line).
+  /// Dark inner seam beside [lineHi].
   final Color lineDim;
 
   /// Hairlines are always 1px; depth comes from stacking, never scaling.
   final double lineWidth;
 
-  /// Primary text.
+  /// Primary text (solid v3 value).
   final Color fg;
 
-  /// Numeric values — the brightest focus.
+  /// Brightest text — white titles and neutral values.
   final Color fgStrong;
 
   /// Secondary text.
   final Color fgDim;
 
-  /// Labels / units — almost unlit.
+  /// Labels / units.
   final Color fgMute;
 
-  /// Cyan primary accent (14,604 px).
+  /// Flat semantic value: key value / cost / duration.
+  final Color valueAmber;
+
+  /// Flat semantic value: healthy / positive.
+  final Color valueGreen;
+
+  /// Flat semantic value: fault / negative.
+  final Color valueRed;
+
+  /// Flat semantic value: accent series.
+  final Color valuePink;
+
+  /// Flat semantic value: accent series.
+  final Color valueViolet;
+
+  /// Neutral solid white (v3), alias of [fgStrong].
+  final Color white;
+
+  /// Cyan primary accent.
   final Color accent;
 
-  /// Yellow secondary accent (4,084 px) — NOT magenta.
+  /// Yellow secondary accent — NOT magenta.
   final Color accent2;
 
   /// Deep blue block accent.
@@ -117,6 +151,27 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Status: pending persistence.
   final Color stPending;
 
+  /// Button fill (all three tiers share it).
+  final Color btnFill;
+
+  /// Normal button border.
+  final Color btnBorder;
+
+  /// Normal button text.
+  final Color btnText;
+
+  /// Primary (main action) button border.
+  final Color btnPrimaryBorder;
+
+  /// Primary (main action) button text.
+  final Color btnPrimaryText;
+
+  /// Danger button border.
+  final Color btnDangerBorder;
+
+  /// Danger button text.
+  final Color btnDangerText;
+
   /// Data series 1 (measured cyan).
   final Color series1;
 
@@ -135,19 +190,22 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Data series 6 (measured red).
   final Color series6;
 
-  /// Glow layer 1 — the tight core hugging the glyph.
+  /// v3 single-layer soft glow — titles and large values only.
+  final Color glowSoft;
+
+  /// Glow layer 1 — legacy core (ASCII device glow only).
   final Color glow1;
 
-  /// Glow layer 2 — inner halo.
+  /// Glow layer 2 — legacy inner halo (ASCII device glow only).
   final Color glow2;
 
-  /// Glow layer 3 — outer halo.
+  /// Glow layer 3 — legacy outer halo.
   final Color glow3;
 
-  /// Glow layer 4 — far halo.
+  /// Glow layer 4 — legacy far halo.
   final Color glow4;
 
-  /// 0.4px outline stroke.
+  /// 0.4px outline stroke (legacy).
   final Color stroke;
 
   /// Reads the palette from the nearest theme, falling back to the defaults.

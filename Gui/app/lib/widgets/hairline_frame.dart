@@ -2,19 +2,19 @@ import 'package:flutter/material.dart';
 
 import '../theme/gui_palette.dart';
 
-/// Hairline frame variants (design-system §3.2).
+/// Hairline frame variants (design-system §3.2, v3).
 enum HairlineVariant {
-  /// Bright line, an inner dark seam, an outer dim line and a faint glow.
+  /// A single bright cyan border with a dark inner seam.
   main,
 
-  /// A single dim line plus a very faint inner ring, for nested blocks.
+  /// A single dim border, for nested blocks.
   sub,
 }
 
-/// Multi-hairline rectangular frame; always square, always 1px lines.
+/// Rectangular hairline frame; always square.
 ///
-/// Thickness comes from stacking lines, never from scaling them
-/// (design-system §3.2).
+/// v3 drops the stacked "一亮两暗" lines and the glow: a bright 1.5px cyan
+/// border carries the frame, with a 1px dark seam just inside it for depth.
 class HairlineFrame extends StatelessWidget {
   const HairlineFrame({
     super.key,
@@ -32,6 +32,9 @@ class HairlineFrame extends StatelessWidget {
   /// Inner padding applied inside the frame.
   final EdgeInsetsGeometry padding;
 
+  /// Width of the bright v3 frame line.
+  static const double brightWidth = 1.5;
+
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
@@ -40,40 +43,20 @@ class HairlineFrame extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border.all(color: palette.lineDim, width: palette.lineWidth),
         ),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: palette.accent.withValues(alpha: 0.06),
-              width: palette.lineWidth,
-            ),
-          ),
-          padding: padding,
-          child: child,
-        ),
+        padding: padding,
+        child: child,
       );
     }
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: palette.lineDim, width: palette.lineWidth),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: palette.accent.withValues(alpha: 0.10),
-            blurRadius: 14,
-            blurStyle: BlurStyle.outer,
-          ),
-        ],
+        border: Border.all(color: palette.lineHi, width: brightWidth),
       ),
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(color: palette.lineHi, width: palette.lineWidth),
+          border: Border.all(color: palette.lineDim, width: palette.lineWidth),
         ),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: palette.bgPanel, width: palette.lineWidth),
-          ),
-          padding: padding,
-          child: child,
-        ),
+        padding: padding,
+        child: child,
       ),
     );
   }

@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 import '../state/app_state.dart';
 import '../theme/gui_theme.dart';
 import '../widgets/device_ascii.dart';
+import '../widgets/gui_button.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/window_caption.dart';
@@ -61,6 +62,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
   bool _expanded = false;
   bool _busy = false;
   bool _maximized = false;
+  bool _connectTabHovered = false;
 
   @override
   void initState() {
@@ -232,30 +234,46 @@ class _TopBarState extends State<TopBar> with WindowListener {
   Widget _connectTab(BuildContext context) {
     final s = widget.state;
     final palette = GuiPalette.of(context);
-    return InkWell(
-      key: const Key('top_bar_connect_tab'),
-      onTap: () => setState(() => _expanded = !_expanded),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: _expanded ? palette.lineHi : palette.line,
-            width: palette.lineWidth,
+    final highlighted = _expanded || _connectTabHovered;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _connectTabHovered = true),
+      onExit: (_) => setState(() => _connectTabHovered = false),
+      child: InkWell(
+        key: const Key('top_bar_connect_tab'),
+        onTap: () => setState(() => _expanded = !_expanded),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            // v3 button vocabulary: idle hairline, bright cyan on hover/expand
+            // with one very faint same-hue glow.
+            border: Border.all(
+              color: highlighted ? palette.lineHi : palette.line,
+              width: palette.lineWidth,
+            ),
+            boxShadow: highlighted
+                ? <BoxShadow>[
+                    BoxShadow(
+                      color: palette.lineHi.withValues(alpha: 0.22),
+                      blurRadius: 8,
+                    ),
+                  ]
+                : const <BoxShadow>[],
           ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text(
-              _expanded ? '▾' : '▸',
-              style: GuiTypeScale.of(context).label,
-            ),
-            const SizedBox(width: 6),
-            StatusBadge(
-              state: s.connected ? ItemState.normal : ItemState.stale,
-              label: s.connected ? '连接 · TCP' : '连接 · 未建立',
-            ),
-          ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                _expanded ? '▾' : '▸',
+                style: GuiTypeScale.of(context).label,
+              ),
+              const SizedBox(width: 6),
+              StatusBadge(
+                state: s.connected ? ItemState.normal : ItemState.stale,
+                label: s.connected ? '连接 · TCP' : '连接 · 未建立',
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -286,12 +304,17 @@ class _TopBarState extends State<TopBar> with WindowListener {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          DeviceAscii(connected: true, modelName: s.deviceName),
+          const DeviceAscii(connected: true),
           const SizedBox(width: 24),
           Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
+              Text(
+                s.deviceName,
+                style: scale.sectionTitle.copyWith(fontSize: 14),
+              ),
+              const SizedBox(height: 6),
               Text(
                 'MCU HPM53M1 · PROTO v${s.protoMajor}.${s.protoMinor}',
                 style: scale.label.copyWith(color: palette.fgDim),
@@ -350,6 +373,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
 
   Widget _telemetryRow(BuildContext context, String label, String? value, Key key) {
     final scale = GuiTypeScale.of(context);
+    final palette = GuiPalette.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -360,7 +384,8 @@ class _TopBarState extends State<TopBar> with WindowListener {
           freshness: value == null ? Freshness.unknown : Freshness.live,
           live: Text(
             value ?? '',
-            style: GuiGlowStyles.soft(scale.data.copyWith(fontSize: 13)),
+            // Telemetry is quiet second-tier text (v3).
+            style: scale.data.copyWith(fontSize: 13, color: palette.fgDim),
           ),
         ),
       ],
@@ -462,16 +487,17 @@ class _TopBarState extends State<TopBar> with WindowListener {
               ),
             ),
             const SizedBox(width: 10),
-            FilledButton.icon(
+            GuiButton(
+              label: '连接',
+              variant: GuiButtonVariant.primary,
+              icon: Icons.link,
               onPressed: _busy ? null : _doConnect,
-              icon: const Icon(Icons.link, size: 16),
-              label: const Text('连接'),
             ),
             const SizedBox(width: 8),
-            OutlinedButton.icon(
+            GuiButton(
+              label: '断开',
+              icon: Icons.link_off,
               onPressed: (_busy || !s.connected) ? null : _doDisconnect,
-              icon: const Icon(Icons.link_off, size: 16),
-              label: const Text('断开'),
             ),
           ],
         ),

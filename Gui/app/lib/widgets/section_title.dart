@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 
-/// Section heading matching the `.gui-section-title` motif.
+/// Section heading (v3).
 ///
-/// All-caps wide-tracked accent title, optionally followed by a dim English
-/// caption and a trailing widget, underlined by the "一亮两暗" hairline stack
-/// (design-system §3.2: bright line at y=0, dim lines at y=2 and y=7).
+/// A solid white Chinese title ([GuiTypeScale.sectionTitle]), an optional
+/// small Latin caption, and a trailing widget, underlined by a single bright
+/// cyan 1px line.
 class SectionTitle extends StatelessWidget {
   const SectionTitle({
     super.key,
@@ -16,7 +16,7 @@ class SectionTitle extends StatelessWidget {
     this.trailing,
   });
 
-  /// Primary (usually Chinese) title.
+  /// Primary (usually Chinese) title, rendered big and white.
   final String title;
 
   /// Optional English caption, rendered uppercase in the label tier.
@@ -42,7 +42,7 @@ class SectionTitle extends StatelessWidget {
               Flexible(
                 child: Text(
                   title,
-                  style: scale.section,
+                  style: scale.sectionTitle,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -56,10 +56,6 @@ class SectionTitle extends StatelessWidget {
           ),
         ),
         Container(height: palette.lineWidth, color: palette.lineHi),
-        SizedBox(height: palette.lineWidth),
-        Container(height: palette.lineWidth, color: palette.lineDim),
-        const SizedBox(height: 4),
-        Container(height: palette.lineWidth, color: palette.lineDim),
       ],
     );
   }
