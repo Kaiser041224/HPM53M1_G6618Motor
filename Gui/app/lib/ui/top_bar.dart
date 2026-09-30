@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../state/app_state.dart';
 import '../theme/gui_theme.dart';
 import '../widgets/device_ascii.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
+import '../widgets/window_caption.dart';
 
 /// Formats a session duration as `HH:MM:SS` (hours may exceed two digits).
 String formatUptime(Duration d) {
@@ -17,28 +19,129 @@ String formatUptime(Duration d) {
 /// Left: the connection tab, which expands a detail panel below the whole bar
 /// (never over the device identity). Middle: the device identity read from the
 /// `PROTO_INFO` handshake, or the `DEVICE ID PENDING` placeholder. Right: the
-/// poll/uptime/SEQ/frame telemetry, honestly showing `—` for anything the
-/// protocol does not provide.
+/// poll/uptime/SEQ/frame telemetry, then the window caption cluster.
+///
+/// The middle identity area doubles as the custom title bar: dragging it moves
+/// the window and double-clicking it toggles maximize (native chrome is hidden
+/// in `main.dart`). The window callbacks are injectable so the bar is testable
+/// without a native window; when absent they fall back to `window_manager`.
 class TopBar extends StatefulWidget {
-  const TopBar({super.key, required this.state});
+  const TopBar({
+    super.key,
+    required this.state,
+    this.onMinimize,
+    this.onToggleMaximize,
+    this.onClose,
+    this.onDragStart,
+  });
 
   final AppState state;
+
+  /// Overrides the minimize button; defaults to `windowManager.minimize()`.
+  final VoidCallback? onMinimize;
+
+  /// Overrides the maximize/restore button and the blank-area double-click;
+  /// defaults to toggling `windowManager`.
+  final VoidCallback? onToggleMaximize;
+
+  /// Overrides the close button; defaults to `windowManager.close()`.
+  final VoidCallback? onClose;
+
+  /// Overrides blank-area dragging; defaults to `windowManager.startDragging()`.
+  final VoidCallback? onDragStart;
 
   @override
   State<TopBar> createState() => _TopBarState();
 }
 
-class _TopBarState extends State<TopBar> {
+class _TopBarState extends State<TopBar> with WindowListener {
   final TextEditingController _addrCtrl = TextEditingController(
     text: '127.0.0.1:9000',
   );
   bool _expanded = false;
   bool _busy = false;
+  bool _maximized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    _syncMaximizedState();
+  }
 
   @override
   void dispose() {
+    windowManager.removeListener(this);
     _addrCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void onWindowMaximize() {
+    if (mounted) setState(() => _maximized = true);
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    if (mounted) setState(() => _maximized = false);
+  }
+
+  /// Seeds [_maximized] from the native window at startup. Any failure (widget
+  /// tests with no platform channel, unsupported platform) leaves the button in
+  /// its restored shape instead of surfacing an error.
+  Future<void> _syncMaximizedState() async {
+    try {
+      final maximized = await windowManager.isMaximized();
+      if (mounted && maximized != _maximized) {
+        setState(() => _maximized = maximized);
+      }
+    } catch (_) {
+      // No native window; stay restored.
+    }
+  }
+
+  void _minimize() {
+    final injected = widget.onMinimize;
+    if (injected != null) {
+      injected();
+      return;
+    }
+    windowManager.minimize();
+  }
+
+  void _toggleMaximize() {
+    final injected = widget.onToggleMaximize;
+    if (injected != null) {
+      injected();
+      return;
+    }
+    _toggleMaximizeWindow();
+  }
+
+  Future<void> _toggleMaximizeWindow() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }
+
+  void _close() {
+    final injected = widget.onClose;
+    if (injected != null) {
+      injected();
+      return;
+    }
+    windowManager.close();
+  }
+
+  void _startDrag() {
+    final injected = widget.onDragStart;
+    if (injected != null) {
+      injected();
+      return;
+    }
+    windowManager.startDragging();
   }
 
   Future<void> _doConnect() async {
@@ -97,11 +200,32 @@ class _TopBarState extends State<TopBar> {
         children: <Widget>[
           _connectTab(context),
           const SizedBox(width: 20),
-          Expanded(child: _identity(context)),
+          Expanded(child: _dragRegion(_identity(context))),
           const SizedBox(width: 20),
           _telemetry(context),
+          const SizedBox(width: 12),
+          WindowCaptionBar(
+            maximized: _maximized,
+            onMinimize: _minimize,
+            onToggleMaximize: _toggleMaximize,
+            onClose: _close,
+          ),
         ],
       ),
+    );
+  }
+
+  /// The blank middle of the bar acts as the custom title bar: drag to move the
+  /// window, double-click to toggle maximize (design-system §4.2 keeps the
+  /// connect tab at the far left and the identity beside it; the empty space
+  /// around the identity is the only free area).
+  Widget _dragRegion(Widget child) {
+    return GestureDetector(
+      key: const Key('top_bar_drag_region'),
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (_) => _startDrag(),
+      onDoubleTap: _toggleMaximize,
+      child: child,
     );
   }
 

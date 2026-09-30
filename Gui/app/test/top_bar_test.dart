@@ -16,13 +16,33 @@ ParamMetaDto makeMeta(int index, String name) => ParamMetaDto(
 );
 
 /// Pumps [TopBar] on the Gui theme at a wide surface so the device art and the
-/// telemetry column both fit without overflow.
-Future<void> _pump(WidgetTester tester, AppState state) async {
+/// telemetry column both fit without overflow. Window-chrome callbacks are
+/// injectable so the caption buttons and drag region are testable without a
+/// native window.
+Future<void> _pump(
+  WidgetTester tester,
+  AppState state, {
+  VoidCallback? onMinimize,
+  VoidCallback? onToggleMaximize,
+  VoidCallback? onClose,
+  VoidCallback? onDragStart,
+}) async {
   tester.view.physicalSize = const Size(1500, 900);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
-    MaterialApp(theme: buildGuiTheme(), home: Scaffold(body: TopBar(state: state))),
+    MaterialApp(
+      theme: buildGuiTheme(),
+      home: Scaffold(
+        body: TopBar(
+          state: state,
+          onMinimize: onMinimize,
+          onToggleMaximize: onToggleMaximize,
+          onClose: onClose,
+          onDragStart: onDragStart,
+        ),
+      ),
+    ),
   );
 }
 
@@ -207,6 +227,84 @@ void main() {
 
     expect(find.text('3'), findsOneWidget);
     expect(find.text('2'), findsOneWidget);
+  });
+
+  group('window chrome', () {
+    testWidgets('renders the minimize / maximize / close cluster at the right', (
+      WidgetTester tester,
+    ) async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      await _pump(tester, state);
+
+      expect(find.byKey(const Key('window_caption_minimize')), findsOneWidget);
+      expect(find.byKey(const Key('window_caption_maximize')), findsOneWidget);
+      expect(find.byKey(const Key('window_caption_close')), findsOneWidget);
+    });
+
+    testWidgets('caption buttons fire the injected callbacks', (
+      WidgetTester tester,
+    ) async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      var minimized = 0;
+      var toggled = 0;
+      var closed = 0;
+
+      await _pump(
+        tester,
+        state,
+        onMinimize: () => minimized++,
+        onToggleMaximize: () => toggled++,
+        onClose: () => closed++,
+      );
+
+      await tester.tap(find.byKey(const Key('window_caption_minimize')));
+      await tester.tap(find.byKey(const Key('window_caption_maximize')));
+      await tester.tap(find.byKey(const Key('window_caption_close')));
+
+      expect(minimized, 1);
+      expect(toggled, 1);
+      expect(closed, 1);
+    });
+
+    testWidgets('dragging the blank bar area starts a window drag', (
+      WidgetTester tester,
+    ) async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      var drags = 0;
+
+      await _pump(tester, state, onDragStart: () => drags++);
+
+      await tester.drag(
+        find.byKey(const Key('top_bar_drag_region')),
+        const Offset(-40, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(drags, 1);
+    });
+
+    testWidgets('double-clicking the blank bar area toggles maximize', (
+      WidgetTester tester,
+    ) async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      var toggles = 0;
+
+      await _pump(tester, state, onToggleMaximize: () => toggles++);
+
+      final center = tester.getCenter(
+        find.byKey(const Key('top_bar_drag_region')),
+      );
+      await tester.tapAt(center);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(center);
+      await tester.pumpAndSettle();
+
+      expect(toggles, 1);
+    });
   });
 
   test('formatUptime renders HH:MM:SS', () {

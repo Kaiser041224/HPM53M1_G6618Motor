@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'bridge/frb/api.dart' as frb;
 import 'bridge/frb/frb_generated.dart';
@@ -10,6 +11,7 @@ import 'ui/single_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _configureWindow();
   _registerFontLicenses();
   try {
     await RustLib.init();
@@ -19,6 +21,33 @@ Future<void> main() async {
     runApp(const GuiApp());
   } catch (error) {
     runApp(BridgeStartupErrorApp(error: error.toString()));
+  }
+}
+
+/// Hides the native title bar and shows the window once Flutter is ready.
+///
+/// `TitleBarStyle.hidden` only custom-draws the title area away — it does not
+/// strip `WS_THICKFRAME`, so the native frame, drop shadow and edge resize stay
+/// intact; `setResizable(true)` makes that explicit. The caption cluster in
+/// [TopBar] replaces the hidden native buttons. A failure here (unsupported
+/// platform) is non-fatal: the app still starts with its native chrome.
+Future<void> _configureWindow() async {
+  try {
+    await windowManager.ensureInitialized();
+    const windowOptions = WindowOptions(
+      size: Size(1280, 800),
+      minimumSize: Size(1024, 640),
+      center: true,
+      title: 'Gui',
+      titleBarStyle: TitleBarStyle.hidden,
+    );
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+    await windowManager.setResizable(true);
+  } catch (error) {
+    debugPrint('window setup skipped: $error');
   }
 }
 
@@ -86,10 +115,33 @@ class BridgeStartupErrorApp extends StatelessWidget {
 class _GuiAppState extends State<GuiApp> {
   late final AppState _state = AppState();
 
+  /// Native/Material window title: `Gui`, or `Gui · <device>` once the
+  /// PROTO_INFO handshake has named the device.
+  String _windowTitle = 'Gui';
+
+  @override
+  void initState() {
+    super.initState();
+    _state.addListener(_syncWindowTitle);
+  }
+
   @override
   void dispose() {
+    _state.removeListener(_syncWindowTitle);
     _state.dispose();
     super.dispose();
+  }
+
+  /// Pushes the state-derived title to the native window. The platform channel
+  /// only exists in a real desktop window; widget tests have none, so a failed
+  /// call is expected and ignored.
+  void _syncWindowTitle() {
+    final title = _state.connected && _state.deviceName.isNotEmpty
+        ? 'Gui · ${_state.deviceName}'
+        : 'Gui';
+    if (title == _windowTitle) return;
+    _windowTitle = title;
+    windowManager.setTitle(title).catchError((Object _) {});
   }
 
   @override
@@ -97,7 +149,7 @@ class _GuiAppState extends State<GuiApp> {
     return ListenableBuilder(
       listenable: _state,
       builder: (context, _) => MaterialApp(
-        title: 'Gui',
+        title: _windowTitle,
         debugShowCheckedModeBanner: false,
         theme: buildGuiTheme(),
         home: SinglePage(state: _state),
