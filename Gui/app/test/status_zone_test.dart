@@ -357,8 +357,8 @@ void main() {
     });
   });
 
-  group('曲线区轮询趋势图', () {
-    testWidgets('ScopeZone 渲染 TrendChart，图注含 2 Hz 轮询与 STREAM_SUB 预留', (
+  group('曲线区 1kHz 趋势图', () {
+    testWidgets('ScopeZone 渲染 TrendChart，图注含 1 kHz 采样与 STREAM_SUB 预留', (
       tester,
     ) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
@@ -367,7 +367,7 @@ void main() {
       await _pump(tester, ScopeZone(state: state));
 
       expect(find.byType(TrendChart), findsOneWidget);
-      expect(find.textContaining('轮询'), findsOneWidget);
+      expect(find.textContaining('1 kHz 采样'), findsOneWidget);
       expect(find.textContaining('STREAM_SUB'), findsWidgets);
     });
 

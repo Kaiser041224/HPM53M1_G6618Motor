@@ -15,7 +15,7 @@ static CLIENT: OnceLock<Mutex<Option<Session<TcpTransport>>>> = OnceLock::new();
 static CONNECTED: AtomicBool = AtomicBool::new(false);
 static RECONNECTS: AtomicU64 = AtomicU64::new(0);
 
-fn runtime() -> &'static tokio::runtime::Runtime {
+pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("tokio runtime"))
 }
 fn client() -> &'static Mutex<Option<Session<TcpTransport>>> {
@@ -132,6 +132,8 @@ pub async fn connect(addr: String) -> Result<(), FrbError> {
 
 pub async fn disconnect() -> Result<(), FrbError> {
     on_tokio(async move {
+        // 先隐式停止采样任务，避免断连后野任务继续打请求。
+        crate::watch::stop()?;
         *client().lock().await = None;
         CONNECTED.store(false, Ordering::SeqCst);
         Ok(())
@@ -300,31 +302,59 @@ fn f32_at(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
 
-pub async fn status_get() -> Result<StatusDto, FrbError> {
-    on_tokio(async move {
-        let b = request(cmd::STATUS_GET, vec![], RequestKind::Read).await?;
-        if b.len() < 42 {
-            return Err(FrbError {
-                code: 0x1FF,
-                message: "short STATUS".into(),
-            });
-        }
-        Ok(StatusDto {
-            fault_flags: u32::from_le_bytes(b[0..4].try_into().unwrap()),
-            motor_running: b[4] != 0,
-            motor_state: b[5],
-            freq_hz: f32_at(&b, 6),
-            mod_pct: f32_at(&b, 10),
-            i_u: f32_at(&b, 14),
-            i_v: f32_at(&b, 18),
-            i_w: f32_at(&b, 22),
-            vbus: f32_at(&b, 26),
-            ntc_temp: f32_at(&b, 30),
-            enc_rotor_deg: f32_at(&b, 34),
-            enc_output_deg: f32_at(&b, 38),
-        })
+fn parse_status(b: &[u8]) -> Result<StatusDto, FrbError> {
+    if b.len() < 42 {
+        return Err(FrbError {
+            code: 0x1FF,
+            message: "short STATUS".into(),
+        });
+    }
+    Ok(StatusDto {
+        fault_flags: u32::from_le_bytes(b[0..4].try_into().unwrap()),
+        motor_running: b[4] != 0,
+        motor_state: b[5],
+        freq_hz: f32_at(b, 6),
+        mod_pct: f32_at(b, 10),
+        i_u: f32_at(b, 14),
+        i_v: f32_at(b, 18),
+        i_w: f32_at(b, 22),
+        vbus: f32_at(b, 26),
+        ntc_temp: f32_at(b, 30),
+        enc_rotor_deg: f32_at(b, 34),
+        enc_output_deg: f32_at(b, 38),
     })
-    .await?
+}
+
+/// 单次 STATUS_GET 采样（复用全局单会话；供采样任务与 `status_get` 共用）。
+pub(crate) async fn status_sample() -> Result<StatusDto, FrbError> {
+    let b = request(cmd::STATUS_GET, vec![], RequestKind::Read).await?;
+    parse_status(&b)
+}
+
+pub async fn status_get() -> Result<StatusDto, FrbError> {
+    on_tokio(status_sample()).await?
+}
+
+/// 一批状态样本：`samples` 保序，`seq` 每批递增。
+#[derive(Debug, Clone)]
+pub struct StatusBatchDto {
+    pub samples: Vec<StatusDto>,
+    pub seq: u64,
+}
+
+/// 启动 1 kHz 状态采样任务（`rate_hz` 钳位 1..=5000），
+/// 每 20 ms 或 16 个样本（先到为准）向 `sink` 推送一批。
+/// 重复调用 = 停旧启新；断连或连续失败 3 次自动停并结束流。
+pub fn start_status_watch(
+    rate_hz: u32,
+    sink: crate::frb_generated::StreamSink<StatusBatchDto>,
+) -> Result<(), FrbError> {
+    crate::watch::start_with(rate_hz, move |batch| sink.add(batch).is_ok())
+}
+
+/// 停止状态采样任务（幂等）；`disconnect()` 亦隐式调用。
+pub fn stop_status_watch() -> Result<(), FrbError> {
+    crate::watch::stop()
 }
 
 async fn ctrl_op(opcode: u8, value: f32) -> Result<(), FrbError> {

@@ -7,8 +7,8 @@ import 'frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `client`, `ctrl_op`, `f32_at`, `map_err`, `on_tokio`, `request`, `runtime`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `client`, `ctrl_op`, `f32_at`, `map_err`, `on_tokio`, `parse_proto_info_body`, `parse_status`, `request`, `runtime`, `status_sample`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<void> connect({required String addr}) =>
     RustLib.instance.api.crateApiConnect(addr: addr);
@@ -37,6 +37,16 @@ Future<void> paramWrite({
 Future<void> paramCommit() => RustLib.instance.api.crateApiParamCommit();
 
 Future<StatusDto> statusGet() => RustLib.instance.api.crateApiStatusGet();
+
+/// 启动 1 kHz 状态采样任务（`rate_hz` 钳位 1..=5000），
+/// 每 20 ms 或 16 个样本（先到为准）向 `sink` 推送一批。
+/// 重复调用 = 停旧启新；断连或连续失败 3 次自动停并结束流。
+Stream<StatusBatchDto> startStatusWatch({required int rateHz}) =>
+    RustLib.instance.api.crateApiStartStatusWatch(rateHz: rateHz);
+
+/// 停止状态采样任务（幂等）；`disconnect()` 亦隐式调用。
+Future<void> stopStatusWatch() =>
+    RustLib.instance.api.crateApiStopStatusWatch();
 
 Future<void> ctrlStart() => RustLib.instance.api.crateApiCtrlStart();
 
@@ -162,6 +172,25 @@ class StatsDto {
           resyncs == other.resyncs &&
           attempts == other.attempts &&
           reconnects == other.reconnects;
+}
+
+/// 一批状态样本：`samples` 保序，`seq` 每批递增。
+class StatusBatchDto {
+  final List<StatusDto> samples;
+  final BigInt seq;
+
+  const StatusBatchDto({required this.samples, required this.seq});
+
+  @override
+  int get hashCode => samples.hashCode ^ seq.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StatusBatchDto &&
+          runtimeType == other.runtimeType &&
+          samples == other.samples &&
+          seq == other.seq;
 }
 
 class StatusDto {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/bridge/frb/api.dart';
 import 'package:g6618_gui/state/app_state.dart';
@@ -105,31 +107,31 @@ void main() {
       expect(state.freshnessOf('status_tile_VBUS'), Freshness.live);
     });
 
-    test('超过 1s（2 个 500ms 轮询周期）未更新 → stale', () {
+    test('超过 100ms（约 5 个 1kHz 批）未更新 → stale', () {
       final state = AppState.test();
       addTearDown(state.dispose);
 
       state.seedFreshness(
         'status_tile_I_V',
-        DateTime.now().subtract(const Duration(seconds: 2)),
+        DateTime.now().subtract(const Duration(milliseconds: 200)),
       );
 
       expect(state.freshnessOf('status_tile_I_V'), Freshness.stale);
     });
 
-    test('阈值边界：900ms 仍 live，1100ms 转 stale', () {
+    test('阈值边界：90ms 仍 live，110ms 转 stale', () {
       final state = AppState.test();
       addTearDown(state.dispose);
 
       state.seedFreshness(
         'rtt',
-        DateTime.now().subtract(const Duration(milliseconds: 900)),
+        DateTime.now().subtract(const Duration(milliseconds: 90)),
       );
       expect(state.freshnessOf('rtt'), Freshness.live);
 
       state.seedFreshness(
         'rtt',
-        DateTime.now().subtract(const Duration(milliseconds: 1100)),
+        DateTime.now().subtract(const Duration(milliseconds: 110)),
       );
       expect(state.freshnessOf('rtt'), Freshness.stale);
     });
@@ -181,18 +183,19 @@ void main() {
     });
   });
 
-  group('statusHistory 轮询环形缓冲', () {
-    test('recordHistory 追加样本，超过 60 点丢弃最旧', () {
+  group('statusHistory 1kHz 环形缓冲', () {
+    test('recordHistory 追加样本，超过 2000 点丢弃最旧', () {
       final state = AppState.test();
       addTearDown(state.dispose);
 
-      for (var i = 0; i < 65; i++) {
+      for (var i = 0; i < 2005; i++) {
         state.recordHistory(makeStatus(iU: i.toDouble()));
       }
 
       expect(state.statusHistory.length, AppState.statusHistoryLimit);
+      expect(AppState.statusHistoryLimit, 2000);
       expect(state.statusHistory.first.iU, 5.0);
-      expect(state.statusHistory.last.iU, 64.0);
+      expect(state.statusHistory.last.iU, 2004.0);
     });
 
     test('AppState.test 可注入 history（默认空）', () {
@@ -214,6 +217,88 @@ void main() {
       await state.disconnect();
 
       expect(state.statusHistory, isEmpty);
+    });
+  });
+
+  group('1kHz 批注入', () {
+    test('一批样本全部入环形，status 取批内最新', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      state.feedBatch(
+        StatusBatchDto(
+          samples: <StatusDto>[
+            makeStatus(iU: 1),
+            makeStatus(iU: 2),
+            makeStatus(iU: 3),
+          ],
+          seq: BigInt.from(1),
+        ),
+      );
+
+      expect(state.statusHistory, hasLength(3));
+      expect(state.status!.iU, 3);
+    });
+
+    test('每批仅一次 notifyListeners（不逐样本通知）', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      var notifies = 0;
+      state.addListener(() => notifies++);
+
+      state.feedBatch(
+        StatusBatchDto(
+          samples: <StatusDto>[
+            for (var i = 0; i < 16; i++) makeStatus(iU: i.toDouble()),
+          ],
+          seq: BigInt.from(1),
+        ),
+      );
+
+      expect(notifies, 1);
+      expect(state.statusHistory, hasLength(16));
+    });
+
+    test('seq 非连续时计数丢批，连续则不计', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      state.feedBatch(
+        StatusBatchDto(samples: <StatusDto>[makeStatus()], seq: BigInt.from(1)),
+      );
+      state.feedBatch(
+        StatusBatchDto(samples: <StatusDto>[makeStatus()], seq: BigInt.from(2)),
+      );
+      expect(state.droppedBatches, 0);
+
+      // Jump 2 -> 6: batches 3, 4, 5 never arrived.
+      state.feedBatch(
+        StatusBatchDto(samples: <StatusDto>[makeStatus()], seq: BigInt.from(6)),
+      );
+      expect(state.droppedBatches, 3);
+    });
+
+    test('注入 batch 流后 connect 订阅，批到达即刷新', () async {
+      final controller = StreamController<StatusBatchDto>();
+      addTearDown(controller.close);
+      final state = AppState.test(batch: controller.stream);
+      addTearDown(state.dispose);
+      state.onConnect = (addr) async => (1, 0, 0x03, 'G6618 Motor Controller');
+
+      await state.connect('127.0.0.1:9000');
+      expect(state.connected, isTrue);
+
+      controller.add(
+        StatusBatchDto(samples: <StatusDto>[makeStatus(iU: 7)], seq: BigInt.one),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(state.status!.iU, 7);
+      expect(state.freshnessOf(AppState.statusTileKey('I_U')), Freshness.live);
+
+      await state.disconnect();
+      expect(state.statusHistory, isEmpty);
+      expect(state.droppedBatches, 0);
     });
   });
 

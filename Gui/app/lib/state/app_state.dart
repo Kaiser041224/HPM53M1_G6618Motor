@@ -8,7 +8,7 @@ import '../widgets/stale_gate.dart' show Freshness;
 // Re-exported so the UI layer depends only on AppState (ui -> state -> bridge)
 // and never imports the generated bridge code directly.
 export '../bridge/frb/api.dart'
-    show ParamMetaDto, ParamValueDto, StatusDto, StatsDto;
+    show ParamMetaDto, ParamValueDto, StatusBatchDto, StatusDto, StatsDto;
 
 /// App-wide observable state.
 ///
@@ -35,11 +35,11 @@ class AppState extends ChangeNotifier {
   /// disconnected.
   DateTime? sessionStart;
 
-  /// Elapsed time since [sessionStart], refreshed by the 500 ms status poll.
+  /// Elapsed time since [sessionStart], refreshed by the 500 ms stats poll.
   /// Null while disconnected so the top bar can honestly show `—`.
   Duration? sessionUptime;
 
-  /// Round-trip time of the last STATUS_GET, in milliseconds. Measured around
+  /// Round-trip time of the last `statsGet`, in milliseconds. Measured around
   /// the bridge call and smoothed with an EMA (α = [rttEmaAlpha]); null while
   /// disconnected so the UI honestly shows `—`.
   double? rttMs;
@@ -48,8 +48,10 @@ class AppState extends ChangeNotifier {
   static const double rttEmaAlpha = 0.2;
 
   /// A live value that has not been refreshed for longer than this degrades to
-  /// [Freshness.stale] — two missed 500 ms polls (design-system §6 rule 2).
-  static const Duration staleAfter = Duration(seconds: 1);
+  /// [Freshness.stale]. With a 1 kHz batched feed (≈20 ms per batch) this is
+  /// five missed batches — tight enough that a stalled watch shows up promptly
+  /// (design-system §6 rule 2).
+  static const Duration kStaleAfter = Duration(milliseconds: 100);
 
   /// Freshness key of a status tile; matches the `status_zone.dart` widget keys
   /// (`status_tile_<tile>`).
@@ -107,18 +109,20 @@ class AppState extends ChangeNotifier {
   /// True while [loadMetas] is in flight.
   bool loadingParams = false;
 
-  /// Last device status snapshot, refreshed by [refreshStatus].
+  /// Latest device status sample; the newest sample of the last batch, so a
+  /// tile read here is current to within one ~20 ms batch. Cleared on
+  /// [disconnect].
   frb.StatusDto? status;
 
-  /// Oldest-first ring buffer of the last [statusHistoryLimit] status
-  /// snapshots, pushed by the 500 ms poll on success. Drives the ScopeZone
-  /// trend chart — a polled 2 Hz preview, not the reserved 25 kHz
+  /// Oldest-first ring buffer of the last [statusHistoryLimit] status samples,
+  /// appended once per batch by the 1 kHz watch (≈20 ms batches). Drives the
+  /// ScopeZone trend chart — a 1 kHz, 2 s window preview, not the reserved
   /// `STREAM_SUB` stream. Cleared on [disconnect].
   final List<frb.StatusDto> statusHistory = [];
 
-  /// Maximum plotted samples (60 ≈ 30 s at the 500 ms poll), matching
+  /// Maximum retained samples: 2000 = 2 s at 1 kHz, matching
   /// `TrendChart.capacity`.
-  static const int statusHistoryLimit = 60;
+  static const int statusHistoryLimit = 2000;
 
   /// Appends [snapshot] to [statusHistory], dropping the oldest sample once
   /// the buffer exceeds [statusHistoryLimit].
@@ -127,6 +131,90 @@ class AppState extends ChangeNotifier {
     statusHistory.add(snapshot);
     if (statusHistory.length > statusHistoryLimit) {
       statusHistory.removeRange(0, statusHistory.length - statusHistoryLimit);
+    }
+  }
+
+  /// Batch seq of the last accepted frame, used for gap detection.
+  BigInt? _lastSeq;
+
+  /// Number of batches the device seq counter shows as missing (a gap in the
+  /// monotonic `seq`). Reset per connection.
+  int droppedBatches = 0;
+
+  /// Active subscription to the 1 kHz status watch; null while disconnected or
+  /// when the bridge does not provide the watch.
+  StreamSubscription<frb.StatusBatchDto>? _batchSub;
+
+  /// Sample rate requested from `start_status_watch` [Hz].
+  static const int watchRateHz = 1000;
+
+  /// Test-only replacement for the native watch stream. When set, [connect]
+  /// subscribes to it instead of the bridge, so tests can push
+  /// [frb.StatusBatchDto] frames and drive history / freshness.
+  @visibleForTesting
+  Stream<frb.StatusBatchDto>? batch;
+
+  /// Applies one device batch: appends every sample to the ring, takes the
+  /// batch's newest sample as [status], counts a seq gap and emits a **single**
+  /// [notifyListeners] for the whole batch (≈50 Hz UI refresh — never one
+  /// notification per sample).
+  void _applyBatch(frb.StatusBatchDto batch) {
+    if (_disposed) return;
+    for (final sample in batch.samples) {
+      recordHistory(sample);
+    }
+    if (batch.samples.isNotEmpty) {
+      status = batch.samples.last;
+      _markFresh(<String>[...statusTileKeys, keyRtt]);
+      _clearError();
+    }
+    _trackSeqGap(batch.seq);
+    notifyListeners();
+  }
+
+  /// Test seam feeding one batch through the production path.
+  @visibleForTesting
+  void feedBatch(frb.StatusBatchDto batch) => _applyBatch(batch);
+
+  /// Counts missing batches from a monotonic [seq]: a jump of `n` adds `n - 1`.
+  void _trackSeqGap(BigInt seq) {
+    final previous = _lastSeq;
+    if (previous != null && seq > previous + BigInt.one) {
+      droppedBatches += (seq - previous - BigInt.one).toInt();
+    }
+    _lastSeq = seq;
+  }
+
+  /// Starts the 1 kHz status watch (or the injected [batch] stream in tests).
+  /// A missing bridge binding is swallowed: the connection stays up and the
+  /// tiles honestly degrade to `unknown` until the watch is available.
+  void _startWatch() {
+    _stopWatch();
+    _lastSeq = null;
+    droppedBatches = 0;
+    try {
+      final stream = batch ?? frb.startStatusWatch(rateHz: watchRateHz);
+      _batchSub = stream.listen(
+        _applyBatch,
+        onError: (Object error) {
+          _recordFailure(error);
+          if (!_disposed) notifyListeners();
+        },
+      );
+    } catch (_) {
+      _batchSub = null;
+    }
+  }
+
+  /// Stops the watch: cancels the subscription, then asks the device to stop
+  /// streaming. Safe to call repeatedly.
+  void _stopWatch() {
+    _batchSub?.cancel();
+    _batchSub = null;
+    try {
+      frb.stopStatusWatch();
+    } catch (_) {
+      // Bridge watch unavailable; nothing to stop.
     }
   }
 
@@ -156,7 +244,7 @@ class AppState extends ChangeNotifier {
   Freshness freshnessOf(String key) {
     final at = _freshAt[key];
     if (at == null) return Freshness.unknown;
-    return DateTime.now().difference(at) > staleAfter
+    return DateTime.now().difference(at) > kStaleAfter
         ? Freshness.stale
         : Freshness.live;
   }
@@ -303,16 +391,20 @@ class AppState extends ChangeNotifier {
     this.sessionUptime,
     this.attempts = 0,
     this.rttMs,
+    this.batch,
   }) : metas = List.of(metas) {
     statusHistory.addAll(history);
     // Seed freshness from the injected snapshot so tri-state wiring is live in
     // tests: a supplied status means its tiles are current, and a connected
-    // session means its counters are known.
-    if (status != null) _markFresh(statusTileKeys);
+    // session means its counters are known. The stamp carries a small margin
+    // because widget tests render after construction and can exceed the tight
+    // [kStaleAfter]; production never uses this constructor.
+    final stamp = DateTime.now().add(const Duration(seconds: 1));
+    if (status != null) _markFresh(statusTileKeys, stamp);
     if (connected) {
-      _markFresh(<String>[keyCrc, keyResync, keyRetry, keyFrames]);
+      _markFresh(<String>[keyCrc, keyResync, keyRetry, keyFrames], stamp);
     }
-    if (rttMs != null) _markFresh(<String>[keyRtt]);
+    if (rttMs != null) _markFresh(<String>[keyRtt], stamp);
   }
 
   /// Loads the metadata table, then reads every parameter value. Exceptions are
@@ -399,29 +491,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Refreshes [status] and [latchedFlags] from the device.
-  ///
-  /// The STATUS_GET round-trip is measured and folded into [rttMs]; on success
-  /// every telemetry value is stamped fresh. On failure the previous values
-  /// stay, but their freshness ages out to `stale` after [staleAfter], so the
-  /// UI degrades them to `—` instead of pretending they are current.
-  Future<void> refreshStatus() async {
-    try {
-      final started = DateTime.now();
-      status = await frb.statusGet();
-      recordHistory(status!);
-      _updateRtt(DateTime.now().difference(started).inMicroseconds / 1000.0);
-      final fault = await frb.faultGet();
-      latchedFlags = fault.$2;
-      _markFresh(<String>[...statusTileKeys, keyRtt]);
-      _clearError();
-    } on Exception catch (e) {
-      _recordFailure(e);
-    }
-    if (_disposed) return;
-    notifyListeners();
-  }
-
   /// Runs a control [op] (through [onCtrl] when injected) and records any
   /// failure so the UI can classify it by [lastErrorCode].
   Future<bool> _ctrl(String op, Future<void> Function() fallback) async {
@@ -482,6 +551,7 @@ class AppState extends ChangeNotifier {
       sessionUptime = Duration.zero;
       _clearError();
       _startPolling();
+      _startWatch();
       // Fire-and-forget: the parameter table (thresholds, warn judgments) must
       // populate without the user pressing「读全部」. loadMetas owns its
       // loadingParams state and records failures, so a bridge error can never
@@ -491,6 +561,7 @@ class AppState extends ChangeNotifier {
       return true;
     } catch (e) {
       _stopPolling();
+      _stopWatch();
       _recordFailure(e);
       connected = false;
       notifyListeners();
@@ -500,6 +571,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> disconnect() async {
     _stopPolling();
+    _stopWatch();
     try {
       await frb.disconnect();
     } catch (e) {
@@ -517,6 +589,8 @@ class AppState extends ChangeNotifier {
       status = null;
       latchedFlags = 0;
       statusHistory.clear();
+      _lastSeq = null;
+      droppedBatches = 0;
       _freshAt.clear();
       notifyListeners();
     }
@@ -535,14 +609,22 @@ class AppState extends ChangeNotifier {
     statusTimer = null;
   }
 
+  /// Slow 500 ms poll kept only for the counters and the latched fault set.
+  /// The live telemetry now arrives through the 1 kHz watch ([_startWatch]);
+  /// the old single-shot `statusGet` path is gone. The `statsGet` round-trip
+  /// is measured into [rttMs].
   Future<void> _pollStats() async {
     try {
+      final started = DateTime.now();
       final stats = await frb.statsGet();
+      _updateRtt(DateTime.now().difference(started).inMicroseconds / 1000.0);
+      final fault = await frb.faultGet();
       if (_disposed) return;
       reconnects = stats.reconnects.toInt();
       crcErrors = stats.crcErrors.toInt();
       attempts = stats.attempts.toInt();
-      _markFresh(<String>[keyCrc, keyResync, keyRetry, keyFrames]);
+      latchedFlags = fault.$2;
+      _markFresh(<String>[keyCrc, keyResync, keyRetry, keyFrames, keyRtt]);
       final start = sessionStart;
       if (start != null) {
         sessionUptime = DateTime.now().difference(start);
@@ -553,13 +635,13 @@ class AppState extends ChangeNotifier {
       _recordFailure(e);
       notifyListeners();
     }
-    await refreshStatus();
   }
 
   @override
   void dispose() {
     _disposed = true;
     _stopPolling();
+    _stopWatch();
     super.dispose();
   }
 

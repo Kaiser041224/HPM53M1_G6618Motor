@@ -22,6 +22,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  RustStreamSink<StatusBatchDto> dco_decode_StreamSink_status_batch_dto_Sse(
+    dynamic raw,
+  );
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -37,6 +45,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<StatusDto> dco_decode_list_status_dto(dynamic raw);
+
+  @protected
   ParamMetaDto dco_decode_param_meta_dto(dynamic raw);
 
   @protected
@@ -50,6 +61,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   StatsDto dco_decode_stats_dto(dynamic raw);
+
+  @protected
+  StatusBatchDto dco_decode_status_batch_dto(dynamic raw);
 
   @protected
   StatusDto dco_decode_status_dto(dynamic raw);
@@ -70,6 +84,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<StatusBatchDto> sse_decode_StreamSink_status_batch_dto_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
@@ -83,6 +105,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<StatusDto> sse_decode_list_status_dto(SseDeserializer deserializer);
 
   @protected
   ParamMetaDto sse_decode_param_meta_dto(SseDeserializer deserializer);
@@ -100,6 +125,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   StatsDto sse_decode_stats_dto(SseDeserializer deserializer);
+
+  @protected
+  StatusBatchDto sse_decode_status_batch_dto(SseDeserializer deserializer);
 
   @protected
   StatusDto sse_decode_status_dto(SseDeserializer deserializer);
@@ -123,6 +151,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_status_batch_dto_Sse(
+    RustStreamSink<StatusBatchDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
@@ -137,6 +177,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_status_dto(
+    List<StatusDto> self,
     SseSerializer serializer,
   );
 
@@ -157,6 +203,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_stats_dto(StatsDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_status_batch_dto(
+    StatusBatchDto self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_status_dto(StatusDto self, SseSerializer serializer);

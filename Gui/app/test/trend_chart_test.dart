@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -51,6 +53,45 @@ void main() {
         ]),
         7.5,
       );
+    });
+
+    test('抽稀：2000 点每像素列取 min/max，顶点 ≤ 2×宽度', () {
+      final values = List<double>.generate(
+        2000,
+        (i) => math.sin(i / 20) * 5,
+      );
+      const size = Size(600, 200);
+      final points = TrendChartPainter.seriesPoints(values, size, 5);
+
+      expect(points.length, lessThanOrEqualTo(2 * size.width.ceil()));
+      // Peaks survive the downsample: both envelope extremes are still reached.
+      final ys = points.map((p) => p.dy).toList();
+      expect(ys.reduce(math.min), lessThan(size.height / 2));
+      expect(ys.reduce(math.max), greaterThan(size.height / 2));
+    });
+
+    test('抽稀：样本少于列数时逐点绘制；< 2 点为空', () {
+      expect(
+        TrendChartPainter.seriesPoints(const <double>[], const Size(600, 200), 1),
+        isEmpty,
+      );
+      expect(
+        TrendChartPainter.seriesPoints(const <double>[1], const Size(600, 200), 1),
+        isEmpty,
+      );
+      final points = TrendChartPainter.seriesPoints(
+        const <double>[1, 2, 3],
+        const Size(600, 200),
+        1,
+      );
+      expect(points, hasLength(3));
+    });
+
+    test('窗口容量 2000 点 = 2 s @1kHz', () {
+      expect(TrendChart.capacity, 2000);
+      expect(TrendChart.caption, contains('1 kHz'));
+      expect(TrendChart.caption, contains('2 s 窗'));
+      expect(TrendChart.caption, contains('STREAM_SUB'));
     });
 
     test('三通道 1.5px 细线：描边、扁平无辉光', () {
@@ -128,8 +169,13 @@ void main() {
       expect(painter.series[1], <double>[-1.0, -2.0, -3.0]);
       expect(painter.series[2], <double>[0.5, 1.0, 1.5]);
 
-      expect(find.textContaining('轮询'), findsOneWidget);
+      expect(find.text(TrendChart.caption), findsOneWidget);
+      expect(find.textContaining('1 kHz 采样'), findsOneWidget);
       expect(find.textContaining('STREAM_SUB'), findsOneWidget);
+      // Time axis: 2 s window, 1 s midpoint, now.
+      expect(find.text('2s'), findsOneWidget);
+      expect(find.text('1s'), findsOneWidget);
+      expect(find.text('0'), findsOneWidget);
       expect(find.text('U'), findsOneWidget);
       expect(find.text('V'), findsOneWidget);
       expect(find.text('W'), findsOneWidget);
