@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Gui 单页平铺 v2 —— 无边框板块 + 左上下拉连接 + 设备 ASCII 标识</title>
+<link rel="stylesheet" href="../design-system/tokens.css">
+<style>
+@font-face{font-family:Electrolize;src:url(../design-system/fonts/Electrolize-Regular.ttf)format("truetype");font-display:block}
+@font-face{font-family:Aldrich;src:url(../design-system/fonts/Aldrich-Regular.ttf)format("truetype");font-display:block}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg-void);color:var(--fg);font-family:var(--font-zh);font-size:13px;padding:26px;
+  background-image:
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 0%, rgba(88,200,192,.05), transparent 60%);
+  background-size:var(--grid-size) var(--grid-size), var(--grid-size) var(--grid-size), 100% 100%;
+}
+.doc-h1{font-family:var(--font-display);font-size:18px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--accent);-webkit-text-stroke:var(--stroke);
+  text-shadow:var(--glow-1),var(--glow-2),var(--glow-3),var(--glow-4)}
+.doc-sub{font-family:var(--font-mono);font-size:11px;color:var(--fg-mute);letter-spacing:.08em;margin:7px 0 24px}
+
+/* ================= 应用窗体 ================= */
+.app{background:var(--bg-base);border:1px solid var(--line-hi);
+  box-shadow:0 0 0 1px var(--line-dim),0 0 32px rgba(88,200,192,.12),0 18px 50px rgba(0,0,0,.85)}
+
+/* ---------- 顶栏：左上角连接选项卡 + 右侧设备身份 ---------- */
+.topbar{position:relative;display:flex;align-items:flex-start;gap:22px;padding:16px 18px 14px;
+  background:linear-gradient(180deg,rgba(88,200,192,.045),transparent 70%)}
+.topbar .sp{flex:1}
+
+/* 连接选项卡（可点击展开） */
+details.conn{flex-shrink:0;position:static}
+details.conn > summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;
+  padding:9px 15px;border:1px solid var(--line-hi);background:var(--bg-panel);
+  box-shadow:inset 0 0 20px rgba(88,200,192,.10),0 0 14px rgba(88,200,192,.08)}
+details.conn > summary::-webkit-details-marker{display:none}
+details.conn[open] > summary{background:var(--bg-active);box-shadow:inset 0 0 24px rgba(88,200,192,.2),0 0 18px rgba(88,200,192,.14)}
+details.conn > summary .t{font-family:var(--font-display);font-size:11.5px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--accent);text-shadow:var(--glow-2),var(--glow-3)}
+details.conn > summary .s{font-family:var(--font-mono);font-size:10px;color:var(--fg-mute);display:block;margin-top:2px}
+details.conn > summary .cv{color:var(--fg-mute);font-size:10px;margin-left:2px}
+details.conn[open] > summary .cv{color:var(--accent)}
+.beat{display:inline-block;width:8px;height:8px;background:var(--accent);
+  box-shadow:0 0 9px var(--accent);animation:beat 1s steps(2,end) infinite;flex-shrink:0}
+.beat.warn{background:var(--st-warn);box-shadow:0 0 9px var(--st-warn)}
+.beat.off{background:var(--st-stale);box-shadow:none;animation:none}
+@keyframes beat{0%,49%{opacity:1}50%,100%{opacity:.18}}
+
+/* 展开的详细设置 —— 相对整个顶栏定位，落在顶栏下方，不遮挡设备艺术字 */
+.conn-panel{position:absolute;left:0;right:0;top:100%;z-index:9;
+  background:var(--bg-panel);border:1px solid var(--line-hi);border-top:none;
+  box-shadow:0 0 0 1px var(--line-dim),0 18px 50px rgba(0,0,0,.9),0 0 26px rgba(88,200,192,.12);
+  padding:16px 18px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:22px}
+.conn-panel .lbl{font-family:var(--font-display);font-size:9px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--fg-mute);display:block;margin-bottom:9px}
+.seg-sel{display:flex;gap:1px;background:var(--line-dim);border:1px solid var(--line)}
+.seg-sel .o{background:var(--bg-panel);padding:7px 10px;font-family:var(--font-display);font-size:9.5px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--fg-mute);flex:1;text-align:center}
+.seg-sel .o.on{background:var(--bg-active);color:var(--accent);
+  box-shadow:inset 0 -2px 0 var(--accent),inset 0 0 18px rgba(88,200,192,.15)}
+.seg-sel .o.dis{color:#22383A}
+.field{background:var(--bg-void);border:1px solid var(--line);padding:7px 11px;
+  font-family:var(--font-mono);font-size:12.5px;color:var(--fg-strong);
+  box-shadow:inset 0 0 0 1px rgba(88,200,192,.07)}
+.field .caret{display:inline-block;width:1px;height:13px;background:var(--accent);vertical-align:-2px;
+  box-shadow:0 0 6px var(--accent);animation:beat 1.1s steps(2,end) infinite}
+.btn{display:inline-block;font-family:var(--font-display);font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;padding:6px 14px;color:var(--fg-dim);cursor:pointer;
+  background:var(--bg-raise);border:1px solid var(--line);text-shadow:0 0 5px rgba(88,200,192,.18)}
+.btn.pri{color:var(--bg-void);background:var(--accent);border-color:var(--accent);
+  box-shadow:0 0 16px var(--accent-glow),0 0 7px rgba(88,200,192,.55)}
+.kv{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line-dim);font-size:11.5px}
+.kv:last-child{border-bottom:none}
+.kv .k{font-family:var(--font-display);font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--fg-mute)}
+.kv .v{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-strong);text-shadow:var(--glow-2)}
+
+/* ---------- 设备身份区：终端同款 ASCII 艺术字 ---------- */
+.identity{display:flex;align-items:center;gap:16px;min-width:0}
+.dev-art{font-family:var(--font-mono);font-size:15px;line-height:1.08;white-space:pre;
+  letter-spacing:0;margin:0;flex-shrink:0}
+/* 五行按终端 256 色序 45→51→141→207→213（青蓝→青→紫→洋红→品红）
+ * 色值由 tools/extract-device-art.ps1 从固件源码提取，勿手改。
+ * 注意 213 = #FF87FF（不是 #FF87D7，那是 212）。 */
+.dev-art .r1{color:#00D7FF;text-shadow:0 0 1px rgba(0,215,255,.9),0 0 8px rgba(0,215,255,.5),0 0 20px rgba(0,215,255,.22)}
+.dev-art .r2{color:#00FFFF;text-shadow:0 0 1px rgba(0,255,255,.9),0 0 8px rgba(0,255,255,.5),0 0 20px rgba(0,255,255,.22)}
+.dev-art .r3{color:#AF87FF;text-shadow:0 0 1px rgba(175,135,255,.9),0 0 8px rgba(175,135,255,.5),0 0 20px rgba(175,135,255,.22)}
+.dev-art .r4{color:#FF5FFF;text-shadow:0 0 1px rgba(255,95,255,.9),0 0 8px rgba(255,95,255,.5),0 0 20px rgba(255,95,255,.22)}
+.dev-art .r5{color:#FF87FF;text-shadow:0 0 1px rgba(255,135,255,.9),0 0 8px rgba(255,135,255,.5),0 0 20px rgba(255,135,255,.22)}
+.dev-meta{display:flex;flex-direction:column;gap:6px;padding-bottom:2px}
+.dev-meta .nm{font-family:var(--font-display);font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--fg-dim);text-shadow:var(--glow-2)}
+.dev-meta .ln{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-mute)}
+.dev-meta .ln b{color:var(--fg-dim);font-weight:400}
+/* 未连接占位 */
+.dev-empty{display:flex;align-items:center;gap:14px;min-height:82px}
+.dev-empty .box{width:190px;height:62px;border:1px dashed #2A4446;display:flex;align-items:center;
+  justify-content:center;font-family:var(--font-display);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:#2E4A4C}
+.dev-empty .hint{font-family:var(--font-zh-light);font-size:11.5px;color:var(--fg-mute);line-height:1.7;max-width:280px}
+
+.tbinfo{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-mute);text-align:right;
+  text-shadow:0 0 4px rgba(88,200,192,.15);line-height:1.9;flex-shrink:0}
+.tbinfo b{color:var(--fg-dim);font-weight:400}
+
+/* ================= 分割线：一亮两暗（实测母题） ================= */
+.divider{height:1px;background:var(--line-hi);
+  box-shadow:0 3px 0 var(--line-dim),0 8px 0 var(--line-dim);
+  margin:0 18px}
+
+/* ================= 无边框板块 ================= */
+.section{padding:20px 18px 24px}
+.sec-hd{display:flex;align-items:baseline;gap:14px;padding-bottom:9px;
+  border-bottom:1px solid var(--line-hi);box-shadow:0 3px 0 var(--line-dim),0 8px 0 var(--line-dim);
+  margin-bottom:20px}
+.sec-hd .t{font-family:var(--font-display);font-size:11.5px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--accent);-webkit-text-stroke:var(--stroke);text-shadow:var(--glow-2),var(--glow-3)}
+.sec-hd .d{font-family:var(--font-zh-light);font-size:11.5px;color:var(--fg-mute)}
+.sec-hd .r{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-mute)}
+
+/* ================= 指标格（仅内部细线，无外框） ================= */
+.mgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line-dim)}
+.mcell{background:var(--bg-base);padding:12px 14px;min-height:84px;display:flex;
+  flex-direction:column;justify-content:space-between;position:relative}
+.mcell::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(88,200,192,.05),transparent 45%)}
+.mcell .k{font-family:var(--font-display);font-size:9px;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--fg-mute);text-shadow:0 0 4px rgba(88,200,192,.15)}
+.mcell .k .zh{font-family:var(--font-zh-light);font-size:10px;color:var(--fg-dim);text-transform:none;
+  letter-spacing:.05em;margin-left:6px}
+.mcell .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:26px;
+  line-height:1.05;color:var(--fg-strong);-webkit-text-stroke:var(--stroke);
+  text-shadow:var(--glow-1),var(--glow-2),var(--glow-3),var(--glow-4)}
+.mcell .v .u{font-size:10.5px;color:var(--fg-mute);margin-left:4px;text-shadow:none;-webkit-text-stroke:0}
+.mcell .f{font-family:var(--font-display);font-size:8.5px;letter-spacing:.13em;color:#22383A}
+.mcell.v-y .v{color:var(--accent-2);-webkit-text-stroke:.4px rgba(200,192,0,.4);text-shadow:var(--glow-yellow)}
+.mcell.v-y .f{color:var(--st-warn)}
+.mcell.v-g .v{color:var(--st-normal);-webkit-text-stroke:.4px rgba(64,176,64,.4);text-shadow:var(--glow-green)}
+.mcell.v-r .v{color:var(--st-fault);-webkit-text-stroke:.4px rgba(248,128,112,.45);text-shadow:var(--glow-red)}
+.mcell.v-p .v{color:var(--series-3);-webkit-text-stroke:.4px rgba(255,135,215,.4);text-shadow:var(--glow-pink)}
+.mcell.v-v .v{color:var(--series-4);-webkit-text-stroke:.4px rgba(175,135,255,.4);text-shadow:var(--glow-violet)}
+.mcell.is-stale{background:#040C0C;outline:1px dashed #2A4446;outline-offset:-5px}
+.mcell.is-stale .v{color:var(--st-stale);text-shadow:none;-webkit-text-stroke:0}
+.mcell.is-stale .f{color:var(--st-warn)}
+
+/* ================= 图表（无边框，靠留白分栏） ================= */
+.charts{display:grid;grid-template-columns:2fr 1fr;gap:34px;align-items:start}
+.charts2{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:26px}
+.chart{width:100%;display:block}
+.chtitle{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+.chtitle .t{font-family:var(--font-display);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-dim);text-shadow:var(--glow-2)}
+.chtitle .s{font-family:var(--font-mono);font-size:9.5px;color:var(--fg-mute);margin-left:auto}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px}
+.legend .li{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:10px;color:var(--fg-dim)}
+.legend .li i{width:11px;height:11px;display:inline-block}
+.legend .li b{color:var(--fg-strong);font-weight:400;text-shadow:var(--glow-2)}
+.pie{width:128px;height:128px;border-radius:50%;flex-shrink:0;
+  background:conic-gradient(var(--accent) 0deg 151deg,var(--accent-2) 151deg 234deg,
+    var(--series-3) 234deg 288deg,var(--series-4) 288deg 331deg,var(--st-normal) 331deg 360deg);
+  box-shadow:0 0 26px rgba(88,200,192,.22),inset 0 0 22px rgba(0,0,0,.4)}
+.pie.small{width:100px;height:100px;background:conic-gradient(
+    var(--accent-2) 0deg 205deg,var(--st-fault) 205deg 288deg,var(--series-5) 288deg 360deg);
+  box-shadow:0 0 22px rgba(200,192,0,.2),inset 0 0 18px rgba(0,0,0,.4)}
+.piewrap{display:flex;align-items:center;gap:20px}
+.pielist{display:flex;flex-direction:column;gap:7px;flex:1}
+.pielist .r{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px}
+.pielist .r i{width:10px;height:10px;flex-shrink:0}
+.pielist .r .n{color:var(--fg-mute);flex:1}
+.pielist .r .v{color:var(--fg-strong);text-shadow:var(--glow-2)}
+
+.hbars{display:flex;flex-direction:column;gap:10px}
+.hbar{display:flex;align-items:center;gap:11px}
+.hbar .n{font-family:var(--font-display);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--fg-mute);width:52px;flex-shrink:0}
+.hbar .track{flex:1;height:13px;background:var(--bg-void);border:1px solid var(--line-dim);position:relative;
+  background-image:linear-gradient(90deg,var(--line-dim) 1px,transparent 1px);background-size:20% 100%}
+.hbar .track i{position:absolute;top:0;bottom:0;left:0;display:block}
+.hbar .v{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-strong);
+  width:66px;text-align:right;flex-shrink:0;text-shadow:var(--glow-2)}
+
+.gui-segments{display:flex;gap:2px;height:9px}
+.gui-segments i{flex:1;background:var(--bg-raise);border-top:1px solid rgba(88,200,192,.1);display:block}
+.gui-segments i.on{background:var(--accent);box-shadow:0 0 7px var(--accent-glow),0 0 2px rgba(88,200,192,.8)}
+.gui-segments i.w{background:var(--accent-2);box-shadow:0 0 7px rgba(200,192,0,.45)}
+.gui-segments i.r{background:var(--st-fault);box-shadow:0 0 7px rgba(248,128,112,.45)}
+
+/* SVG 图表着色 */
+.ax{stroke:var(--line-dim);stroke-width:1}
+.ax-hi{stroke:var(--line);stroke-width:1}
+svg.chart polyline[stroke="#58C8C0"]{filter:drop-shadow(0 0 3px rgba(88,200,192,.7))}
+svg.chart polyline[stroke="#C8C000"]{filter:drop-shadow(0 0 3px rgba(200,192,0,.65))}
+svg.chart polyline[stroke="#FF87D7"]{filter:drop-shadow(0 0 3px rgba(255,135,215,.65))}
+svg.chart polygon{filter:drop-shadow(0 0 6px rgba(88,200,192,.28))}
+
+/* ================= 参数（无边框分组，仅标题细线） ================= */
+.ptoolbar{display:flex;gap:10px;align-items:center;margin-bottom:22px}
+.ptoolbar .field{flex:1;color:var(--fg-mute);font-size:11.5px;padding:6px 11px}
+.pcols{display:grid;grid-template-columns:1fr 1fr;gap:36px;align-items:start}
+.pgroup{margin-bottom:26px}
+.pgroup:last-child{margin-bottom:0}
+.pgh{display:flex;align-items:baseline;gap:10px;padding-bottom:6px;margin-bottom:2px;
+  border-bottom:1px solid var(--line);box-shadow:0 3px 0 rgba(20,57,60,.5)}
+.pgh .nm{font-family:var(--font-display);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);text-shadow:var(--glow-2)}
+.pgh .ct{font-family:var(--font-mono);font-size:9.5px;color:var(--fg-mute)}
+.prow{display:grid;grid-template-columns:2.3fr .5fr 1.5fr .8fr;gap:1px}
+.prow > div{padding:5px 0 5px 12px;font-size:11.5px;display:flex;align-items:center;
+  border-bottom:1px solid rgba(20,57,60,.55)}
+.prow .nm{font-family:var(--font-mono);font-size:11px;color:var(--fg)}
+.prow .ty{font-family:var(--font-mono);font-size:10px;color:var(--fg-mute);
+  text-shadow:0 0 4px rgba(88,200,192,.15)}
+.prow .rg{font-family:var(--font-mono);font-size:10px;color:var(--fg-mute);gap:8px;
+  text-shadow:0 0 4px rgba(88,200,192,.15)}
+.prow .vl{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:12px;
+  color:var(--fg-strong);justify-content:flex-end;padding-right:8px;
+  -webkit-text-stroke:.35px rgba(127,227,219,.34);text-shadow:var(--glow-2),var(--glow-3)}
+.prow.dirty > div{background:rgba(200,192,0,.045)}
+.prow.dirty .nm,.prow.dirty .vl{color:var(--accent-2);-webkit-text-stroke:.35px rgba(200,192,0,.34);
+  text-shadow:var(--glow-yellow)}
+.prow.dirty .nm::before{content:"\25AA ";margin-right:4px}
+.tag{font-family:var(--font-display);font-size:8px;letter-spacing:.1em;text-transform:uppercase;
+  padding:1px 5px;border:1px solid var(--line-dim);color:var(--fg-mute)}
+.tag.live{border-color:var(--st-normal);color:var(--st-normal)}
+.tag.reboot{border-color:var(--st-warn);color:var(--st-warn)}
+.pnote{font-family:var(--font-zh-light);font-size:11.5px;color:var(--st-warn);margin-top:18px;
+  text-shadow:var(--glow-yellow)}
+
+/* ================= 底栏 ================= */
+.botbar{display:flex;align-items:center;background:var(--bg-void);border-top:1px solid var(--line-hi);
+  box-shadow:0 -2px 0 var(--line-dim);font-family:var(--font-mono);font-size:10px;color:var(--fg-mute)}
+.botbar .c{padding:7px 15px;border-right:1px solid var(--line-dim)}
+.botbar .c:last-child{border-right:none;margin-left:auto}
+.botbar .ok{color:var(--st-normal);text-shadow:var(--glow-green)}
+.botbar .wn{color:var(--st-warn);text-shadow:var(--glow-yellow)}
+
+/* 未连接示例条 */
+.striptitle{font-family:var(--font-display);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--fg-dim);margin:30px 0 10px;text-shadow:var(--glow-2)}
+</style>
+</head>
+<body>
+
+<div class="doc-h1">Gui Single-Page v2</div>
+<div class="doc-sub">无边框板块 · 左上下拉连接 · 设备型号采用 USB 终端同款 ASCII 艺术字 &nbsp;|&nbsp; 2026-09-30</div>
+
+<div class="app">
+
+  <!-- ==================== 顶栏 ==================== -->
+  <div class="topbar">
+
+    <!-- 左上角：连接选项卡（主示例为收起态，展开态见页面下方对照） -->
+    <details class="conn">
+      <summary>
+        <span class="beat warn"></span>
+        <span>
+          <span class="t">连接 · TCP</span>
+          <span class="s">127.0.0.1:9000</span>
+        </span>
+        <span class="cv">&#9662;</span>
+      </summary>
+
+      <div class="conn-panel">
+        <div>
+          <span class="lbl">链路选择 Transport</span>
+          <div class="seg-sel">
+            <div class="o on">TCP / 无线</div><div class="o dis">USB bulk</div>
+            <div class="o dis">UART / CDC</div>
+          </div>
+          <span class="lbl" style="margin-top:14px">地址 Address</span>
+          <div style="display:flex;gap:9px;align-items:center">
+            <div class="field" style="flex:1">127.0.0.1:9000<span class="caret"></span></div>
+            <span class="btn pri">连接</span><span class="btn">断开</span>
+          </div>
+        </div>
+        <div>
+          <span class="lbl">握手与能力 Handshake</span>
+          <div class="kv"><span class="k">Protocol</span><span class="v">v1.0　major 匹配</span></div>
+          <div class="kv"><span class="k">Capabilities</span><span class="v">0x03　WRITE | CTRL</span></div>
+          <div class="kv"><span class="k">Param Meta</span><span class="v">128 / 128</span></div>
+        </div>
+        <div>
+          <span class="lbl">链路质量 Link Quality</span>
+          <div class="kv"><span class="k">RTT</span><span class="v">12.4 ms</span></div>
+          <div class="kv"><span class="k">CRC / 重同步</span><span class="v">0 / 0</span></div>
+          <div class="kv"><span class="k">重连次数</span><span class="v">0</span></div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 连接选项卡右侧：目标设备身份（ASCII 艺术字，终端同款） -->
+    <div class="identity">
+      <pre class="dev-art"><span class="r1"> ██████   ██████   ██████   ██  █████ </span>
+<span class="r2">██       ██       ██       ███ ██   ██</span>
+<span class="r3">██   ███ ███████  ███████   ██  █████</span>
+<span class="r4">██    ██ ██    ██ ██    ██  ██ ██   ██</span>
+<span class="r5"> ██████   ██████   ██████   ██  █████</span></pre>
+      <div class="dev-meta">
+        <span class="nm">G6618 Motor Controller</span>
+        <span class="ln">MCU <b>HPM53M1</b>　PROTO <b>v1.0</b></span>
+        <span class="ln">FW <b>v0.1.0</b>　SERIAL <b>未提供</b></span>
+        <span class="ln" style="color:var(--st-warn);text-shadow:var(--glow-yellow)">&#9650; V 相电流数据失效</span>
+      </div>
+    </div>
+
+    <span class="sp"></span>
+    <span class="tbinfo">
+      POLL <b>500 ms</b><br>UPTIME <b>00:14:22</b><br>SEQ <b>0x1C</b> · 帧 <b>14208</b>
+    </span>
+  </div>
+
+  <!-- ==================== 分割 · 状态监视 ==================== -->
+  <div class="divider"></div>
+  <div class="section">
+    <div class="sec-hd">
+      <span class="t">状态监视</span>
+      <span class="d">Status</span>
+      <span class="r">8 项 · 1 项失效 · 1 项告警</span>
+    </div>
+
+    <div class="mgrid">
+      <div class="mcell"><div class="k">Vbus<span class="zh">母线电压</span></div>
+        <div class="v">24.0<span class="u">V</span></div><div class="f">NOMINAL 48</div></div>
+      <div class="mcell v-p"><div class="k">I_u<span class="zh">U 相电流</span></div>
+        <div class="v">0.000<span class="u">A</span></div><div class="f">RMS</div></div>
+      <div class="mcell is-stale"><div class="k">I_v<span class="zh">V 相电流</span></div>
+        <div class="v">&mdash;<span class="u">A</span></div><div class="f">&#9888; 1.5 S 未更新</div></div>
+      <div class="mcell v-v"><div class="k">I_w<span class="zh">W 相电流</span></div>
+        <div class="v">0.000<span class="u">A</span></div><div class="f">RMS</div></div>
+      <div class="mcell v-y"><div class="k">NTC<span class="zh">温度</span></div>
+        <div class="v">78.4<span class="u">&#8451;</span></div><div class="f">&#9650; 接近门限 85</div></div>
+      <div class="mcell v-g"><div class="k">Enc R<span class="zh">转子角</span></div>
+        <div class="v">123.4<span class="u">&deg;</span></div><div class="f">ROTOR · 正常</div></div>
+      <div class="mcell v-g"><div class="k">Enc O<span class="zh">出轴角</span></div>
+        <div class="v">120.9<span class="u">&deg;</span></div><div class="f">OUTPUT · 正常</div></div>
+      <div class="mcell"><div class="k">F_elec<span class="zh">电频率</span></div>
+        <div class="v">50.00<span class="u">Hz</span></div><div class="f">SETPOINT</div></div>
+    </div>
+  </div>
+
+  <!-- ==================== 分割 · 图表 ==================== -->
+  <div class="divider"></div>
+  <div class="section">
+    <div class="sec-hd">
+      <span class="t">曲线</span><span class="d">Scope</span>
+      <span class="r">一级流预留 · STREAM_SUB 返回 UNSUPPORTED</span>
+    </div>
+
+    <div class="charts">
+      <div>
+        <div class="chtitle"><span class="t">三相电流波形</span><span class="s">2.5 kHz · 10 ms/div</span></div>
+        <svg class="chart" viewBox="0 0 620 170" preserveAspectRatio="none" height="170">
+          <g class="ax">
+            <line x1="0" y1="28" x2="620" y2="28"/><line x1="0" y1="56" x2="620" y2="56"/>
+            <line x1="0" y1="84" x2="620" y2="84"/><line x1="0" y1="112" x2="620" y2="112"/>
+            <line x1="0" y1="140" x2="620" y2="140"/>
+            <line x1="77" y1="0" x2="77" y2="170"/><line x1="155" y1="0" x2="155" y2="170"/>
+            <line x1="232" y1="0" x2="232" y2="170"/><line x1="310" y1="0" x2="310" y2="170"/>
+            <line x1="387" y1="0" x2="387" y2="170"/><line x1="465" y1="0" x2="465" y2="170"/>
+            <line x1="542" y1="0" x2="542" y2="170"/>
+          </g>
+          <line class="ax-hi" x1="0" y1="84" x2="620" y2="84"/>
+          <polygon fill="#58C8C0" fill-opacity=".30"
+            points="0,96 40,72 80,86 120,58 160,74 200,46 240,64 280,40 320,58 360,34 400,52 440,38 480,62 520,44 560,68 600,50 620,60 620,84 0,84"/>
+          <polyline fill="none" stroke="#58C8C0" stroke-width="2"
+            points="0,96 40,72 80,86 120,58 160,74 200,46 240,64 280,40 320,58 360,34 400,52 440,38 480,62 520,44 560,68 600,50 620,60"/>
+          <polygon fill="#C8C000" fill-opacity=".24"
+            points="0,110 40,96 80,104 120,88 160,100 200,80 240,94 280,78 320,92 360,74 400,90 440,80 480,98 520,86 560,102 600,90 620,98 620,84 0,84"/>
+          <polyline fill="none" stroke="#C8C000" stroke-width="1.6"
+            points="0,110 40,96 80,104 120,88 160,100 200,80 240,94 280,78 320,92 360,74 400,90 440,80 480,98 520,86 560,102 600,90 620,98"/>
+          <polyline fill="none" stroke="#FF87D7" stroke-width="1.4" stroke-dasharray="5 3"
+            points="0,68 40,80 80,64 120,78 160,58 200,72 240,54 280,70 320,50 360,66 400,48 440,64 480,52 520,70 560,56 600,74 620,64"/>
+        </svg>
+        <div class="legend">
+          <span class="li"><i style="background:#58C8C0"></i>U 相 <b>0.000 A</b></span>
+          <span class="li"><i style="background:#C8C000"></i>V 相 <b style="color:var(--st-warn)">— 失效</b></span>
+          <span class="li"><i style="background:#FF87D7"></i>W 相 <b>0.000 A</b></span>
+          <span class="li" style="color:var(--fg-mute)">纵轴 ±30 A</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="chtitle"><span class="t">相电流占比</span><span class="s">RMS</span></div>
+        <div class="piewrap">
+          <div class="pie"></div>
+          <div class="pielist">
+            <div class="r"><i style="background:#58C8C0"></i><span class="n">U 相</span><span class="v">42.0 %</span></div>
+            <div class="r"><i style="background:#C8C000"></i><span class="n">V 相</span><span class="v">23.1 %</span></div>
+            <div class="r"><i style="background:#FF87D7"></i><span class="n">W 相</span><span class="v">15.0 %</span></div>
+            <div class="r"><i style="background:#AF87FF"></i><span class="n">谐波</span><span class="v">12.0 %</span></div>
+            <div class="r"><i style="background:#40B040"></i><span class="n">直流</span><span class="v">7.9 %</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="charts2">
+      <div>
+        <div class="chtitle"><span class="t">热与负载 · 相对门限</span><span class="s">%</span></div>
+        <div class="hbars">
+          <div class="hbar"><span class="n">NTC</span>
+            <div class="track"><i style="width:92%;background:linear-gradient(90deg,#C8C000,#E0A020)"></i></div>
+            <span class="v">92 %</span></div>
+          <div class="hbar"><span class="n">U 相</span>
+            <div class="track"><i style="width:34%;background:var(--accent)"></i></div>
+            <span class="v">34 %</span></div>
+          <div class="hbar"><span class="n">V 相</span>
+            <div class="track"><i style="width:0%"></i></div>
+            <span class="v" style="color:var(--st-stale)">&mdash;</span></div>
+          <div class="hbar"><span class="n">W 相</span>
+            <div class="track"><i style="width:29%;background:var(--series-4)"></i></div>
+            <span class="v">29 %</span></div>
+          <div class="hbar"><span class="n">Vbus</span>
+            <div class="track"><i style="width:50%;background:var(--st-normal)"></i></div>
+            <span class="v">50 %</span></div>
+          <div class="hbar"><span class="n">栅极</span>
+            <div class="track"><i style="width:76%;background:var(--st-fault)"></i></div>
+            <span class="v" style="color:var(--st-fault)">76 %</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="chtitle"><span class="t">故障构成与指令</span><span class="s">LATCHED</span></div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:22px">
+          <div class="piewrap" style="gap:14px">
+            <div class="pie small"></div>
+            <div class="pielist" style="gap:6px">
+              <div class="r"><i style="background:#C8C000"></i><span class="n">过流</span><span class="v">57 %</span></div>
+              <div class="r"><i style="background:#F88070"></i><span class="n">欠压</span><span class="v">23 %</span></div>
+              <div class="r"><i style="background:#87FFAF"></i><span class="n">过温</span><span class="v">20 %</span></div>
+            </div>
+          </div>
+          <div>
+            <div style="display:flex;gap:8px;margin-bottom:16px">
+              <span class="btn pri">启动</span><span class="btn">停止</span>
+              <span class="btn" style="color:var(--st-fault);border-color:var(--st-fault)">清除故障</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px">
+              <span style="font-family:var(--font-display);font-size:9px;color:var(--fg-mute);width:32px">FREQ</span>
+              <div class="gui-segments" style="flex:1">
+                <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i>
+                <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i>
+                <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <span style="font-family:var(--font-mono);font-size:11px;color:var(--fg-strong);width:70px;text-align:right;text-shadow:var(--glow-2)">50.00 Hz</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="font-family:var(--font-display);font-size:9px;color:var(--fg-mute);width:32px">MOD</span>
+              <div class="gui-segments" style="flex:1">
+                <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i>
+                <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i>
+                <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="w"></i>
+                <i class="w"></i><i class="w"></i><i></i><i></i><i></i></div>
+              <span style="font-family:var(--font-mono);font-size:11px;color:var(--fg-strong);width:70px;text-align:right;text-shadow:var(--glow-2)">72.0 %</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 分割 · 参数 ==================== -->
+  <div class="divider"></div>
+  <div class="section">
+    <div class="sec-hd">
+      <span class="t">参数</span><span class="d">Parameters · 元数据驱动</span>
+      <span class="r">128 项 · 2 项待落盘</span>
+    </div>
+
+    <div class="ptoolbar">
+      <div class="field">按名称过滤…</div>
+      <span class="btn">读全部</span>
+      <span class="btn pri">COMMIT 落盘</span>
+    </div>
+
+    <div class="pcols">
+      <div>
+        <div class="pgroup">
+          <div class="pgh"><span class="nm">Motor</span><span class="ct">6 项</span></div>
+          <div class="prow"><div class="nm">motor.pole_pairs</div><div class="ty">u32</div>
+            <div class="rg">1..64 <span class="tag reboot">reboot</span></div><div class="vl">10</div></div>
+          <div class="prow"><div class="nm">motor.rs_ohm</div><div class="ty">f32</div>
+            <div class="rg">0..10 &#937; <span class="tag live">live</span></div><div class="vl">0.158</div></div>
+          <div class="prow"><div class="nm">motor.ls_h</div><div class="ty">f32</div>
+            <div class="rg">0..0.01 H <span class="tag live">live</span></div><div class="vl">0.000119</div></div>
+          <div class="prow"><div class="nm">motor.ke_vs_per_rad</div><div class="ty">f32</div>
+            <div class="rg">0..1 <span class="tag live">live</span></div><div class="vl">0.125</div></div>
+          <div class="prow dirty"><div class="nm">motor.i_rated_a</div><div class="ty">f32</div>
+            <div class="rg">0..50 A <span class="tag live">live</span></div><div class="vl">7.000</div></div>
+          <div class="prow"><div class="nm">motor.rpm_max</div><div class="ty">u32</div>
+            <div class="rg">0..10000 <span class="tag reboot">reboot</span></div><div class="vl">3300</div></div>
+        </div>
+        <div class="pgroup">
+          <div class="pgh"><span class="nm">Hardware · Current Sense</span><span class="ct">2 项</span></div>
+          <div class="prow"><div class="nm">hardware.current_sense.a_per_volt</div><div class="ty">f32</div>
+            <div class="rg">0..5 <span class="tag live">live</span></div><div class="vl">0.125</div></div>
+          <div class="prow"><div class="nm">hardware.current_sense.offset_mv</div><div class="ty">f32</div>
+            <div class="rg">-100..100 <span class="tag live">live</span></div><div class="vl">0.0</div></div>
+        </div>
+      </div>
+      <div>
+        <div class="pgroup">
+          <div class="pgh"><span class="nm">Software · Fault</span><span class="ct">4 项</span></div>
+          <div class="prow dirty"><div class="nm">software.fault.vbus_ov_v</div><div class="ty">f32</div>
+            <div class="rg">0..80 V <span class="tag live">live</span></div><div class="vl">72.0</div></div>
+          <div class="prow"><div class="nm">software.fault.vbus_uv_v</div><div class="ty">f32</div>
+            <div class="rg">0..80 V <span class="tag live">live</span></div><div class="vl">18.0</div></div>
+          <div class="prow"><div class="nm">software.fault.oc_a</div><div class="ty">f32</div>
+            <div class="rg">0..60 A <span class="tag live">live</span></div><div class="vl">24.3</div></div>
+          <div class="prow"><div class="nm">software.fault.ntc_ot_c</div><div class="ty">f32</div>
+            <div class="rg">0..150 &#8451; <span class="tag live">live</span></div><div class="vl">85.0</div></div>
+        </div>
+        <div class="pgroup">
+          <div class="pgh"><span class="nm">Software · Control</span><span class="ct">3 项</span></div>
+          <div class="prow"><div class="nm">software.control.freq_hz</div><div class="ty">f32</div>
+            <div class="rg">0..1000 Hz <span class="tag live">live</span></div><div class="vl">50.00</div></div>
+          <div class="prow"><div class="nm">software.control.mod_pct</div><div class="ty">f32</div>
+            <div class="rg">0..100 % <span class="tag live">live</span></div><div class="vl">72.0</div></div>
+          <div class="prow"><div class="nm">software.control.ramp_s</div><div class="ty">f32</div>
+            <div class="rg">0..60 s <span class="tag live">live</span></div><div class="vl">2.500</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pnote">
+      &#9642; 落盘需停机且无故障锁存 —— 当前 <b style="color:var(--fg-dim)">Stop</b>、<b style="color:var(--st-fault)">锁存 1 项</b>，COMMIT 将被拒绝
+    </div>
+  </div>
+
+  <!-- ==================== 底栏 ==================== -->
+  <div class="botbar">
+    <div class="c wn">&#9650; DEGRADED · V 相电流失效</div>
+    <div class="c">RTT 12.4 MS</div>
+    <div class="c">CRC 0</div>
+    <div class="c">RESYNC 0</div>
+    <div class="c">RETRY 0</div>
+    <div class="c">DIRTY 2</div>
+    <div class="c">SEQ 0x1C · 帧 14208</div>
+  </div>
+
+</div>
+
+<!-- ==================== 未连接状态对照 ==================== -->
+<div class="striptitle">对照 A · 未连接时的顶栏（设备身份由握手获得，不预先假定）</div>
+<div class="app">
+  <div class="topbar" style="padding-bottom:16px">
+    <details class="conn">
+      <summary>
+        <span class="beat off"></span>
+        <span><span class="t" style="color:var(--fg-mute)">连接 · 未建立</span>
+        <span class="s">127.0.0.1:9000</span></span>
+        <span class="cv">&#9662;</span>
+      </summary>
+    </details>
+    <div class="dev-empty">
+      <div class="box">Device ID Pending</div>
+      <div class="hint">设备型号由 <b style="color:var(--fg-dim)">PROTO_INFO</b> 握手取得，连接前不作假定。
+        展开左侧选项卡可选择链路与地址。</div>
+    </div>
+    <span class="sp"></span>
+    <span class="tbinfo">POLL <b>—</b><br>UPTIME <b>—</b><br>SEQ <b>—</b></span>
+  </div>
+</div>
+
+<!-- ==================== 展开态对照 ==================== -->
+<div class="striptitle">对照 B · 点击连接选项卡后展开（面板落在顶栏下方，不遮挡设备标识）</div>
+<div class="app" style="padding-bottom:186px">
+  <div class="topbar" style="padding-bottom:16px">
+    <details class="conn" open>
+      <summary>
+        <span class="beat warn"></span>
+        <span><span class="t">连接 · TCP</span><span class="s">127.0.0.1:9000</span></span>
+        <span class="cv">&#9662;</span>
+      </summary>
+      <div class="conn-panel">
+        <div>
+          <span class="lbl">链路选择 Transport</span>
+          <div class="seg-sel">
+            <div class="o on">TCP / 无线</div><div class="o dis">USB bulk</div>
+            <div class="o dis">UART / CDC</div>
+          </div>
+          <span class="lbl" style="margin-top:14px">地址 Address</span>
+          <div style="display:flex;gap:9px;align-items:center">
+            <div class="field" style="flex:1">127.0.0.1:9000<span class="caret"></span></div>
+            <span class="btn pri">连接</span><span class="btn">断开</span>
+          </div>
+        </div>
+        <div>
+          <span class="lbl">握手与能力 Handshake</span>
+          <div class="kv"><span class="k">Protocol</span><span class="v">v1.0　major 匹配</span></div>
+          <div class="kv"><span class="k">Capabilities</span><span class="v">0x03　WRITE | CTRL</span></div>
+          <div class="kv"><span class="k">Param Meta</span><span class="v">128 / 128</span></div>
+        </div>
+        <div>
+          <span class="lbl">链路质量 Link Quality</span>
+          <div class="kv"><span class="k">RTT</span><span class="v">12.4 ms</span></div>
+          <div class="kv"><span class="k">CRC / 重同步</span><span class="v">0 / 0</span></div>
+          <div class="kv"><span class="k">重连次数</span><span class="v">0</span></div>
+        </div>
+      </div>
+    </details>
+    <div class="identity">
+      <pre class="dev-art"><span class="r1"> ██████   ██████   ██████   ██  █████ </span>
+<span class="r2">██       ██       ██       ███ ██   ██</span>
+<span class="r3">██   ███ ███████  ███████   ██  █████</span>
+<span class="r4">██    ██ ██    ██ ██    ██  ██ ██   ██</span>
+<span class="r5"> ██████   ██████   ██████   ██  █████</span></pre>
+      <div class="dev-meta">
+        <span class="nm">G6618 Motor Controller</span>
+        <span class="ln">MCU <b>HPM53M1</b>　PROTO <b>v1.0</b></span>
+      </div>
+    </div>
+    <span class="sp"></span>
+    <span class="tbinfo">POLL <b>500 ms</b><br>UPTIME <b>00:14:22</b><br>SEQ <b>0x1C</b></span>
+  </div>
+</div>
+
+</body>
+</html>
