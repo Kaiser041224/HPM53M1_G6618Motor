@@ -98,6 +98,72 @@ void main() {
       await tester.pump(const Duration(milliseconds: 2600));
       expect(find.byKey(const Key('gui_toast_frame')), findsNothing);
     });
+
+    testWidgets('底部水平居中锚定：底缘落在状态栏上方 inset 处', (tester) async {
+      await _pumpAndShow(tester);
+      // 入场完成、进入定格段。
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final size = tester.view.physicalSize / tester.view.devicePixelRatio;
+      final rect = tester.getRect(find.byKey(const Key('gui_toast_frame')));
+
+      expect(
+        rect.bottom,
+        closeTo(size.height - kGuiToastBottomInset, 1.0),
+        reason: '底缘应锚定在状态栏顶缘上方 ~12px（不再居中悬浮）',
+      );
+      expect(
+        rect.center.dx,
+        closeTo(size.width / 2, 1.0),
+        reason: '水平取底部居中',
+      );
+      expect(
+        rect.center.dy,
+        greaterThan(size.height / 2),
+        reason: '应贴底，不得居中偏下悬浮',
+      );
+
+      await _drain(tester);
+    });
+
+    testWidgets('无下划 / 黄线强调装饰：双层框四边等色等宽', (tester) async {
+      const palette = GuiPalette();
+      await _pumpAndShow(tester);
+
+      final frame = tester.widget<Container>(
+        find.byKey(const Key('gui_toast_frame')),
+      );
+      final frameBorder =
+          (frame.decoration! as BoxDecoration).border! as Border;
+      // 四边等色等宽 —— 不允许出现「仅底边」的下划强调线。
+      expect(frameBorder.top, frameBorder.bottom);
+      expect(frameBorder.top, frameBorder.left);
+      expect(frameBorder.top, frameBorder.right);
+
+      // 提示框内不得有黄线（accent2 / valueAmber）或仅底边的装饰条。
+      final containers = tester.widgetList<Container>(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast')),
+          matching: find.byType(Container),
+        ),
+      );
+      for (final container in containers) {
+        final decoration = container.decoration;
+        if (decoration is! BoxDecoration) continue;
+        final border = decoration.border;
+        if (border is Border) {
+          expect(
+            border.bottom.width,
+            border.top.width,
+            reason: '不得出现仅底边的下划强调线',
+          );
+        }
+        expect(decoration.color, isNot(palette.accent2));
+        expect(decoration.color, isNot(palette.valueAmber));
+      }
+
+      await _drain(tester);
+    });
   });
 
   group('GuiToast 语气三重编码（icon + 色带 + 颜色）', () {

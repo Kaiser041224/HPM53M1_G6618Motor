@@ -139,6 +139,31 @@ void main() {
     expect((cardShape as RoundedRectangleBorder).borderRadius, BorderRadius.zero);
   });
 
+  test('Tooltip 主题：暗底 bgPanel + 青色 1px 锐利边框 + fgStrong 文字', () {
+    const palette = GuiPalette();
+    final tooltip = buildGuiTheme().tooltipTheme;
+
+    final decoration = tooltip.decoration! as BoxDecoration;
+    expect(decoration.color, palette.bgPanel, reason: '暗底，不得沿用浅色默认');
+    final border = decoration.border! as Border;
+    expect(border.top.color, palette.accent);
+    expect(border.top.width, 1.0);
+    expect(decoration.borderRadius, BorderRadius.zero, reason: '直角');
+
+    // 阴影压暗：存在且为极暗的 bgVoid 半透明层。
+    expect(decoration.boxShadow, isNotEmpty);
+    expect(decoration.boxShadow!.first.color.a, greaterThan(0));
+    expect(decoration.boxShadow!.first.color.r, lessThan(0.1));
+
+    expect(
+      tooltip.padding,
+      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    );
+    expect(tooltip.textStyle?.color, palette.fgStrong);
+    expect(tooltip.textStyle?.fontFamily, GuiTypeScale.zhFamily);
+    expect(tooltip.textStyle!.fontSize, inInclusiveRange(12, 13));
+  });
+
   test('GuiTypeScale 采用 CRT 终端字体栈与字距', () {
     const palette = GuiPalette();
     final scale = GuiTypeScale(const GuiPalette());
