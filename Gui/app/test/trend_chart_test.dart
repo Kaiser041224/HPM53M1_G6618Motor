@@ -9,6 +9,7 @@ import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/widgets/chart_history.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
+import 'package:g6618_gui/widgets/sigma_trend.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
 
@@ -349,7 +350,11 @@ void main() {
     testWidgets('图表外框为 HairlineFrame main', (tester) async {
       await _pump(tester, TrendChart(history: _three()));
 
-      final frame = tester.widget<HairlineFrame>(find.byType(HairlineFrame));
+      final frame = tester.widget<HairlineFrame>(
+        find.byWidgetPredicate(
+          (w) => w is HairlineFrame && w.variant == HairlineVariant.main,
+        ),
+      );
       expect(frame.variant, HairlineVariant.main);
     });
 
@@ -415,24 +420,68 @@ void main() {
       }
     });
 
-    testWidgets('示数值 / 字母 / 行标字号达到下限（22 / 18 / 11）', (tester) async {
+    testWidgets('示数值 / 字母 / 行标字号达到下限（26 / 22 / 13）', (tester) async {
       await _pump(tester, TrendChart(history: _three()));
 
       final u = find.byKey(TrendChart.phaseColumnKey(0));
       final value = tester.widget<Text>(
         find.descendant(of: u, matching: find.text('+3.00')),
       );
-      expect(value.style?.fontSize, greaterThanOrEqualTo(22));
+      expect(value.style?.fontSize, greaterThanOrEqualTo(26));
       expect(value.style?.color, const GuiPalette().valueGreen);
       final letter = tester.widget<Text>(
         find.descendant(of: u, matching: find.text('U')),
       );
-      expect(letter.style?.fontSize, greaterThanOrEqualTo(18));
+      expect(letter.style?.fontSize, greaterThanOrEqualTo(22));
       final label = tester.widget<Text>(
         find.descendant(of: u, matching: find.text('MAX')),
       );
-      expect(label.style?.fontSize, greaterThanOrEqualTo(11));
+      expect(label.style?.fontSize, greaterThanOrEqualTo(13));
       expect(label.style?.color, const GuiPalette().fgDim);
+    });
+
+    testWidgets('色块图例竖向居中：图例中心对齐右栈 RMS 行（非顶对齐）', (tester) async {
+      await _pump(tester, TrendChart(history: _three()));
+
+      final column = find.byKey(TrendChart.phaseColumnKey(0));
+      final legendCenter = tester.getCenter(
+        find.byKey(TrendChart.phaseLegendKey(0)),
+      );
+      final rmsCenter = tester.getCenter(
+        find.descendant(of: column, matching: find.text('RMS')),
+      );
+      expect(
+        (legendCenter.dy - rmsCenter.dy).abs(),
+        lessThan(8),
+        reason: '色块 + 通道字母整体应竖向居中，与 RMS 中行对齐',
+      );
+      // And not start-aligned at the MAX row.
+      final maxCenter = tester.getCenter(
+        find.descendant(of: column, matching: find.text('MAX')),
+      );
+      expect(legendCenter.dy, greaterThan(maxCenter.dy + 8));
+    });
+
+    testWidgets('ΣI 趋势小图：200×88 sub 外框，位于 ΣI 值右侧同一横排', (tester) async {
+      await _pump(tester, TrendChart(history: _three()));
+
+      final frame = find.byKey(SigmaTrend.frameKey);
+      expect(frame, findsOneWidget);
+      expect(tester.getSize(frame), const Size(200, 88));
+
+      final sum = find.descendant(
+        of: find.byKey(TrendChart.sigmaRowKey),
+        matching: find.text('+1.50'),
+      );
+      expect(
+        tester.getTopLeft(frame).dx,
+        greaterThan(tester.getTopLeft(sum).dx),
+        reason: '小图在 ΣI 值/标签右侧，与三相列同横排',
+      );
+      expect(
+        tester.getTopLeft(frame).dy,
+        closeTo(tester.getTopLeft(find.byKey(TrendChart.phaseColumnKey(0))).dy, 40),
+      );
     });
 
     testWidgets('示数区位于控制栏（SPAN 滑块）下方', (tester) async {

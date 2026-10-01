@@ -9,6 +9,7 @@ import '../theme/gui_type.dart';
 import 'chart_history.dart';
 import 'gui_button.dart';
 import 'hairline_frame.dart';
+import 'sigma_trend.dart';
 import 'stable_digits.dart';
 import 'stale_gate.dart';
 import 'status_badge.dart';
@@ -138,27 +139,32 @@ class TrendChart extends StatefulWidget {
   static Key phaseSwatchKey(int channel) =>
       Key('trend_phase_swatch_${channelLetters[channel]}');
 
+  /// Key of one phase's left legend block (swatch + channel letter), the unit
+  /// that is vertically centred against the right `MAX / RMS / MIN` stack.
+  static Key phaseLegendKey(int channel) =>
+      Key('trend_phase_legend_${channelLetters[channel]}');
+
   /// Channel letters of the readout area, in series order.
   static const List<String> channelLetters = <String>['U', 'V', 'W'];
 
-  /// Value font size [logical px] in the readout area (≥ 22).
-  static const double valueSize = 22;
+  /// Value font size [logical px] in the readout area (≥ 26).
+  static const double valueSize = 28;
 
-  /// Channel-letter font size [logical px] in the readout area (≥ 18).
-  static const double channelLetterSize = 18;
+  /// Channel-letter font size [logical px] in the readout area (≥ 22).
+  static const double channelLetterSize = 22;
 
-  /// `MAX` / `RMS` / `MIN` row-label font size [logical px] (≥ 11).
-  static const double rowLabelSize = 11;
+  /// `MAX` / `RMS` / `MIN` row-label font size [logical px] (≥ 13).
+  static const double rowLabelSize = 13;
 
   /// Unit (`A`) font size [logical px] in the readout area.
-  static const double unitSize = 11;
+  static const double unitSize = 14;
 
   /// Phase colour-swatch edge [logical px].
   static const double swatchSize = 12;
 
   /// Fixed width [logical px] of the `MAX` / `RMS` / `MIN` label gutter, so the
   /// three value columns line up across every phase.
-  static const double rowLabelWidth = 34;
+  static const double rowLabelWidth = 38;
 
   /// Formats [value] with two decimals and an explicit sign (`+3.00` / `-3.00`).
   /// Shared by the `MAX` / `MIN` and current-sum readouts.
@@ -563,15 +569,18 @@ class TrendChartState extends State<TrendChart> {
   }
 
   /// The numeric readout area below the control bar: three phase columns
-  /// (`U` / `V` / `W`) plus a `ΣI` column, laid out to fill the frame width.
+  /// (`U` / `V` / `W`) plus a `ΣI` block (`ΣI[value + trend]`), laid out
+  /// horizontally to fill the frame width.
   ///
   /// Each phase column carries a 12×12 series-colour swatch and the channel
-  /// letter on the left, and a vertical `MAX / RMS / MIN` stack on the right.
-  /// `MAX` / `MIN` are the signed window extrema and `RMS` the window
-  /// root-mean-square, each tinted green for the `A` dimension with its `A`
-  /// unit; the row labels stay a dim small tier. The `ΣI` column shows the
-  /// newest sample's three-phase sum in magenta under the cyan `ΣI 三相和`
-  /// caption. A window with no sample at all renders a single `—`
+  /// letter on the left — the legend block is vertically centred against the
+  /// right stack, aligning with the middle `RMS` row — and a vertical
+  /// `MAX / RMS / MIN` stack on the right. `MAX` / `MIN` are the signed window
+  /// extrema and `RMS` the window root-mean-square, each tinted green for the
+  /// `A` dimension with its `A` unit; the row labels stay a dim small tier. The
+  /// `ΣI` block shows the newest sample's three-phase sum in magenta under the
+  /// cyan `ΣI 三相和` caption, with the [SigmaTrend] sparkline of `ΣI(t)` to its
+  /// right. A window with no sample at all renders a single `—`
   /// (design-system §6 rule 2).
   Widget _readoutArea(
     GuiPalette palette,
@@ -607,7 +616,7 @@ class TrendChartState extends State<TrendChart> {
     }
     return Row(
       key: TrendChart.readoutAreaKey,
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         for (var channel = 0; channel < ChartHistory.channelCount; channel++)
           ...<Widget>[
@@ -623,13 +632,38 @@ class TrendChartState extends State<TrendChart> {
             ),
             const SizedBox(width: 18),
           ],
-        Expanded(child: _sigmaColumn(palette, scale, history)),
+        _sigmaBlock(palette, scale, history, viewStart),
+      ],
+    );
+  }
+
+  /// The `ΣI` block: the signed three-phase-sum readout followed by the
+  /// [SigmaTrend] sparkline, sitting at the right of the readout row.
+  Widget _sigmaBlock(
+    GuiPalette palette,
+    GuiTypeScale scale,
+    ChartHistory history,
+    double viewStart,
+  ) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        _sigmaColumn(palette, scale, history),
+        const SizedBox(width: 12),
+        SigmaTrend(
+          history: history,
+          viewStartSec: viewStart,
+          viewSpanSec: _viewSpanSec,
+        ),
       ],
     );
   }
 
   /// One phase column of [_readoutArea]: swatch + letter on the left, the
-  /// `MAX / RMS / MIN` value stack on the right.
+  /// `MAX / RMS / MIN` value stack on the right. The left legend block is
+  /// vertically centred against the right stack, so it lines up with the middle
+  /// (`RMS`) row rather than top-aligning with `MAX`.
   Widget _phaseColumn(
     GuiPalette palette,
     GuiTypeScale scale,
@@ -640,9 +674,11 @@ class TrendChartState extends State<TrendChart> {
   ) {
     return Row(
       key: TrendChart.phaseColumnKey(channel),
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         Column(
+          key: TrendChart.phaseLegendKey(channel),
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: <Widget>[
             Container(
