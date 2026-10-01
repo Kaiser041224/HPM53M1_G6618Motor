@@ -135,24 +135,31 @@ class AppState extends ChangeNotifier {
   /// [rpmOutput]): each accepted sample moves the estimate 15%.
   static const double rpmEmaAlpha = 0.15;
 
+  /// Sliding window over which the angular-speed derivative is taken. The rpm
+  /// is the unwrapped angle swept across this window divided by its elapsed
+  /// time, so a single late/dropped sample cannot spike the estimate (design
+  /// intent: the readout stays steady under a 1 kHz feed with jitter).
+  static const Duration kRpmWindow = Duration(milliseconds: 100);
+
   /// A longer interval between angle samples than this is a discontinuity (a
-  /// stalled or coalesced feed): the derivative restarts from null rather than
-  /// computing a bogus speed over the gap.
+  /// stalled or coalesced feed): the sample window is restarted. The **estimate
+  /// itself is preserved** — an em dash is reserved for "never had a valid
+  /// sample", never for a momentary gap.
   static const Duration kRpmMaxGap = Duration(milliseconds: 500);
 
-  /// Previous rotor angle [°] and its arrival time, driving [rpmRotor].
-  double? _previousRotorDeg;
-  DateTime? _previousRotorAt;
+  /// Rotor angular-speed estimator; [rpmRotor] reads its EMA.
+  final _AngularSpeedTracker _rotorSpeed = _AngularSpeedTracker(
+    window: kRpmWindow,
+    maxGap: kRpmMaxGap,
+    alpha: rpmEmaAlpha,
+  );
 
-  /// EMA of the rotor angular speed [rpm]; null until two samples bound a gap.
-  double? _rpmRotorEma;
-
-  /// Previous output-shaft angle [°] and its arrival time, driving [rpmOutput].
-  double? _previousOutputDeg;
-  DateTime? _previousOutputAt;
-
-  /// EMA of the output-shaft angular speed [rpm]; null until two samples.
-  double? _rpmOutputEma;
+  /// Output-shaft angular-speed estimator; [rpmOutput] reads its EMA.
+  final _AngularSpeedTracker _outputSpeed = _AngularSpeedTracker(
+    window: kRpmWindow,
+    maxGap: kRpmMaxGap,
+    alpha: rpmEmaAlpha,
+  );
 
   /// Wall-clock source for the angle-difference derivative. Overridable in
   /// tests so rpm can be driven without sleeping on the real clock.
@@ -188,12 +195,13 @@ class AppState extends ChangeNotifier {
         : deriveNtcStator(sample.ntcTemp, sample.iU, sample.iV, sample.iW);
   }
 
-  /// Rotor angular speed estimate [rpm] from the shortest-arc unwrapped angle
-  /// difference, EMA-smoothed. **EST**; null on the first sample / after a gap.
-  double? get rpmRotor => _rpmRotorEma;
+  /// Rotor angular speed estimate [rpm] from the sliding-window unwrapped angle
+  /// difference, EMA-smoothed. **EST**; null only before the first valid
+  /// sample — a gap holds the previous estimate rather than blanking it.
+  double? get rpmRotor => _rotorSpeed.ema;
 
   /// Output-shaft angular speed estimate [rpm]; **EST**; null as [rpmRotor].
-  double? get rpmOutput => _rpmOutputEma;
+  double? get rpmOutput => _outputSpeed.ema;
 
   /// Flat, timestamped 60 s ring of the three phase currents, appended once per
   /// batch by the 1 kHz watch (one sample per 1 ms tick). Drives the ScopeZone
@@ -247,59 +255,15 @@ class AppState extends ChangeNotifier {
   /// Advances the two angular-speed estimates from the newest [sample].
   void _updateSpeeds(frb.StatusDto sample) {
     final now = clock();
-    _rpmRotorEma = _advanceRpm(
-      angleDeg: sample.encRotorDeg,
-      now: now,
-      previousDeg: _previousRotorDeg,
-      previousAt: _previousRotorAt,
-      priorEma: _rpmRotorEma,
-    );
-    _previousRotorDeg = sample.encRotorDeg;
-    _previousRotorAt = now;
-
-    _rpmOutputEma = _advanceRpm(
-      angleDeg: sample.encOutputDeg,
-      now: now,
-      previousDeg: _previousOutputDeg,
-      previousAt: _previousOutputAt,
-      priorEma: _rpmOutputEma,
-    );
-    _previousOutputDeg = sample.encOutputDeg;
-    _previousOutputAt = now;
+    _rotorSpeed.add(now, sample.encRotorDeg);
+    _outputSpeed.add(now, sample.encOutputDeg);
   }
 
-  /// One angular-speed step: null on the first sample or across a [kRpmMaxGap]
-  /// discontinuity (which also clears the EMA so it restarts from null),
-  /// otherwise the shortest-arc derivative EMA-smoothed by [rpmEmaAlpha].
-  double? _advanceRpm({
-    required double angleDeg,
-    required DateTime now,
-    required double? previousDeg,
-    required DateTime? previousAt,
-    required double? priorEma,
-  }) {
-    final previous = previousDeg;
-    final at = previousAt;
-    if (previous == null || at == null) return null;
-    final elapsed = now.difference(at);
-    if (elapsed <= Duration.zero || elapsed > kRpmMaxGap) return null;
-    final rpm = deriveRpm(
-      previous,
-      angleDeg,
-      elapsed.inMicroseconds / Duration.microsecondsPerSecond,
-    );
-    if (rpm == null) return null;
-    return emaStep(priorEma, rpm, rpmEmaAlpha);
-  }
-
-  /// Clears the angular-speed derivatives (new session / disconnect).
+  /// Clears the angular-speed estimates and their sample windows (new session /
+  /// disconnect).
   void _resetSpeeds() {
-    _previousRotorDeg = null;
-    _previousRotorAt = null;
-    _rpmRotorEma = null;
-    _previousOutputDeg = null;
-    _previousOutputAt = null;
-    _rpmOutputEma = null;
+    _rotorSpeed.reset();
+    _outputSpeed.reset();
   }
 
   /// Coalescing timer that flushes pending telemetry notifications.
@@ -952,3 +916,73 @@ double? deriveRpm(double prevDeg, double nextDeg, double deltaSeconds) {
 @visibleForTesting
 double emaStep(double? previous, double next, double alpha) =>
     previous == null ? next : previous + (next - previous) * alpha;
+
+/// Sliding-window angular-speed estimator for one encoder.
+///
+/// Keeps the last [window] of `(arrival, angle)` samples and derives rpm from
+/// the **unwrapped** angle swept across that window divided by its elapsed
+/// time, then EMA-smooths the result by [alpha]. Taking a window rather than a
+/// single consecutive pair is robust to sampling jitter: one late or dropped
+/// sample no longer spikes the estimate or blanks the readout.
+///
+/// Once an estimate exists it is **never** cleared back to null — an em dash is
+/// reserved for "never had a valid sample". A feed discontinuity longer than
+/// [maxGap] restarts the sample window while preserving the last [ema]; while
+/// fewer than two samples fall inside the window the previous [ema] is held.
+class _AngularSpeedTracker {
+  _AngularSpeedTracker({
+    required this.window,
+    required this.maxGap,
+    required this.alpha,
+  });
+
+  /// Sliding-window length.
+  final Duration window;
+
+  /// Interval beyond which a sample marks a discontinuity (window restart).
+  final Duration maxGap;
+
+  /// EMA smoothing factor for the derived rpm.
+  final double alpha;
+
+  /// `(arrival, angleDeg)` samples inside the current window, oldest first.
+  final List<(DateTime, double)> _samples = <(DateTime, double)>[];
+
+  /// Latest smoothed estimate [rpm]; null until the first valid window.
+  double? ema;
+
+  /// Ingests one angle [deg] arriving at [now], refreshing [ema].
+  void add(DateTime now, double deg) {
+    final latest = _samples.isEmpty ? null : _samples.last.$1;
+    if (latest != null && now.difference(latest) > maxGap) {
+      _samples.clear();
+    }
+    _samples.add((now, deg));
+
+    final cutoff = now.subtract(window);
+    while (_samples.length >= 2 && _samples.first.$1.isBefore(cutoff)) {
+      _samples.removeAt(0);
+    }
+    if (_samples.length < 2) return;
+
+    final first = _samples.first;
+    final last = _samples.last;
+    final dt = last.$1.difference(first.$1).inMicroseconds /
+        Duration.microsecondsPerSecond;
+    if (dt <= 0) return;
+
+    var swept = 0.0;
+    for (var i = 1; i < _samples.length; i++) {
+      swept += unwrapDeltaDeg(_samples[i - 1].$2, _samples[i].$2);
+    }
+    final rpm = swept / 360.0 / dt * 60.0;
+    if (!rpm.isFinite) return;
+    ema = emaStep(ema, rpm, alpha);
+  }
+
+  /// Clears the sample window and the estimate.
+  void reset() {
+    _samples.clear();
+    ema = null;
+  }
+}

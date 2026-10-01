@@ -84,17 +84,24 @@ void main() {
     });
   });
 
-  group('rpm 角差分 EMA 与首批 null', () {
-    test('首批样本 null；次批角差分 + EMA(α=0.15)', () {
+  group('rpm 滑窗角差解算与 EMA', () {
+    test('首样本前为 —（null）；次批起滑窗解算 + EMA(α=0.15)', () {
       final state = AppState.test(status: makeStatus());
       addTearDown(state.dispose);
       var now = DateTime(2026, 1, 1);
       state.clock = () => now;
 
+      // Before any sample the estimate is honestly absent (rendered —).
+      expect(state.rpmRotor, isNull, reason: '从未有有效样本 → —');
+      expect(state.rpmOutput, isNull, reason: '从未有有效样本 → —');
+
       state.feedBatch(
-        StatusBatchDto(samples: <StatusDto>[makeStatus(rotor: 0)], seq: BigInt.one),
+        StatusBatchDto(
+          samples: <StatusDto>[makeStatus(rotor: 0)],
+          seq: BigInt.one,
+        ),
       );
-      expect(state.rpmRotor, isNull, reason: '首批样本无前值 → null');
+      expect(state.rpmRotor, isNull, reason: '首批样本单点，窗内不足两点 → 维持 null');
 
       now = now.add(const Duration(milliseconds: 10));
       state.feedBatch(
@@ -103,7 +110,7 @@ void main() {
           seq: BigInt.two,
         ),
       );
-      // 6° / 360 / 0.01 s · 60 = 100 rpm, first estimate adopted directly.
+      // Window 0°→6° over 10 ms = 100 rpm; first estimate adopted directly.
       expect(state.rpmRotor, closeTo(100.0, 1e-6));
 
       now = now.add(const Duration(milliseconds: 10));
@@ -113,37 +120,61 @@ void main() {
           seq: BigInt.from(3),
         ),
       );
-      // 3° → 50 rpm; 100 + (50 − 100)·0.15 = 92.5.
-      expect(state.rpmRotor, closeTo(92.5, 1e-6));
+      // Window 0°→9° over 20 ms = 75 rpm; 100 + (75 − 100)·0.15 = 96.25.
+      expect(state.rpmRotor, closeTo(96.25, 1e-6));
     });
 
-    test('Δt 间断超过 500ms → null 并自 null 重启', () {
+    test('连续样本后插入 600ms 间隙：转速保持数值（非 null / 非 —）', () {
       final state = AppState.test(status: makeStatus());
       addTearDown(state.dispose);
       var now = DateTime(2026, 1, 1);
       state.clock = () => now;
 
-      void feed(double angleDeg, BigInt seq) => state.feedBatch(
-        StatusBatchDto(
-          samples: <StatusDto>[makeStatus(rotor: angleDeg)],
-          seq: seq,
-        ),
-      );
-
-      feed(0, BigInt.one);
-      now = now.add(const Duration(milliseconds: 10));
-      feed(6, BigInt.two);
+      // Uniform 6° / 10 ms = 100 rpm.
+      for (var i = 0; i < 12; i++) {
+        state.feedBatch(
+          StatusBatchDto(
+            samples: <StatusDto>[makeStatus(rotor: i * 6.0)],
+            seq: BigInt.from(i + 1),
+          ),
+        );
+        now = now.add(const Duration(milliseconds: 10));
+      }
       expect(state.rpmRotor, closeTo(100.0, 1e-6));
 
-      // 1 s gap > kRpmMaxGap: derivative is dropped, not fabricated.
-      now = now.add(const Duration(seconds: 1));
-      feed(12, BigInt.from(3));
-      expect(state.rpmRotor, isNull);
+      // A 600 ms discontinuity (> kRpmMaxGap) must NOT blank the readout.
+      now = now.add(const Duration(milliseconds: 600));
+      state.feedBatch(
+        StatusBatchDto(
+          samples: <StatusDto>[makeStatus(rotor: 200)],
+          seq: BigInt.from(20),
+        ),
+      );
+      expect(state.rpmRotor, isNotNull, reason: '间隙后必须保持上次估计，禁清空');
+      expect(state.rpmRotor, closeTo(100.0, 1e-6));
+    });
 
-      // The sample after the gap restarts the EMA from the new delta.
-      now = now.add(const Duration(milliseconds: 10));
-      feed(15, BigInt.from(4));
-      expect(state.rpmRotor, closeTo(50.0, 1e-6));
+    test('匀速角序列 → 转速收敛到期望值 ±2%', () {
+      final state = AppState.test(status: makeStatus());
+      addTearDown(state.dispose);
+      var now = DateTime(2026, 1, 1);
+      state.clock = () => now;
+
+      // 9° per 5 ms = 1800 °/s = 300 rpm, wrapped through 360.
+      for (var i = 0; i < 60; i++) {
+        state.feedBatch(
+          StatusBatchDto(
+            samples: <StatusDto>[makeStatus(rotor: (i * 9.0) % 360)],
+            seq: BigInt.from(i + 1),
+          ),
+        );
+        now = now.add(const Duration(milliseconds: 5));
+      }
+      expect(
+        state.rpmRotor,
+        closeTo(300.0, 300.0 * 0.02),
+        reason: '匀速序列收敛 ±2%',
+      );
     });
   });
 

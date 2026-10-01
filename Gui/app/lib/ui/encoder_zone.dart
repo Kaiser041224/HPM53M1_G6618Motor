@@ -53,6 +53,15 @@ class EncoderZone extends StatelessWidget {
   /// 两个读数列之间的栏间距 [logical px]。
   static const double _columnGap = 24;
 
+  /// 数据行标签列宽 [logical px]（「角度」「转速」）。
+  static const double _labelWidth = 40;
+
+  /// 栏标题行固定高度 [logical px] —— 保证左右两栏标题 / 数据行跨栏对齐。
+  static const double _headerHeight = 24;
+
+  /// 数据行固定高度 [logical px] —— 角度 / 转速两行跨栏同行基线。
+  static const double _dataRowHeight = 32;
+
   Widget _build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -117,18 +126,62 @@ class EncoderZone extends StatelessWidget {
               const SizedBox(height: 16),
               _divider(context),
               const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Expanded(child: _rotorColumn(context, rotorFreshness)),
-                  const SizedBox(width: _columnGap),
-                  Expanded(child: _outputColumn(context, outputFreshness)),
-                ],
+              // 下部：左右两栏 + 中央竖分割线；角度 / 转速两行跨栏同行对齐。
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Expanded(
+                      child: _encoderColumn(
+                        context,
+                        columnKey: const Key('encoder_column_rotor'),
+                        headerKey: const Key('encoder_header_rotor'),
+                        title: '转子编码器',
+                        freshness: rotorFreshness,
+                        angleRow: _angleRow(
+                          context,
+                          key: const Key('encoder_row_rotor'),
+                          value: state.status?.encRotorDeg,
+                          freshness: rotorFreshness,
+                        ),
+                        rpmRow: _rpmRow(
+                          context,
+                          key: const Key('encoder_rpm_rotor'),
+                          note: '角差分 EST',
+                          value: state.rpmRotor,
+                          freshness: rotorFreshness,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: _columnGap),
+                    _verticalDivider(context),
+                    const SizedBox(width: _columnGap),
+                    Expanded(
+                      child: _encoderColumn(
+                        context,
+                        columnKey: const Key('encoder_column_output'),
+                        headerKey: const Key('encoder_header_output'),
+                        title: '出轴编码器',
+                        freshness: outputFreshness,
+                        angleRow: _angleRow(
+                          context,
+                          key: const Key('encoder_row_output'),
+                          value: state.status?.encOutputDeg,
+                          freshness: outputFreshness,
+                        ),
+                        rpmRow: _rpmRow(
+                          context,
+                          key: const Key('encoder_rpm_output'),
+                          note: '磁编 · 角差分 EST',
+                          value: state.rpmOutput,
+                          freshness: outputFreshness,
+                        ),
+                        footer: _zeroSetRow(context),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-              _divider(context),
-              const SizedBox(height: 14),
-              _zeroSetRow(context),
             ],
           ),
         ),
@@ -146,59 +199,60 @@ class EncoderZone extends StatelessWidget {
     return ratio.isFinite ? ratio : null;
   }
 
-  /// 左列：转子角度 + 转子转速。
-  Widget _rotorColumn(BuildContext context, Freshness freshness) {
+  /// 一栏编码器读数：标题 + 状态徽标（紧邻标题右侧），下方角度 / 转速两行。
+  ///
+  /// 标题行与数据行均取固定高度，使左右两栏的角度、转速行落在同一基线
+  /// （跨栏对齐）。右栏通过 [footer] 额外承载出轴零点按钮组。
+  Widget _encoderColumn(
+    BuildContext context, {
+    required Key columnKey,
+    required Key headerKey,
+    required String title,
+    required Freshness freshness,
+    required Widget angleRow,
+    required Widget rpmRow,
+    Widget? footer,
+  }) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    final (ItemState item, String text) = _badgeFor(freshness);
     return KeyedSubtree(
-      key: const Key('encoder_column_rotor'),
+      key: columnKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _encoderRow(
-            context,
-            key: const Key('encoder_row_rotor'),
-            label: 'ENC R',
-            zh: '转子角',
-            value: state.status?.encRotorDeg,
-            freshness: freshness,
+          SizedBox(
+            height: _headerHeight,
+            child: Row(
+              key: headerKey,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: <Widget>[
+                Text(title, style: guiLabelStyle(palette, scale)),
+                const SizedBox(width: 10),
+                StatusBadge(state: item, label: text),
+              ],
+            ),
           ),
+          const SizedBox(height: 10),
+          angleRow,
           const SizedBox(height: 8),
-          _rpmRow(
-            context,
-            key: const Key('encoder_rpm_rotor'),
-            note: '角差分 EST',
-            value: state.rpmRotor,
-            freshness: freshness,
-          ),
+          rpmRow,
+          if (footer != null) ...<Widget>[
+            const SizedBox(height: 12),
+            footer,
+          ],
         ],
       ),
     );
   }
 
-  /// 右列：出轴角度 + 出轴转速。
-  Widget _outputColumn(BuildContext context, Freshness freshness) {
-    return KeyedSubtree(
-      key: const Key('encoder_column_output'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          _encoderRow(
-            context,
-            key: const Key('encoder_row_output'),
-            label: 'ENC O',
-            zh: '出轴角',
-            value: state.status?.encOutputDeg,
-            freshness: freshness,
-          ),
-          const SizedBox(height: 8),
-          _rpmRow(
-            context,
-            key: const Key('encoder_rpm_output'),
-            note: '磁编 · 角差分 EST',
-            value: state.rpmOutput,
-            freshness: freshness,
-          ),
-        ],
-      ),
+  /// 中央竖分割线：1px 低亮青 [GuiPalette.lineDim]。
+  Widget _verticalDivider(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    return Container(
+      key: const Key('encoder_column_divider'),
+      width: palette.lineWidth,
+      color: palette.lineDim,
     );
   }
 
@@ -258,40 +312,37 @@ class EncoderZone extends StatelessWidget {
     );
   }
 
-  /// 出轴零点快捷设置（右列 / 出轴侧下方）；转子零点不在此处。
+  /// 出轴零点快捷设置（**右栏**出轴侧下方）；转子零点不在此处。
   Widget _zeroSetRow(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    return Align(
-      alignment: Alignment.centerRight,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: <Widget>[
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.end,
-            children: <Widget>[
-              GuiButton(
-                key: const Key('encoder_zero_set_now'),
-                label: '当前角设零点',
-                variant: GuiButtonVariant.primary,
-                onPressed: () => _setZeroNow(context),
-              ),
-              GuiButton(
-                key: const Key('encoder_zero_set_abs'),
-                label: '指定角度设零点',
-                onPressed: () => _setZeroAbs(context),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '转子零点由 电机·驱动 负责',
-            style: scale.label.copyWith(color: palette.fgMute),
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: <Widget>[
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.end,
+          children: <Widget>[
+            GuiButton(
+              key: const Key('encoder_zero_set_now'),
+              label: '当前角设零点',
+              variant: GuiButtonVariant.primary,
+              onPressed: () => _setZeroNow(context),
+            ),
+            GuiButton(
+              key: const Key('encoder_zero_set_abs'),
+              label: '指定角度设零点',
+              onPressed: () => _setZeroAbs(context),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '转子零点由 电机·驱动 负责',
+          style: scale.label.copyWith(color: palette.fgMute),
+        ),
+      ],
     );
   }
 
@@ -318,60 +369,51 @@ class EncoderZone extends StatelessWidget {
     );
   }
 
-  Widget _encoderRow(
+  /// 角度数据行：`角度` 标签 + 1 位小数 `°`（量纲青）。固定行高，
+  /// 与对栏角度行同行基线。
+  Widget _angleRow(
     BuildContext context, {
     required Key key,
-    required String label,
-    required String zh,
     required double? value,
     required Freshness freshness,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    final (ItemState item, String text) = _badgeFor(freshness);
-    return Row(
+    return SizedBox(
       key: key,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: <Widget>[
-        SizedBox(
-          width: 56,
-          child: Text(label, style: guiLabelStyle(palette, scale)),
-        ),
-        Expanded(
-          child: Text(
-            zh,
-            overflow: TextOverflow.ellipsis,
-            style: scale.body.copyWith(
-              fontSize: GuiTypeScale.pixelSize,
-              color: palette.fgDim,
+      height: _dataRowHeight,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          SizedBox(
+            width: _labelWidth,
+            child: Text('角度', style: guiLabelStyle(palette, scale)),
+          ),
+          const Spacer(),
+          StaleGate(
+            freshness: freshness,
+            fallback: '—',
+            // Angle readout is a monitor value: sample it at 5 Hz.
+            live: StableDigits(
+              text: value == null ? '—' : value.toStringAsFixed(1),
+              builder: (context) => GlowValue(
+                value: value,
+                unit: '°',
+                precision: 1,
+                tint: tintForUnit(palette, '°'),
+              ),
             ),
           ),
-        ),
-        StaleGate(
-          freshness: freshness,
-          fallback: '—',
-          // Angle readout is a monitor value: sample it at 5 Hz.
-          live: StableDigits(
-            text: value == null ? '—' : value.toStringAsFixed(1),
-            builder: (context) => GlowValue(
-              value: value,
-              unit: '°',
-              precision: 1,
-              tint: tintForUnit(palette, '°'),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        StatusBadge(state: item, label: text),
-      ],
+        ],
+      ),
     );
   }
 
-  /// One angular-speed estimate row: a `转速` label, the `RPM`-equivalent note,
-  /// the value in rpm (1 decimal, neutral) and the **EST** footnote naming how
-  /// it was derived. Gated by the same encoder [freshness] as the angle above
-  /// it, so a stalled feed degrades the estimate to `—` (design-system §6
-  /// rule 2).
+  /// One angular-speed estimate row: a `转速` label, the derivation note, and
+  /// the value in rpm (1 decimal, dimension-tinted). Gated by the same encoder
+  /// [freshness] as the angle above it, so a stalled feed degrades the estimate
+  /// to `—` (design-system §6 rule 2). Fixed row height keeps it on the same
+  /// baseline as the opposite column's row.
   Widget _rpmRow(
     BuildContext context, {
     required Key key,
@@ -381,36 +423,40 @@ class EncoderZone extends StatelessWidget {
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    return Row(
+    return SizedBox(
       key: key,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: <Widget>[
-        SizedBox(
-          width: 56,
-          child: Text('转速', style: guiLabelStyle(palette, scale)),
-        ),
-        Expanded(
-          child: Text(
-            note,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: scale.label.copyWith(color: palette.fgDim),
+      height: _dataRowHeight,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          SizedBox(
+            width: _labelWidth,
+            child: Text('转速', style: guiLabelStyle(palette, scale)),
           ),
-        ),
-        StaleGate(
-          freshness: freshness,
-          fallback: '—',
-          // Speed estimate is a monitor value: sample it at 5 Hz.
-          live: StableDigits(
-            text: value == null ? '—' : value.toStringAsFixed(1),
-            builder: (context) => GlowValue(
-              value: value,
-              precision: 1,
-              tint: tintForUnit(palette, 'RPM'),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              note,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: scale.label.copyWith(color: palette.fgDim),
             ),
           ),
-        ),
-      ],
+          StaleGate(
+            freshness: freshness,
+            fallback: '—',
+            // Speed estimate is a monitor value: sample it at 5 Hz.
+            live: StableDigits(
+              text: value == null ? '—' : value.toStringAsFixed(1),
+              builder: (context) => GlowValue(
+                value: value,
+                precision: 1,
+                tint: tintForUnit(palette, 'RPM'),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

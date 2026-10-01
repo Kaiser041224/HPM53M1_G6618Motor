@@ -93,7 +93,7 @@ void main() {
       expect(frame.variant, HairlineVariant.main);
     });
 
-    testWidgets('两角度值渲染：ENC R / ENC O 各 1 位小数 °，徽标为正常', (tester) async {
+    testWidgets('两栏标题「转子编码器」「出轴编码器」，角度各 1 位小数 °', (tester) async {
       final state = AppState.test(
         status: makeStatus(rotor: 123.456, output: 12.34),
         metas: const [],
@@ -102,8 +102,8 @@ void main() {
 
       await _pump(tester, EncoderZone(state: state));
 
-      expect(find.text('ENC R'), findsOneWidget);
-      expect(find.text('ENC O'), findsOneWidget);
+      expect(find.text('转子编码器'), findsOneWidget);
+      expect(find.text('出轴编码器'), findsOneWidget);
       expect(find.text('123.5'), findsOneWidget);
       expect(find.text('12.3'), findsOneWidget);
       // Unit `°` is rendered once per encoder reading.
@@ -113,7 +113,7 @@ void main() {
       expect(find.byType(StatusBadge), findsNWidgets(2));
     });
 
-    testWidgets('数据列角度按量纲着色（°→cyan），名称统一青色', (tester) async {
+    testWidgets('数据列角度按量纲着色（°→cyan），栏标题统一青色', (tester) async {
       final state = AppState.test(
         status: makeStatus(rotor: 123.456, output: 12.34),
         metas: const [],
@@ -122,9 +122,9 @@ void main() {
 
       await _pump(tester, EncoderZone(state: state));
 
-      final label = tester.widget<Text>(find.text('ENC R'));
-      expect(label.style?.color, const GuiPalette().accent);
-      expect(label.style?.shadows, isNotEmpty);
+      final title = tester.widget<Text>(find.text('转子编码器'));
+      expect(title.style?.color, const GuiPalette().accent);
+      expect(title.style?.shadows, isNotEmpty);
       final angle = tester.widget<Text>(find.text('123.5'));
       expect(angle.style?.color, const GuiPalette().valueCyan);
     });
@@ -261,6 +261,121 @@ void main() {
       expect(
         tester.getTopLeft(rotorColumn).dx,
         lessThan(tester.getTopLeft(outputColumn).dx),
+      );
+    });
+  });
+
+  group('EncoderZone 两栏标题 / 对齐 / 分割线', () {
+    testWidgets('标题紧邻状态徽标（三重编码）', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_header_rotor')),
+          matching: find.byType(StatusBadge),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_header_output')),
+          matching: find.byType(StatusBadge),
+        ),
+        findsOneWidget,
+      );
+      // 徽标不再逐行重复：整幅仅两枚（每栏标题各一）。
+      expect(find.byType(StatusBadge), findsNWidgets(2));
+      // 标题徽标紧邻其列标题文本。
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_header_rotor')),
+          matching: find.text('转子编码器'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('encoder_header_output')),
+          matching: find.text('出轴编码器'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('角度/转速两行跨栏同行对齐', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      final rotorAngle = tester
+          .getTopLeft(find.byKey(const Key('encoder_row_rotor')))
+          .dy;
+      final outputAngle = tester
+          .getTopLeft(find.byKey(const Key('encoder_row_output')))
+          .dy;
+      expect(rotorAngle, closeTo(outputAngle, 0.5));
+
+      final rotorRpm = tester
+          .getTopLeft(find.byKey(const Key('encoder_rpm_rotor')))
+          .dy;
+      final outputRpm = tester
+          .getTopLeft(find.byKey(const Key('encoder_rpm_output')))
+          .dy;
+      expect(rotorRpm, closeTo(outputRpm, 0.5));
+      expect(rotorAngle, lessThan(rotorRpm));
+    });
+
+    testWidgets('中央竖分割线：1px lineDim，位于两栏之间', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      final divider = find.byKey(const Key('encoder_column_divider'));
+      expect(divider, findsOneWidget);
+      expect(tester.getSize(divider).width, 1);
+      final container = tester.widget<Container>(divider);
+      expect(container.color, const GuiPalette().lineDim);
+
+      final rotorColumn = find.byKey(const Key('encoder_column_rotor'));
+      final outputColumn = find.byKey(const Key('encoder_column_output'));
+      final dx = tester.getCenter(divider).dx;
+      expect(dx, greaterThan(tester.getTopLeft(rotorColumn).dx));
+      expect(dx, lessThan(tester.getTopRight(outputColumn).dx));
+    });
+
+    testWidgets('出轴零点按钮组保留在右栏', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      final outputColumn = find.byKey(const Key('encoder_column_output'));
+      expect(
+        find.descendant(
+          of: outputColumn,
+          matching: find.byKey(const Key('encoder_zero_set_now')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: outputColumn,
+          matching: find.byKey(const Key('encoder_zero_set_abs')),
+        ),
+        findsOneWidget,
+      );
+      // 转子零点归属提示随按钮同栏。
+      expect(
+        find.descendant(
+          of: outputColumn,
+          matching: find.textContaining('电机·驱动'),
+        ),
+        findsOneWidget,
       );
     });
   });
