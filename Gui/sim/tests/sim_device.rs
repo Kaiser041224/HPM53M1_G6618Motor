@@ -605,3 +605,102 @@ fn stream_cmds_are_unsupported_in_v1() {
     let resp = dev.handle_frame(&req(cmd::STREAM_UNSUB, &[]));
     assert_eq!(resp.payload[0], status::UNSUPPORTED);
 }
+
+// ---- v1.3：PARAM_RESET（出厂默认恢复） ----
+
+/// 构造 PARAM_RESET 请求体：`count u8 | [name_len | name]×count`。
+fn reset_payload(names: &[&str]) -> Vec<u8> {
+    let mut p = vec![names.len() as u8];
+    for n in names {
+        p.extend_from_slice(&name(n));
+    }
+    p
+}
+
+/// 写入一个 U32 参数值（测试便捷）。
+fn write_u32(dev: &mut SimDevice, key: &str, v: u32) {
+    let mut w = name(key);
+    w.extend_from_slice(&params::encode_value(ParamValue::from_u32(v), ParamType::U32));
+    assert_eq!(dev.handle_frame(&req(cmd::PARAM_WRITE, &w)).payload[0], status::OK);
+}
+
+/// 写入一个 F32 参数值（测试便捷）。
+fn write_f32(dev: &mut SimDevice, key: &str, v: f32) {
+    let mut w = name(key);
+    w.extend_from_slice(&params::encode_value(ParamValue::from_f32(v), ParamType::F32));
+    assert_eq!(dev.handle_frame(&req(cmd::PARAM_WRITE, &w)).payload[0], status::OK);
+}
+
+/// 读取参数原始位型（断言状态为 OK）。
+fn read_raw(dev: &mut SimDevice, key: &str) -> (ParamType, ParamValue) {
+    let resp = dev.handle_frame(&req(cmd::PARAM_READ, &name(key)));
+    assert_eq!(resp.payload[0], status::OK);
+    params::decode_value(&resp.payload[1..]).unwrap()
+}
+
+#[test]
+fn param_reset_all_restores_defaults() {
+    let _g = COMMIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut dev = load();
+    // 出厂默认（YAML 原始值）：pole_pairs=10、vbus_ov_v=36.0
+    write_u32(&mut dev, "motor.pole_pairs", 20);
+    write_f32(&mut dev, "software.fault.vbus_ov_v", 60.0);
+    // 空 payload = 全部恢复
+    let resp = dev.handle_frame(&req(cmd::PARAM_RESET, &[]));
+    assert_eq!(resp.cmd, cmd::PARAM_RESET | gui_core::proto::RESPONSE_BIT);
+    assert_eq!(resp.payload[0], status::OK);
+    assert_eq!(read_raw(&mut dev, "motor.pole_pairs").1.as_u32(), 10);
+    assert_eq!(read_raw(&mut dev, "software.fault.vbus_ov_v").1.as_f32(), 36.0);
+    // 再次改动后以 count=0 显式全部恢复
+    write_u32(&mut dev, "motor.pole_pairs", 8);
+    assert_eq!(dev.handle_frame(&req(cmd::PARAM_RESET, &[0])).payload[0], status::OK);
+    assert_eq!(read_raw(&mut dev, "motor.pole_pairs").1.as_u32(), 10);
+    let _ = std::fs::remove_file("sim_params.json"); // 清理落盘产物
+}
+
+#[test]
+fn param_reset_named_subset_restores_only_listed() {
+    let _g = COMMIT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut dev = load();
+    write_u32(&mut dev, "motor.pole_pairs", 20);
+    write_f32(&mut dev, "software.fault.vbus_ov_v", 60.0);
+    // 仅恢复 pole_pairs
+    let resp = dev.handle_frame(&req(cmd::PARAM_RESET, &reset_payload(&["motor.pole_pairs"])));
+    assert_eq!(resp.payload[0], status::OK);
+    assert_eq!(read_raw(&mut dev, "motor.pole_pairs").1.as_u32(), 10);
+    // 未列入名单者保持改动值
+    assert_eq!(read_raw(&mut dev, "software.fault.vbus_ov_v").1.as_f32(), 60.0);
+    let _ = std::fs::remove_file("sim_params.json"); // 清理落盘产物
+}
+
+#[test]
+fn param_reset_locked_while_running_or_latched() {
+    let mut dev = load();
+    // 运行中 → LOCKED
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&req(cmd::PARAM_RESET, &[])).payload[0], status::LOCKED);
+    assert_eq!(
+        dev.handle_frame(&req(cmd::PARAM_RESET, &reset_payload(&["motor.pole_pairs"]))).payload[0],
+        status::LOCKED
+    );
+    // 停机但故障锁存 → 仍 LOCKED
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::STOP, 0.0)).payload[0], status::OK);
+    dev.inject_fault(0x1);
+    assert_eq!(dev.handle_frame(&req(cmd::PARAM_RESET, &[])).payload[0], status::LOCKED);
+}
+
+#[test]
+fn param_reset_unknown_name_is_bad_param_without_partial_apply() {
+    let mut dev = load();
+    write_u32(&mut dev, "motor.pole_pairs", 20);
+    // 名单同时含合法名与未知名 → BAD_PARAM
+    let resp = dev.handle_frame(&req(
+        cmd::PARAM_RESET,
+        &reset_payload(&["motor.pole_pairs", "nope.none"]),
+    ));
+    assert_eq!(resp.payload[0], status::BAD_PARAM);
+    // 不做部分恢复：pole_pairs 保持改动值 20
+    assert_eq!(read_raw(&mut dev, "motor.pole_pairs").1.as_u32(), 20);
+    // 名单截断（声明 1 个名但无后续字节）→ BAD_PARAM
+    assert_eq!(dev.handle_frame(&req(cmd::PARAM_RESET, &[1])).payload[0], status::BAD_PARAM);
+}

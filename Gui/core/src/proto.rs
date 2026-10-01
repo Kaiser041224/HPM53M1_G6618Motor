@@ -19,6 +19,8 @@ pub mod cmd {
     pub const FAULT_CLEAR: u8 = 0x0A;
     pub const STREAM_SUB: u8 = 0x0B;
     pub const STREAM_UNSUB: u8 = 0x0C;
+    // v1.3 增量（additive，独立命令字）：按名单/全部恢复出厂默认值。
+    pub const PARAM_RESET: u8 = 0x0D;
 }
 
 pub mod status {
@@ -65,5 +67,11 @@ mod tests {
         assert_eq!(ctrl::SET_TORQUE, 0x08);
         assert_eq!(ctrl::SET_SPEED, 0x09);
         assert_eq!(ctrl::SET_ANGLE, 0x0A);
+    }
+
+    /// v1.3 命令字与 `motor_proto.h` / sim / frb 三处镜像一致。
+    #[test]
+    fn cmd_v13_param_reset_matches_contract() {
+        assert_eq!(cmd::PARAM_RESET, 0x0D);
     }
 }

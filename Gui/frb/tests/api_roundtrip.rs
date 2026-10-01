@@ -79,6 +79,23 @@ fn api_roundtrip_against_sim() {
         assert_eq!(gui_frb::api::ctrl_set_angle(0.0).await.unwrap_err().code, 4);
         gui_frb::api::ctrl_stop().await.unwrap();
 
+        // v1.3：PARAM_RESET —— 按名单/全部恢复出厂默认（YAML 原始值）
+        // vbus_ov_v 出厂默认 36.0；先改为 50.0，再按名单恢复。
+        const VBUS: &str = "software.fault.vbus_ov_v";
+        gui_frb::api::param_write(VBUS.into(), 0, 50.0f32.to_bits()).await.unwrap();
+        assert_eq!(gui_frb::api::param_read(VBUS.into()).await.unwrap().raw, 50.0f32.to_bits());
+        gui_frb::api::param_reset_factory(vec![VBUS.into()]).await.unwrap();
+        assert_eq!(gui_frb::api::param_read(VBUS.into()).await.unwrap().raw, 36.0f32.to_bits());
+        // 空 vec = 全部恢复
+        gui_frb::api::param_write(VBUS.into(), 0, 55.0f32.to_bits()).await.unwrap();
+        gui_frb::api::param_reset_factory(vec![]).await.unwrap();
+        assert_eq!(gui_frb::api::param_read(VBUS.into()).await.unwrap().raw, 36.0f32.to_bits());
+        // 未知名 → BAD_PARAM(2)；运行中 → LOCKED(4)
+        assert_eq!(gui_frb::api::param_reset_factory(vec!["nope.none".into()]).await.unwrap_err().code, 2);
+        gui_frb::api::ctrl_start().await.unwrap();
+        assert_eq!(gui_frb::api::param_reset_factory(vec![]).await.unwrap_err().code, 4);
+        gui_frb::api::ctrl_stop().await.unwrap();
+
         gui_frb::api::disconnect().await.unwrap();
         assert!(!gui_frb::api::is_connected());
     });

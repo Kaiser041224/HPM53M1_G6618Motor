@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1358520048;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -184084168;
 
 // Section: executor
 
@@ -719,6 +719,42 @@ fn wire__crate__api__param_read_impl(
         },
     )
 }
+fn wire__crate__api__param_reset_factory_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "param_reset_factory",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_names = <Vec<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::FrbError>(
+                    (move || async move {
+                        let output_ok = crate::api::param_reset_factory(api_names).await?;
+                        std::result::Result::Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__param_write_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -986,6 +1022,18 @@ impl SseDecode for crate::api::FrbError {
     }
 }
 
+impl SseDecode for Vec<String> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1192,12 +1240,13 @@ fn pde_ffi_dispatcher_primary_impl(
         17 => wire__crate__api__param_meta_count_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__param_meta_get_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__param_read_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__param_write_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__proto_info_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__start_status_watch_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__stats_get_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__status_get_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__stop_status_watch_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__param_reset_factory_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__param_write_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__proto_info_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__start_status_watch_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__stats_get_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__status_get_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__stop_status_watch_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1372,6 +1421,16 @@ impl SseEncode for crate::api::FrbError {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u32>::sse_encode(self.code, serializer);
         <String>::sse_encode(self.message, serializer);
+    }
+}
+
+impl SseEncode for Vec<String> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <String>::sse_encode(item, serializer);
+        }
     }
 }
 

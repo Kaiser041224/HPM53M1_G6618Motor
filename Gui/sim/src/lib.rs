@@ -59,6 +59,8 @@ pub struct ParamEntry {
 /// 设备模拟器状态。
 pub struct SimDevice {
     params: BTreeMap<String, ParamEntry>,
+    /// 出厂默认值快照（加载 `config/*.yaml` 时的原始值，v1.3 PARAM_RESET 用）。
+    defaults: BTreeMap<String, ParamValue>,
     by_index: Vec<String>,
     fault_flags: u32,
     latched_flags: u32,
@@ -94,6 +96,9 @@ impl SimDevice {
                 .map_err(|e| SimError::Yaml(format!("parse {}: {e}", path.display())))?;
             yaml::flatten_yaml(domain, &doc, "", &mut raw, &mut index);
         }
+        // 出厂默认快照：在把 raw 消费进 params 前克隆一份值。
+        let defaults: BTreeMap<String, ParamValue> =
+            raw.iter().map(|(name, (_, value))| (name.clone(), *value)).collect();
         let params: BTreeMap<String, ParamEntry> = raw
             .into_iter()
             .map(|(name, (meta, value))| (name, ParamEntry { meta, value }))
@@ -106,6 +111,7 @@ impl SimDevice {
         }
         Ok(Self {
             params,
+            defaults,
             by_index,
             fault_flags: 0,
             latched_flags: 0,
@@ -204,6 +210,7 @@ impl SimDevice {
             cmd::PARAM_READ => self.param_read(payload),
             cmd::PARAM_WRITE => self.param_write(payload),
             cmd::PARAM_COMMIT => self.param_commit(),
+            cmd::PARAM_RESET => self.param_reset(payload),
             cmd::STATUS_GET => {
                 self.tick = self.tick.wrapping_add(1);
                 self.advance_angle_ramp();
@@ -294,6 +301,48 @@ impl SimDevice {
     fn param_commit(&mut self) -> (u8, Vec<u8>) {
         if self.motor_running || self.latched_flags != 0 {
             return (status::LOCKED, Vec::new());
+        }
+        match self.save_params() {
+            Ok(()) => (status::OK, Vec::new()),
+            Err(_) => (status::BUSY, Vec::new()),
+        }
+    }
+
+    /// v1.3：按名单/全部恢复出厂默认值；恢复后立即落盘（「恢复+写入」）。
+    ///
+    /// 请求体 `count u8 | [name_len | name]×count`；`count=0` 或空 payload = 全部参数。
+    /// 联锁同 `PARAM_COMMIT`（运行中或故障锁存 → LOCKED，先于名单校验）；任一未知名 →
+    /// BAD_PARAM 且不做部分恢复；落盘失败 → BUSY。
+    fn param_reset(&mut self, payload: &[u8]) -> (u8, Vec<u8>) {
+        if self.interlocked() {
+            return (status::LOCKED, Vec::new());
+        }
+        let mut names: Vec<String> = Vec::new();
+        if !payload.is_empty() {
+            let count = payload[0] as usize;
+            let mut pos = 1;
+            for _ in 0..count {
+                match params::decode_name(payload, &mut pos) {
+                    Ok(n) => names.push(n),
+                    Err(_) => return (status::BAD_PARAM, Vec::new()),
+                }
+            }
+        }
+        let targets: Vec<String> = if names.is_empty() {
+            self.params.keys().cloned().collect()
+        } else {
+            names
+        };
+        // 先整体校验，避免未知名导致部分恢复。
+        if targets.iter().any(|n| !self.params.contains_key(n)) {
+            return (status::BAD_PARAM, Vec::new());
+        }
+        for name in &targets {
+            if let (Some(entry), Some(default)) =
+                (self.params.get_mut(name), self.defaults.get(name))
+            {
+                entry.value = *default;
+            }
         }
         match self.save_params() {
             Ok(()) => (status::OK, Vec::new()),

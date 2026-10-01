@@ -280,6 +280,31 @@ pub async fn param_commit() -> Result<(), FrbError> {
     .await?
 }
 
+/// v1.3：把指定参数恢复为出厂默认值（独立命令字 `PARAM_RESET`）。
+/// 空 `names` = 全部参数恢复出厂（`count=0`）。
+/// 运行中或故障锁存 → `LOCKED (0x04)`；名单含未知名 → `BAD_PARAM (0x02)`。
+pub async fn param_reset_factory(names: Vec<String>) -> Result<(), FrbError> {
+    on_tokio(async move {
+        if names.len() > u8::MAX as usize {
+            return Err(FrbError {
+                code: 0x1FF,
+                message: "too many names".into(),
+            });
+        }
+        let mut payload = vec![names.len() as u8];
+        for name in &names {
+            let encoded = encode_name(name).map_err(|_| FrbError {
+                code: 0x1FF,
+                message: "name too long".into(),
+            })?;
+            payload.extend_from_slice(&encoded);
+        }
+        request(cmd::PARAM_RESET, payload, RequestKind::Write).await?;
+        Ok(())
+    })
+    .await?
+}
+
 // ---- 状态 / 控制 / 故障 ----
 
 #[derive(Debug, Clone)]

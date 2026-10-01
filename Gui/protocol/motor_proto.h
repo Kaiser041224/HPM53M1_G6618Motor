@@ -40,7 +40,8 @@ typedef enum {
     MP_CMD_FAULT_GET        = 0x09, /* 故障与锁存 */
     MP_CMD_FAULT_CLEAR      = 0x0A, /* 清除故障锁存 */
     MP_CMD_STREAM_SUB       = 0x0B, /* 订阅一级流（v1 预留，返回 UNSUPPORTED） */
-    MP_CMD_STREAM_UNSUB     = 0x0C  /* 取消订阅（v1 预留） */
+    MP_CMD_STREAM_UNSUB     = 0x0C, /* 取消订阅（v1 预留） */
+    MP_CMD_PARAM_RESET      = 0x0D  /* v1.3：按名单/全部恢复出厂默认值（独立命令字） */
 } mp_cmd_t;
 
 /* 响应状态码（响应 payload 首字节） */
@@ -119,6 +120,9 @@ typedef struct {
 /* CTRL_CMD req: opcode u8 | value f32; resp: status */
 /* FAULT_GET resp: status | fault_flags u32 | latched_flags u32 */
 /* FAULT_CLEAR req: 空; resp: status */
+/* PARAM_RESET req: count u8 | [name_len u8 | name]×count（count=0 或空 payload = 全部恢复）
+ * resp: status；名单含未知名 → BAD_PARAM；运行中或故障锁存 → LOCKED（flash 类联锁同 COMMIT）；
+ *       落盘失败 → BUSY。恢复后值立即生效且持久化（RAM 与落盘语义等同「恢复+写入」）。 */
 
 /* motor_state 取值 */
 #define MP_MOTOR_STOP (0x00u)
