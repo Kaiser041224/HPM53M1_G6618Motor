@@ -365,20 +365,26 @@ fn ctrl_v12_setpoints_locked_while_running_or_latched() {
 #[test]
 fn speed_mode_sets_rotor_angular_rate() {
     let mut dev = load();
-    // 模式=速度(2) 且默认 600 rpm → 3.6 °/tick（保持既有观感）
+    // 运行中 SET_MODE/SET_SPEED 均 LOCKED，故设定在停机窗口完成、再启动看联动。
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(2))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
+    // 模式=速度(2) 且默认 600 rpm → 3.6 °/tick（保持既有观感）
     let a = rotor_deg(&mut dev);
     let b = rotor_deg(&mut dev);
     let step = (b - a).rem_euclid(360.0);
     assert!((step - 3.6).abs() < 1e-3, "default step={step}");
-    // 1200 rpm → 7.2 °/tick
+    // 停机改 1200 rpm 再启动 → 7.2 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::STOP, 0.0)).payload[0], status::OK);
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 1200.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
     let a = rotor_deg(&mut dev);
     let b = rotor_deg(&mut dev);
     let step = (b - a).rem_euclid(360.0);
     assert!((step - 7.2).abs() < 1e-3, "1200rpm step={step}");
-    // 负速度反向：-600 rpm → -3.6 °/tick
+    // 停机改负速度再启动：-600 rpm → -3.6 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::STOP, 0.0)).payload[0], status::OK);
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, -600.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
     let a = rotor_deg(&mut dev);
     let b = rotor_deg(&mut dev);
     let step = (b - a).rem_euclid(360.0);
@@ -391,14 +397,17 @@ fn torque_mode_scales_current_amplitude() {
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(1))).payload[0], status::OK);
     // 0.5 N·m → 5 A 幅值
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, 0.5)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
     let mut max = 0f32;
     for _ in 0..20 {
         let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
         max = max.max(f32_at(&resp.payload, 15).abs());
     }
     assert!((max - 5.0).abs() < 1e-2, "0.5Nm amp={max}");
-    // 2.0 N·m → 20 A（钳位上限）
+    // 停机改 2.0 N·m 再启动 → 20 A（钳位上限）
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::STOP, 0.0)).payload[0], status::OK);
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, 2.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
     let mut max = 0f32;
     for _ in 0..20 {
         let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
@@ -412,6 +421,7 @@ fn angle_mode_ramps_output_angle() {
     let mut dev = load();
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(3))).payload[0], status::OK);
     assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_ANGLE, 30.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
     let mut prev = 0f32;
     for _ in 0..12 {
         let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
@@ -421,6 +431,72 @@ fn angle_mode_ramps_output_angle() {
         prev = out;
     }
     assert!((prev - 30.0).abs() < 1e-3, "ramp converged prev={prev}");
+}
+
+#[test]
+fn mode_linkage_ignored_while_stopped() {
+    let mut dev = load();
+    // 停机设速度模式 + 300 rpm：角速率保持默认 3.6 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(2))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 300.0)).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 3.6).abs() < 1e-3, "stopped rotor step={step}");
+
+    // 停机设力矩模式 + 0.5 N·m：幅值保持默认 10 A
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(1))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, 0.5)).payload[0], status::OK);
+    let mut max = 0f32;
+    for _ in 0..20 {
+        let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+        max = max.max(f32_at(&resp.payload, 15).abs());
+    }
+    assert!((max - 10.0).abs() < 1e-2, "stopped amp={max}");
+
+    // 停机设角度模式 + 180°：出轴保持默认 0.9 °/tick，不随设定斜坡
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(3))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_ANGLE, 180.0)).payload[0], status::OK);
+    let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    let a = f32_at(&resp.payload, 39);
+    let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    let b = f32_at(&resp.payload, 39);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 0.9).abs() < 1e-3, "stopped output step={step}");
+}
+
+#[test]
+fn speed_mode_takes_effect_only_when_running() {
+    let mut dev = load();
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(2))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 300.0)).payload[0], status::OK);
+    // 启动前：默认 3.6 °/tick
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    assert!(((b - a).rem_euclid(360.0) - 3.6).abs() < 1e-3);
+    // 启动后：300 rpm 折算 = 300/60*360/1000 = 1.8 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 1.8).abs() < 1e-3, "running step={step}");
+}
+
+#[test]
+fn stop_restores_default_synthesis() {
+    let mut dev = load();
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(2))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 1200.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    assert!(((b - a).rem_euclid(360.0) - 7.2).abs() < 1e-3);
+    // 停机 → 恢复默认 3.6 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::STOP, 0.0)).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 3.6).abs() < 1e-3, "restored step={step}");
 }
 
 #[test]

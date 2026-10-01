@@ -67,13 +67,13 @@ fn api_roundtrip_against_sim() {
         assert_eq!(gui_frb::api::ctrl_set_speed(20001.0).await.unwrap_err().code, 6);
         assert_eq!(gui_frb::api::ctrl_set_torque(f32::NAN).await.unwrap_err().code, 6);
         assert_eq!(gui_frb::api::ctrl_set_angle(f32::INFINITY).await.unwrap_err().code, 6);
-        // 模式=速度(2) + 1200 rpm → 转子角 7.2 °/tick
+        // 模式=速度(2)：停机设模式/设定，启动后联动生效 → 转子角 7.2 °/tick
         gui_frb::api::ctrl_set_mode(2).await.unwrap();
+        gui_frb::api::ctrl_start().await.unwrap();
         let a = gui_frb::api::status_get().await.unwrap().enc_rotor_deg;
         let b = gui_frb::api::status_get().await.unwrap().enc_rotor_deg;
         assert!(((b - a).rem_euclid(360.0) - 7.2).abs() < 1e-2, "a={a} b={b}");
         // 运行中改设定 → LOCKED(4)
-        gui_frb::api::ctrl_start().await.unwrap();
         assert_eq!(gui_frb::api::ctrl_set_speed(600.0).await.unwrap_err().code, 4);
         assert_eq!(gui_frb::api::ctrl_set_torque(1.0).await.unwrap_err().code, 4);
         assert_eq!(gui_frb::api::ctrl_set_angle(0.0).await.unwrap_err().code, 4);

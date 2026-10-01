@@ -179,8 +179,10 @@ impl SimDevice {
     }
 
     /// 角度模式（3）演示：出轴角每 tick 向设定值靠拢 ≤ 3°。
+    ///
+    /// 仅运行中生效；停机时冻结斜坡并回退默认合成（见 `status_body`）。
     fn advance_angle_ramp(&mut self) {
-        if self.mode != 3 {
+        if !self.motor_running || self.mode != 3 {
             return;
         }
         const STEP: f32 = 3.0;
@@ -428,13 +430,15 @@ impl SimDevice {
     /// 末尾 7 个 f32 为 tick 的确定函数（三相对称正弦 + 母线/温度/角度合成），
     /// 供上位机图表演示；`freq`/`mod`/状态位仍来自 CTRL 与故障注入。
     ///
-    /// v1.2 演示联动（非固件承诺）：模式=力矩(1) 按 `|torque|/额定(1.0 N·m→10 A)`
+    /// v1.2 演示联动（非固件承诺）：**仅 `motor_running == true` 时生效**——
+    /// 停机态一律回退默认合成（幅值 10 A、转子 3.6 °/tick、出轴 0.9 °/tick），
+    /// 与既有基线一致。运行中：模式=力矩(1) 按 `|torque|/额定(1.0 N·m→10 A)`
     /// 缩放三相正弦幅值（钳位 ±20 A）；模式=速度(2) 令转子角速率 =
     /// `speed_rpm/60×360 °/s`；模式=角度(3) 令出轴角为斜坡值。未设模式(0) 保持既有合成。
     fn status_body(&self) -> Vec<u8> {
         const TAU: f32 = std::f32::consts::TAU;
         let t = self.tick as f32;
-        let amp = if self.mode == 1 {
+        let amp = if self.motor_running && self.mode == 1 {
             (self.torque_setpoint_nm.abs() * 10.0).min(20.0)
         } else {
             10.0
@@ -444,13 +448,13 @@ impl SimDevice {
         let i_w = amp * (TAU * t / 20.0 + TAU / 3.0).sin();
         let vbus = 48.0 + 2.0 * (TAU * t / 50.0).sin();
         let ntc_temp = 55.0 + 10.0 * (0.5 + 0.5 * (TAU * t / 100.0).sin());
-        let rotor_deg_per_tick = if self.mode == 2 {
+        let rotor_deg_per_tick = if self.motor_running && self.mode == 2 {
             self.speed_setpoint_rpm / 60.0 * 360.0 / 1000.0
         } else {
             3.6
         };
         let enc_rotor_deg = (t * rotor_deg_per_tick).rem_euclid(360.0);
-        let enc_output_deg = if self.mode == 3 {
+        let enc_output_deg = if self.motor_running && self.mode == 3 {
             self.angle_current_deg.rem_euclid(360.0)
         } else {
             (t * 0.9 - self.output_zero_deg).rem_euclid(360.0)
