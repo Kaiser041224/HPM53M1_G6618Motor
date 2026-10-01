@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 
 /// Refresh rate [Hz] for human-readable numeric monitor text.
 ///
-/// The widget tree is notified at `kUiRefreshHz` (25 Hz) so charts and cursor
-/// feedback stay smooth; monitor readouts only need to be legible, so
+/// The widget tree is notified at `kUiRefreshHz` (50 Hz) so the trend waveform
+/// follows every batch; monitor readouts only need to be legible, so
 /// [StableDigits] samples them at this reduced rate instead. 5 Hz is calm
 /// enough to stop a counter or a current reading from visibly flickering, yet
 /// fast enough to read as "live".
@@ -16,32 +16,18 @@ const Duration kTextRefreshPeriod = Duration(
   milliseconds: 1000 ~/ kTextRefreshHz,
 );
 
-/// Refresh rate [Hz] for the trend chart's data-driven repaint.
-///
-/// The chart plot is far denser than a text readout, so it is throttled to a
-/// gentler 10 Hz — smooth enough to read as live, calm enough that the eye is
-/// not asked to track a 25 Hz repaint. Pointer interaction bypasses this gate
-/// (see `TrendChart`): only the data-driven cadence is limited.
-const int kChartRefreshHz = 10;
-
-/// Period between accepted chart data updates: `1000 / kChartRefreshHz` = 100 ms.
-const Duration kChartRefreshPeriod = Duration(
-  milliseconds: 1000 ~/ kChartRefreshHz,
-);
-
 /// Throttles the rebuild of an arbitrary subtree to [period].
 ///
-/// The parent rebuilds at the full UI cadence (25 Hz) and hands the latest
+/// The parent rebuilds at the full UI cadence (50 Hz) and hands the latest
 /// state in [refreshKey] together with a [builder] that closes over the current
 /// values. The builder's subtree is cached and only rebuilt once per [period]
 /// when [refreshKey] differs from the last accepted key; the very first subtree
 /// is built immediately. Returning the same cached instance on non-tick frames
 /// lets Flutter short-circuit the child update, which is what actually keeps
-/// the subtree off the 25 Hz path.
+/// the subtree off the full-rate path.
 ///
-/// [period] defaults to [kTextRefreshPeriod] (5 Hz); pass
-/// [kChartRefreshPeriod] for the trend chart's 10 Hz data cadence.
-/// [StableDigits] is the numeric specialisation built on top of this.
+/// [period] defaults to [kTextRefreshPeriod] (5 Hz); [StableDigits] is the
+/// numeric specialisation built on top of this.
 class StableRefresh extends StatefulWidget {
   const StableRefresh({
     super.key,
@@ -125,7 +111,7 @@ class _StableRefreshState extends State<StableRefresh> {
 /// * plain — pass [text] plus an optional [style] and it renders a [Text];
 /// * builder — pass a [builder] that paints a richer readout (for example a
 ///   `GlowValue` number + unit pair). Its subtree is only rebuilt on an
-///   accepted update, so a 25 Hz parent feed does not repaint it 25 times a
+///   accepted update, so a 50 Hz parent feed does not repaint it 50 times a
 ///   second.
 class StableDigits extends StatelessWidget {
   const StableDigits({

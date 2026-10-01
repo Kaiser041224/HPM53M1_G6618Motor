@@ -15,11 +15,6 @@ void main() {
     expect(kTextRefreshPeriod, const Duration(milliseconds: 200));
   });
 
-  test('kChartRefreshHz is 10 Hz, i.e. a 100 ms period', () {
-    expect(kChartRefreshHz, 10);
-    expect(kChartRefreshPeriod, const Duration(milliseconds: 100));
-  });
-
   testWidgets('shows the initial value immediately', (tester) async {
     await _pump(tester, const StableDigits(text: '1.0'));
 
@@ -77,7 +72,7 @@ void main() {
     await _pump(tester, frame('1'));
     expect(builds, 1);
 
-    // 25 Hz parent churn: four rebuilds inside the first 200 ms window.
+    // 50 Hz parent churn: four rebuilds inside the first 200 ms window.
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 40));
       await _pump(tester, frame('${i + 2}'));
@@ -146,10 +141,11 @@ void main() {
       expect(builds, 1);
     });
 
-    testWidgets('可配 period：10 Hz 时 <100ms 不重建，≥100ms 才重建', (tester) async {
+    testWidgets('可配 period：100ms 周期时 <100ms 不重建，≥100ms 才重建', (tester) async {
+      const period = Duration(milliseconds: 100);
       var builds = 0;
       Widget frame(String key) => StableRefresh(
-        period: kChartRefreshPeriod,
+        period: period,
         refreshKey: key,
         builder: (context) {
           builds++;
@@ -162,18 +158,19 @@ void main() {
 
       await _pump(tester, frame('b'));
       await tester.pump(const Duration(milliseconds: 99));
-      expect(builds, 1, reason: '99 ms < 100 ms chart tick');
+      expect(builds, 1, reason: '99 ms < 100 ms tick');
       expect(find.text('a'), findsOneWidget);
 
       await tester.pump(const Duration(milliseconds: 1));
-      expect(builds, 2, reason: '100 ms chart tick rebuilds the subtree');
+      expect(builds, 2, reason: '100 ms tick rebuilds the subtree');
       expect(find.text('b'), findsOneWidget);
     });
 
     testWidgets('period 变更会切换采样周期', (tester) async {
+      const period = Duration(milliseconds: 100);
       var builds = 0;
-      Widget frame(Duration period, String key) => StableRefresh(
-        period: period,
+      Widget frame(Duration samplePeriod, String key) => StableRefresh(
+        period: samplePeriod,
         refreshKey: key,
         builder: (context) {
           builds++;
@@ -185,7 +182,7 @@ void main() {
       expect(builds, 1);
 
       // Swap to the 100 ms cadence; the timer is restarted.
-      await _pump(tester, frame(kChartRefreshPeriod, 'b'));
+      await _pump(tester, frame(period, 'b'));
       await tester.pump(const Duration(milliseconds: 100));
       expect(builds, 2);
       expect(find.text('b'), findsOneWidget);

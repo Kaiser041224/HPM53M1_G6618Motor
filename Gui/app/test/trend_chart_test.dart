@@ -4,7 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:g6618_gui/bridge/frb/api.dart';
+import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/widgets/chart_history.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
@@ -216,7 +216,7 @@ void main() {
       expect(formatAxisSeconds(60), '60s');
     });
 
-    test('windowMax：窗口内逐通道最大 |样本|；无数据为 null', () {
+    test('windowExtrema：窗口内逐通道有符号 min/max；无数据为 null', () {
       final history = ChartHistory()..pushBatch(<StatusDto>[
         _sample(iU: 1, iV: -2, iW: 0.5),
         _sample(iU: -3, iV: 4, iW: -1.5),
@@ -224,22 +224,33 @@ void main() {
       ]);
 
       // Default 1 kHz → samples at 0 / 1 / 2 ms; the 10 ms window holds all.
-      final maxima = TrendChartPainter.windowMax(history, 0, 0.01);
-      expect(maxima, hasLength(3));
-      expect(maxima[0], 3.0);
-      expect(maxima[1], 4.0);
-      expect(maxima[2], 1.5);
+      final extrema = TrendChartPainter.windowExtrema(history, 0, 0.01);
+      expect(extrema, hasLength(3));
+      expect(extrema[0]!.max, 2.0);
+      expect(extrema[0]!.min, -3.0);
+      expect(extrema[1]!.max, 4.0);
+      expect(extrema[1]!.min, -2.0);
+      expect(extrema[2]!.max, 0.5);
+      expect(extrema[2]!.min, -1.5);
 
       // A window past the retained history has no sample on any channel.
-      expect(TrendChartPainter.windowMax(history, 100, 1), <double?>[
+      expect(TrendChartPainter.windowExtrema(history, 100, 1), <Object?>[
         null,
         null,
         null,
       ]);
       expect(
-        TrendChartPainter.windowMax(ChartHistory(), 0, 2),
-        <double?>[null, null, null],
+        TrendChartPainter.windowExtrema(ChartHistory(), 0, 2),
+        <Object?>[null, null, null],
       );
+    });
+
+    test('formatSigned / formatExtrema：有符号两位，空为 null', () {
+      expect(TrendChart.formatSigned(10.02), '+10.02');
+      expect(TrendChart.formatSigned(-9.87), '-9.87');
+      expect(TrendChart.formatExtrema(10.02, -9.87), '+10.02 / -9.87');
+      expect(TrendChart.formatExtrema(null, null), isNull);
+      expect(TrendChart.formatExtrema(1.0, null), isNull);
     });
 
     test('轴标单位由 span 决定：inspect 远偏移仍用 ms', () {
@@ -294,11 +305,15 @@ void main() {
       expect(find.text('2s'), findsWidgets);
       expect(find.text('1s'), findsOneWidget);
       expect(find.text('0'), findsOneWidget);
-      // Each channel letter appears twice: the legend and the MAX row.
-      expect(find.text('U'), findsNWidgets(2));
-      expect(find.text('V'), findsNWidgets(2));
-      expect(find.text('W'), findsNWidgets(2));
-      expect(find.text('3.000'), findsOneWidget);
+      // Channel letters now come only from the extrema row; the old U/V/W live
+      // legend was removed.
+      expect(find.text('U'), findsOneWidget);
+      expect(find.text('V'), findsOneWidget);
+      expect(find.text('W'), findsOneWidget);
+      // Signed window extrema in the readout row.
+      expect(find.text('+3.00 / +1.00'), findsOneWidget);
+      expect(find.text('-1.00 / -3.00'), findsOneWidget);
+      expect(find.text('+1.50 / +0.50'), findsOneWidget);
     });
 
     testWidgets('图表外框为 HairlineFrame main', (tester) async {
@@ -328,27 +343,28 @@ void main() {
     });
   });
 
-  group('TrendChart 窗口最大值行', () {
-    testWidgets('波形下方 MAX 行显示窗口内 U/V/W 最大幅值（2 位 / green）', (
-      tester,
-    ) async {
+  group('TrendChart 窗口极值与三相和行', () {
+    testWidgets('极值行显示窗口内 U/V/W 有符号 max/min（2 位 / green）', (tester) async {
       await _pump(tester, TrendChart(history: _three()));
 
-      final row = find.byKey(TrendChart.maxRowKey);
+      final row = find.byKey(TrendChart.extremaRowKey);
       expect(row, findsOneWidget);
-      expect(find.descendant(of: row, matching: find.text('MAX')), findsOneWidget);
-      // U max |3|, V max |-3|, W max |1.5|.
+      // U max 3 / min 1, V max −1 / min −3, W max 1.5 / min 0.5.
       expect(
-        find.descendant(of: row, matching: find.text('3.00')),
-        findsNWidgets(2),
+        find.descendant(of: row, matching: find.text('+3.00 / +1.00')),
+        findsOneWidget,
       );
       expect(
-        find.descendant(of: row, matching: find.text('1.50')),
+        find.descendant(of: row, matching: find.text('-1.00 / -3.00')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: row, matching: find.text('+1.50 / +0.50')),
         findsOneWidget,
       );
       // Values take the A-dimension green; channel letters take series colours.
       final value = tester.widget<Text>(
-        find.descendant(of: row, matching: find.text('3.00')).first,
+        find.descendant(of: row, matching: find.text('+3.00 / +1.00')),
       );
       expect(value.style?.color, const GuiPalette().valueGreen);
       expect(
@@ -360,10 +376,57 @@ void main() {
       );
     });
 
-    testWidgets('窗口无数据：MAX 行显示单个 —', (tester) async {
+    testWidgets('极值行窗口无数据：单个 —', (tester) async {
       await _pump(tester, TrendChart(history: ChartHistory()));
 
-      final row = find.byKey(TrendChart.maxRowKey);
+      final row = find.byKey(TrendChart.extremaRowKey);
+      expect(row, findsOneWidget);
+      expect(
+        find.descendant(of: row, matching: find.text('—')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('ΣI 行：最新样本三相和（有符号 / magenta / 三相和）', (tester) async {
+      await _pump(tester, TrendChart(history: _three()));
+
+      final row = find.byKey(TrendChart.sigmaRowKey);
+      expect(row, findsOneWidget);
+      // Newest sample: iU 3 + iV −3 + iW 1.5 = +1.5.
+      final sum = find.descendant(of: row, matching: find.text('+1.50'));
+      expect(sum, findsOneWidget);
+      expect(
+        tester.widget<Text>(sum).style?.color,
+        const GuiPalette().valueMagenta,
+      );
+      expect(
+        find.descendant(of: row, matching: find.text('三相和')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('ΣI 符号正确性：三相和为负时带负号', (tester) async {
+      final history = ChartHistory()
+        ..pushBatch(<StatusDto>[
+          _sample(iU: 1.0, iV: 2.0, iW: 3.0),
+          _sample(iU: -4.0, iV: 2.0, iW: 0.5),
+        ]);
+      await _pump(tester, TrendChart(history: history));
+
+      final row = find.byKey(TrendChart.sigmaRowKey);
+      // Newest sample: −4 + 2 + 0.5 = −1.5.
+      final sum = find.descendant(of: row, matching: find.text('-1.50'));
+      expect(sum, findsOneWidget);
+      expect(
+        tester.widget<Text>(sum).style?.color,
+        const GuiPalette().valueMagenta,
+      );
+    });
+
+    testWidgets('ΣI 无数据：—', (tester) async {
+      await _pump(tester, TrendChart(history: ChartHistory()));
+
+      final row = find.byKey(TrendChart.sigmaRowKey);
       expect(row, findsOneWidget);
       expect(
         find.descendant(of: row, matching: find.text('—')),
@@ -372,8 +435,12 @@ void main() {
     });
   });
 
-  group('TrendChart 10 Hz 数据节流', () {
-    testWidgets('新样本 <100ms 不推进视口，≥100ms 才推进', (tester) async {
+  group('TrendChart 波形高刷（节流移除）', () {
+    test('UI 刷新上限提升到 50 Hz（20 ms 通知窗口）', () {
+      expect(kUiRefreshHz, 50);
+    });
+
+    testWidgets('新样本即时推进视口（无 100ms 数据节流）', (tester) async {
       final history = ChartHistory()
         ..pushBatch(List<StatusDto>.generate(50, (i) => _sample(iU: i / 10)));
       await _pump(tester, TrendChart(history: history));
@@ -387,19 +454,36 @@ void main() {
         List<StatusDto>.generate(40, (i) => _sample(iU: (i + 50) / 10)),
       );
 
-      await tester.pump(const Duration(milliseconds: 50));
-      expect(
-        painterOf().viewStartSec,
-        before,
-        reason: 'data-driven viewport is held below the 100 ms chart tick',
-      );
+      // The parent rebuild (AppState notification) is the only gate now; there
+      // is no internal 100 ms chart timer to wait out.
+      await _pump(tester, TrendChart(history: history));
 
-      await tester.pump(const Duration(milliseconds: 60));
       expect(
         painterOf().viewStartSec,
         greaterThan(before),
-        reason: 'the 100 ms chart tick folds in the new samples',
+        reason: 'the live viewport follows every batch with no chart throttle',
       );
+    });
+
+    testWidgets('示数（极值 / ΣI）保持 5 Hz 节流：<200ms 不更新，200ms 才更新', (
+      tester,
+    ) async {
+      final history = ChartHistory()
+        ..pushBatch(<StatusDto>[_sample(iU: 1), _sample(iU: 2), _sample(iU: 3)]);
+      await _pump(tester, TrendChart(history: history));
+      expect(find.text('+3.00 / +1.00'), findsOneWidget);
+
+      history.pushBatch(<StatusDto>[_sample(iU: 50)]);
+      await _pump(tester, TrendChart(history: history));
+
+      expect(
+        find.text('+50.00 / +1.00'),
+        findsNothing,
+        reason: 'readouts keep the 200 ms digit throttle',
+      );
+
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('+50.00 / +1.00'), findsOneWidget);
     });
   });
 

@@ -242,11 +242,11 @@ void main() {
       expect(state.status!.iU, 3);
     });
 
-    test('节流上限常量为 25 Hz（40 ms 通知窗口）', () {
-      expect(kUiRefreshHz, 25);
+    test('节流上限常量为 50 Hz（20 ms 通知窗口）', () {
+      expect(kUiRefreshHz, 50);
     });
 
-    testWidgets('UI 刷新节流：40ms 窗口内喂 10 批 → notify ≤ 1 次', (tester) async {
+    testWidgets('UI 刷新节流：20ms 窗口内喂 10 批 → notify ≤ 1 次', (tester) async {
       final state = AppState.test();
       var notifies = 0;
       state.addListener(() => notifies++);
@@ -264,8 +264,8 @@ void main() {
 
       // Data within the batch is applied immediately ...
       expect(state.chartHistory.len, 160);
-      // ... but notifications are coalesced onto the 25 Hz (40 ms) tick.
-      await tester.pump(const Duration(milliseconds: 40));
+      // ... but notifications are coalesced onto the 50 Hz (20 ms) tick.
+      await tester.pump(const Duration(milliseconds: 20));
       expect(notifies, lessThanOrEqualTo(1));
 
       // Dispose inside the body: the pending periodic timer would otherwise
@@ -273,7 +273,7 @@ void main() {
       state.dispose();
     });
 
-    testWidgets('批次通知最终送达（40ms 一次）', (tester) async {
+    testWidgets('批次通知最终送达（20ms 一次）', (tester) async {
       final state = AppState.test();
       var notifies = 0;
       state.addListener(() => notifies++);
@@ -286,7 +286,7 @@ void main() {
       );
       expect(notifies, 0);
 
-      await tester.pump(const Duration(milliseconds: 41));
+      await tester.pump(const Duration(milliseconds: 21));
       expect(notifies, greaterThanOrEqualTo(1));
 
       state.dispose();
