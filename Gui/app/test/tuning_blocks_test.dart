@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/tuning_blocks.dart';
-import 'package:g6618_gui/widgets/gui_button.dart';
 
 StatusDto _status() => StatusDto(
   faultFlags: 0,
@@ -26,17 +25,18 @@ StatusDto _status() => StatusDto(
 int f32(double v) =>
     (ByteData(4)..setFloat32(0, v, Endian.little)).getInt32(0, Endian.little);
 
-ParamMetaDto _f32Meta(String name) => ParamMetaDto(
-  index: 0,
-  name: name,
-  ty: 0,
-  apply: 0,
-  unit: '',
-  min: 0,
-  max: 100,
-);
+ParamMetaDto _f32Meta(String name, {String unit = '', double max = 100}) =>
+    ParamMetaDto(
+      index: 0,
+      name: name,
+      ty: 0,
+      apply: 0,
+      unit: unit,
+      min: 0,
+      max: max,
+    );
 
-Future<void> _pump(WidgetTester tester, CurrentLoopPanel panel) {
+Future<void> _pump(WidgetTester tester, ProtectionLimitsPanel panel) {
   tester.view.physicalSize = const Size(1200, 1200);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
@@ -49,49 +49,49 @@ Future<void> _pump(WidgetTester tester, CurrentLoopPanel panel) {
 }
 
 void main() {
-  group('电流环 PI 暂存-写入', () {
-    const kp = 'software.control.current_loop.kp';
+  group('保护门限面板', () {
+    testWidgets('一个外框 + 3 个安全参数位，各带 SAFETY 徽标', (tester) async {
+      final state = AppState.test(
+        status: _status(),
+        metas: <ParamMetaDto>[
+          for (final (name, _) in ProtectionLimitsPanel.fields)
+            _f32Meta(name),
+        ],
+      );
+      addTearDown(state.dispose);
 
-    testWidgets('无暂存时「写入」禁用', (tester) async {
+      await _pump(tester, ProtectionLimitsPanel(state: state));
+
+      expect(find.byKey(const Key('protection_limits_frame')), findsOneWidget);
+      expect(find.text('保护门限'), findsOneWidget);
+      expect(find.text('过流阈值'), findsOneWidget);
+      expect(find.text('母线过压'), findsOneWidget);
+      expect(find.text('母线欠压'), findsOneWidget);
+      expect(find.text('SAFETY'), findsNWidgets(3));
+    });
+
+    testWidgets('缺参时 3 个参数如实显示「设备未提供」', (tester) async {
       final state = AppState.test(status: _status(), metas: const []);
       addTearDown(state.dispose);
 
-      await _pump(tester, CurrentLoopPanel(state: state));
+      await _pump(tester, ProtectionLimitsPanel(state: state));
 
-      final write = tester.widget<GuiButton>(
-        find.widgetWithText(GuiButton, '写入'),
-      );
-      expect(write.onPressed, isNull);
+      expect(find.text('设备未提供'), findsNWidgets(3));
     });
 
-    testWidgets('暂存字段显示旧→新对比，写入只下发电流环子集', (tester) async {
-      const external = 'software.fault.vbus_uv_v';
+    testWidgets('设备提供元数据时按全限定名渲染当前值', (tester) async {
+      const name = 'software.fault.oc_trip_a';
       final state = AppState.test(
         status: _status(),
-        metas: <ParamMetaDto>[_f32Meta(kp), _f32Meta(external)],
+        metas: <ParamMetaDto>[_f32Meta(name, unit: 'A', max: 80)],
       );
       addTearDown(state.dispose);
-      state.values[kp] = ParamValueDto(ty: 0, raw: f32(1.0));
-      final writes = <String>[];
-      var commits = 0;
-      state.onParamWrite = (name, ty, raw) async => writes.add(name);
-      state.onParamCommit = () async => commits++;
-      state.stageParam(kp, 0, f32(3.0));
-      state.stageParam(external, 0, f32(9.0));
+      state.values[name] = ParamValueDto(ty: 0, raw: f32(12.5));
 
-      await _pump(tester, CurrentLoopPanel(state: state));
+      await _pump(tester, ProtectionLimitsPanel(state: state));
 
-      expect(find.byKey(const Key('field_staged_$kp')), findsOneWidget);
-      expect(find.text('→'), findsOneWidget);
-      expect(find.byKey(const Key('current_loop_pending_badge')), findsOneWidget);
-
-      await tester.tap(find.text('写入'));
-      await tester.pumpAndSettle();
-
-      expect(writes, <String>[kp]);
-      expect(commits, 1);
-      expect(state.staged.containsKey(kp), isFalse);
-      expect(state.staged.containsKey(external), isTrue);
+      expect(find.text('12.50 A'), findsOneWidget);
+      expect(find.text('设备未提供'), findsNWidgets(2));
     });
   });
 }

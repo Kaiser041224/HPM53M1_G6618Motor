@@ -11,7 +11,7 @@ import 'encoder_zone.dart';
 import 'limit_zone.dart';
 import 'motor_drive_zone.dart';
 import 'param_zone.dart';
-import 'pid_zone.dart';
+import 'pid_panel.dart';
 import 'tuning_blocks.dart';
 import 'scope_zone.dart';
 import 'start_adjust_zone.dart';
@@ -126,7 +126,7 @@ class _SinglePageState extends State<SinglePage> {
   /// **顺序必须与 [kNavItems] 严格一致** —— 索引即页面。
   /// - 监视·控制: **左右分栏** —— 左栏监视（`StatusZone → EncoderZone`），
   ///   右栏控制（`ControlZone` 故障 → `StartAdjustZone` 启动/调整 →
-  ///   `CurrentLoopPanel` 电流环 → `PidZone` 速度环/角度环 → 保护门限）。
+  ///   `PidPanel` 三环 PID 参数 → 保护门限）。
   ///   合并的理由：调参时必须同时看着读数，分两页来回切是反效率的；
   ///   启动 / 调整与速度环 / 角度环 PID 入口亦从「电机 · 驱动」页迁来同屏。
   /// - 电机·驱动: `MotorDriveZone`（左标定程序 / 右参数对照）
@@ -156,7 +156,7 @@ class _SinglePageState extends State<SinglePage> {
   /// 右栏自上而下（严格顺序）：
   /// `ControlZone`（故障构成 + 清除故障）→
   /// `StartAdjustZone`（启停切换 + 力矩 / 速度 / 角度模式 + 设定输入）→
-  /// `CurrentLoopPanel`（电流环）→ `PidZone`（速度环 / 角度环）→
+  /// `PidPanel`（三环 PID：电流环 / 速度环 / 角度环，单面板）→
   /// `ProtectionLimitsPanel`（保护门限，最底部）。
   /// FREQ / MOD 滑条与设备回读面板已删除。
   ///
@@ -174,9 +174,8 @@ class _SinglePageState extends State<SinglePage> {
     final control = _stack(<Widget>[
       ControlZone(state: widget.state),
       StartAdjustZone(state: widget.state),
-      CurrentLoopPanel(state: widget.state),
-      PidZone(state: widget.state),
-      // 保护门限回归右栏最底部（角度环之下）：与「影响运行 / 安全」的参数组同列。
+      PidPanel(state: widget.state),
+      // 保护门限回归右栏最底部（PID 参数之下）：与「影响运行 / 安全」的参数组同列。
       ProtectionLimitsPanel(state: widget.state),
     ]);
 

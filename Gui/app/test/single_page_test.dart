@@ -9,7 +9,7 @@ import 'package:g6618_gui/ui/encoder_zone.dart';
 import 'package:g6618_gui/ui/limit_zone.dart';
 import 'package:g6618_gui/ui/motor_drive_zone.dart';
 import 'package:g6618_gui/ui/param_zone.dart';
-import 'package:g6618_gui/ui/pid_zone.dart';
+import 'package:g6618_gui/ui/pid_panel.dart';
 import 'package:g6618_gui/ui/single_page.dart';
 import 'package:g6618_gui/ui/start_adjust_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
@@ -168,7 +168,7 @@ void main() {
     expect(find.text('故障构成与指令'), findsOneWidget);
   });
 
-  testWidgets('合并页右栏六段自上而下：故障 → 启动/调整 → 电流环 → 速度环 → 角度环 → 保护门限', (
+  testWidgets('合并页右栏四段自上而下：故障 → 启动/调整 → PID 参数（三环）→ 保护门限', (
     tester,
   ) async {
     final state = AppState.test(status: _status(), metas: const []);
@@ -178,30 +178,35 @@ void main() {
 
     final fault = find.byKey(const Key('fault_frame'));
     final start = find.byKey(const Key('quick_control_frame'));
-    final current = find.byKey(const Key('current_loop_frame'));
-    final speed = find.byKey(const Key('speed_loop_frame'));
-    final angle = find.byKey(const Key('angle_loop_frame'));
+    final pid = find.byKey(const Key('pid_panel_frame'));
     final protection = find.byKey(const Key('protection_limits_frame'));
 
     expect(fault, findsOneWidget);
     expect(start, findsOneWidget);
-    expect(current, findsOneWidget);
-    expect(speed, findsOneWidget);
-    expect(angle, findsOneWidget);
+    expect(pid, findsOneWidget);
     expect(protection, findsOneWidget);
 
     final faultTop = tester.getTopLeft(fault).dy;
     final startTop = tester.getTopLeft(start).dy;
-    final currentTop = tester.getTopLeft(current).dy;
-    final speedTop = tester.getTopLeft(speed).dy;
-    final angleTop = tester.getTopLeft(angle).dy;
+    final pidTop = tester.getTopLeft(pid).dy;
     final protectionTop = tester.getTopLeft(protection).dy;
 
     expect(faultTop, lessThan(startTop), reason: '故障在最上');
-    expect(startTop, lessThan(currentTop), reason: '启动/调整在电流环之上');
+    expect(startTop, lessThan(pidTop), reason: '启动/调整在 PID 参数之上');
+    expect(pidTop, lessThan(protectionTop), reason: '保护门限在 PID 参数之下（最底部）');
+
+    // 合并面板内部三节：电流环 → 速度环 → 角度环。
+    final currentTop = tester
+        .getTopLeft(find.byKey(const Key('pid_current_section')))
+        .dy;
+    final speedTop = tester
+        .getTopLeft(find.byKey(const Key('pid_speed_section')))
+        .dy;
+    final angleTop = tester
+        .getTopLeft(find.byKey(const Key('pid_angle_section')))
+        .dy;
     expect(currentTop, lessThan(speedTop), reason: '电流环在速度环之上');
     expect(speedTop, lessThan(angleTop), reason: '速度环在角度环之上');
-    expect(angleTop, lessThan(protectionTop), reason: '保护门限在最底部（角度环之下）');
 
     // 右栏在左栏（监视）右侧，即确属「右栏」而非堆叠。
     expect(
@@ -238,7 +243,7 @@ void main() {
     await _pump(tester, state);
 
     expect(find.byType(StartAdjustZone), findsOneWidget);
-    expect(find.byType(PidZone), findsOneWidget);
+    expect(find.byType(PidPanel), findsOneWidget);
     expect(find.text('启动 / 调整'), findsOneWidget);
     expect(find.text('速度环'), findsOneWidget);
     expect(find.text('角度环'), findsOneWidget);
@@ -253,7 +258,7 @@ void main() {
       greaterThan(tester.getTopLeft(find.byType(EncoderZone)).dx),
     );
     expect(
-      tester.getTopLeft(find.byType(PidZone)).dx,
+      tester.getTopLeft(find.byType(PidPanel)).dx,
       greaterThan(tester.getTopLeft(find.byType(EncoderZone)).dx),
     );
   });
@@ -272,7 +277,7 @@ void main() {
     expect(find.byKey(const Key('angle_loop_frame')), findsNothing);
     expect(find.byKey(const Key('ctrl_mode_1')), findsNothing);
     expect(find.byType(StartAdjustZone), findsNothing);
-    expect(find.byType(PidZone), findsNothing);
+    expect(find.byType(PidPanel), findsNothing);
     // 保护门限已回迁合并页右栏底部，不再在此页。
     expect(find.byKey(const Key('protection_limits_frame')), findsNothing);
     // 仍保留：标定程序 + 参数对照。

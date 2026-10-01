@@ -5,7 +5,7 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/control_zone.dart';
 import 'package:g6618_gui/ui/panel_title.dart';
-import 'package:g6618_gui/ui/pid_zone.dart';
+import 'package:g6618_gui/ui/pid_panel.dart';
 import 'package:g6618_gui/ui/start_adjust_zone.dart';
 import 'package:g6618_gui/ui/tuning_blocks.dart';
 import 'package:g6618_gui/widgets/section_title.dart';
@@ -82,10 +82,8 @@ void main() {
     });
   });
 
-  group('C. 监视·控制右栏六段相邻相异', () {
-    testWidgets('故障/启动调整/电流环/速度环/角度环/保护门限 = 洋红/青/紫/翠绿/洋红/紫', (
-      tester,
-    ) async {
+  group('C. 监视·控制右栏四段相邻相异', () {
+    testWidgets('故障/启动调整/PID 参数/保护门限 = 洋红/青/翠绿/紫', (tester) async {
       tester.view.physicalSize = const Size(1200, 3200);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
@@ -104,9 +102,7 @@ void main() {
                   const SizedBox(height: 24),
                   StartAdjustZone(state: state),
                   const SizedBox(height: 24),
-                  CurrentLoopPanel(state: state),
-                  const SizedBox(height: 24),
-                  PidZone(state: state),
+                  PidPanel(state: state),
                   const SizedBox(height: 24),
                   ProtectionLimitsPanel(state: state),
                 ],
@@ -126,17 +122,13 @@ void main() {
       final segments = <TitleHue>[
         sectionHue('故障'),
         panelHue('启动 / 调整'),
-        panelHue('电流环 PI'),
-        panelHue('速度环'),
-        panelHue('角度环'),
+        panelHue('PID 参数'),
         panelHue('保护门限'),
       ];
       expect(segments, <TitleHue>[
         TitleHue.magenta,
         TitleHue.cyan,
-        TitleHue.violet,
         TitleHue.green,
-        TitleHue.magenta,
         TitleHue.violet,
       ]);
 

@@ -4,6 +4,9 @@
 /// 所有参数名均为设备元数据里的域限定全名；取不到即由 [ParamField]
 /// 如实渲染为「设备未提供」，不做猜测兜底。
 ///
+/// 电流环 / 速度环 / 角度环 PID 已合并进 `pid_panel.dart` 的单个面板，
+/// 本文件只保留「保护门限」。
+///
 /// Copyright (c) 2026 Alliance HardwareGroup
 /// SPDX-License-Identifier: BSD-3-Clause
 library;
@@ -15,7 +18,6 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/param_controls.dart';
 import 'panel_title.dart';
-import 'toast_overlay.dart';
 
 /// 保护门限 —— 固件把这几个参数列为**安全相关**
 /// （`app_terminal_cmd_param.c` 的 `s_safety_params`），终端 set 时会警告；
@@ -62,98 +64,6 @@ class ProtectionLimitsPanel extends StatelessWidget {
             ),
             if (name != fields.last.$1) const SizedBox(width: 8),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-/// 电流环 PI —— kp / ki。
-///
-/// **诚实标注**：固件 `app_software_params.h` 把 `current_loop` 标为
-/// 「FOC 预留」，且当前**没有任何消费者**（`algo_pid.c` 用的是自身默认值）。
-/// 写入会正常落到设备并持久化，但**暂不改变运行行为** ——
-/// 界面必须说清这一点，否则会让人以为调了它电机就变了。
-class CurrentLoopPanel extends StatelessWidget {
-  const CurrentLoopPanel({super.key, required this.state});
-
-  final AppState state;
-
-  /// `software.control.current_loop.*`（域限定全名）。
-  static const List<(String, String)> fields = <(String, String)>[
-    ('software.control.current_loop.kp', '比例增益 kp'),
-    ('software.control.current_loop.ki', '积分增益 ki'),
-  ];
-
-  /// 本面板的写入范围（与速度环 / 角度环互不重叠）。
-  static final Set<String> writeNames = <String>{
-    for (final (name, _) in fields) name,
-  };
-
-  /// 待写入计数：电流环暂存项数。
-  int get _pending =>
-      state.staged.keys.where(CurrentLoopPanel.writeNames.contains).length;
-
-  /// 下发电流环暂存并 commit，随后 toast 结果。
-  Future<void> _write(BuildContext context) async {
-    final overlay = Overlay.maybeOf(context);
-    final count = _pending;
-    final ok = await state.writeStaged(only: CurrentLoopPanel.writeNames);
-    if (overlay == null) return;
-    showGuiToastIn(
-      overlay,
-      ok ? '已写入 $count 项' : '写入失败：${faultText(state)}',
-      tone: ok ? ToastTone.success : ToastTone.error,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    return PanelBox(
-      frameKey: const Key('current_loop_frame'),
-      title: '电流环 PI',
-      en: 'Current Loop',
-      hue: TitleHue.violet,
-      trailing: Text(
-        '目标带宽 1 kHz',
-        style: scale.label.copyWith(color: palette.valuePurple),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              for (final (name, label) in fields) ...<Widget>[
-                Expanded(
-                  child: ParamField(
-                    state: state,
-                    name: name,
-                    label: label,
-                    compact: true,
-                  ),
-                ),
-                if (name != fields.last.$1) const SizedBox(width: 8),
-              ],
-            ],
-          ),
-          const SizedBox(height: 9),
-          Text(
-            '▲ FOC 预留 · 当前无消费者，写入暂不改变运行行为',
-            key: const Key('current_loop_note'),
-            style: scale.label.copyWith(color: palette.stWarn),
-          ),
-          const SizedBox(height: 9),
-          Align(
-            alignment: Alignment.centerRight,
-            child: StagedWriteButton(
-              pending: _pending,
-              badgeKey: const Key('current_loop_pending_badge'),
-              onPressed: _pending > 0 ? () => _write(context) : null,
-            ),
-          ),
         ],
       ),
     );
