@@ -10,6 +10,7 @@ import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
+import '../widgets/vfd_bar_painter.dart';
 
 /// Metadata-driven parameter panel (design-system §4.1 参数区).
 ///
@@ -210,7 +211,8 @@ class _ParamZoneState extends State<ParamZone> {
             ],
           ),
           const SizedBox(height: 6),
-          Container(height: palette.lineWidth, color: palette.line),
+          // 标题 / 组线归一：低亮紫 groupLine（§2.6.2）。
+          Container(height: palette.lineWidth, color: palette.groupLine),
           for (final meta in metas) _row(context, state, meta),
         ],
       ),
@@ -225,10 +227,12 @@ class _ParamZoneState extends State<ParamZone> {
     final value = state.values[meta.name];
     final shown = value == null ? '—' : formatValue(value.ty, value.raw);
 
-    // v3 tone mapping: a parameter value is flat amber; a local edit not yet
-    // flushed takes the warning hue plus the dirty dot below. Float values
-    // render through `GlowValue(tone:)`; integer / bool values keep the plain
-    // tabular text (GlowValue is a measured-value widget, not a decoder).
+    // v5 tone mapping: a parameter value takes its physical-dimension accent
+    // (§2.6.3; unitless → neutral white-cyan); a local edit not yet flushed
+    // takes the warning hue plus the dirty dot below. Float values render
+    // through `GlowValue(tint:)`; integer / bool values keep the plain tabular
+    // text (GlowValue is a measured-value widget, not a decoder).
+    final tint = tintForUnit(palette, meta.unit);
     final valueBase = scale.data.copyWith(fontSize: 12.5);
     final Widget valueWidget;
     if (value == null) {
@@ -247,13 +251,13 @@ class _ParamZoneState extends State<ParamZone> {
       valueWidget = GlowValue(
         value: f32FromRaw(value.raw),
         precision: 2,
-        tone: Tone.amber,
+        tint: tint,
       );
     } else {
       valueWidget = Text(
         shown,
         maxLines: 1,
-        style: valueBase.copyWith(color: palette.valueAmber),
+        style: valueBase.copyWith(color: tint),
       );
     }
 
@@ -272,11 +276,9 @@ class _ParamZoneState extends State<ParamZone> {
       onTap: () => openParamEditor(context, state, meta),
       child: Container(
         decoration: BoxDecoration(
+          // 行分割归一：低亮青 line（#173E44）。
           border: Border(
-            bottom: BorderSide(
-              color: palette.lineDim,
-              width: palette.lineWidth,
-            ),
+            bottom: BorderSide(color: palette.line, width: palette.lineWidth),
           ),
         ),
         padding: const EdgeInsets.symmetric(vertical: 5),
@@ -297,13 +299,15 @@ class _ParamZoneState extends State<ParamZone> {
                 meta.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: scale.data.copyWith(
-                  // 参数名放大到 13 —— 它是这一页的主要阅读对象，
-                  // 11.5 在长表里偏小。VT323 字宽窄（约 0.48em），
-                  // 加宽后长名（如 hardware.current_sense.a_per_volt）仍放得下。
-                  fontSize: 13,
-                  color: dirty ? palette.stWarn : palette.fg,
-                ),
+                style: dirty
+                    ? scale.data.copyWith(fontSize: 13, color: palette.stWarn)
+                    // 参数名统一青色 + 弱青辉光（§2.6.3）；13px 是它的阅读字号。
+                    : GuiGlowStyles.weak(
+                        scale.data.copyWith(
+                          fontSize: 13,
+                          color: palette.accent,
+                        ),
+                      ),
               ),
             ),
             const SizedBox(width: 8),

@@ -16,11 +16,14 @@ library;
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
+import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
+import '../widgets/vfd_bar_painter.dart';
+import 'label_style.dart';
 import 'panel_title.dart';
 
 /// 一条标定 / 测试程序的描述。
@@ -245,7 +248,8 @@ class MotorDriveZone extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Expanded(child: Container(height: 1, color: palette.lineDim)),
+          // 组线归一：低亮紫 groupLine（§2.6.2）。
+          Expanded(child: Container(height: 1, color: palette.groupLine)),
         ],
       ),
     );
@@ -260,7 +264,8 @@ class _CompareHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    final style = scale.label.copyWith(color: palette.fgMute);
+    // 数据列标签统一青色 + 弱青辉光（§2.6.3）。
+    final style = guiLabelStyle(palette, scale);
     return Container(
       padding: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
@@ -320,8 +325,8 @@ class _CompareRow extends StatelessWidget {
     final meta = metaOf(state, name);
     final value = state.values[name];
     final dirty = state.dirty.contains(name);
-    // 数值按**参数域**着色，与本页分组头、全量参数页同一套语言。
-    final hue = domainColor(palette, groupKeyOf(name));
+    // 数值按**量纲**着色（§2.6.3），无单位参数回落白青中性。
+    final tint = tintForUnit(palette, meta?.unit ?? '');
 
     final currentText = value == null
         ? '—'
@@ -333,11 +338,9 @@ class _CompareRow extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 3),
         decoration: BoxDecoration(
+          // 行分割归一：低亮青 line（#173E44）。
           border: Border(
-            bottom: BorderSide(
-              color: palette.lineDim,
-              width: palette.lineWidth,
-            ),
+            bottom: BorderSide(color: palette.line, width: palette.lineWidth),
           ),
         ),
         child: Row(
@@ -351,10 +354,17 @@ class _CompareRow extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: scale.body.copyWith(
-                  fontSize: GuiTypeScale.pixelSize,
-                  color: meta == null ? palette.fgMute : palette.fg,
-                ),
+                style: meta == null
+                    ? scale.body.copyWith(
+                        fontSize: GuiTypeScale.pixelSize,
+                        color: palette.fgMute,
+                      )
+                    : GuiGlowStyles.weak(
+                        scale.body.copyWith(
+                          fontSize: GuiTypeScale.pixelSize,
+                          color: palette.accent,
+                        ),
+                      ),
               ),
             ),
             SizedBox(
@@ -369,7 +379,7 @@ class _CompareRow extends StatelessWidget {
                     fontSize: 15,
                     color: value == null
                         ? palette.fgMute
-                        : (dirty ? palette.stWarn : hue),
+                        : (dirty ? palette.stWarn : tint),
                   ),
                 ),
               ),

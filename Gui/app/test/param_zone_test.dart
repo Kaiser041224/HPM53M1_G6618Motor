@@ -196,7 +196,7 @@ void main() {
     expect(line.style?.color, const GuiPalette().valueGreen);
   });
 
-  testWidgets('参数值扁平琥珀；脏值走 stWarn（tone mapping）', (tester) async {
+  testWidgets('参数值列量纲着色：无单位→白青中性；脏值走 stWarn', (tester) async {
     final state = AppState.test(
       metas: [
         makeMeta(0, 'motor.rs_ohm', ty: 0, min: 0, max: 10),
@@ -211,9 +211,68 @@ void main() {
     await _pump(tester, state);
 
     final clean = tester.widget<Text>(find.text('0.16'));
-    expect(clean.style?.color, const GuiPalette().valueAmber);
+    expect(clean.style?.color, const GuiPalette().fgStrong);
     final dirtyValue = tester.widget<Text>(find.text('0.00'));
     expect(dirtyValue.style?.color, const GuiPalette().stWarn);
+  });
+
+  testWidgets('参数值列按量纲着色（V→cyan）', (tester) async {
+    final state = AppState.test(
+      metas: [
+        makeMeta(
+          0,
+          'software.fault.vbus_ov_v',
+          ty: 0,
+          unit: 'V',
+          min: 0,
+          max: 80,
+        ),
+      ],
+    );
+    addTearDown(state.dispose);
+    state.values['software.fault.vbus_ov_v'] = ParamValueDto(
+      ty: 0,
+      raw: f32(48.2),
+    );
+
+    await _pump(tester, state);
+
+    final value = tester.widget<Text>(find.text('48.20'));
+    expect(value.style?.color, const GuiPalette().valueCyan);
+  });
+
+  testWidgets('参数名统一青色 + 弱青辉光', (tester) async {
+    final state = AppState.test(
+      metas: [makeMeta(0, 'motor.pole_pairs', ty: 1, min: 1, max: 64)],
+    );
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    final name = tester.widget<Text>(find.text('motor.pole_pairs'));
+    expect(name.style?.color, const GuiPalette().accent);
+    expect(name.style?.shadows, isNotEmpty);
+  });
+
+  testWidgets('行分割归一为低亮青 line（#173E44）', (tester) async {
+    final state = AppState.test(
+      metas: [makeMeta(0, 'motor.pole_pairs', ty: 1, min: 1, max: 64)],
+    );
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    final row = tester.widget<Container>(
+      find
+          .ancestor(
+            of: find.text('motor.pole_pairs'),
+            matching: find.byType(Container),
+          )
+          .first,
+    );
+    final border = (row.decoration! as BoxDecoration).border! as Border;
+    expect(border.bottom.color, const GuiPalette().line);
+    expect(border.bottom.color, const Color(0xFF173E44));
   });
 
   testWidgets('工具栏与对话框按钮为 GuiButton（读全部/COMMIT primary）', (tester) async {

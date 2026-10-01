@@ -7,6 +7,8 @@ import '../widgets/glow_value.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
+import '../widgets/vfd_bar_painter.dart';
+import 'label_style.dart';
 import 'panel_title.dart';
 import 'status_zone.dart' show HeatLoadBar;
 
@@ -92,32 +94,38 @@ class _HeatLoadPanel extends StatelessWidget {
 
   List<Widget> _bars(StatusDto? status) {
     return <Widget>[
+      // 显式携带量纲：管色与读数由单位派生（不再依赖行名推断）。
       HeatLoadBar(
         name: 'NTC',
         value: status?.ntcTemp,
         threshold: state.thresholdNtc,
+        unit: '℃',
       ),
       HeatLoadBar(
         name: 'U 相',
         value: status?.iU,
         threshold: state.thresholdCurrent,
+        unit: 'A',
       ),
       HeatLoadBar(
         name: 'V 相',
         value: status?.iV,
         threshold: state.thresholdCurrent,
+        unit: 'A',
       ),
       HeatLoadBar(
         name: 'W 相',
         value: status?.iW,
         threshold: state.thresholdCurrent,
+        unit: 'A',
       ),
       HeatLoadBar(
         name: 'VBUS',
         value: status?.vbus,
         threshold: state.thresholdVbus,
+        unit: 'V',
       ),
-      const HeatLoadBar(name: '模组', value: null, threshold: null),
+      const HeatLoadBar(name: '模组', value: null, threshold: null, unit: ''),
     ];
   }
 }
@@ -136,38 +144,21 @@ class _PhaseCurrentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
     final status = state.status;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         const PanelTitle(title: '相电流', en: 'PHASE CURRENTS'),
         const SizedBox(height: 12),
-        _phaseRow(
-          context,
-          name: 'I_U',
-          color: palette.series1,
-          value: status?.iU,
-        ),
+        _phaseRow(context, name: 'I_U', value: status?.iU),
         _hairline(context),
-        _phaseRow(
-          context,
-          name: 'I_V',
-          color: palette.series2,
-          value: status?.iV,
-        ),
+        _phaseRow(context, name: 'I_V', value: status?.iV),
         _hairline(context),
-        _phaseRow(
-          context,
-          name: 'I_W',
-          color: palette.series3,
-          value: status?.iW,
-        ),
+        _phaseRow(context, name: 'I_W', value: status?.iW),
         _hairline(context),
         _valueRow(
           context,
           name: 'F_ELEC',
-          color: palette.fgDim,
           value: status?.freqHz,
           unit: 'Hz',
           precision: 2,
@@ -179,40 +170,39 @@ class _PhaseCurrentPanel extends StatelessWidget {
 
   Widget _hairline(BuildContext context) {
     final palette = GuiPalette.of(context);
-    return Container(height: palette.lineWidth, color: palette.lineDim);
+    // 行分割归一：低亮青 line（#173E44），不再用更暗的 lineDim。
+    return Container(height: palette.lineWidth, color: palette.line);
   }
 
   Widget _phaseRow(
     BuildContext context, {
     required String name,
-    required Color color,
     required double? value,
   }) => _valueRow(
     context,
     name: name,
-    color: color,
     value: value,
     unit: 'A',
     precision: 3,
     note: 'RMS',
   );
 
-  /// One aligned readout row: channel name + value + footnote.
+  /// One aligned readout row: cyan channel name + dimension-tinted value + note.
   Widget _valueRow(
     BuildContext context, {
     required String name,
-    required Color color,
     required double? value,
     required String unit,
     required int precision,
     required String note,
   }) {
+    final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: <Widget>[
-          Text(name, style: scale.label.copyWith(color: color)),
+          Text(name, style: guiLabelStyle(palette, scale)),
           const Spacer(),
           // Monitor readout: sample at 5 Hz so it does not flicker at 25 Hz.
           StableDigits(
@@ -222,6 +212,7 @@ class _PhaseCurrentPanel extends StatelessWidget {
               unit: unit,
               precision: precision,
               tone: Tone.neutral,
+              tint: tintForUnit(palette, unit),
             ),
           ),
           const SizedBox(width: 8),

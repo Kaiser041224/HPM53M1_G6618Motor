@@ -10,6 +10,7 @@ import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/window_caption.dart';
+import 'label_style.dart';
 
 /// Formats a session duration as `HH:MM:SS` (hours may exceed two digits).
 String formatUptime(Duration d) {
@@ -390,7 +391,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Text(label, style: scale.label),
+        Text(label, style: guiLabelStyle(palette, scale)),
         const SizedBox(width: 10),
         StaleGate(
           key: key,
@@ -562,12 +563,16 @@ class _TopBarState extends State<TopBar> with WindowListener {
 
   Widget _kvRow(BuildContext context, String label, String value) {
     final scale = GuiTypeScale.of(context);
+    final palette = GuiPalette.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          SizedBox(width: 110, child: Text(label, style: scale.label)),
+          SizedBox(
+            width: 110,
+            child: Text(label, style: guiLabelStyle(palette, scale)),
+          ),
           const SizedBox(width: 8),
           StableDigits(
             text: value,

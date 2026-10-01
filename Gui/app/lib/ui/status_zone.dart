@@ -12,6 +12,8 @@ import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
+import '../widgets/vfd_bar_painter.dart';
+import 'label_style.dart';
 
 /// Formats a stale age: whole seconds without decimals, otherwise one.
 String _seconds(double value) => value == value.roundToDouble()
@@ -79,24 +81,29 @@ class StatusTile extends StatelessWidget {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
 
-    // v3 tone mapping: a measured tile value is flat neutral white and renders
-    // through `GlowValue(tone:)` so numeric formatting + unit live in one place.
-    // The warn path keeps the same-hue status glow — a status hue is
-    // deliberately not one of the value tones, so it is not cross-colorised.
+    // v5 dimension accent: a measured tile value is tinted by its physical
+    // unit (V→cyan, A→green, W→magenta, ℃→orange …) through the single
+    // `tintForUnit` source. The warn path keeps the same-hue status glow — a
+    // status hue deliberately overrides the dimension accent, so a warning is
+    // never read as "just another dimension". The unit stays in the label tier.
     final Widget valueRow;
     if (warn) {
-      valueRow = Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.baseline,
-        textBaseline: TextBaseline.alphabetic,
-        children: <Widget>[
-          Text(
-            value == null ? '—' : value!.toStringAsFixed(precision),
-            style: GuiGlowStyles.status(palette.stWarn, scale.data),
-          ),
-          const SizedBox(width: 4),
-          Text(unit.toUpperCase(), style: GuiGlowStyles.weak(scale.label)),
-        ],
+      valueRow = FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: <Widget>[
+            Text(
+              value == null ? '—' : value!.toStringAsFixed(precision),
+              style: GuiGlowStyles.status(palette.stWarn, scale.data),
+            ),
+            const SizedBox(width: 4),
+            Text(unit.toUpperCase(), style: GuiGlowStyles.weak(scale.label)),
+          ],
+        ),
       );
     } else {
       valueRow = GlowValue(
@@ -104,6 +111,7 @@ class StatusTile extends StatelessWidget {
         unit: unit,
         precision: precision,
         tone: Tone.neutral,
+        tint: tintForUnit(palette, unit),
       );
     }
 
@@ -127,7 +135,7 @@ class StatusTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: <Widget>[
-              Text(label.toUpperCase(), style: scale.label),
+              Text(label.toUpperCase(), style: guiLabelStyle(palette, scale)),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
@@ -177,7 +185,12 @@ class StatusTile extends StatelessWidget {
         style: GuiGlowStyles.status(palette.stWarn, scale.label),
       );
     }
-    return Text(note, style: scale.label);
+    // Derived (EST) readings carry the violet marker (§2.6.3): the footnote is
+    // tinted so an estimate can never pass itself off as a measurement.
+    final noteStyle = note.startsWith('EST')
+        ? scale.label.copyWith(color: palette.valuePurple)
+        : scale.label;
+    return Text(note, style: noteStyle);
   }
 }
 
@@ -191,49 +204,33 @@ const double kHeatPeakDecayPerSecond = 0.35;
 /// Tick period for the peak-hold decay — aligned with the 5 Hz UI cadence.
 const Duration kHeatPeakTick = kTextRefreshPeriod;
 
-/// The peak-hold marker drawn by [HeatLoadBar].
-///
-/// Exposed as a public widget so tests can read the held [position] without
-/// reaching into the private bar state.
-class HeatPeakLine extends StatelessWidget {
-  const HeatPeakLine({super.key, required this.position, required this.color});
-
-  /// Peak position as a fraction of full scale, clamped to `[0, 1]`.
-  final double position;
-
-  /// Brightened band color of the marker.
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: color,
-        boxShadow: <BoxShadow>[
-          BoxShadow(color: color.withValues(alpha: 0.12), blurRadius: 3),
-        ],
-      ),
-    );
-  }
+/// Infers the physical unit from a fixed limit-row name so the VFD tube tint
+/// is dimension-derived even where the call site cannot supply a unit.
+String _unitForName(String name) {
+  if (name.contains('NTC')) return '℃';
+  if (name.contains('VBUS')) return 'V';
+  if (name.contains('相')) return 'A';
+  return '';
 }
 
-/// Relative load against a threshold, drawn as an audio loudness meter.
+/// Relative load against a threshold, drawn as a VFD 竖排发光管条 (§2.6.5).
 ///
-/// The bar is filled by `|value| / threshold` and both the fill and the right
-/// cell readout take a three-band semantic tone from the ratio — green below
-/// 50 %, amber for 50–85 %, red above 85 % (v3 tone mapping). The body is a
-/// raised slot with 1 px dim border, 50 % / 85 % band ticks, a low-saturation
-/// translucent fill with a bright 2 px leading edge, and a peak-hold marker
-/// that holds for [kHeatPeakHold] then decays at [kHeatPeakDecayPerSecond]. The
-/// whole row is sampled at [kTextRefreshHz] through [StableRefresh]. When no
-/// threshold (or no value) is available the bar stays an empty slot and shows
-/// `—` — never a fabricated `0 %` (design-system §6 rule 2).
+/// The bar is filled by `|value| / threshold` and the tube/spill tint is
+/// **derived from the physical dimension** (see [tintForUnit]) — a current row
+/// glows green, a temperature row orange, a bus-voltage row cyan. The right
+/// cell `%` readout takes the same dimension tint; the 50 % / 85 % band ticks
+/// and the magenta peak-hold line are drawn by [VfdBar]. The peak holds for
+/// [kHeatPeakHold] then decays at [kHeatPeakDecayPerSecond]. The whole row is
+/// sampled at [kTextRefreshHz] through [StableRefresh]. When no threshold (or
+/// no value) is available the bar stays an honest empty trough showing `—` —
+/// never a fabricated `0 %` (design-system §6 rule 2).
 class HeatLoadBar extends StatefulWidget {
   const HeatLoadBar({
     super.key,
     required this.name,
     required this.value,
     required this.threshold,
+    this.unit,
   });
 
   /// Row label.
@@ -245,6 +242,10 @@ class HeatLoadBar extends StatefulWidget {
   /// The trip threshold, or null when the parameter is unloaded.
   final double? threshold;
 
+  /// Optional physical unit; when omitted it is inferred from [name] so the
+  /// fixed limit rows still get the correct dimension tint.
+  final String? unit;
+
   /// `|value| / threshold` clamped to `[0, 1]`, or null when undefined.
   double? get ratio {
     final t = threshold;
@@ -253,8 +254,9 @@ class HeatLoadBar extends StatefulWidget {
     return (v.abs() / t).clamp(0.0, 1.0).toDouble();
   }
 
-  /// Three-band semantic tone for a load [ratio] (v3 tone mapping):
-  /// `< 0.50` green, `0.50..0.85` amber, `> 0.85` red.
+  /// Three-band semantic tone for a load [ratio] (retained for compatibility
+  /// with the loudness-meter semantics): `< 0.50` green, `0.50..0.85` amber,
+  /// `> 0.85` red.
   static Tone toneForRatio(double? ratio) {
     if (ratio == null) return Tone.neutral;
     if (ratio < 0.5) return Tone.green;
@@ -332,21 +334,21 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
     );
   }
 
-  /// Honest empty state: raised slot + `—`, no fill and no peak marker.
+  /// Honest empty state: an unlit VFD trough + `—`, no fill and no peak line.
   Widget _emptyRow(GuiPalette palette, GuiTypeScale scale) {
     return Row(
       children: <Widget>[
-        SizedBox(width: 52, child: Text(widget.name, style: scale.label)),
+        SizedBox(
+          width: 52,
+          child: Text(widget.name, style: guiLabelStyle(palette, scale)),
+        ),
         const SizedBox(width: 11),
         Expanded(
-          child: SizedBox(
-            height: 13,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: palette.bgRaise,
-                border: Border.all(color: palette.lineDim),
-              ),
-            ),
+          child: VfdBar(
+            key: Key('heat_bar_${widget.name}'),
+            ratio: 0,
+            tint: palette.fgMute,
+            warnBand: false,
           ),
         ),
         const SizedBox(width: 11),
@@ -364,97 +366,22 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
     double ratio,
     double peak,
   ) {
-    final tone = HeatLoadBar.toneForRatio(ratio);
-    final band = GlowValue.colorFor(palette, tone);
-    // Low-saturation translucent body + brightened leading edge / peak marker.
-    final fillColor = band.withValues(alpha: 0.55);
-    final capColor = Color.lerp(band, palette.white, 0.35)!;
-    final peakColor = Color.lerp(band, palette.white, 0.2)!;
+    // Dimension-derived tint: the tube colour follows the physical unit, not
+    // the ratio band (design-system §2.6.3).
+    final tint = tintForUnit(palette, widget.unit ?? _unitForName(widget.name));
     return Row(
       children: <Widget>[
-        SizedBox(width: 52, child: Text(widget.name, style: scale.label)),
+        SizedBox(
+          width: 52,
+          child: Text(widget.name, style: guiLabelStyle(palette, scale)),
+        ),
         const SizedBox(width: 11),
         Expanded(
-          child: SizedBox(
-            height: 13,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final width = constraints.maxWidth;
-                final fillWidth = (width * ratio).clamp(0.0, width);
-                final peakLeft = width <= 2
-                    ? 0.0
-                    : (width * peak - 1).clamp(0.0, width - 2);
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: <Widget>[
-                    Positioned.fill(child: ColoredBox(color: palette.bgRaise)),
-                    if (fillWidth > 0) ...<Widget>[
-                      Positioned(
-                        left: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: fillWidth,
-                        child: ColoredBox(
-                          key: Key('heat_fill_${widget.name}'),
-                          color: fillColor,
-                        ),
-                      ),
-                      Positioned(
-                        left: (fillWidth - 2).clamp(0.0, width),
-                        top: 0,
-                        bottom: 0,
-                        width: 2,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: capColor,
-                            boxShadow: <BoxShadow>[
-                              BoxShadow(
-                                color: band.withValues(alpha: 0.15),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                    Positioned(
-                      left: width * 0.5,
-                      top: 0,
-                      bottom: 0,
-                      width: 1,
-                      child: ColoredBox(
-                        key: Key('heat_tick_50_${widget.name}'),
-                        color: palette.lineDim,
-                      ),
-                    ),
-                    Positioned(
-                      left: width * 0.85,
-                      top: 0,
-                      bottom: 0,
-                      width: 1,
-                      child: ColoredBox(
-                        key: Key('heat_tick_85_${widget.name}'),
-                        color: palette.lineDim,
-                      ),
-                    ),
-                    Positioned(
-                      left: peakLeft,
-                      top: 0,
-                      bottom: 0,
-                      width: 2,
-                      child: HeatPeakLine(position: peak, color: peakColor),
-                    ),
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          border: Border.all(color: palette.lineDim),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+          child: VfdBar(
+            key: Key('heat_bar_${widget.name}'),
+            ratio: ratio,
+            peak: peak,
+            tint: tint,
           ),
         ),
         const SizedBox(width: 11),
@@ -464,12 +391,19 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerRight,
             // The whole row is throttled by the outer StableRefresh; the %
-            // readout keeps the three-band tone.
-            child: GlowValue(
-              value: (ratio * 100).round(),
-              unit: '%',
-              precision: 0,
-              tone: tone,
+            // readout keeps the same dimension tint as the tube bank.
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: <Widget>[
+                Text(
+                  (ratio * 100).round().toString(),
+                  style: scale.data.copyWith(color: tint),
+                ),
+                const SizedBox(width: 4),
+                Text('%', style: scale.label),
+              ],
             ),
           ),
         ),

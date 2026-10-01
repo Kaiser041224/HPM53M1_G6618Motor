@@ -13,6 +13,11 @@ void main() {
   testWidgets('single page renders top bar, zones and persistent bottom bar', (
     WidgetTester tester,
   ) async {
+    // The shell targets a desktop window (minimumSize 1024x640); render at the
+    // default 1280x800 so the smoke test exercises a supported size.
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(const GuiApp());
 
     expect(find.byType(SinglePage), findsOneWidget);

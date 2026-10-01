@@ -15,6 +15,8 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
+import '../widgets/vfd_bar_painter.dart';
+import 'label_style.dart';
 import 'panel_title.dart';
 
 /// 保护门限 —— 固件把这几个参数列为**安全相关**
@@ -108,7 +110,7 @@ class CurrentLoopPanel extends StatelessWidget {
             en: 'Current Loop',
             trailing: Text(
               '目标带宽 1 kHz',
-              style: scale.label.copyWith(color: palette.valueViolet),
+              style: scale.label.copyWith(color: palette.valuePurple),
             ),
           ),
           const SizedBox(height: 10),
@@ -205,18 +207,32 @@ class SetpointReadbackPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(label, style: scale.label.copyWith(color: palette.fgDim)),
+          Text(label, style: guiLabelStyle(palette, scale)),
           const SizedBox(height: 5),
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(
-              '$text $unit',
-              maxLines: 1,
-              style: scale.data.copyWith(
-                fontSize: 21,
-                color: value == null ? palette.fgMute : palette.valueAmber,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: <Widget>[
+                Text(
+                  text,
+                  maxLines: 1,
+                  style: scale.data.copyWith(
+                    fontSize: 21,
+                    color: value == null
+                        ? palette.fgMute
+                        : tintForUnit(palette, unit),
+                  ),
+                ),
+                // 单位保持最暗档，专色只赋数值（§2.6.3）。
+                if (value != null) ...<Widget>[
+                  const SizedBox(width: 4),
+                  Text(unit, style: scale.label),
+                ],
+              ],
             ),
           ),
         ],

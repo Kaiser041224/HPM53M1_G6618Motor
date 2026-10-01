@@ -4,9 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/widgets/device_art_data.dart';
 import 'package:g6618_gui/widgets/device_ascii.dart';
+import 'package:g6618_gui/widgets/glow_value.dart';
 import 'package:g6618_gui/widgets/segment_bar.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 import 'package:g6618_gui/widgets/status_badge.dart';
+import 'package:g6618_gui/widgets/vfd_bar_painter.dart';
 
 Future<void> _pump(WidgetTester tester, Widget child) {
   return tester.pumpWidget(
@@ -14,79 +16,42 @@ Future<void> _pump(WidgetTester tester, Widget child) {
   );
 }
 
-List<Color?> _segmentColors(WidgetTester tester) {
-  return tester
-      .widgetList<Container>(
-        find.descendant(
-          of: find.byType(SegmentBar),
-          matching: find.byType(Container),
-        ),
-      )
-      .map((c) => (c.decoration as BoxDecoration?)?.color)
-      .toList();
-}
-
 void main() {
-  group('SegmentBar', () {
+  group('SegmentBar（VFD 竖排发光管条语汇）', () {
     const palette = GuiPalette();
 
-    testWidgets('renders one segment per requested count', (tester) async {
-      await _pump(tester, const SegmentBar(value01: 1, segments: 10));
-      expect(_segmentColors(tester).length, 10);
+    testWidgets('渲染 VfdBar：ratio=value01、青色 tint、无门限刻度', (tester) async {
+      await _pump(tester, const SegmentBar(value01: 0.5));
+
+      final bar = tester.widget<VfdBar>(find.byType(VfdBar));
+      expect(bar.ratio, 0.5);
+      expect(bar.tint, palette.accent);
+      expect(bar.warnBand, isFalse);
+      expect(bar.peak, isNull);
     });
 
-    testWidgets('lights round(value*segments) segments in accent', (
-      tester,
-    ) async {
-      await _pump(tester, const SegmentBar(value01: 0.5, segments: 10));
-      final colors = _segmentColors(tester);
-      expect(colors.where((c) => c == palette.accent).length, 5);
-      expect(colors.where((c) => c == palette.bgRaise).length, 5);
+    testWidgets('warn 把 tint 换成警告橙', (tester) async {
+      await _pump(tester, const SegmentBar(value01: 1, warn: true));
+
+      expect(
+        tester.widget<VfdBar>(find.byType(VfdBar)).tint,
+        palette.valueOrange,
+      );
     });
 
-    testWidgets('warn swaps the lit color to accent2, never accent', (
-      tester,
-    ) async {
+    testWidgets('显式 tint 覆盖 warn 默认', (tester) async {
       await _pump(
         tester,
-        const SegmentBar(value01: 1, segments: 4, warn: true),
+        SegmentBar(value01: 1, warn: true, tint: palette.valuePurple),
       );
-      final colors = _segmentColors(tester);
-      expect(colors.where((c) => c == palette.accent2).length, 4);
-      expect(colors.where((c) => c == palette.accent).length, 0);
-    });
 
-    testWidgets('uses 9px segments with 2px gaps', (tester) async {
-      await _pump(tester, const SegmentBar(value01: 0.5, segments: 8));
-      final boxes = tester.widgetList<SizedBox>(
-        find.descendant(
-          of: find.byType(SegmentBar),
-          matching: find.byType(SizedBox),
-        ),
-      );
-      expect(boxes.any((b) => b.height == 9), isTrue);
-      expect(boxes.where((b) => b.width == 2).length, 7);
-    });
-
-    testWidgets('lit segments carry one weak same-hue glow (v4)', (tester) async {
-      await _pump(tester, const SegmentBar(value01: 1, segments: 3));
-      final lit = tester.widget<Container>(
-        find
-            .descendant(
-              of: find.byType(SegmentBar),
-              matching: find.byType(Container),
-            )
-            .first,
-      );
-      final shadow = (lit.decoration as BoxDecoration).boxShadow!.single;
       expect(
-        shadow.color.toARGB32(),
-        palette.accent.withValues(alpha: 0.12).toARGB32(),
+        tester.widget<VfdBar>(find.byType(VfdBar)).tint,
+        palette.valuePurple,
       );
-      expect(shadow.blurRadius, 8);
     });
 
-    test('lit count rounds and clamps to [0, segments]', () {
+    test('litCount 保留（兼容）', () {
       expect(SegmentBar.litCount(-0.5, 10), 0);
       expect(SegmentBar.litCount(2, 10), 10);
       expect(SegmentBar.litCount(0.44, 10), 4);
@@ -275,5 +240,44 @@ void main() {
     for (final shadow in shadows) {
       expect(shadow.color.r, closeTo(artColorStops.first.r, 0.001));
     }
+  });
+
+  group('GlowValue 量纲 tint 透传', () {
+    const palette = GuiPalette();
+
+    testWidgets('显式 tint 覆盖 tone 颜色', (tester) async {
+      await _pump(
+        tester,
+        GlowValue(
+          value: 1.0,
+          unit: 'V',
+          precision: 1,
+          tint: palette.valueCyan,
+        ),
+      );
+      expect(
+        tester.widget<Text>(find.text('1.0')).style?.color,
+        palette.valueCyan,
+      );
+    });
+
+    testWidgets('未给 tint 时回落 tone', (tester) async {
+      await _pump(
+        tester,
+        const GlowValue(value: 1.0, precision: 1, tone: Tone.green),
+      );
+      expect(
+        tester.widget<Text>(find.text('1.0')).style?.color,
+        palette.valueGreen,
+      );
+    });
+
+    testWidgets('null 值仍走 fgMute，不受 tint 影响', (tester) async {
+      await _pump(
+        tester,
+        GlowValue(value: null, unit: 'V', tint: palette.valueCyan),
+      );
+      expect(tester.widget<Text>(find.text('—')).style?.color, palette.fgMute);
+    });
   });
 }

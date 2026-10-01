@@ -88,6 +88,22 @@ void main() {
       expect(find.byType(StatusBadge), findsNWidgets(2));
     });
 
+    testWidgets('数据列角度按量纲着色（°→cyan），名称统一青色', (tester) async {
+      final state = AppState.test(
+        status: makeStatus(rotor: 123.456, output: 12.34),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      final label = tester.widget<Text>(find.text('ENC R'));
+      expect(label.style?.color, const GuiPalette().accent);
+      expect(label.style?.shadows, isNotEmpty);
+      final angle = tester.widget<Text>(find.text('123.5'));
+      expect(angle.style?.color, const GuiPalette().valueCyan);
+    });
+
     testWidgets('stale：角度降级为 — 并显示失效徽标', (tester) async {
       final state = AppState.test(
         status: makeStatus(rotor: 10, output: 20),

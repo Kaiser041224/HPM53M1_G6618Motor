@@ -6,6 +6,7 @@ import '../theme/gui_type.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart' show Freshness;
 import '../widgets/status_badge.dart';
+import 'label_style.dart';
 
 /// Chinese display name of a status tile, keyed by its [AppState] tile suffix
 /// (mirrors the captions in `status_zone.dart`).
@@ -218,7 +219,7 @@ class BottomBar extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
       children: <Widget>[
-        Text(label, style: scale.label),
+        Text(label, style: guiLabelStyle(palette, scale)),
         const SizedBox(width: 6),
         // Monitor counter: sample at 5 Hz. The style is rebuilt with the
         // accepted string so a `—` and a live number never share a look.

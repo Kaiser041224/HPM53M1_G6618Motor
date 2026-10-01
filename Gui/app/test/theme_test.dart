@@ -21,18 +21,19 @@ void main() {
       expect(palette.bgActive, const Color(0xFF1C383C));
     });
 
-    test('hairline borders are three colors, 1px', () {
-      expect(palette.lineHi, const Color(0xFF3F9E98));
-      expect(palette.line, const Color(0xFF1E5458));
-      expect(palette.lineDim, const Color(0xFF123234));
+    test('hairline borders carry the v5 role-fixed colors, 1px', () {
+      expect(palette.lineHi, const Color(0xFF2ED8E8));
+      expect(palette.line, const Color(0xFF173E44));
+      expect(palette.lineDim, const Color(0xFF0F2A2E));
+      expect(palette.groupLine, const Color(0x808A4DFF));
       expect(palette.lineWidth, 1.0);
     });
 
-    test('text tiers are solid v4 colors, not translucent', () {
-      expect(palette.fg, const Color(0xFFA6BAB8));
-      expect(palette.fgStrong, const Color(0xFFCFDCDA));
-      expect(palette.fgDim, const Color(0xFF6E908E));
-      expect(palette.fgMute, const Color(0xFF5B8280));
+    test('text tiers are solid v5 colors, not translucent', () {
+      expect(palette.fg, const Color(0xFFB2C9C2));
+      expect(palette.fgStrong, const Color(0xFFB8F4F8));
+      expect(palette.fgDim, const Color(0xFF4E8E92));
+      expect(palette.fgMute, const Color(0xFF3E6E72));
       for (final tier in <Color>[
         palette.fg,
         palette.fgStrong,
@@ -43,29 +44,32 @@ void main() {
       }
     });
 
-    test('accents: muted cyan primary, olive secondary (not magenta)', () {
-      expect(palette.accent, const Color(0xFF3F9E98));
+    test('accents: bright cyan primary, olive secondary (not magenta)', () {
+      expect(palette.accent, const Color(0xFF2ED8E8));
       expect(palette.accent2, const Color(0xFFBFA84C));
       expect(palette.accentBlue, const Color(0xFF085890));
       expect(palette.accentGlow, const Color.fromRGBO(63, 158, 152, 0.45));
     });
 
     test('status semantics', () {
-      expect(palette.stNormal, const Color(0xFF4E9454));
-      expect(palette.stWarn, const Color(0xFFB0A038));
-      expect(palette.stFault, const Color(0xFFC06858));
-      expect(palette.stLatched, const Color(0xFFD08880));
-      expect(palette.stStale, const Color(0xFF567476));
-      expect(palette.stPending, const Color(0xFFA0A048));
+      expect(palette.stNormal, const Color(0xFF3DDB6E));
+      expect(palette.stWarn, const Color(0xFFF08030));
+      expect(palette.stFault, const Color(0xFFFF4D4D));
+      expect(palette.stLatched, const Color(0xFFFF8080));
+      expect(palette.stStale, const Color(0xFF4E6E72));
+      expect(palette.stPending, const Color(0xFFC8B848));
     });
 
-    test('flat semantic value colors (v4)', () {
+    test('emissive six-color spectrum value colors (v5)', () {
+      // Deprecated v4 token: kept for compatibility, no longer used for bars.
       expect(palette.valueAmber, const Color(0xFFBFA84C));
-      expect(palette.valueGreen, const Color(0xFF589E5E));
-      expect(palette.valueRed, const Color(0xFFB86858));
-      expect(palette.valuePink, const Color(0xFFC07898));
-      expect(palette.valueViolet, const Color(0xFF8878B8));
-      expect(palette.white, const Color(0xFFCFDCDA));
+      expect(palette.valueCyan, const Color(0xFF2ED8E8));
+      expect(palette.valueGreen, const Color(0xFF3DDB6E));
+      expect(palette.valueOrange, const Color(0xFFF08030));
+      expect(palette.valueRed, const Color(0xFFFF4D4D));
+      expect(palette.valueMagenta, const Color(0xFFE040C8));
+      expect(palette.valuePurple, const Color(0xFF8A4DFF));
+      expect(palette.white, const Color(0xFFB8F4F8));
     });
 
     test('three-tier button colors (v4)', () {
@@ -93,8 +97,15 @@ void main() {
       expect(palette.glow3, const Color.fromRGBO(88, 200, 192, 0.24));
       expect(palette.glow4, const Color.fromRGBO(88, 200, 192, 0.11));
       expect(palette.stroke, const Color.fromRGBO(127, 227, 219, 0.46));
-      expect(palette.glowSoft, const Color.fromRGBO(63, 158, 152, 0.12));
+      expect(palette.glowSoft, const Color.fromRGBO(46, 216, 232, 0.12));
     });
+  });
+
+  test('glowSoft tracks the v5 accent hue', () {
+    const palette = GuiPalette();
+    expect(palette.glowSoft.r, closeTo(palette.accent.r, 0.001));
+    expect(palette.glowSoft.g, closeTo(palette.accent.g, 0.001));
+    expect(palette.glowSoft.b, closeTo(palette.accent.b, 0.001));
   });
 
   testWidgets('GuiPalette.of(context) resolves via the theme extension', (
@@ -113,7 +124,7 @@ void main() {
       ),
     );
     expect(resolved.bgBase, const Color(0xFF081018));
-    expect(resolved.accent, const Color(0xFF3F9E98));
+    expect(resolved.accent, const Color(0xFF2ED8E8));
   });
 
   test('buildGuiTheme is Material 3 dark, square, bgBase scaffold', () {
@@ -132,11 +143,16 @@ void main() {
     final scale = GuiTypeScale(const GuiPalette());
     expect(scale.section.fontFamily, 'VT323');
     expect(scale.section.color, palette.accent);
-    expect(scale.section.letterSpacing, closeTo(13 * 0.16, 0.001));
+    expect(scale.section.fontSize, 16);
+    expect(scale.section.letterSpacing, closeTo(16 * 0.16, 0.001));
     expect(scale.label.fontFamily, 'VT323');
     expect(scale.label.color, palette.fgMute);
+    expect(scale.label.fontSize, GuiTypeScale.pixelSize);
     expect(scale.data.fontFamily, 'VT323');
+    expect(scale.data.fontSize, 36);
     expect(scale.data.color, palette.fgStrong);
+    expect(scale.title.fontSize, 18);
+    expect(scale.emph.fontSize, 12);
     expect(scale.data.fontFeatures, contains(const FontFeature.tabularFigures()));
   });
 
@@ -397,8 +413,6 @@ void main() {
         'fg': palette.fg,
         'fgStrong': palette.fgStrong,
         'fgDim': palette.fgDim,
-        // fgMute 承载 9px 小字，同样按正文标准卡。
-        'fgMute': palette.fgMute,
       }.entries) {
         expect(
           contrast(e.value, bg),
@@ -406,6 +420,16 @@ void main() {
           reason: '${e.key} 在 bgBase 上的对比度不足',
         );
       }
+    });
+
+    test('fgMute 是最暗档：达大字下限 3.0，但明显暗于 fgDim', () {
+      final double mute = contrast(palette.fgMute, palette.bgBase);
+      expect(mute, greaterThanOrEqualTo(3.0), reason: '最暗文字档低到看不见');
+      expect(
+        mute,
+        lessThan(contrast(palette.fgDim, palette.bgBase)),
+        reason: '最暗档必须比次级更暗，否则失去"退后"语义',
+      );
     });
 
     test('状态色 >= 4.5:1（都是要读出来的读数）', () {

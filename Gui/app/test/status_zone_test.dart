@@ -15,6 +15,7 @@ import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/stable_digits.dart';
 import 'package:g6618_gui/widgets/stale_gate.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
+import 'package:g6618_gui/widgets/vfd_bar_painter.dart';
 
 /// Bridge-like failure carrying a device error [code] (matches the old
 /// dashboard test's fake so the interlock classification path is exercised).
@@ -352,6 +353,54 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets('六行条显式携带量纲（NTC→℃ / 相→A / VBUS→V / 模组空）', (
+      tester,
+    ) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, LimitZone(state: state));
+
+      String unitOf(String name) => tester
+          .widget<HeatLoadBar>(
+            find.byWidgetPredicate((w) => w is HeatLoadBar && w.name == name),
+          )
+          .unit!;
+      expect(unitOf('NTC'), '℃');
+      expect(unitOf('U 相'), 'A');
+      expect(unitOf('V 相'), 'A');
+      expect(unitOf('W 相'), 'A');
+      expect(unitOf('VBUS'), 'V');
+      expect(unitOf('模组'), '');
+    });
+
+    testWidgets('相电流示数按量纲着色（A→green / Hz→purple），名称统一青色', (
+      tester,
+    ) async {
+      final state = AppState.test(
+        status: makeStatus(iU: 1.82, iV: 1.75, iW: 1.80, freq: 50.0),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+
+      await _pump(tester, LimitZone(state: state));
+
+      final panel = find.byKey(const Key('limit_phase_panel'));
+      final iu = tester.widget<Text>(
+        find.descendant(of: panel, matching: find.text('I_U')),
+      );
+      expect(iu.style?.color, const GuiPalette().accent);
+      expect(iu.style?.shadows, isNotEmpty);
+      final value = tester.widget<Text>(
+        find.descendant(of: panel, matching: find.text('1.820')),
+      );
+      expect(value.style?.color, const GuiPalette().valueGreen);
+      final freq = tester.widget<Text>(
+        find.descendant(of: panel, matching: find.text('50.00')),
+      );
+      expect(freq.style?.color, const GuiPalette().valuePurple);
+    });
   });
 
   group('波形区 1kHz 趋势图', () {
@@ -392,8 +441,8 @@ void main() {
     });
   });
 
-  group('HeatLoadBar 三色门限（v3 tone mapping）', () {
-    test('比例三带：<50% green、50–85% amber、>85% red', () {
+  group('HeatLoadBar 量纲专色（VFD 竖排发光管条换装）', () {
+    test('比例三带（toneForRatio）保留兼容语义', () {
       expect(HeatLoadBar.toneForRatio(null), Tone.neutral);
       expect(HeatLoadBar.toneForRatio(0.49), Tone.green);
       expect(HeatLoadBar.toneForRatio(0.5), Tone.amber);
@@ -402,46 +451,66 @@ void main() {
       expect(HeatLoadBar.toneForRatio(1.0), Tone.red);
     });
 
-    testWidgets('读数与填充随比例取色；无门限保持 —', (tester) async {
+    testWidgets('管色 / 读数 tint 由量纲派生：A→green / ℃→orange / V→cyan', (
+      tester,
+    ) async {
       await _pump(
         tester,
-        Column(
-          children: const <Widget>[
-            HeatLoadBar(name: 'U 相', value: 30, threshold: 100),
-            HeatLoadBar(name: 'V 相', value: 70, threshold: 100),
-            HeatLoadBar(name: 'W 相', value: 90, threshold: 100),
+        const Column(
+          children: <Widget>[
+            HeatLoadBar(name: 'U 相', value: 30, threshold: 100, unit: 'A'),
+            HeatLoadBar(name: 'NTC', value: 70, threshold: 100, unit: '℃'),
+            HeatLoadBar(name: 'VBUS', value: 80, threshold: 100, unit: 'V'),
             HeatLoadBar(name: '模组', value: null, threshold: null),
           ],
         ),
       );
 
+      VfdBar barOf(String name) =>
+          tester.widget<VfdBar>(find.byKey(Key('heat_bar_$name')));
+      expect(barOf('U 相').tint, const GuiPalette().valueGreen);
+      expect(barOf('NTC').tint, const GuiPalette().valueOrange);
+      expect(barOf('VBUS').tint, const GuiPalette().valueCyan);
+      // The % readout keeps the same dimension tint as the tube bank.
       expect(
         tester.widget<Text>(find.text('30')).style?.color,
         const GuiPalette().valueGreen,
       );
       expect(
         tester.widget<Text>(find.text('70')).style?.color,
-        const GuiPalette().valueAmber,
-      );
-      expect(
-        tester.widget<Text>(find.text('90')).style?.color,
-        const GuiPalette().valueRed,
+        const GuiPalette().valueOrange,
       );
       expect(find.text('—'), findsOneWidget);
     });
+
+    testWidgets('未显式给 unit 时由行名派生量纲（limit_zone 六行）', (tester) async {
+      await _pump(
+        tester,
+        const Column(
+          children: <Widget>[
+            HeatLoadBar(name: 'NTC', value: 70, threshold: 100),
+            HeatLoadBar(name: 'U 相', value: 70, threshold: 100),
+            HeatLoadBar(name: 'VBUS', value: 70, threshold: 100),
+          ],
+        ),
+      );
+      VfdBar barOf(String name) =>
+          tester.widget<VfdBar>(find.byKey(Key('heat_bar_$name')));
+      expect(barOf('NTC').tint, const GuiPalette().valueOrange);
+      expect(barOf('U 相').tint, const GuiPalette().valueGreen);
+      expect(barOf('VBUS').tint, const GuiPalette().valueCyan);
+    });
   });
 
-  group('响度条峰值保持与分档刻度', () {
-    const palette = GuiPalette();
-
+  group('响度条峰值保持与门限刻度（VfdBar）', () {
     testWidgets('峰值线随当前值即时上移', (tester) async {
       await _pump(
         tester,
         const HeatLoadBar(name: 'U 相', value: 90, threshold: 100),
       );
 
-      final peak = tester.widget<HeatPeakLine>(find.byType(HeatPeakLine));
-      expect(peak.position, closeTo(0.9, 1e-6));
+      final bar = tester.widget<VfdBar>(find.byKey(const Key('heat_bar_U 相')));
+      expect(bar.peak, closeTo(0.9, 1e-6));
     });
 
     testWidgets('峰值保持 800ms 后缓回落，且不低于当前值', (tester) async {
@@ -457,51 +526,32 @@ void main() {
       // 800 ms hold: the marker has not moved yet.
       await tester.pump(const Duration(milliseconds: 800));
       expect(
-        tester.widget<HeatPeakLine>(find.byType(HeatPeakLine)).position,
+        tester.widget<VfdBar>(find.byKey(const Key('heat_bar_U 相'))).peak,
         closeTo(0.9, 1e-6),
       );
 
-      // 1 s of peak decay, sampled at the meter's 5 Hz cadence (each frame
-      // accepts the previous tick's peak): lower than the old peak, never
-      // below the live value.
+      // 1 s of peak decay, sampled at the meter's 5 Hz cadence.
       for (var i = 0; i < 5; i++) {
         await tester.pump(const Duration(milliseconds: 200));
       }
       final peak = tester
-          .widget<HeatPeakLine>(find.byType(HeatPeakLine))
-          .position;
+          .widget<VfdBar>(find.byKey(const Key('heat_bar_U 相')))
+          .peak!;
       expect(peak, lessThan(0.9));
       expect(peak, greaterThanOrEqualTo(0.1));
     });
 
-    testWidgets('50% 与 85% 分档刻度线位于槽体内', (tester) async {
+    testWidgets('50% / 85% 门限刻度由 VfdBar 开启，刻度位置恒定', (tester) async {
       await _pump(
         tester,
         const HeatLoadBar(name: 'U 相', value: 90, threshold: 100),
       );
 
-      expect(find.byKey(const Key('heat_tick_50_U 相')), findsOneWidget);
-      expect(find.byKey(const Key('heat_tick_85_U 相')), findsOneWidget);
-    });
-
-    testWidgets('填充为三带色、alpha 0.55', (tester) async {
-      await _pump(
-        tester,
-        const Column(
-          children: <Widget>[
-            HeatLoadBar(name: 'U 相', value: 30, threshold: 100),
-            HeatLoadBar(name: 'V 相', value: 70, threshold: 100),
-            HeatLoadBar(name: 'W 相', value: 90, threshold: 100),
-          ],
-        ),
+      expect(
+        tester.widget<VfdBar>(find.byKey(const Key('heat_bar_U 相'))).warnBand,
+        isTrue,
       );
-
-      Color fillOf(String name) => tester
-          .widget<ColoredBox>(find.byKey(Key('heat_fill_$name')))
-          .color;
-      expect(fillOf('U 相'), palette.valueGreen.withValues(alpha: 0.55));
-      expect(fillOf('V 相'), palette.valueAmber.withValues(alpha: 0.55));
-      expect(fillOf('W 相'), palette.valueRed.withValues(alpha: 0.55));
+      expect(VfdBarPainter.bandMarks, <double>[0.5, 0.85]);
     });
 
     testWidgets('无门限为空槽 + —，不画峰值线', (tester) async {
@@ -511,7 +561,9 @@ void main() {
       );
 
       expect(find.text('—'), findsOneWidget);
-      expect(find.byType(HeatPeakLine), findsNothing);
+      final bar = tester.widget<VfdBar>(find.byKey(const Key('heat_bar_模组')));
+      expect(bar.peak, isNull);
+      expect(bar.ratio, 0.0);
     });
   });
 
@@ -561,8 +613,8 @@ void main() {
     });
   });
 
-  group('v3 页面语义色', () {
-    testWidgets('非告警测量瓦片为扁平中性白（tone neutral）', (tester) async {
+  group('v5 页面语义色', () {
+    testWidgets('非告警测量瓦片按量纲着色：V→cyan（不再是中性白）', (tester) async {
       await _pump(
         tester,
         const StatusTile(
@@ -575,8 +627,86 @@ void main() {
       );
 
       final value = tester.widget<Text>(find.text('24.0'));
-      expect(value.style?.color, const GuiPalette().fgStrong);
+      expect(value.style?.color, const GuiPalette().valueCyan);
       expect(value.style?.shadows, anyOf(isNull, isEmpty));
+    });
+
+    testWidgets('数值量纲专色：A→green / W→magenta / ℃→orange', (tester) async {
+      await _pump(
+        tester,
+        const Column(
+          children: <Widget>[
+            StatusTile(
+              label: 'I',
+              zh: '电流',
+              value: 1.0,
+              unit: 'A',
+              precision: 3,
+            ),
+            StatusTile(
+              label: 'P',
+              zh: '功率',
+              value: 2.0,
+              unit: 'W',
+              precision: 1,
+            ),
+            StatusTile(
+              label: 'NTC',
+              zh: '温度',
+              value: 3.0,
+              unit: '℃',
+              precision: 1,
+            ),
+          ],
+        ),
+      );
+
+      expect(
+        tester.widget<Text>(find.text('1.000')).style?.color,
+        const GuiPalette().valueGreen,
+      );
+      expect(
+        tester.widget<Text>(find.text('2.0')).style?.color,
+        const GuiPalette().valueMagenta,
+      );
+      expect(
+        tester.widget<Text>(find.text('3.0')).style?.color,
+        const GuiPalette().valueOrange,
+      );
+    });
+
+    testWidgets('参数名 / 瓦片标签统一青色 + 弱青辉光', (tester) async {
+      await _pump(
+        tester,
+        const StatusTile(
+          label: 'VBUS',
+          zh: '母线电压',
+          value: 24.0,
+          unit: 'V',
+          precision: 1,
+        ),
+      );
+
+      final label = tester.widget<Text>(find.text('VBUS'));
+      expect(label.style?.color, const GuiPalette().accent);
+      expect(label.style?.shadows, isNotEmpty);
+    });
+
+    testWidgets('EST 反推值的注记带紫标识（valuePurple）', (tester) async {
+      await _pump(
+        tester,
+        const StatusTile(
+          label: 'P_IN',
+          zh: '输入功率',
+          value: 595.2,
+          unit: 'W',
+          precision: 1,
+          note: 'EST · 相电流反推',
+        ),
+      );
+
+      final note = tester.widget<Text>(find.text('EST · 相电流反推'));
+      expect(note.style?.color, const GuiPalette().valuePurple);
     });
 
     testWidgets('故障构成条目标题与红色条目（Tone.red）', (tester) async {
@@ -614,10 +744,11 @@ void main() {
       // The setpoint readout lives in the control frame; scope it so the
       // assertion is stable even if other panels render an F_ELEC value.
       final control = find.byKey(const Key('control_frame'));
+      // v5 量纲专色：FREQ（Hz）→ 紫。
       final freq = tester.widget<Text>(
         find.descendant(of: control, matching: find.text('0.00')),
       );
-      expect(freq.style?.color, const GuiPalette().valueAmber);
+      expect(freq.style?.color, const GuiPalette().valuePurple);
       // Setpoint readout is a GlowValue: unit renders separately, uppercased.
       expect(
         find.descendant(of: control, matching: find.text('HZ')),

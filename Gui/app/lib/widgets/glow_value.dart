@@ -91,6 +91,7 @@ class GlowValue extends StatelessWidget {
     this.unit,
     this.precision = 3,
     this.tone = Tone.neutral,
+    this.tint,
     this.glow = false,
   });
 
@@ -106,6 +107,11 @@ class GlowValue extends StatelessWidget {
   /// Semantic value color.
   final Tone tone;
 
+  /// Optional explicit dimension tint (§2.6.3, from `tintForUnit`). When set it
+  /// overrides [tone] so the value carries the physical-dimension color; a null
+  /// [value] still renders [GuiPalette.fgMute] (a fallback is never tinted).
+  final Color? tint;
+
   /// When true, stack the single soft glow layer on top of the flat color.
   final bool glow;
 
@@ -115,8 +121,8 @@ class GlowValue extends StatelessWidget {
     Tone.amber => palette.valueAmber,
     Tone.green => palette.valueGreen,
     Tone.red => palette.valueRed,
-    Tone.pink => palette.valuePink,
-    Tone.violet => palette.valueViolet,
+    Tone.pink => palette.valueMagenta,
+    Tone.violet => palette.valuePurple,
   };
 
   @override
@@ -124,7 +130,9 @@ class GlowValue extends StatelessWidget {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final text = value == null ? '—' : value!.toStringAsFixed(precision);
-    final color = value == null ? palette.fgMute : colorFor(palette, tone);
+    final color = value == null
+        ? palette.fgMute
+        : (tint ?? colorFor(palette, tone));
     final style = scale.data.copyWith(
       color: color,
       shadows: (glow && value != null)
@@ -133,17 +141,21 @@ class GlowValue extends StatelessWidget {
             ]
           : const <Shadow>[],
     );
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(text, style: style, textAlign: TextAlign.right),
-        if (unit != null) ...[
-          const SizedBox(width: 4),
-          Text(unit!.toUpperCase(), style: scale.label),
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerRight,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text(text, style: style, textAlign: TextAlign.right),
+          if (unit != null) ...[
+            const SizedBox(width: 4),
+            Text(unit!.toUpperCase(), style: scale.label),
+          ],
         ],
-      ],
+      ),
     );
   }
 }

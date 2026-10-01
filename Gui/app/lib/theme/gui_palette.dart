@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 
-/// TNO 硅晶之梦 palette (v4, muted screenshot-derived).
+/// TNO 硅晶之梦 palette (v5, emissive six-color spectrum).
 ///
 /// Base surface values are copied verbatim from
-/// `Gui/ref/design-system/tokens.css` (pixel-measured). The v4 restyle mutes
-/// the v3 colors back toward `Gui/ref/screenshots/`: soft cyan hairlines,
-/// grey-white text, olive-amber / soft-green / soft-red values, with saturated
-/// pixels reserved for thin borders and small icons. Nothing here may be
-/// invented: page code must read semantic tokens through [GuiPalette.of]
-/// instead of hard-coding.
+/// `Gui/ref/design-system/tokens.css` (pixel-measured). The v5 restyle replaces
+/// the v4 muted screenshot-derived values with an **emissive** vocabulary:
+/// a six-color spectrum (cyan / violet / magenta / green / orange / red) tuned
+/// for a "machine panel turned into a glowing screen", bright cyan chrome,
+/// white-cyan values and purple group lines. Nothing here may be invented:
+/// page code must read semantic tokens through [GuiPalette.of] instead of
+/// hard-coding.
 @immutable
 class GuiPalette extends ThemeExtension<GuiPalette> {
   const GuiPalette({
@@ -18,39 +19,41 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.bgRaise = const Color(0xFF102024),
     this.bgHover = const Color(0xFF162C30),
     this.bgActive = const Color(0xFF1C383C),
-    this.lineHi = const Color(0xFF3F9E98),
-    this.line = const Color(0xFF1E5458),
-    this.lineDim = const Color(0xFF123234),
+    this.lineHi = const Color(0xFF2ED8E8),
+    this.line = const Color(0xFF173E44),
+    this.lineDim = const Color(0xFF0F2A2E),
+    this.groupLine = const Color(0x808A4DFF),
     this.lineWidth = 1.0,
-    this.fg = const Color(0xFFA6BAB8),
-    this.fgStrong = const Color(0xFFCFDCDA),
-    this.fgDim = const Color(0xFF6E908E),
-    // 9px 小字也用它，故须满足小字对比度下限（bgBase 上 >= 4.5:1）。
-    // 原 #507270 只有 3.63:1，小字号下偏糊；提亮到 4.51:1，色相不变。
-    this.fgMute = const Color(0xFF5B8280),
+    this.fg = const Color(0xFFB2C9C2),
+    this.fgStrong = const Color(0xFFB8F4F8),
+    this.fgDim = const Color(0xFF4E8E92),
+    // v5 最暗文字档：退到背景里的标签 / 单位 / 注记（刻意不达正文对比下限）。
+    this.fgMute = const Color(0xFF3E6E72),
+    // v4 暗金：保留字段以兼容既有调用，v5 UI 不再用于条形读数。
     this.valueAmber = const Color(0xFFBFA84C),
-    this.valueGreen = const Color(0xFF589E5E),
-    this.valueRed = const Color(0xFFB86858),
-    this.valuePink = const Color(0xFFC07898),
-    this.valueViolet = const Color(0xFF8878B8),
+    this.valueCyan = const Color(0xFF2ED8E8),
+    this.valueGreen = const Color(0xFF3DDB6E),
+    this.valueOrange = const Color(0xFFF08030),
+    this.valueRed = const Color(0xFFFF4D4D),
+    this.valueMagenta = const Color(0xFFE040C8),
+    this.valuePurple = const Color(0xFF8A4DFF),
     this.gearGreen = const Color(0xFF589E5E),
     this.gearGreenRim = const Color(0xFF3C6E44),
     this.gearViolet = const Color(0xFF8878B8),
     this.gearVioletRim = const Color(0xFF5E5288),
-    this.white = const Color(0xFFCFDCDA),
-    this.accent = const Color(0xFF3F9E98),
+    this.white = const Color(0xFFB8F4F8),
+    this.accent = const Color(0xFF2ED8E8),
     this.accent2 = const Color(0xFFBFA84C),
     this.accentBlue = const Color(0xFF085890),
     this.accentGlow = const Color.fromRGBO(63, 158, 152, 0.45),
-    this.stNormal = const Color(0xFF4E9454),
-    this.stWarn = const Color(0xFFB0A038),
-    this.stFault = const Color(0xFFC06858),
-    this.stLatched = const Color(0xFFD08880),
-    // 失效态是**安全提示**：必须看得出"这里没数据"。原 #445C5E 仅 2.68:1，
-    // 低于大字下限 3.0，实际近乎不可见 —— 提亮到 3.79:1，
-    // 仍明显暗于正常态（stNormal 5.18:1），保住"退后"的语义。
-    this.stStale = const Color(0xFF567476),
-    this.stPending = const Color(0xFFA0A048),
+    this.stNormal = const Color(0xFF3DDB6E),
+    this.stWarn = const Color(0xFFF08030),
+    this.stFault = const Color(0xFFFF4D4D),
+    this.stLatched = const Color(0xFFFF8080),
+    // 失效态是**安全提示**：必须看得出"这里没数据"。取值保证大字下限 3.0，
+    // 且明显暗于正常态，保住"退后"的语义。
+    this.stStale = const Color(0xFF4E6E72),
+    this.stPending = const Color(0xFFC8B848),
     this.btnFill = const Color(0xFF222C2E),
     this.btnBorder = const Color(0xFF3E6466),
     this.btnText = const Color(0xFFA6BAB8),
@@ -64,7 +67,7 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.series4 = const Color(0xFF8878B8),
     this.series5 = const Color(0xFF589E90),
     this.series6 = const Color(0xFFB86858),
-    this.glowSoft = const Color.fromRGBO(63, 158, 152, 0.12),
+    this.glowSoft = const Color.fromRGBO(46, 216, 232, 0.12),
     this.glow1 = const Color.fromRGBO(127, 227, 219, 0.85),
     this.glow2 = const Color.fromRGBO(88, 200, 192, 0.48),
     this.glow3 = const Color.fromRGBO(88, 200, 192, 0.24),
@@ -90,44 +93,53 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Active surface.
   final Color bgActive;
 
-  /// Soft cyan hairline — the v4 frame / underline color.
+  /// Bright cyan hairline — the v5 panel frame / underline color.
   final Color lineHi;
 
-  /// Regular border.
+  /// Regular row divider — low-brightness cyan.
   final Color line;
 
   /// Dark inner seam beside [lineHi].
   final Color lineDim;
 
+  /// Title / group underline — low-brightness violet (role-fixed, no rotation).
+  final Color groupLine;
+
   /// Hairlines are always 1px; depth comes from stacking, never scaling.
   final double lineWidth;
 
-  /// Primary text (solid v4 value).
+  /// Primary body text (v5).
   final Color fg;
 
-  /// Brightest text — grey-white titles and neutral values.
+  /// Brightest text — white-cyan titles and neutral values.
   final Color fgStrong;
 
   /// Secondary text.
   final Color fgDim;
 
-  /// Labels / units.
+  /// Labels / units / annotations — the dimmest text tier.
   final Color fgMute;
 
-  /// Flat semantic value: key value / cost / duration.
+  /// Deprecated (v4 dark gold). Kept for compatibility; v5 bars no longer use it.
   final Color valueAmber;
 
-  /// Flat semantic value: healthy / positive.
+  /// Dimension accent: voltage `V`, angle `°` — cyan.
+  final Color valueCyan;
+
+  /// Dimension accent: current `A`, healthy / low position — green.
   final Color valueGreen;
 
-  /// Flat semantic value: fault / negative.
+  /// Dimension accent: temperature `°C`, mid position / warning — orange.
+  final Color valueOrange;
+
+  /// Dimension accent: high position / fault — red.
   final Color valueRed;
 
-  /// Flat semantic value: accent series.
-  final Color valuePink;
+  /// Dimension accent: power `W`, `%`, emphasis / peak line — magenta.
+  final Color valueMagenta;
 
-  /// Flat semantic value: accent series.
-  final Color valueViolet;
+  /// Dimension accent: frequency `Hz`, EST / inverse values — violet.
+  final Color valuePurple;
 
   /// Input gear soft fill (encoder schematic, v4 soft-green).
   final Color gearGreen;
@@ -141,7 +153,7 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
   /// Output gear deep rim — one step darker than [gearViolet].
   final Color gearVioletRim;
 
-  /// Neutral solid light-grey (v4), alias of [fgStrong].
+  /// Neutral value white-cyan (v5), alias of [fgStrong] — neutral values / units.
   final Color white;
 
   /// Cyan primary accent.

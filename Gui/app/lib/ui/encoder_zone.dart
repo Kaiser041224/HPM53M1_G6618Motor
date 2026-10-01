@@ -10,6 +10,8 @@ import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
+import '../widgets/vfd_bar_painter.dart';
+import 'label_style.dart';
 
 /// The 双编码器 zone: a thin-line schematic beside the two encoder readings.
 ///
@@ -110,8 +112,6 @@ class EncoderZone extends StatelessWidget {
           zh: '转子角',
           value: state.status?.encRotorDeg,
           freshness: rotorFreshness,
-          // 与转子齿轮同色（gearGreen == valueGreen），强化「这一路」的关联。
-          tone: Tone.green,
         ),
         const SizedBox(height: 8),
         _rpmRow(
@@ -121,7 +121,6 @@ class EncoderZone extends StatelessWidget {
           note: '角差分 EST',
           value: state.rpmRotor,
           freshness: rotorFreshness,
-          tone: Tone.green,
         ),
         const SizedBox(height: 14),
         _encoderRow(
@@ -131,8 +130,6 @@ class EncoderZone extends StatelessWidget {
           zh: '出轴角',
           value: state.status?.encOutputDeg,
           freshness: outputFreshness,
-          // 与出轴齿轮同色（gearViolet == valueViolet）。
-          tone: Tone.violet,
         ),
         const SizedBox(height: 8),
         _rpmRow(
@@ -142,7 +139,6 @@ class EncoderZone extends StatelessWidget {
           note: '磁编 · 角差分 EST',
           value: state.rpmOutput,
           freshness: outputFreshness,
-          tone: Tone.violet,
         ),
         const SizedBox(height: 14),
         _divider(context),
@@ -192,7 +188,6 @@ class EncoderZone extends StatelessWidget {
     required String zh,
     required double? value,
     required Freshness freshness,
-    required Tone tone,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -201,7 +196,10 @@ class EncoderZone extends StatelessWidget {
       key: key,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
-        SizedBox(width: 64, child: Text(label, style: scale.label)),
+        SizedBox(
+          width: 64,
+          child: Text(label, style: guiLabelStyle(palette, scale)),
+        ),
         Expanded(
           child: Text(
             zh,
@@ -218,8 +216,12 @@ class EncoderZone extends StatelessWidget {
           // Angle readout is a monitor value: sample it at 5 Hz.
           live: StableDigits(
             text: value == null ? '—' : value.toStringAsFixed(1),
-            builder: (context) =>
-                GlowValue(value: value, unit: '°', precision: 1, tone: tone),
+            builder: (context) => GlowValue(
+              value: value,
+              unit: '°',
+              precision: 1,
+              tint: tintForUnit(palette, '°'),
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -239,7 +241,6 @@ class EncoderZone extends StatelessWidget {
     required String note,
     required double? value,
     required Freshness freshness,
-    required Tone tone,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -247,7 +248,10 @@ class EncoderZone extends StatelessWidget {
       key: key,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
-        SizedBox(width: 64, child: Text('转速', style: scale.label)),
+        SizedBox(
+          width: 64,
+          child: Text('转速', style: guiLabelStyle(palette, scale)),
+        ),
         Expanded(
           child: Text(
             zh,
@@ -264,8 +268,11 @@ class EncoderZone extends StatelessWidget {
           // Speed estimate is a monitor value: sample it at 5 Hz.
           live: StableDigits(
             text: value == null ? '—' : value.toStringAsFixed(1),
-            builder: (context) =>
-                GlowValue(value: value, precision: 1, tone: tone),
+            builder: (context) => GlowValue(
+              value: value,
+              precision: 1,
+              tint: tintForUnit(palette, 'RPM'),
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -297,7 +304,10 @@ class EncoderZone extends StatelessWidget {
       key: key,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
-        SizedBox(width: 64, child: Text(label, style: scale.label)),
+        SizedBox(
+          width: 64,
+          child: Text(label, style: guiLabelStyle(palette, scale)),
+        ),
         Expanded(
           child: Text(
             zh,
@@ -310,8 +320,11 @@ class EncoderZone extends StatelessWidget {
         ),
         StableDigits(
           text: value == null ? '—' : value.toStringAsFixed(3),
-          builder: (context) =>
-              GlowValue(value: value, precision: 3, tone: Tone.neutral),
+          builder: (context) => GlowValue(
+            value: value,
+            precision: 3,
+            tint: tintForUnit(palette, ''),
+          ),
         ),
       ],
     );
@@ -330,7 +343,10 @@ class EncoderZone extends StatelessWidget {
       key: key,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
-        SizedBox(width: 64, child: Text(label, style: scale.label)),
+        SizedBox(
+          width: 64,
+          child: Text(label, style: guiLabelStyle(palette, scale)),
+        ),
         Expanded(
           child: Text(
             zh,
@@ -342,10 +358,11 @@ class EncoderZone extends StatelessWidget {
           ),
         ),
         // Resolution / zero readouts are monitor values: sample at 5 Hz.
+        // Unitless → the neutral white-cyan dimension tint (§2.6.3).
         StableDigits(
           text: value ?? '—',
           style: scale.label.copyWith(
-            color: value == null ? palette.fgMute : palette.fg,
+            color: value == null ? palette.fgMute : tintForUnit(palette, 'bit'),
           ),
         ),
       ],
@@ -354,7 +371,8 @@ class EncoderZone extends StatelessWidget {
 
   Widget _divider(BuildContext context) {
     final palette = GuiPalette.of(context);
-    return Container(height: palette.lineWidth, color: palette.lineDim);
+    // 行分割归一：低亮青 line（#173E44）。
+    return Container(height: palette.lineWidth, color: palette.line);
   }
 
   /// Triple-encoded status badge for an encoder [freshness].

@@ -9,6 +9,8 @@ import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/segment_bar.dart';
 import '../widgets/stable_digits.dart';
+import '../widgets/vfd_bar_painter.dart';
+import 'label_style.dart';
 import 'panel_title.dart';
 
 /// Semantic label for a single fault bit, extracted read-only from
@@ -252,11 +254,15 @@ class _ControlPanelState extends State<ControlPanel> {
     required ValueChanged<double> onChanged,
     required VoidCallback onSend,
   }) {
+    final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final value01 = (value / max).clamp(0.0, 1.0).toDouble();
     return Row(
       children: <Widget>[
-        SizedBox(width: 42, child: Text(label, style: scale.label)),
+        SizedBox(
+          width: 42,
+          child: Text(label, style: guiLabelStyle(palette, scale)),
+        ),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -283,17 +289,18 @@ class _ControlPanelState extends State<ControlPanel> {
           child: FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerRight,
-            // v3 tone mapping: the setpoint readout is amber while the LED bar
-            // itself keeps the cyan accent. `glow: true` stacks the single soft
-            // layer the design reserves for bar / value readouts. The readout
-            // is a monitor value sampled at 5 Hz; the slider bar stays instant.
+            // v5: the setpoint readout takes the dimension accent (FREQ Hz→紫,
+            // MOD %→洋红) while the LED bar keeps the cyan/amber accent.
+            // `glow: true` stacks the single soft layer reserved for bar /
+            // value readouts. The readout is sampled at 5 Hz; the slider stays
+            // instant.
             child: StableDigits(
               text: value.toString(),
               builder: (context) => GlowValue(
                 value: value,
                 unit: unit,
                 precision: precision,
-                tone: Tone.amber,
+                tint: tintForUnit(palette, unit),
                 glow: true,
               ),
             ),

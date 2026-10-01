@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 
-/// Section heading (v3).
+/// Section heading (v5).
 ///
 /// A solid white Chinese title ([GuiTypeScale.sectionTitle]), an optional
-/// small Latin caption, and a trailing widget, underlined by a single bright
-/// cyan 1px line.
+/// small Latin caption, and a trailing widget, underlined by a single
+/// low-brightness violet group line ([GuiPalette.groupLine], §2.6.2).
 class SectionTitle extends StatelessWidget {
   const SectionTitle({
     super.key,
@@ -61,7 +61,7 @@ class SectionTitle extends StatelessWidget {
             ],
           ),
         ),
-        Container(height: palette.lineWidth, color: palette.lineHi),
+        Container(height: palette.lineWidth, color: palette.groupLine),
       ],
     );
   }

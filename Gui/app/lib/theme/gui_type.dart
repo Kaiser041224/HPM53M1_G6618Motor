@@ -62,8 +62,8 @@ class GuiTypeScale {
   TextStyle get title => TextStyle(
     fontFamily: displayFamily,
     fontFamilyFallback: zhFallback,
-    fontSize: 17,
-    letterSpacing: 17 * 0.16,
+    fontSize: 18,
+    letterSpacing: 18 * 0.16,
     color: palette.fg,
   );
 
@@ -71,8 +71,8 @@ class GuiTypeScale {
   TextStyle get section => TextStyle(
     fontFamily: displayFamily,
     fontFamilyFallback: zhFallback,
-    fontSize: 13,
-    letterSpacing: 13 * 0.16,
+    fontSize: 16,
+    letterSpacing: 16 * 0.16,
     color: palette.accent,
   );
 
@@ -111,8 +111,8 @@ class GuiTypeScale {
   TextStyle get data => TextStyle(
     fontFamily: monoFamily,
     fontFamilyFallback: zhFallback,
-    fontSize: 26,
-    letterSpacing: 26 * 0.01,
+    fontSize: 36,
+    letterSpacing: 36 * 0.01,
     color: palette.fgStrong,
     fontFeatures: const [FontFeature.tabularFigures()],
   );
@@ -129,8 +129,8 @@ class GuiTypeScale {
   /// （告警、状态、模式名）。比 VT323 更重更方，一眼可辨。
   TextStyle get emph => TextStyle(
     fontFamily: emphFamily,
-    fontSize: 10,
-    letterSpacing: 10 * 0.1,
+    fontSize: 12,
+    letterSpacing: 12 * 0.1,
     color: palette.fgStrong,
   );
 
