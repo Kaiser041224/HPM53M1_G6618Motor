@@ -11,6 +11,7 @@ import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/vfd_bar_painter.dart';
+import 'toast_overlay.dart';
 
 /// Metadata-driven parameter panel (design-system §4.1 参数区).
 ///
@@ -126,13 +127,12 @@ class _ParamZoneState extends State<ParamZone> {
     return LayoutBuilder(
       builder: (context, constraints) {
         // 两列阈值按「最长参数名放得下」反推，不拍脑袋：
-        // 每行固定列合计约 285px（脏点 10 + 类型 34 + 量程 84 +
-        // 生效徽标 ~43 + 数值 80 + 段间距）；最长参数名
-        // `hardware.current_sense.a_per_volt`（32 字符）在 13px VT323 下
-        // 约 166px，留余量按 200px 计 → 每列需 ~485px，
-        // 两列加 28px 栏距 ≈ 1000px 内容宽。
-        // 阈值 720 时每列仅 ~390px、参数名只剩 ~105px，长名一律被截断。
-        if (constraints.maxWidth < 1000 || entries.length < 2) {
+        // 每行固定列合计约 299px（脏点 10 + 类型 34 + 量程 84 +
+        // 生效徽标 ~57 + 数值 80 + 段间距）；参数表统一 15px 后，
+        // 最长参数名 `hardware.vbus_sense.divider_high_ohm`（37 字符）
+        // 约需 ~300px → 每列需 ~600px，两列加 28px 栏距 ≈ 1230px 内容宽。
+        // 阈值 1280 保证每列参数名不被省略号截断。
+        if (constraints.maxWidth < 1280 || entries.length < 2) {
           return _column(context, state, entries);
         }
         final half = (entries.length + 1) ~/ 2;
@@ -233,7 +233,7 @@ class _ParamZoneState extends State<ParamZone> {
     // through `GlowValue(tint:)`; integer / bool values keep the plain tabular
     // text (GlowValue is a measured-value widget, not a decoder).
     final tint = tintForUnit(palette, meta.unit);
-    final valueBase = scale.data.copyWith(fontSize: 12.5);
+    final valueBase = scale.data.copyWith(fontSize: kParamRowFontSize);
     final Widget valueWidget;
     if (value == null) {
       valueWidget = Text(
@@ -252,6 +252,7 @@ class _ParamZoneState extends State<ParamZone> {
         value: f32FromRaw(value.raw),
         precision: 2,
         tint: tint,
+        fontSize: kParamRowFontSize,
       );
     } else {
       valueWidget = Text(
@@ -300,11 +301,14 @@ class _ParamZoneState extends State<ParamZone> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: dirty
-                    ? scale.data.copyWith(fontSize: 13, color: palette.stWarn)
-                    // 参数名统一青色 + 弱青辉光（§2.6.3）；13px 是它的阅读字号。
+                    ? scale.data.copyWith(
+                        fontSize: kParamRowFontSize,
+                        color: palette.stWarn,
+                      )
+                    // 参数名统一青色 + 弱青辉光（§2.6.3）。
                     : GuiGlowStyles.weak(
                         scale.data.copyWith(
-                          fontSize: 13,
+                          fontSize: kParamRowFontSize,
                           color: palette.accent,
                         ),
                       ),
@@ -313,7 +317,10 @@ class _ParamZoneState extends State<ParamZone> {
             const SizedBox(width: 8),
             SizedBox(
               width: 34,
-              child: Text(typeName(meta.ty), style: scale.label),
+              child: Text(
+                typeName(meta.ty),
+                style: scale.label.copyWith(fontSize: kParamRowFontSize),
+              ),
             ),
             const SizedBox(width: 8),
             SizedBox(
@@ -321,13 +328,14 @@ class _ParamZoneState extends State<ParamZone> {
               child: Text(
                 range,
                 textAlign: TextAlign.right,
-                style: scale.label,
+                style: scale.label.copyWith(fontSize: kParamRowFontSize),
               ),
             ),
             const SizedBox(width: 8),
             ApplyBadge(
               label: reboot ? 'REBOOT' : 'LIVE',
               color: reboot ? palette.accent2 : palette.accent,
+              fontSize: kParamRowFontSize,
             ),
             const SizedBox(width: 10),
             SizedBox(
@@ -381,10 +389,13 @@ class _ParamZoneState extends State<ParamZone> {
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final ok = await state.commit();
-    messenger.showSnackBar(
-      SnackBar(content: Text(ok ? '参数已落盘' : '落盘失败：${faultText(state)}')),
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '参数已落盘' : '落盘失败：${faultText(state)}',
+      tone: ok ? ToastTone.success : ToastTone.error,
     );
   }
 }

@@ -11,6 +11,7 @@ import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/window_caption.dart';
 import 'label_style.dart';
+import 'toast_overlay.dart';
 
 /// Formats a session duration as `HH:MM:SS` (hours may exceed two digits).
 String formatUptime(Duration d) {
@@ -150,29 +151,29 @@ class _TopBarState extends State<TopBar> with WindowListener {
   }
 
   Future<void> _doConnect() async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     setState(() => _busy = true);
     final ok = await widget.state.connect(_addrCtrl.text.trim());
     if (!mounted) return;
     setState(() => _busy = false);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          ok
-              ? '已连接 ${widget.state.deviceName}'
-              : '连接失败：${widget.state.lastError}',
-        ),
-      ),
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok
+          ? '已连接 ${widget.state.deviceName}'
+          : '连接失败：${widget.state.lastError}',
+      tone: ok ? ToastTone.success : ToastTone.error,
     );
   }
 
   Future<void> _doDisconnect() async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     setState(() => _busy = true);
     await widget.state.disconnect();
     if (!mounted) return;
     setState(() => _busy = false);
-    messenger.showSnackBar(const SnackBar(content: Text('已断开连接')));
+    if (overlay == null) return;
+    showGuiToastIn(overlay, '已断开连接', tone: ToastTone.info);
   }
 
   @override

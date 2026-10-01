@@ -23,6 +23,7 @@ import '../widgets/gui_button.dart';
 import '../widgets/param_controls.dart' show faultText, numText;
 import 'control_zone.dart' show ctrlMessage;
 import 'panel_title.dart';
+import 'toast_overlay.dart';
 
 /// 快捷控制模式（协议 v1.1 `CTRL_CMD SET_MODE`）：(mode, 中文名, 单位)。
 const List<(int, String, String)> kControlModes = <(int, String, String)>[
@@ -78,30 +79,35 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
   /// 启停切换：按当前运行态调用 [AppState.ctrlStart] / [AppState.ctrlStop]；
   /// 失败（含故障联锁 code 4）走既有 [ctrlMessage] 文案。
   Future<void> _toggleRun() async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final ok = _state.motorRunning
         ? await _state.ctrlStop()
         : await _state.ctrlStart();
-    if (ok) return;
-    messenger.showSnackBar(
-      SnackBar(content: Text(ctrlMessage(_state.lastErrorCode))),
+    if (ok || overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ctrlMessage(_state.lastErrorCode),
+      tone: ToastTone.error,
     );
   }
 
   /// 下发控制模式；成功提示中文名，失败走既有 [faultText] 文案表
-  /// （运行中切换 → LOCKED code 4）。
+  /// （运行中切换 → LOCKED code 4；UI 已预禁用，此处为兜底）。
   Future<void> _selectMode(int mode, String label) async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final ok = await _state.setCtrlMode(mode);
-    messenger.showSnackBar(
-      SnackBar(content: Text(ok ? '控制模式：$label' : faultText(_state))),
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '控制模式：$label' : faultText(_state),
+      tone: ok ? ToastTone.success : ToastTone.error,
     );
   }
 
-  /// 校验并下发改定值；成功 SnackBar「已下发：…」，失败走既有文案表
+  /// 校验并下发改定值；成功提示「已下发：…」，失败走既有文案表
   /// （运行中 → LOCKED code 4 / 越界 → RANGE_ERR code 6）。
   Future<void> _sendSetpoint() async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final mode = _state.ctrlMode;
     final unit = _unit;
     final text = _controller.text.trim();
@@ -129,10 +135,11 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
       3 => await _state.setAngle(value),
       _ => false,
     };
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(ok ? '已下发：${numText(value)} $unit' : faultText(_state)),
-      ),
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '已下发：${numText(value)} $unit' : faultText(_state),
+      tone: ok ? ToastTone.success : ToastTone.error,
     );
   }
 
@@ -146,6 +153,25 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
         final scale = GuiTypeScale.of(context);
         final mode = _state.ctrlMode;
         final modeValid = _unit != '—';
+        // 运行中：模式切换与设定值下发一律禁用（协议侧本就 LOCKED，此处预禁用）。
+        final running = _state.motorRunning;
+        final modeButtons = Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            for (final (m, label, _) in kControlModes) ...<Widget>[
+              Expanded(
+                child: _ModeButton(
+                  mode: m,
+                  label: '$label控制',
+                  selected: mode == m,
+                  enabled: !running,
+                  onPressed: () => _selectMode(m, label),
+                ),
+              ),
+              if (m != kControlModes.last.$1) const SizedBox(width: 8),
+            ],
+          ],
+        );
         return PanelBox(
           frameKey: const Key('quick_control_frame'),
           title: '启动 / 调整',
@@ -164,22 +190,18 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
                 onPressed: _toggleRun,
               ),
               const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  for (final (m, label, _) in kControlModes) ...<Widget>[
-                    Expanded(
-                      child: _ModeButton(
-                        mode: m,
-                        label: '$label控制',
-                        selected: mode == m,
-                        onPressed: () => _selectMode(m, label),
-                      ),
-                    ),
-                    if (m != kControlModes.last.$1) const SizedBox(width: 8),
-                  ],
-                ],
-              ),
+              if (running)
+                Tooltip(message: '请先停止后切换', child: modeButtons)
+              else
+                modeButtons,
+              if (running) ...<Widget>[
+                const SizedBox(height: 6),
+                Text(
+                  '请先停止后切换',
+                  key: const Key('ctrl_locked_note'),
+                  style: scale.label.copyWith(color: palette.stWarn),
+                ),
+              ],
               const SizedBox(height: 9),
               // 控制模式设定输入：数值 + 单位标识（随模式切换）+ 下发。
               Row(
@@ -188,8 +210,8 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
                   Expanded(
                     child: _SetpointField(
                       controller: _controller,
-                      enabled: modeValid,
-                      hint: _hint,
+                      enabled: modeValid && !running,
+                      hint: running ? '请先停止后切换' : _hint,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -201,7 +223,9 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
                       textAlign: TextAlign.center,
                       style: scale.body.copyWith(
                         fontSize: 13,
-                        color: modeValid ? palette.accent : palette.fgMute,
+                        color: (modeValid && !running)
+                            ? palette.accent
+                            : palette.fgMute,
                       ),
                     ),
                   ),
@@ -210,7 +234,7 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
                     key: const Key('ctrl_setpoint_send'),
                     label: '下发',
                     variant: GuiButtonVariant.primary,
-                    onPressed: modeValid ? _sendSetpoint : null,
+                    onPressed: (modeValid && !running) ? _sendSetpoint : null,
                   ),
                 ],
               ),
@@ -347,12 +371,16 @@ class _ModeButton extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onPressed,
+    this.enabled = true,
   });
 
   final int mode;
   final String label;
   final bool selected;
   final VoidCallback onPressed;
+
+  /// 运行中为 false：按钮禁用（GuiButton 禁用样式 + 工具提示 + 小字）。
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -367,7 +395,7 @@ class _ModeButton extends StatelessWidget {
           variant: selected
               ? GuiButtonVariant.primary
               : GuiButtonVariant.normal,
-          onPressed: onPressed,
+          onPressed: enabled ? onPressed : null,
         ),
         const SizedBox(height: 4),
         // 徽标槽位等高；容器自适内容宽度，文字不裁（含 ◆ 与「当前」）。

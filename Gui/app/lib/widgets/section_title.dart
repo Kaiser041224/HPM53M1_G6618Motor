@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import 'hairline_frame.dart';
 
 /// v5 unified title-bar gradient: violet → magenta → transparent, left to
 /// right. The exact stop sequence is taken from the approved sample
@@ -49,7 +50,15 @@ class GuiTitleFrame extends StatelessWidget {
       children: <Widget>[
         Container(
           key: const Key('gui_title_bar'),
-          decoration: const BoxDecoration(gradient: kTitleGradient),
+          decoration: BoxDecoration(
+            gradient: kTitleGradient,
+            // 与内容外框同色系的青色锐利边框（accent，与 HairlineFrame 同档 1.5px），
+            // 包住整条渐变标题条 —— 全页标题风格统一。
+            border: Border.all(
+              color: palette.accent,
+              width: HairlineFrame.brightWidth,
+            ),
+          ),
           // 文字距渐变底左右缘 ≥10px 且垂直居中：不顶格、不溢出背景（修正旧版顶格）。
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           child: child,

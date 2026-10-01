@@ -93,6 +93,7 @@ class GlowValue extends StatelessWidget {
     this.tone = Tone.neutral,
     this.tint,
     this.glow = false,
+    this.fontSize,
   });
 
   /// The number, or null when the reading is stale / unknown.
@@ -115,6 +116,10 @@ class GlowValue extends StatelessWidget {
   /// When true, stack the single soft glow layer on top of the flat color.
   final bool glow;
 
+  /// Optional font-size override for the value digits (defaults to the 36px
+  /// display scale). Dense tables pass a smaller, unified size.
+  final double? fontSize;
+
   /// The palette color for [tone].
   static Color colorFor(GuiPalette palette, Tone tone) => switch (tone) {
     Tone.neutral => palette.fgStrong,
@@ -135,6 +140,7 @@ class GlowValue extends StatelessWidget {
         : (tint ?? colorFor(palette, tone));
     final style = scale.data.copyWith(
       color: color,
+      fontSize: fontSize ?? scale.data.fontSize,
       shadows: (glow && value != null)
           ? <Shadow>[
               Shadow(color: palette.glowSoft, blurRadius: GuiGlowStyles.softBlur),

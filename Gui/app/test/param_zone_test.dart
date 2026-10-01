@@ -8,6 +8,7 @@ import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/param_zone.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
+import 'package:g6618_gui/widgets/param_controls.dart';
 
 ParamMetaDto makeMeta(
   int index,
@@ -291,6 +292,56 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.widgetWithText(GuiButton, '确认写入'), findsOneWidget);
     expect(find.widgetWithText(GuiButton, '取消'), findsOneWidget);
+  });
+
+  testWidgets('参数分页各列字号统一（名称/类型/范围/徽标/值）', (tester) async {
+    expect(
+      kParamRowFontSize,
+      inInclusiveRange(15, 16),
+      reason: '参数表统一到一个较大可读字号档',
+    );
+    final state = AppState.test(
+      metas: [makeMeta(0, 'motor.pole_pairs', ty: 1, min: 1, max: 64)],
+    );
+    addTearDown(state.dispose);
+    state.values['motor.pole_pairs'] = ParamValueDto(ty: 1, raw: 8);
+
+    await _pump(tester, state);
+
+    for (final label in <String>[
+      'motor.pole_pairs', // 名称
+      'u32', // 类型
+      '1.0..64.0', // 范围
+      'LIVE', // 生效徽标
+      '8', // 值
+    ]) {
+      final text = tester.widget<Text>(find.text(label));
+      expect(
+        text.style?.fontSize,
+        kParamRowFontSize,
+        reason: '「$label」应与参数表统一字号，不得大小混排',
+      );
+    }
+  });
+
+  testWidgets('ParamField 编辑控件值字号与参数页统一', (tester) async {
+    final state = AppState.test(
+      metas: [makeMeta(0, 'motor.pole_pairs', ty: 1, min: 1, max: 64)],
+    );
+    addTearDown(state.dispose);
+    state.values['motor.pole_pairs'] = ParamValueDto(ty: 1, raw: 8);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: Scaffold(
+          body: ParamField(state: state, name: 'motor.pole_pairs', label: '极对数'),
+        ),
+      ),
+    );
+
+    final value = tester.widget<Text>(find.text('8'));
+    expect(value.style?.fontSize, kParamRowFontSize);
   });
 
   testWidgets('参数分组各自包一层亮青外框（v3 面板密度）', (tester) async {

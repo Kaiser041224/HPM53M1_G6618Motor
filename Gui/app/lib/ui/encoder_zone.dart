@@ -14,6 +14,7 @@ import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/vfd_bar_painter.dart';
 import 'label_style.dart';
+import 'toast_overlay.dart';
 
 /// The 编码器 (encoder) zone: a thin-line schematic beside the two encoder
 /// readings, plus the v1.1 output-shaft zero-point shortcuts.
@@ -348,24 +349,30 @@ class EncoderZone extends StatelessWidget {
 
   /// 按钮 A：把当前出轴角设为零点。
   Future<void> _setZeroNow(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final ok = await state.setOutputZeroNow();
-    messenger.showSnackBar(
-      SnackBar(content: Text(ok ? '出轴零点已设置' : faultText(state))),
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '出轴零点已设置' : faultText(state),
+      tone: ok ? ToastTone.success : ToastTone.error,
     );
   }
 
   /// 按钮 B：输入指定角度后设为出轴零点。
   Future<void> _setZeroAbs(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final deg = await showDialog<double>(
       context: context,
       builder: (_) => const _AngleZeroDialog(),
     );
     if (deg == null) return;
     final ok = await state.setOutputZeroAbs(deg);
-    messenger.showSnackBar(
-      SnackBar(content: Text(ok ? '出轴零点已设置' : faultText(state))),
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '出轴零点已设置' : faultText(state),
+      tone: ok ? ToastTone.success : ToastTone.error,
     );
   }
 

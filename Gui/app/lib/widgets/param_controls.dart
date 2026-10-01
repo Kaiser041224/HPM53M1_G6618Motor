@@ -18,6 +18,10 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import 'gui_button.dart';
 
+/// 参数表统一阅读字号 [logical px]：名称 / 类型 / 范围 / 徽标 / 值同档，
+/// 层级只靠颜色与字重区分，避免同一列内大小混排。
+const double kParamRowFontSize = 15;
+
 /// Human-readable name of a parameter wire type.
 String typeName(int ty) => switch (ty) {
   0 => 'f32',
@@ -110,10 +114,18 @@ ParamMetaDto? metaOf(AppState state, String name) {
 
 /// A small square LIVE/REBOOT chip marking when a parameter takes effect.
 class ApplyBadge extends StatelessWidget {
-  const ApplyBadge({super.key, required this.label, required this.color});
+  const ApplyBadge({
+    super.key,
+    required this.label,
+    required this.color,
+    this.fontSize,
+  });
 
   final String label;
   final Color color;
+
+  /// 字号覆盖；为 null 时用 [GuiTypeScale.label] 原生字号。
+  final double? fontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -123,7 +135,13 @@ class ApplyBadge extends StatelessWidget {
       decoration: BoxDecoration(
         border: Border.all(color: color.withValues(alpha: 0.55)),
       ),
-      child: Text(label, style: scale.label.copyWith(color: color)),
+      child: Text(
+        label,
+        style: scale.label.copyWith(
+          color: color,
+          fontSize: fontSize ?? scale.label.fontSize,
+        ),
+      ),
     );
   }
 }
@@ -131,12 +149,19 @@ class ApplyBadge extends StatelessWidget {
 /// 安全相关徽标 —— 固件把过流/过压/欠压/PWM 频率/死区等列为安全参数
 /// （终端 set 时会警告）。这里让它们在界面上同样醒目。
 class SafetyBadge extends StatelessWidget {
-  const SafetyBadge({super.key});
+  const SafetyBadge({super.key, this.fontSize});
+
+  /// 字号覆盖；透传给 [ApplyBadge]。
+  final double? fontSize;
 
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
-    return ApplyBadge(label: 'SAFETY', color: palette.accent2);
+    return ApplyBadge(
+      label: 'SAFETY',
+      color: palette.accent2,
+      fontSize: fontSize,
+    );
   }
 }
 
@@ -341,7 +366,7 @@ class ParamField extends StatelessWidget {
   /// 是否为固件标注的安全相关参数（改变时设备会警告）。
   final bool safety;
 
-  /// 紧凑模式：值小一号，用于多列并排。
+  /// 紧凑模式：更紧的垂直留白，用于多列并排（字号统一，不因紧凑而缩小）。
   final bool compact;
 
   final AppState state;
@@ -421,7 +446,10 @@ class ParamField extends StatelessWidget {
     return Opacity(
       opacity: enabled ? 1 : 0.55,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+        padding: EdgeInsets.symmetric(
+          horizontal: 9,
+          vertical: compact ? 6 : 7,
+        ),
         decoration: BoxDecoration(
           color: palette.bgVoid,
           border: Border.all(color: palette.lineDim, width: palette.lineWidth),
@@ -453,7 +481,7 @@ class ParamField extends StatelessWidget {
                 style: GuiGlowStyles.softWith(
                   palette,
                   scale.data.copyWith(
-                    fontSize: compact ? 18 : 21,
+                    fontSize: kParamRowFontSize,
                     color: valueColor,
                   ),
                 ),

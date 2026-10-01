@@ -197,27 +197,29 @@ void main() {
   });
 
   group('ControlZone 故障构成与清除', () {
-    testWidgets('清除故障失败 code 4 保留联锁 SnackBar 文案', (tester) async {
+    testWidgets('清除故障失败 code 4 保留联锁 toast 文案', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async => throw const FrbLikeError(code: 4);
 
       await _pump(tester, ControlZone(state: state));
       await tester.tap(find.text('清除故障'));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
 
-      final snack = find.byType(SnackBar);
+      final toast = find.byKey(const Key('gui_toast_frame'));
       expect(
-        find.descendant(of: snack, matching: find.textContaining('联锁')),
+        find.descendant(of: toast, matching: find.textContaining('联锁')),
         findsOneWidget,
       );
       expect(
         find.descendant(
-          of: snack,
+          of: toast,
           matching: find.textContaining('FAULT_CLEAR'),
         ),
         findsOneWidget,
       );
+      await tester.pump(const Duration(milliseconds: 3000));
     });
 
     testWidgets('故障位按 app_fault.h 语义出条目', (tester) async {

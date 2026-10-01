@@ -381,7 +381,7 @@ void main() {
   });
 
   group('EncoderZone 出轴零点快捷设置', () {
-    testWidgets('按钮 A「当前角设零点」→ setOutputZeroNow + 成功 SnackBar', (tester) async {
+    testWidgets('按钮 A「当前角设零点」→ setOutputZeroNow + 成功 toast', (tester) async {
       final ops = <String>[];
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
@@ -394,7 +394,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       expect(ops, <String>['setOutputZeroNow']);
-      expect(find.text('出轴零点已设置'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast_frame')),
+          matching: find.text('出轴零点已设置'),
+        ),
+        findsOneWidget,
+      );
+      // 示意图 ticker 常驻，不能用 pumpAndSettle；按固定帧推进冲掉 toast。
+      await tester.pump(const Duration(milliseconds: 3000));
     });
 
     testWidgets('按钮 B「指定角度设零点」→ 对话框输入 45 → setOutputZeroAbs', (tester) async {
@@ -420,7 +428,14 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
 
       expect(ops, <String>['setOutputZeroAbs']);
-      expect(find.text('出轴零点已设置'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast_frame')),
+          matching: find.text('出轴零点已设置'),
+        ),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(milliseconds: 3000));
     });
 
     testWidgets('按钮 B 越界输入被拒（−360..360），不下发', (tester) async {

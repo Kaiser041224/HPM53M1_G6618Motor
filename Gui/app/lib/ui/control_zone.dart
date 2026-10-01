@@ -7,6 +7,7 @@ import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/section_title.dart';
 import 'panel_title.dart';
+import 'toast_overlay.dart';
 
 /// Semantic label for a single fault bit, extracted read-only from
 /// `App/Control/Inc/app_fault.h` (bit0..bit9). Unknown bits fall back to
@@ -53,13 +54,15 @@ class ControlZone extends StatelessWidget {
 
   final AppState state;
 
-  /// Clears latched faults; surfaces a classified failure as a SnackBar.
+  /// Clears latched faults; surfaces a classified failure as a toast.
   Future<void> _clearFault(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
+    final overlay = Overlay.maybeOf(context);
     final ok = await state.faultClear();
-    if (ok) return;
-    messenger.showSnackBar(
-      SnackBar(content: Text(ctrlMessage(state.lastErrorCode))),
+    if (ok || overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ctrlMessage(state.lastErrorCode),
+      tone: ToastTone.error,
     );
   }
 

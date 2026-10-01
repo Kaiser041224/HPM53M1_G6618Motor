@@ -5,6 +5,7 @@ import 'package:g6618_gui/bridge/frb/api.dart' show FrbError;
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/start_adjust_zone.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 
 StatusDto makeStatus({bool running = false}) => StatusDto(
   faultFlags: 0,
@@ -31,6 +32,11 @@ Future<void> _pump(WidgetTester tester, StartAdjustZone zone) {
       home: Scaffold(body: SingleChildScrollView(child: zone)),
     ),
   );
+}
+
+/// 让一条 toast 走完整个生命周期，避免测试结束时残留动画回调。
+Future<void> _drainToast(WidgetTester tester) async {
+  await tester.pump(const Duration(milliseconds: 3000));
 }
 
 void main() {
@@ -75,6 +81,7 @@ void main() {
       }
 
       expect(ops, <String>['setMode', 'setMode', 'setMode']);
+      await _drainToast(tester);
     });
 
     testWidgets('模式高亮：选中态徽标只出现在当前模式', (tester) async {
@@ -95,9 +102,10 @@ void main() {
       expect(find.byKey(const Key('ctrl_mode_badge_2')), findsOneWidget);
       expect(find.byKey(const Key('ctrl_mode_badge_1')), findsNothing);
       expect(find.byKey(const Key('ctrl_mode_badge_3')), findsNothing);
+      await _drainToast(tester);
     });
 
-    testWidgets('成功 SnackBar「控制模式：速度」', (tester) async {
+    testWidgets('成功 toast「控制模式：速度」', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async {};
@@ -111,14 +119,18 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(find.text('控制模式：速度'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast_frame')),
+          matching: find.text('控制模式：速度'),
+        ),
+        findsOneWidget,
+      );
+      await _drainToast(tester);
     });
 
-    testWidgets('运行中切换被拒 LOCKED(code 4) → 既有文案表 SnackBar', (tester) async {
-      final state = AppState.test(
-        status: makeStatus(running: true),
-        metas: const [],
-      );
+    testWidgets('切换失败 LOCKED(code 4) → 既有文案表 toast（停止态兜底）', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async =>
           throw const FrbError(code: 4, message: 'interlock');
@@ -132,8 +144,15 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(find.text('设备联锁拒绝：先 STOP / FAULT_CLEAR'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast_frame')),
+          matching: find.text('设备联锁拒绝：先 STOP / FAULT_CLEAR'),
+        ),
+        findsOneWidget,
+      );
       expect(state.ctrlMode, 0);
+      await _drainToast(tester);
     });
   });
 
@@ -204,7 +223,7 @@ void main() {
       expect(ops, <String>['stop']);
     });
 
-    testWidgets('启停失败 code 4 → 既有联锁 SnackBar 文案', (tester) async {
+    testWidgets('启停失败 code 4 → 既有联锁 toast 文案', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async =>
@@ -213,20 +232,94 @@ void main() {
       await _pump(tester, StartAdjustZone(state: state));
 
       await tester.tap(find.byKey(const Key('ctrl_start_stop_toggle')));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
 
-      final snack = find.byType(SnackBar);
+      final toast = find.byKey(const Key('gui_toast_frame'));
       expect(
-        find.descendant(of: snack, matching: find.textContaining('联锁')),
+        find.descendant(of: toast, matching: find.textContaining('联锁')),
         findsOneWidget,
       );
       expect(
         find.descendant(
-          of: snack,
+          of: toast,
           matching: find.textContaining('FAULT_CLEAR'),
         ),
         findsOneWidget,
       );
+      await _drainToast(tester);
+    });
+  });
+
+  group('启动·调整 运行态锁定（停止态才可用）', () {
+    testWidgets('运行中：三模式按钮禁用 + 输入禁用 + 下发禁用 + 「请先停止后切换」', (
+      tester,
+    ) async {
+      final state = AppState.test(
+        status: makeStatus(running: true),
+        metas: const [],
+      );
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async {};
+      await state.setCtrlMode(2);
+
+      await _pump(tester, StartAdjustZone(state: state));
+
+      for (final key in <Key>[
+        const Key('ctrl_mode_1'),
+        const Key('ctrl_mode_2'),
+        const Key('ctrl_mode_3'),
+      ]) {
+        expect(
+          tester.widget<GuiButton>(find.byKey(key)).onPressed,
+          isNull,
+          reason: '$key 运行中必须禁用',
+        );
+      }
+      expect(
+        tester.widget<TextField>(
+          find.byKey(const Key('ctrl_setpoint_input')),
+        ).enabled,
+        isFalse,
+      );
+      expect(
+        tester.widget<GuiButton>(find.byKey(const Key('ctrl_setpoint_send'))).onPressed,
+        isNull,
+      );
+      // 三重编码：文字提示（禁用样式 + tooltip 由组件提供）。
+      expect(
+        find.byKey(const Key('ctrl_locked_note')),
+        findsOneWidget,
+      );
+      expect(find.text('请先停止后切换'), findsWidgets);
+    });
+
+    testWidgets('停机后恢复可用：按钮 / 输入 / 下发均启用，无锁定提示', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async {};
+      await state.setCtrlMode(2);
+
+      await _pump(tester, StartAdjustZone(state: state));
+
+      for (final key in <Key>[
+        const Key('ctrl_mode_1'),
+        const Key('ctrl_mode_2'),
+        const Key('ctrl_mode_3'),
+      ]) {
+        expect(tester.widget<GuiButton>(find.byKey(key)).onPressed, isNotNull);
+      }
+      expect(
+        tester.widget<TextField>(
+          find.byKey(const Key('ctrl_setpoint_input')),
+        ).enabled,
+        isTrue,
+      );
+      expect(
+        tester.widget<GuiButton>(find.byKey(const Key('ctrl_setpoint_send'))).onPressed,
+        isNotNull,
+      );
+      expect(find.byKey(const Key('ctrl_locked_note')), findsNothing);
     });
   });
 
@@ -261,14 +354,15 @@ void main() {
       expect(tester.widget<Text>(unit()).data, 'rpm');
       await selectMode(tester, 3);
       expect(tester.widget<Text>(unit()).data, '°');
+      await _drainToast(tester);
     });
 
-    testWidgets('下发调用注入 API 并弹「已下发」SnackBar', (tester) async {
+    testWidgets('下发调用注入 API 并弹「已下发」toast', (tester) async {
       final ops = <String>[];
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async => ops.add(op);
-      // 预置模式（不经 UI 选模式，避免其 SnackBar 占队遮挡「已下发」）。
+      // 预置模式（不经 UI 选模式，避免其 toast 占队遮挡「已下发」）。
       await state.setCtrlMode(2);
       ops.clear();
 
@@ -283,7 +377,14 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       expect(ops.last, 'setSpeed');
-      expect(find.textContaining('已下发'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast_frame')),
+          matching: find.textContaining('已下发'),
+        ),
+        findsOneWidget,
+      );
+      await _drainToast(tester);
     });
 
     testWidgets('速度越界 |v|>20000 → 本地校验拦截，不调用 API', (tester) async {
@@ -306,6 +407,7 @@ void main() {
       expect(find.byKey(const Key('ctrl_setpoint_error')), findsOneWidget);
       expect(find.textContaining('越界'), findsOneWidget);
       expect(ops, isEmpty);
+      await _drainToast(tester);
     });
 
     testWidgets('非有限值 → 本地校验拦截，不调用 API', (tester) async {
@@ -327,16 +429,17 @@ void main() {
 
       expect(find.byKey(const Key('ctrl_setpoint_error')), findsOneWidget);
       expect(ops, isEmpty);
+      await _drainToast(tester);
     });
 
-    testWidgets('下发失败 RANGE_ERR(code 6) → 既有越界文案表', (tester) async {
+    testWidgets('下发失败 RANGE_ERR(code 6) → 既有越界文案表 toast', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async {
         if (op == 'setMode') return;
         throw const FrbError(code: 6, message: 'range');
       };
-      // 预置模式（不经 UI 选模式，避免其 SnackBar 占队遮挡失败文案）。
+      // 预置模式（不经 UI 选模式，避免其 toast 占队遮挡失败文案）。
       await state.setCtrlMode(1);
 
       await _pump(tester, StartAdjustZone(state: state));
@@ -349,7 +452,14 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(find.text('设备判定越界'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('gui_toast_frame')),
+          matching: find.text('设备判定越界'),
+        ),
+        findsOneWidget,
+      );
+      await _drainToast(tester);
     });
   });
 
@@ -382,6 +492,7 @@ void main() {
         greaterThanOrEqualTo(tester.getSize(text).height),
       );
       expect(tester.takeException(), isNull);
+      await _drainToast(tester);
     });
   });
 }

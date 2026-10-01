@@ -346,6 +346,42 @@ void main() {
     expect(find.byKey(const Key('gui_title_underline')), findsOneWidget);
   });
 
+  testWidgets('标题渐变条外统一包一层青色锐利边框（SectionTitle / PanelTitle）', (
+    WidgetTester tester,
+  ) async {
+    const palette = GuiPalette();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(body: SectionTitle(title: '状态监视', en: 'Status')),
+      ),
+    );
+    final sectionBar = tester.widget<Container>(
+      find.byKey(const Key('gui_title_bar')),
+    );
+    final sectionBorder =
+        (sectionBar.decoration! as BoxDecoration).border! as Border;
+    expect(sectionBorder.top.color, palette.accent);
+    expect(sectionBorder.top.width, inInclusiveRange(1.0, 1.5));
+    expect(sectionBorder.top.width, greaterThan(0));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: PanelTitle(title: '电流环 PI', en: 'Current Loop'),
+        ),
+      ),
+    );
+    final panelBar = tester.widget<Container>(
+      find.byKey(const Key('gui_title_bar')),
+    );
+    final panelBorder =
+        (panelBar.decoration! as BoxDecoration).border! as Border;
+    expect(panelBorder.top.color, palette.accent);
+    expect(panelBorder.top.width, inInclusiveRange(1.0, 1.5));
+  });
+
   testWidgets('标题条内边距：文字距渐变底左右缘 ≥10px、垂直居中', (
     WidgetTester tester,
   ) async {
