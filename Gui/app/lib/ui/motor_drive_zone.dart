@@ -19,6 +19,7 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
@@ -78,9 +79,28 @@ const List<CalibProgram> kCalibPrograms = <CalibProgram>[
   ),
 ];
 
+/// 快捷控制模式（协议 v1.1 `CTRL_CMD SET_MODE`）：(mode, 中文名)。
+const List<(int, String)> kControlModes = <(int, String)>[
+  (1, '力矩'),
+  (2, '速度'),
+  (3, '角度'),
+];
+
+/// 速度环 PID 参数位（全限定名）。设备 schema 无 kd。
+const List<(String, String)> kSpeedLoopFields = <(String, String)>[
+  ('software.control.speed_loop.kp', '比例增益 kp'),
+  ('software.control.speed_loop.ki', '积分增益 ki'),
+];
+
+/// 角度环 PID 参数位（全限定名）。schema 暂无，按 speed_loop 命名约定预留；
+/// 设备未提供时如实显示「设备未提供」。
+const List<(String, String)> kAngleLoopFields = <(String, String)>[
+  ('software.control.angle_loop.kp', '比例增益 kp'),
+  ('software.control.angle_loop.ki', '积分增益 ki'),
+];
+
 /// 右栏一组待对照的参数。
-class ConfigGroup {
-  const ConfigGroup(this.title, this.params);
+class ConfigGroup {  const ConfigGroup(this.title, this.params);
 
   final String title;
 
@@ -159,8 +179,20 @@ class MotorDriveZone extends StatelessWidget {
     );
   }
 
-  /// 左栏：标定 / 测试程序。
+  /// 左栏：标定 / 测试程序，下接快捷控制模式。
   Widget _programColumn(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _calibFrame(context),
+        const SizedBox(height: 14),
+        _quickControlFrame(context),
+      ],
+    );
+  }
+
+  /// 左栏上段：标定 / 测试程序。
+  Widget _calibFrame(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     return HairlineFrame(
@@ -199,8 +231,95 @@ class MotorDriveZone extends StatelessWidget {
     );
   }
 
-  /// 右栏：参数对照表。
+  /// 左栏下段：快捷控制模式（协议 v1.1 `SET_MODE`）。
+  ///
+  /// 按钮协议已暴露，故**可点**——与上方标定例程「协议未暴露」的禁用按钮
+  /// 区分标注（trailing 注明 v1.1）。当前模式**无设备回读**，仅按最近一次
+  /// 成功写入在本地记录并高亮，故小字如实说明。
+  Widget _quickControlFrame(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    return HairlineFrame(
+      key: const Key('quick_control_frame'),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          PanelTitle(
+            title: '启动 / 调整',
+            en: 'Quick Control',
+            trailing: Text(
+              '协议 v1.1',
+              key: const Key('ctrl_mode_v11_note'),
+              style: scale.label.copyWith(color: palette.accent),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              for (final (mode, label) in kControlModes) ...<Widget>[
+                Expanded(
+                  child: _ModeButton(
+                    mode: mode,
+                    label: '$label控制',
+                    selected: state.ctrlMode == mode,
+                    onPressed: () => _selectMode(context, mode, label),
+                  ),
+                ),
+                if (mode != kControlModes.last.$1) const SizedBox(width: 8),
+              ],
+            ],
+          ),
+          const SizedBox(height: 9),
+          Text(
+            '▲ 模式无回读（协议 v1.1）：高亮为最近一次成功写入的本地记录，非设备回读',
+            key: const Key('ctrl_mode_readback_note'),
+            style: scale.label.copyWith(color: palette.fgMute),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 下发控制模式；成功提示中文名，失败走既有 [faultText] 文案表
+  /// （运行中切换 → LOCKED code 4）。
+  Future<void> _selectMode(BuildContext context, int mode, String label) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await state.setCtrlMode(mode);
+    messenger.showSnackBar(
+      SnackBar(content: Text(ok ? '控制模式：$label' : faultText(state))),
+    );
+  }
+
+  /// 右栏：参数对照表 + 速度环 / 角度环 PID 调整入口。
   Widget _configColumn(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _compareFrame(context),
+        const SizedBox(height: 14),
+        _PidLoopPanel(
+          frameKey: const Key('speed_loop_frame'),
+          title: '速度环',
+          en: 'Speed Loop',
+          fields: kSpeedLoopFields,
+          state: state,
+        ),
+        const SizedBox(height: 14),
+        _PidLoopPanel(
+          frameKey: const Key('angle_loop_frame'),
+          title: '角度环',
+          en: 'Angle Loop',
+          fields: kAngleLoopFields,
+          state: state,
+        ),
+      ],
+    );
+  }
+
+  /// 右栏上段：参数对照表。
+  Widget _compareFrame(BuildContext context) {
     final scale = GuiTypeScale.of(context);
     return HairlineFrame(
       key: const Key('config_compare_frame'),
@@ -496,6 +615,119 @@ class _ProgramCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 一组 PID 参数位面板（速度环 / 角度环），排版同「保护门限 / 电流环」：
+/// 面板标题 + 一行 [ParamField]。参数一律元数据驱动，缺参如实「设备未提供」。
+class _PidLoopPanel extends StatelessWidget {
+  const _PidLoopPanel({
+    required this.frameKey,
+    required this.title,
+    required this.en,
+    required this.fields,
+    required this.state,
+  });
+
+  final Key frameKey;
+  final String title;
+  final String en;
+  final List<(String, String)> fields;
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = GuiTypeScale.of(context);
+    return HairlineFrame(
+      key: frameKey,
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          PanelTitle(
+            title: title,
+            en: en,
+            trailing: Text('由设备元数据提供', style: scale.label),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              for (final (name, label) in fields) ...<Widget>[
+                Expanded(
+                  child: ParamField(
+                    state: state,
+                    name: name,
+                    label: label,
+                    compact: true,
+                  ),
+                ),
+                if (name != fields.last.$1) const SizedBox(width: 8),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 一枚控制模式按钮：选中态用「primary 边框 + ◆ 当前徽标」三重编码
+/// （符号 + 文字 + 强调色）标注，未选中位保留等高。
+class _ModeButton extends StatelessWidget {
+  const _ModeButton({
+    required this.mode,
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final int mode;
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        GuiButton(
+          key: Key('ctrl_mode_$mode'),
+          label: label,
+          variant: selected
+              ? GuiButtonVariant.primary
+              : GuiButtonVariant.normal,
+          onPressed: onPressed,
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 18,
+          child: selected
+              ? Center(
+                  child: Container(
+                    key: Key('ctrl_mode_badge_$mode'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: palette.accent.withValues(alpha: 0.55),
+                      ),
+                    ),
+                    child: Text(
+                      '◆ 当前',
+                      style: scale.label.copyWith(color: palette.accent),
+                    ),
+                  ),
+                )
+              : null,
+        ),
+      ],
     );
   }
 }

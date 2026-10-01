@@ -96,6 +96,76 @@ void main() {
     expect(state.lastError, contains('interlock active'));
   });
 
+  group('v1.1 出轴零点 API', () {
+    test('setOutputZeroNow 注入回调收到 op 名并返回 true', () async {
+      final ops = <String>[];
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      final ok = await state.setOutputZeroNow();
+
+      expect(ok, isTrue);
+      expect(ops, <String>['setOutputZeroNow']);
+      expect(state.requestFailures, 0);
+    });
+
+    test('setOutputZeroAbs 注入回调收到 op 名并返回 true', () async {
+      final ops = <String>[];
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      final ok = await state.setOutputZeroAbs(45.0);
+
+      expect(ok, isTrue);
+      expect(ops, <String>['setOutputZeroAbs']);
+    });
+
+    test('setOutputZeroNow 失败：记录设备码 code 4 且 requestFailures +1', () async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async =>
+          throw const FrbError(code: 4, message: 'interlock');
+
+      final ok = await state.setOutputZeroNow();
+
+      expect(ok, isFalse);
+      expect(state.lastErrorCode, 4);
+      expect(state.requestFailures, 1);
+    });
+  });
+
+  group('v1.1 控制模式 API', () {
+    test('setCtrlMode 注入回调收到 op 名、返回 true 并本地记录模式', () async {
+      final ops = <String>[];
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      final ok = await state.setCtrlMode(2);
+
+      expect(ok, isTrue);
+      expect(ops, <String>['setMode']);
+      expect(state.ctrlMode, 2);
+      expect(state.requestFailures, 0);
+    });
+
+    test('setCtrlMode 失败：记录设备码 code 4、requestFailures +1、模式不更新', () async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async =>
+          throw const FrbError(code: 4, message: 'interlock');
+
+      final ok = await state.setCtrlMode(3);
+
+      expect(ok, isFalse);
+      expect(state.lastErrorCode, 4);
+      expect(state.requestFailures, 1);
+      expect(state.ctrlMode, 0);
+    });
+  });
+
   group('数据三态 freshnessOf', () {
     test('从未更新 → unknown；刚更新 → live', () {
       final state = AppState.test();
@@ -196,7 +266,10 @@ void main() {
       expect(state.chartHistory.len, ChartHistory.capacity);
       expect(ChartHistory.capacity, 60000);
       expect(state.chartHistory.channelAt(0, 0), 5.0);
-      expect(state.chartHistory.channelAt(0, state.chartHistory.len - 1), 60004.0);
+      expect(
+        state.chartHistory.channelAt(0, state.chartHistory.len - 1),
+        60004.0,
+      );
     });
 
     test('AppState.test 可注入 history（默认空）', () {
@@ -322,7 +395,10 @@ void main() {
       expect(state.connected, isTrue);
 
       controller.add(
-        StatusBatchDto(samples: <StatusDto>[makeStatus(iU: 7)], seq: BigInt.one),
+        StatusBatchDto(
+          samples: <StatusDto>[makeStatus(iU: 7)],
+          seq: BigInt.one,
+        ),
       );
       await Future<void>.delayed(Duration.zero);
 

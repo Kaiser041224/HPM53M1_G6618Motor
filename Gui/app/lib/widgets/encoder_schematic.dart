@@ -53,7 +53,6 @@ double shortestArcDeg(double delta) {
   return (input, output);
 }
 
-
 /// Output-wheel rotation [°] meshing-coupled to an input rotation.
 ///
 /// External meshing reverses the sense and scales by the tooth ratio:
@@ -94,6 +93,8 @@ class EncoderSchematic extends StatefulWidget {
     required this.rotorDeg,
     required this.outputDeg,
     required this.ratioLabel,
+    this.pointerColor,
+    this.ratioValueColor,
   });
 
   /// Rotor angle [°]; null when the reading is stale / never read.
@@ -107,6 +108,18 @@ class EncoderSchematic extends StatefulWidget {
 
   /// Reduction-ratio label, e.g. `3.50`, or `—` when no ratio is loaded.
   final String ratioLabel;
+
+  /// Pointer line + tip-glow colour for **both** dials (v1.1 encoder rework).
+  ///
+  /// Defaults to each dial's own ring channel ([GuiPalette.accent] / amber) so
+  /// the historical look is preserved when unset; the encoder zone passes the
+  /// magenta emphasis, leaving the rings and graduations cyan/amber.
+  final Color? pointerColor;
+
+  /// Colour of the `i = … : 1` annotation value; defaults to
+  /// [GuiPalette.valueAmber]. The encoder zone passes magenta to emphasise the
+  /// computed reduction ratio.
+  final Color? ratioValueColor;
 
   /// Drawing height; the width follows the parent.
   static const double height = 220;
@@ -195,7 +208,6 @@ class EncoderSchematicState extends State<EncoderSchematic>
     }
   }
 
-
   /// Runs the pointer integrator while either dial is live.
   void _syncTicker() {
     final live = widget.rotorDeg != null || widget.outputDeg != null;
@@ -245,7 +257,8 @@ class EncoderSchematicState extends State<EncoderSchematic>
     final maxStep = kPointerMaxDps * dt;
     final advance = (delta * kPointerSpeedScale).clamp(-maxStep, maxStep);
     pointer.target = pointer.target! + advance;
-    pointer.display = pointer.display! + (pointer.target! - pointer.display!) * pointerLerp;
+    pointer.display =
+        pointer.display! + (pointer.target! - pointer.display!) * pointerLerp;
   }
 
   @override
@@ -272,7 +285,9 @@ class EncoderSchematicState extends State<EncoderSchematic>
       fontSize: 10,
     );
     final ratioValueStyle = scale.label.copyWith(
-      color: widget.ratioLabel == '—' ? palette.fgMute : palette.valueAmber,
+      color: widget.ratioLabel == '—'
+          ? palette.fgMute
+          : (widget.ratioValueColor ?? palette.valueAmber),
       fontSize: 10,
     );
     final ratioValue = widget.ratioLabel == '—'
@@ -349,6 +364,7 @@ class EncoderSchematicState extends State<EncoderSchematic>
                         gearVioletRim: palette.gearVioletRim,
                         bgBase: palette.bgBase,
                         glowSoft: palette.glowSoft,
+                        pointerColor: widget.pointerColor,
                       ),
                     );
                   },
@@ -405,6 +421,7 @@ class EncoderSchematicPainter extends CustomPainter {
     required this.gearVioletRim,
     required this.bgBase,
     required this.glowSoft,
+    this.pointerColor,
   });
 
   /// Rotor *display* pointer angle [°] (scaled/lerped for perception); null
@@ -459,6 +476,11 @@ class EncoderSchematicPainter extends CustomPainter {
   /// Single soft glow colour, used only at the pointer tips.
   final Color glowSoft;
 
+  /// Pointer line + tip-glow colour for both dials; null keeps each dial's ring
+  /// channel. Set to magenta by the encoder zone (v1.1 rework) while the rings
+  /// and graduations keep their cyan/amber channels.
+  final Color? pointerColor;
+
   /// Thin wire weight (design-system: 1.2px, never scaled for emphasis).
   static const double strokeWidth = 1.2;
 
@@ -482,7 +504,6 @@ class EncoderSchematicPainter extends CustomPainter {
 
   /// Centre bore radius as a multiple of the pitch radius.
   static const double hubBoreFactor = 0.13;
-
 
   /// Dashed pitch-circle stroke width.
   static const double pitchCircleWidth = 0.6;
@@ -560,8 +581,27 @@ class EncoderSchematicPainter extends CustomPainter {
     final outputCenter = EncoderSchematicPainter.outputCenter(size);
     final gearCenter = EncoderSchematicPainter.gearCenter(size);
 
-    _drawDial(canvas, rotorCenter, radius, rotorDeg, accent, fgDim, line);
-    _drawDial(canvas, outputCenter, radius, outputDeg, valueAmber, fgDim, line);
+    // v1.1：盘圈/刻度保持各自通道色，指针（含尖端辉光）改洋红 —— 见 [pointerColor]。
+    _drawDial(
+      canvas,
+      rotorCenter,
+      radius,
+      rotorDeg,
+      accent,
+      fgDim,
+      line,
+      pointerColor,
+    );
+    _drawDial(
+      canvas,
+      outputCenter,
+      radius,
+      outputDeg,
+      valueAmber,
+      fgDim,
+      line,
+      pointerColor,
+    );
 
     _drawGearPair(canvas, size, gearCenter);
 
@@ -593,6 +633,7 @@ class EncoderSchematicPainter extends CustomPainter {
     Color channel,
     Color faintColor,
     Color seamColor,
+    Color? pointerColor,
   ) {
     final faint = _stroke(faintColor, 1);
     canvas.drawCircle(center, radius, _stroke(channel, strokeWidth));
@@ -612,8 +653,14 @@ class EncoderSchematicPainter extends CustomPainter {
 
     final angle = deg ?? 0.0;
     final tip = pointerTip(center, radius * pointerRadiusFactor, angle);
-    canvas.drawCircle(tip, radius * 0.06, _fill(glowSoft));
-    final pointer = _stroke(channel, strokeWidth);
+    // 指针（及尖端辉光）取 [pointerColor]，未设时回落到盘圈色。
+    final pointerTint = pointerColor ?? channel;
+    canvas.drawCircle(
+      tip,
+      radius * 0.06,
+      _fill(pointerTint.withValues(alpha: glowSoft.a)),
+    );
+    final pointer = _stroke(pointerTint, strokeWidth);
     canvas.drawLine(center, tip, pointer);
     final head = radius * 0.16;
     canvas.drawLine(tip, pointerTip(tip, head, angle + 152), pointer);
@@ -819,5 +866,6 @@ class EncoderSchematicPainter extends CustomPainter {
       oldDelegate.gearViolet != gearViolet ||
       oldDelegate.gearVioletRim != gearVioletRim ||
       oldDelegate.bgBase != bgBase ||
-      oldDelegate.glowSoft != glowSoft;
+      oldDelegate.glowSoft != glowSoft ||
+      oldDelegate.pointerColor != pointerColor;
 }

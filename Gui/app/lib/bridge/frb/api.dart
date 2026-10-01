@@ -58,6 +58,19 @@ Future<void> ctrlSetFreq({required double freqHz}) =>
 Future<void> ctrlSetMod({required double modPct}) =>
     RustLib.instance.api.crateApiCtrlSetMod(modPct: modPct);
 
+/// v1.1：把当前出轴角设为零点（停机窗口联锁；运行中/故障锁存 → `LOCKED`）。
+Future<void> ctrlSetOutputZeroNow() =>
+    RustLib.instance.api.crateApiCtrlSetOutputZeroNow();
+
+/// v1.1：把指定角度（度）设为出轴零点（非法非有限值 → `RANGE_ERR`）。
+Future<void> ctrlSetOutputZeroAbs({required double deg}) =>
+    RustLib.instance.api.crateApiCtrlSetOutputZeroAbs(deg: deg);
+
+/// v1.1：设置控制模式（1=力矩 / 2=速度 / 3=角度；非法 → `BAD_CMD`）。
+/// `value` 以 f32 位型低字节承载 u8 模式。
+Future<void> ctrlSetMode({required int mode}) =>
+    RustLib.instance.api.crateApiCtrlSetMode(mode: mode);
+
 Future<(int, int)> faultGet() => RustLib.instance.api.crateApiFaultGet();
 
 Future<void> faultClear() => RustLib.instance.api.crateApiFaultClear();

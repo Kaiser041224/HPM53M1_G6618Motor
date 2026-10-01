@@ -381,6 +381,11 @@ class AppState extends ChangeNotifier {
   /// Latched fault bitmask reported alongside [status].
   int latchedFlags = 0;
 
+  /// Last control mode written through [setCtrlMode] — 1=torque / 2=speed /
+  /// 3=angle; 0 until one is accepted. Recorded **locally** because protocol
+  /// v1.1 exposes no mode read-back, so the UI must not imply a device echo.
+  int ctrlMode = 0;
+
   /// Whether the motor is currently running; false until a status is read.
   bool get motorRunning => status?.motorRunning ?? false;
 
@@ -499,17 +504,17 @@ class AppState extends ChangeNotifier {
     final value = values[name];
     if (value == null) return null;
     return switch (value.ty) {
-      0 => (ByteData(4)..setUint32(0, value.raw, Endian.little)).getFloat32(
-        0,
-        Endian.little,
-      ),
+      0 => (ByteData(
+        4,
+      )..setUint32(0, value.raw, Endian.little)).getFloat32(0, Endian.little),
       1 || 2 || 3 => value.raw.toDouble(),
       _ => null,
     };
   }
 
   /// Overrides the bridge control calls when set (test injection). Receives
-  /// the operation name (`start`/`stop`/`setFreq`/`setMod`/`faultClear`).
+  /// the operation name (`start`/`stop`/`setFreq`/`setMod`/`faultClear` and the
+  /// v1.1 `setOutputZeroNow`/`setOutputZeroAbs`).
   Future<void> Function(String op)? onCtrl;
 
   /// Periodic [frb.statsGet] refresher; active only while connected.
@@ -687,6 +692,30 @@ class AppState extends ChangeNotifier {
 
   /// Clears latched faults. Returns false on failure.
   Future<bool> faultClear() => _ctrl('faultClear', frb.faultClear);
+
+  /// v1.1: sets the **output-shaft** zero point to the current shaft angle.
+  /// A stop-window interlock: running or a latched fault → `LOCKED` (code 4).
+  /// Returns false on failure (see [lastErrorCode]).
+  Future<bool> setOutputZeroNow() =>
+      _ctrl('setOutputZeroNow', frb.ctrlSetOutputZeroNow);
+
+  /// v1.1: sets the **output-shaft** zero point to [deg] (degrees). A
+  /// non-finite value → `RANGE_ERR` (code 6). Returns false on failure.
+  Future<bool> setOutputZeroAbs(double deg) =>
+      _ctrl('setOutputZeroAbs', () => frb.ctrlSetOutputZeroAbs(deg: deg));
+
+  /// v1.1: sets the control mode (1=torque / 2=speed / 3=angle); an invalid
+  /// value is rejected by the device as `BAD_CMD`. Switching while running is
+  /// refused with `LOCKED` (code 4). On success the requested mode is recorded
+  /// in [ctrlMode] (there is no device read-back). Returns false on failure.
+  Future<bool> setCtrlMode(int mode) async {
+    final ok = await _ctrl('setMode', () => frb.ctrlSetMode(mode: mode));
+    if (ok) {
+      ctrlMode = mode;
+      notifyListeners();
+    }
+    return ok;
+  }
 
   /// Connects to [addr] and reads the device name from PROTO_INFO.
   /// Returns true on success; on failure [lastError] is populated.

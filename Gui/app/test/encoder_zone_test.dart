@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:g6618_gui/bridge/frb/api.dart' show FrbError;
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/encoder_zone.dart';
@@ -44,24 +45,48 @@ Finder _schematicPaint() => find.byWidgetPredicate(
   (w) => w is CustomPaint && w.painter is EncoderSchematicPainter,
 );
 
-/// Full `i = … : 1` text of the schematic's ratio annotation rich text.
-String _ratioFullText(WidgetTester tester) {
-  final rich = tester.widget<Text>(find.byKey(EncoderSchematic.ratioLabelKey));
+/// Full plain text of a `Text.rich`/`Text` widget identified by [key].
+String _richText(WidgetTester tester, Key key) {
+  final rich = tester.widget<Text>(find.byKey(key));
   return (rich.textSpan! as TextSpan).toPlainText();
+}
+
+/// Full `i = … : 1` text of the schematic's ratio annotation rich text.
+String _ratioFullText(WidgetTester tester) =>
+    _richText(tester, EncoderSchematic.ratioLabelKey);
+
+/// Full `i = … : 1` text of the data-area reduction-ratio row.
+String _reductionFullText(WidgetTester tester) =>
+    _richText(tester, const Key('encoder_reduction_ratio_value'));
+
+/// Seeds the two gear-ratio parameters decoded from raw f32.
+void _seedRatios(AppState state, {double? rotor, double? output}) {
+  if (rotor != null) {
+    state.values['motor.encoder.rotor_ratio'] = ParamValueDto(
+      ty: 0,
+      raw: f32(rotor),
+    );
+  }
+  if (output != null) {
+    state.values['motor.encoder.output_ratio'] = ParamValueDto(
+      ty: 0,
+      raw: f32(output),
+    );
+  }
 }
 
 void main() {
   group('EncoderZone 面板', () {
-    testWidgets('面板存在：标题「双编码器 / DUAL ENCODERS」+ HairlineFrame main', (
-      tester,
-    ) async {
+    testWidgets('面板存在：标题「编码器 / ENCODERS」+ HairlineFrame main', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, EncoderZone(state: state));
 
-      expect(find.text('双编码器'), findsOneWidget);
-      expect(find.text('DUAL ENCODERS'), findsOneWidget);
+      expect(find.text('编码器'), findsOneWidget);
+      expect(find.text('ENCODERS'), findsOneWidget);
+      expect(find.text('双编码器'), findsNothing);
+      expect(find.text('DUAL ENCODERS'), findsNothing);
       final frame = tester.widget<HairlineFrame>(
         find.byKey(const Key('encoder_frame')),
       );
@@ -127,60 +152,229 @@ void main() {
     });
   });
 
-  group('EncoderZone 齿比与无源项', () {
-    testWidgets('齿比缺省：两行与示意图均显示 —', (tester) async {
+  group('EncoderZone 减速比计算', () {
+    testWidgets('缺省（两参均缺）：数据行与示意图均 i = —', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, EncoderZone(state: state));
 
-      for (final key in const <String>[
-        'encoder_ratio_rotor',
-        'encoder_ratio_output',
-      ]) {
-        expect(
-          find.descendant(of: find.byKey(Key(key)), matching: find.text('—')),
-          findsOneWidget,
-          reason: key,
-        );
-      }
+      expect(_reductionFullText(tester), 'i = —');
       expect(_ratioFullText(tester), 'i = —');
     });
 
-    testWidgets('齿比载入：转子 1.000 / 出轴 0.980，示意图标 i = 0.98 : 1', (tester) async {
+    testWidgets('载入：转子 1.000 / 出轴 0.980 → i = 1.02 : 1', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
-      state.values['motor.encoder.rotor_ratio'] = ParamValueDto(
-        ty: 0,
-        raw: f32(1.0),
-      );
-      state.values['motor.encoder.output_ratio'] = ParamValueDto(
-        ty: 0,
-        raw: f32(0.98),
-      );
+      _seedRatios(state, rotor: 1.0, output: 0.98);
 
       await _pump(tester, EncoderZone(state: state));
 
-      expect(find.text('1.000'), findsOneWidget);
-      expect(find.text('0.980'), findsOneWidget);
-      expect(_ratioFullText(tester), 'i = 0.98 : 1');
+      expect(_reductionFullText(tester), 'i = 1.02 : 1');
+      expect(_ratioFullText(tester), 'i = 1.02 : 1');
     });
 
-    testWidgets('零点协议无源：显示 —', (tester) async {
+    testWidgets('除零：出轴齿比 0 → i = —（不产生 Inf/NaN）', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      _seedRatios(state, rotor: 1.0, output: 0.0);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      expect(_reductionFullText(tester), 'i = —');
+      expect(_ratioFullText(tester), 'i = —');
+    });
+
+    testWidgets('缺出轴参：转子 2.000 / 出轴缺 → i = —', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      _seedRatios(state, rotor: 2.0);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      expect(_reductionFullText(tester), 'i = —');
+    });
+
+    testWidgets('减速比数值用 valueMagenta 强调，前缀 fgDim', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      _seedRatios(state, rotor: 1.0, output: 0.98);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      final rich = tester.widget<Text>(
+        find.byKey(const Key('encoder_reduction_ratio_value')),
+      );
+      final spans = (rich.textSpan! as TextSpan).children!.cast<TextSpan>();
+      const palette = GuiPalette();
+      expect(spans[0].text, 'i = ');
+      expect(spans[0].style!.color, palette.fgDim);
+      expect(spans[1].text, '1.02 : 1');
+      expect(spans[1].style!.color, palette.valueMagenta);
+    });
+  });
+
+  group('EncoderZone 左右分列', () {
+    testWidgets('转子列在左、出轴列在右，角度与转速分列', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, EncoderZone(state: state));
 
+      final rotorColumn = find.byKey(const Key('encoder_column_rotor'));
+      final outputColumn = find.byKey(const Key('encoder_column_output'));
+      expect(rotorColumn, findsOneWidget);
+      expect(outputColumn, findsOneWidget);
+
+      // 左列：转子角度 + 转子转速。
       expect(
         find.descendant(
-          of: find.byKey(const Key('encoder_zero')),
-          matching: find.text('—'),
+          of: rotorColumn,
+          matching: find.byKey(const Key('encoder_row_rotor')),
         ),
         findsOneWidget,
       );
+      expect(
+        find.descendant(
+          of: rotorColumn,
+          matching: find.byKey(const Key('encoder_rpm_rotor')),
+        ),
+        findsOneWidget,
+      );
+      // 右列：出轴角度 + 出轴转速。
+      expect(
+        find.descendant(
+          of: outputColumn,
+          matching: find.byKey(const Key('encoder_row_output')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: outputColumn,
+          matching: find.byKey(const Key('encoder_rpm_output')),
+        ),
+        findsOneWidget,
+      );
+
+      // 两列水平分离：转子列整体位于出轴列左侧。
+      expect(
+        tester.getTopLeft(rotorColumn).dx,
+        lessThan(tester.getTopLeft(outputColumn).dx),
+      );
+    });
+  });
+
+  group('EncoderZone 出轴零点快捷设置', () {
+    testWidgets('按钮 A「当前角设零点」→ setOutputZeroNow + 成功 SnackBar', (tester) async {
+      final ops = <String>[];
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      await tester.tap(find.byKey(const Key('encoder_zero_set_now')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(ops, <String>['setOutputZeroNow']);
+      expect(find.text('出轴零点已设置'), findsOneWidget);
     });
 
+    testWidgets('按钮 B「指定角度设零点」→ 对话框输入 45 → setOutputZeroAbs', (tester) async {
+      final ops = <String>[];
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      await tester.tap(find.byKey(const Key('encoder_zero_set_abs')));
+      // 示意图 ticker 常驻（live 读数），不能用 pumpAndSettle；按固定帧推进。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.byKey(const Key('encoder_zero_angle_field')), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('encoder_zero_angle_field')),
+        '45',
+      );
+      await tester.tap(find.byKey(const Key('encoder_zero_angle_confirm')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(ops, <String>['setOutputZeroAbs']);
+      expect(find.text('出轴零点已设置'), findsOneWidget);
+    });
+
+    testWidgets('按钮 B 越界输入被拒（−360..360），不下发', (tester) async {
+      final ops = <String>[];
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      await tester.tap(find.byKey(const Key('encoder_zero_set_abs')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.enterText(
+        find.byKey(const Key('encoder_zero_angle_field')),
+        '400',
+      );
+      await tester.tap(find.byKey(const Key('encoder_zero_angle_confirm')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(ops, isEmpty);
+      // 对话框保持打开并给出范围提示。
+      expect(find.byKey(const Key('encoder_zero_angle_field')), findsOneWidget);
+      expect(find.textContaining('−360'), findsOneWidget);
+    });
+
+    testWidgets('联锁拒绝 code 4 → 既有文案表（FAULT_CLEAR / STOP 引导）', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async =>
+          throw const FrbError(code: 4, message: 'interlock');
+
+      await _pump(tester, EncoderZone(state: state));
+
+      await tester.tap(find.byKey(const Key('encoder_zero_set_now')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.textContaining('FAULT_CLEAR'), findsOneWidget);
+      expect(find.textContaining('STOP'), findsOneWidget);
+    });
+
+    testWidgets('RANGE_ERR code 6 → 「设备判定越界」', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async =>
+          throw const FrbError(code: 6, message: 'range');
+
+      await _pump(tester, EncoderZone(state: state));
+
+      await tester.tap(find.byKey(const Key('encoder_zero_set_now')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('设备判定越界'), findsOneWidget);
+    });
+
+    testWidgets('转子零点归属提示：注明由 电机·驱动 负责', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      expect(find.textContaining('电机·驱动'), findsOneWidget);
+    });
+  });
+
+  group('EncoderZone 分辨率', () {
     testWidgets('分辨率缺省：显示 —', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
@@ -194,7 +388,6 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('14 bit'), findsNothing);
     });
 
     testWidgets('分辨率载入：显示 14 bit', (tester) async {
@@ -218,9 +411,10 @@ void main() {
   });
 
   group('EncoderSchematic', () {
-    testWidgets('示意图 painter 在场，线色取自 GuiPalette token', (tester) async {
+    testWidgets('双刻度盘指针均为 valueMagenta，盘圈保持青', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
+      _seedRatios(state, rotor: 1.0, output: 0.98);
       const palette = GuiPalette();
 
       await _pump(tester, EncoderZone(state: state));
@@ -228,13 +422,17 @@ void main() {
       expect(find.byKey(const Key('encoder_schematic')), findsOneWidget);
       final paint = tester.widget<CustomPaint>(_schematicPaint());
       final painter = paint.painter! as EncoderSchematicPainter;
+      expect(painter.pointerColor, palette.valueMagenta);
       expect(painter.accent, palette.accent);
-      expect(painter.line, palette.line);
-      expect(painter.fgDim, palette.fgDim);
-      expect(painter.valueAmber, palette.valueAmber);
-      expect(painter.gearGreen, palette.gearGreen);
-      expect(painter.gearViolet, palette.gearViolet);
       expect(EncoderSchematicPainter.strokeWidth, 1.2);
+
+      // 减速比标注数值也取洋红（前缀 fgDim）。
+      final rich = tester.widget<Text>(
+        find.byKey(EncoderSchematic.ratioLabelKey),
+      );
+      final spans = (rich.textSpan! as TextSpan).children!.cast<TextSpan>();
+      expect(spans[0].style!.color, palette.fgDim);
+      expect(spans[1].style!.color, palette.valueMagenta);
     });
 
     test('painter 在线色变化时重绘，相同则否', () {
@@ -252,6 +450,7 @@ void main() {
         gearVioletRim: Color(0xFF5E5288),
         bgBase: Color(0xFF081018),
         glowSoft: Color(0x1F3F9E98),
+        pointerColor: Color(0xFFE040C8),
       );
       const b = EncoderSchematicPainter(
         rotorDeg: 0,
@@ -267,9 +466,46 @@ void main() {
         gearVioletRim: Color(0xFF5E5288),
         bgBase: Color(0xFF081018),
         glowSoft: Color(0x1F3F9E98),
+        pointerColor: Color(0xFFE040C8),
       );
       expect(a.shouldRepaint(b), isTrue);
       expect(a.shouldRepaint(a), isFalse);
+    });
+
+    test('指针色变化触发重绘', () {
+      const a = EncoderSchematicPainter(
+        rotorDeg: 0,
+        outputDeg: 0,
+        ratioLabel: '—',
+        accent: Color(0xFF3F9E98),
+        line: Color(0xFF1E5458),
+        fgDim: Color(0xFF6E908E),
+        valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
+        pointerColor: Color(0xFFE040C8),
+      );
+      const b = EncoderSchematicPainter(
+        rotorDeg: 0,
+        outputDeg: 0,
+        ratioLabel: '—',
+        accent: Color(0xFF3F9E98),
+        line: Color(0xFF1E5458),
+        fgDim: Color(0xFF6E908E),
+        valueAmber: Color(0xFFBFA84C),
+        gearGreen: Color(0xFF589E5E),
+        gearGreenRim: Color(0xFF3C6E44),
+        gearViolet: Color(0xFF8878B8),
+        gearVioletRim: Color(0xFF5E5288),
+        bgBase: Color(0xFF081018),
+        glowSoft: Color(0x1F3F9E98),
+        pointerColor: Color(0xFF00FF00),
+      );
+      expect(a.shouldRepaint(b), isTrue);
     });
   });
 }
