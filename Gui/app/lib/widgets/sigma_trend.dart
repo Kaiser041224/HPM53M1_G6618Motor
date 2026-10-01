@@ -10,34 +10,29 @@ import 'hairline_frame.dart';
 /// The small `ΣI(t)` sparkline that sits to the right of the `ΣI` readout.
 ///
 /// Where [TrendChart] keeps a 1 kHz three-channel trace, this companion plots a
-/// single derived series — the three-phase sum `i_u + i_v + i_w` — over the
-/// **same viewport window** the main chart is showing (it zooms and pans with
-/// it). Like the main trace, the window is decimated to one min/max pair per
-/// pixel column so peaks survive, and the y axis is symmetric around zero:
+/// single derived series — the three-phase sum `i_u + i_v + i_w` — over a
+/// **fixed rolling window of the most recent [windowSec]** (decoupled from the
+/// main scope viewport: zooming, panning or changing the `SPAN` slider never
+/// moves it). Like the main trace, the window is decimated to one min/max pair
+/// per pixel column so peaks survive, and the y axis is symmetric around zero:
 /// `±max(|min|, |max|)` over the window, floored at [minYLimit] so an idle
 /// window does not collapse onto the baseline.
 ///
 /// The look follows the TNO economic line-chart vocabulary: a dark panel, a
 /// pale bidirectional 1px grid ([GuiPalette.lineDim]), a dashed zero baseline
 /// ([GuiPalette.fgDim]), a flat 1.5px magenta line ([GuiPalette.valueMagenta],
-/// no glow) and two small `+/−` bound labels at the left edge. With no sample
-/// in the window it renders a centred `—`.
+/// no glow), two small `+/−` bound labels at the left edge and a small
+/// `−50ms … 0` time ruler along the bottom edge. With no sample in the window
+/// it renders a centred `—`.
 class SigmaTrend extends StatelessWidget {
-  const SigmaTrend({
-    super.key,
-    required this.history,
-    required this.viewStartSec,
-    required this.viewSpanSec,
-  });
+  const SigmaTrend({super.key, required this.history});
 
   /// The same ring the main trend chart slices.
   final ChartHistory history;
 
-  /// Viewport left edge [s] (oldest visible sample time).
-  final double viewStartSec;
-
-  /// Viewport width [s].
-  final double viewSpanSec;
+  /// Fixed rolling window width [s] shown by the sparkline: 50 ms = 50 samples
+  /// at 1 kHz. Independent of the main [TrendChart] viewport.
+  static const double windowSec = 0.05;
 
   /// Fixed plot width [logical px].
   static const double width = 200;
@@ -55,6 +50,9 @@ class SigmaTrend extends StatelessWidget {
   /// `±` bound label font size [logical px].
   static const double boundLabelSize = 10;
 
+  /// Time-ruler label font size [logical px].
+  static const double axisLabelSize = 9;
+
   /// Key of the fixed-size frame box (mirrors the plot dimensions).
   static const Key frameKey = Key('sigma_trend_frame');
 
@@ -63,6 +61,23 @@ class SigmaTrend extends StatelessWidget {
 
   /// Tolerance [s] for the inclusive window edge, mirroring the main painter.
   static const double _windowEdgeEpsilon = 1e-9;
+
+  /// The fixed rolling window `[lastTime − windowSec, lastTime]` [s] over the
+  /// ring, taken from the newest sample's timestamp. Empty history yields an
+  /// empty window ending at 0.
+  static ({double startSec, double spanSec}) windowOf(ChartHistory history) {
+    final endSec = history.lastTime;
+    return (startSec: endSec - windowSec, spanSec: windowSec);
+  }
+
+  /// Formats a time-ruler offset [seconds] inside the fixed window: `0` at the
+  /// right edge and `−50ms` / `−25ms` to its left.
+  static String formatAxisLabel(double seconds) {
+    final millis = (seconds * 1000).round();
+    if (millis == 0) return '0';
+    final sign = millis < 0 ? '−' : '+';
+    return '$sign${millis.abs()}ms';
+  }
 
   /// Three-phase sum `i_u + i_v + i_w` of the oldest-first sample at [index].
   static double sigmaAt(ChartHistory history, int index) =>
@@ -172,9 +187,11 @@ class SigmaTrend extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    final limit = yLimit(history, viewStartSec, viewSpanSec);
-    final hasData =
-        sampleCount(history, viewStartSec, viewSpanSec) >= 2;
+    final window = windowOf(history);
+    final startSec = window.startSec;
+    final spanSec = window.spanSec;
+    final limit = yLimit(history, startSec, spanSec);
+    final hasData = sampleCount(history, startSec, spanSec) >= 2;
 
     return SizedBox(
       key: frameKey,
@@ -195,8 +212,8 @@ class SigmaTrend extends StatelessWidget {
                     gridColor: palette.lineDim,
                     lineColor: palette.valueMagenta,
                     fgColor: palette.fgDim,
-                    viewStartSec: viewStartSec,
-                    viewSpanSec: viewSpanSec,
+                    viewStartSec: startSec,
+                    viewSpanSec: spanSec,
                     limit: limit,
                   ),
                 )
@@ -217,11 +234,14 @@ class SigmaTrend extends StatelessWidget {
                   top: 1,
                   child: _boundLabel(palette, scale, limit),
                 ),
+                // Raised above the bottom time ruler so the two labels do not
+                // collide at the left edge.
                 Positioned(
                   left: 3,
-                  bottom: 1,
+                  bottom: _axisLabelClearance,
                   child: _boundLabel(palette, scale, -limit),
                 ),
+                _timeRuler(palette, scale),
               ],
             ],
           ),
@@ -229,6 +249,33 @@ class SigmaTrend extends StatelessWidget {
       ),
     );
   }
+
+  /// The small `−50ms … 0` time ruler along the bottom edge of the fixed
+  /// window, in the dim annotation tier.
+  Widget _timeRuler(GuiPalette palette, GuiTypeScale scale) {
+    return Positioned(
+      left: 3,
+      right: 3,
+      bottom: 1,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: <Widget>[
+          _axisLabel(palette, scale, formatAxisLabel(-windowSec)),
+          _axisLabel(palette, scale, formatAxisLabel(-windowSec / 2)),
+          _axisLabel(palette, scale, formatAxisLabel(0)),
+        ],
+      ),
+    );
+  }
+
+  /// One small time-ruler tick label in the dim annotation tier.
+  Widget _axisLabel(GuiPalette palette, GuiTypeScale scale, String text) => Text(
+    text,
+    style: scale.label.copyWith(fontSize: axisLabelSize, color: palette.fgDim),
+  );
+
+  /// Bottom offset [px] of the lower `−` bound label, clearing the time ruler.
+  static const double _axisLabelClearance = 15;
 
   /// One small `+/−` y bound label in the dim annotation tier.
   Widget _boundLabel(GuiPalette palette, GuiTypeScale scale, double value) =>

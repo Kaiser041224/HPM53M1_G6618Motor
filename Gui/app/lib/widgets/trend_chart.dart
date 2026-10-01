@@ -109,6 +109,9 @@ class TrendChart extends StatefulWidget {
   /// Key of the plot area (hover / cursor hit region).
   static const Key plotKey = Key('trend_plot');
 
+  /// Key of the main time-axis row under the plot (oldest / midpoint / now).
+  static const Key timeAxisKey = Key('trend_time_axis');
+
   /// Key of the logarithmic span slider.
   static const Key spanSliderKey = Key('trend_span_slider');
 
@@ -386,6 +389,7 @@ class TrendChartState extends State<TrendChart> {
           // Time axis follows the viewport: left = oldest visible, right = now
           // (live) or the inspect offset.
           Row(
+            key: TrendChart.timeAxisKey,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Text(
@@ -632,18 +636,20 @@ class TrendChartState extends State<TrendChart> {
             ),
             const SizedBox(width: 18),
           ],
-        _sigmaBlock(palette, scale, history, viewStart),
+        _sigmaBlock(palette, scale, history),
       ],
     );
   }
 
   /// The `ΣI` block: the signed three-phase-sum readout followed by the
   /// [SigmaTrend] sparkline, sitting at the right of the readout row.
+  ///
+  /// The sparkline owns its own fixed 50 ms window ([SigmaTrend.windowSec]); it
+  /// is intentionally decoupled from the main scope viewport.
   Widget _sigmaBlock(
     GuiPalette palette,
     GuiTypeScale scale,
     ChartHistory history,
-    double viewStart,
   ) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -651,11 +657,7 @@ class TrendChartState extends State<TrendChart> {
       children: <Widget>[
         _sigmaColumn(palette, scale, history),
         const SizedBox(width: 12),
-        SigmaTrend(
-          history: history,
-          viewStartSec: viewStart,
-          viewSpanSec: _viewSpanSec,
-        ),
+        SigmaTrend(history: history),
       ],
     );
   }

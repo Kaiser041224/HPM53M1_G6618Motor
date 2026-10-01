@@ -119,14 +119,42 @@ void main() {
       expect(SigmaTrend.formatBound(-1.5), '-1.5');
       expect(SigmaTrend.formatBound(0.0), '+0.0');
     });
+
+    test('windowOf：固定 50ms 滚动窗，终点为最新样本时间', () {
+      final history = _history(1000);
+      final window = SigmaTrend.windowOf(history);
+
+      expect(SigmaTrend.windowSec, 0.05);
+      expect(window.spanSec, SigmaTrend.windowSec);
+      expect(window.startSec, closeTo(history.lastTime - 0.05, 1e-12));
+
+      // A later sample pushes the window forward, keeping it 50 ms wide.
+      history.pushBatch(<StatusDto>[_sample(iU: 1)]);
+      final shifted = SigmaTrend.windowOf(history);
+      expect(shifted.spanSec, SigmaTrend.windowSec);
+      expect(shifted.startSec, closeTo(history.lastTime - 0.05, 1e-12));
+      expect(shifted.startSec, greaterThan(window.startSec));
+    });
+
+    test('50ms 窗样本计数：1kHz 下约 50 个', () {
+      final history = _history(1000);
+      final window = SigmaTrend.windowOf(history);
+      expect(
+        SigmaTrend.sampleCount(history, window.startSec, window.spanSec),
+        closeTo(50, 1),
+      );
+    });
+
+    test('formatAxisLabel：50ms 窗刻度 −50ms / −25ms / 0', () {
+      expect(SigmaTrend.formatAxisLabel(-0.05), '−50ms');
+      expect(SigmaTrend.formatAxisLabel(-0.025), '−25ms');
+      expect(SigmaTrend.formatAxisLabel(0), '0');
+    });
   });
 
   group('SigmaTrend 组件', () {
     testWidgets('渲染：200×88 sub 外框 + magenta 1.5px 折线（无辉光）', (tester) async {
-      await _pump(
-        tester,
-        SigmaTrend(history: _three(), viewStartSec: 0, viewSpanSec: 0.01),
-      );
+      await _pump(tester, SigmaTrend(history: _three()));
 
       expect(tester.getSize(find.byKey(SigmaTrend.frameKey)), const Size(200, 88));
       final frame = tester.widget<HairlineFrame>(
@@ -150,10 +178,7 @@ void main() {
     });
 
     testWidgets('空数据：居中 —', (tester) async {
-      await _pump(
-        tester,
-        SigmaTrend(history: ChartHistory(), viewStartSec: 0, viewSpanSec: 2),
-      );
+      await _pump(tester, SigmaTrend(history: ChartHistory()));
 
       expect(find.byKey(SigmaTrend.frameKey), findsOneWidget);
       expect(_sigmaPaint(), findsNothing);
@@ -161,10 +186,7 @@ void main() {
     });
 
     testWidgets('y 极值双向标注：+/− bound（fgDim 小字）', (tester) async {
-      await _pump(
-        tester,
-        SigmaTrend(history: _three(), viewStartSec: 0, viewSpanSec: 0.01),
-      );
+      await _pump(tester, SigmaTrend(history: _three()));
 
       final plus = tester.widget<Text>(find.text('+1.5'));
       final minus = tester.widget<Text>(find.text('-1.5'));
@@ -177,6 +199,21 @@ void main() {
       expect(
         tester.getCenter(find.text('+1.5')).dy,
         lessThan(tester.getCenter(find.text('-1.5')).dy),
+      );
+    });
+
+    testWidgets('横轴 50ms 时间刻度：−50ms / −25ms / 0（fgDim 小字）', (tester) async {
+      await _pump(tester, SigmaTrend(history: _three()));
+
+      for (final text in <String>['−50ms', '−25ms', '0']) {
+        final label = tester.widget<Text>(find.text(text));
+        expect(label.style?.color, const GuiPalette().fgDim);
+        expect(label.style?.fontSize, lessThanOrEqualTo(11));
+      }
+      // Time runs left (−50ms) to right (0).
+      expect(
+        tester.getCenter(find.text('−50ms')).dx,
+        lessThan(tester.getCenter(find.text('0')).dx),
       );
     });
   });

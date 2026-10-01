@@ -74,6 +74,10 @@ Finder _chartPaint() => find.byWidgetPredicate(
   (w) => w is CustomPaint && w.painter is TrendChartPainter,
 );
 
+Finder _sigmaPaint() => find.byWidgetPredicate(
+  (w) => w is CustomPaint && w.painter is SigmaTrendPainter,
+);
+
 TrendChartState _state(WidgetTester tester) =>
     tester.state<TrendChartState>(find.byType(TrendChart));
 
@@ -328,7 +332,15 @@ void main() {
       // on the SPAN readout and the 2s preset, so match at least one.
       expect(find.text('2s'), findsWidgets);
       expect(find.text('1s'), findsOneWidget);
-      expect(find.text('0'), findsOneWidget);
+      // The `ΣI` mini trend also carries a `0` on its own time ruler; the main
+      // axis `0` is scoped to the time-axis row.
+      expect(
+        find.descendant(
+          of: find.byKey(TrendChart.timeAxisKey),
+          matching: find.text('0'),
+        ),
+        findsOneWidget,
+      );
       // Channel letters now come only from the extrema row; the old U/V/W live
       // legend was removed.
       expect(find.text('U'), findsOneWidget);
@@ -552,6 +564,45 @@ void main() {
           matching: find.text('—'),
         ),
         findsOneWidget,
+      );
+    });
+
+    testWidgets('小图窗口固定 50ms：主图 span/anchor 变化不改变小图窗口边界', (tester) async {
+      final history = _history(500);
+      await _pump(tester, TrendChart(history: history));
+
+      SigmaTrendPainter sigma() =>
+          tester.widget<CustomPaint>(_sigmaPaint()).painter!
+              as SigmaTrendPainter;
+
+      // The window is the newest 50 ms, derived from history timestamps only.
+      expect(sigma().viewSpanSec, closeTo(SigmaTrend.windowSec, 1e-12));
+      expect(
+        sigma().viewStartSec,
+        closeTo(history.lastTime - SigmaTrend.windowSec, 1e-9),
+      );
+
+      // Move the main viewport (zoom + pan) and feed newer samples; the
+      // readout area re-throttles on its 5 Hz tick. The pan stays over the
+      // retained history so the readout area keeps rendering.
+      final state = _state(tester);
+      state.setSpanSec(0.5);
+      await tester.drag(find.byKey(TrendChart.plotKey), const Offset(30, 0));
+      await tester.pump();
+      expect(state.isLive, isFalse);
+
+      history.pushBatch(List<StatusDto>.generate(100, (i) => _sample(iU: i / 10)));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        sigma().viewSpanSec,
+        closeTo(SigmaTrend.windowSec, 1e-12),
+        reason: '小图窗口不随主示波器 SPAN/拖动变化',
+      );
+      expect(
+        sigma().viewStartSec,
+        closeTo(history.lastTime - SigmaTrend.windowSec, 1e-9),
+        reason: '小图窗口始终锚定最新 50ms',
       );
     });
   });
