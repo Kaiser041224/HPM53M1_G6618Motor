@@ -17,6 +17,7 @@ import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import 'gui_button.dart';
+import 'gui_text_field.dart';
 
 /// 参数表统一阅读字号 [logical px]：名称 / 类型 / 范围 / 徽标 / 值同档，
 /// 层级只靠颜色与字重区分，避免同一列内大小混排。
@@ -280,6 +281,8 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
   @override
   Widget build(BuildContext context) {
     final meta = widget.meta;
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
     return AlertDialog(
       title: Text(meta.name),
       content: Column(
@@ -289,25 +292,22 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
           Text(
             '${typeName(meta.ty)} · ${rangeText(meta)} ${meta.unit}'
                 .trimRight(),
-            style: Theme.of(context).textTheme.bodySmall,
+            style: scale.label.copyWith(color: palette.fgDim),
           ),
           const SizedBox(height: 8),
-          TextField(
+          GuiTextField(
             controller: _valueCtrl,
             keyboardType: _keyboard,
             enabled: !_busy,
             autofocus: true,
-            decoration: const InputDecoration(
-              labelText: '新值',
-              border: OutlineInputBorder(),
-            ),
+            labelText: '新值',
           ),
           if (_error.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Text(
                 _error,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                style: scale.label.copyWith(color: palette.stFault),
               ),
             ),
         ],

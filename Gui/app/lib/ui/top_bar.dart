@@ -5,6 +5,7 @@ import '../state/app_state.dart';
 import '../theme/gui_theme.dart';
 import '../widgets/device_ascii.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/gui_text_field.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
@@ -458,22 +459,21 @@ class _TopBarState extends State<TopBar> with WindowListener {
       children: <Widget>[
         _sectionHeading(context, '链路选择', 'transport'),
         const SizedBox(height: 10),
-        SegmentedButton<String>(
-          segments: const <ButtonSegment<String>>[
-            ButtonSegment(value: 'tcp', label: Text('TCP / 无线')),
-            ButtonSegment(
-              value: 'usb',
-              label: Text('USB BULK'),
-              enabled: false,
+        // 统一到 GuiButton 三级：TCP 为当前链路（primary），其余暂无实现（禁用）。
+        // 取代 Material SegmentedButton，避免其默认主题色渗入。
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            GuiButton(
+              label: 'TCP / 无线',
+              variant: GuiButtonVariant.primary,
+              onPressed: () {},
             ),
-            ButtonSegment(
-              value: 'serial',
-              label: Text('UART · CDC'),
-              enabled: false,
-            ),
+            const SizedBox(width: 8),
+            const GuiButton(label: 'USB BULK', onPressed: null),
+            const SizedBox(width: 8),
+            const GuiButton(label: 'UART · CDC', onPressed: null),
           ],
-          selected: const <String>{'tcp'},
-          onSelectionChanged: (_) {},
         ),
       ],
     );
@@ -492,14 +492,10 @@ class _TopBarState extends State<TopBar> with WindowListener {
           children: <Widget>[
             SizedBox(
               width: 220,
-              child: TextField(
+              child: GuiTextField(
                 controller: _addrCtrl,
-                decoration: const InputDecoration(
-                  labelText: '地址',
-                  hintText: '127.0.0.1:9000',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
+                labelText: '地址',
+                hintText: '127.0.0.1:9000',
               ),
             ),
             const SizedBox(width: 10),

@@ -67,7 +67,7 @@ class GuiButton extends StatefulWidget {
   final VoidCallback? onPressed;
 
   /// Fixed button height.
-  static const double height = 30;
+  static const double height = 32;
 
   /// Resolves the styling for [variant] and [hovered] / [enabled].
   static GuiButtonStyle styleFor(
@@ -133,7 +133,7 @@ class _GuiButtonState extends State<GuiButton> {
     );
     final textStyle = GuiTypeScale.of(
       context,
-    ).body.copyWith(color: style.text, fontSize: 12);
+    ).body.copyWith(color: style.text, fontSize: 14);
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hovered = true),
@@ -148,15 +148,21 @@ class _GuiButtonState extends State<GuiButton> {
             border: Border.all(color: style.border, width: 1),
             boxShadow: style.glow,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (widget.icon != null) ...[
-                Icon(widget.icon, size: 14, color: style.text),
-                const SizedBox(width: 6),
+          // Center with width/heightFactor 1: 内容整体居中，但在 Wrap 之类的
+          // 有界宽度里仍按内容收缩，不会撑满一行。
+          child: Center(
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (widget.icon != null) ...[
+                  Icon(widget.icon, size: 14, color: style.text),
+                  const SizedBox(width: 6),
+                ],
+                Text(widget.label, style: textStyle),
               ],
-              Text(widget.label, style: textStyle),
-            ],
+            ),
           ),
         ),
       ),

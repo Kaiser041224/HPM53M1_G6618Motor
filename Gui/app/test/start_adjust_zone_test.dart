@@ -6,6 +6,7 @@ import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/start_adjust_zone.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
+import 'package:g6618_gui/widgets/gui_text_field.dart';
 
 StatusDto makeStatus({bool running = false}) => StatusDto(
   faultFlags: 0,
@@ -277,7 +278,7 @@ void main() {
         );
       }
       expect(
-        tester.widget<TextField>(
+        tester.widget<GuiTextField>(
           find.byKey(const Key('ctrl_setpoint_input')),
         ).enabled,
         isFalse,
@@ -310,7 +311,7 @@ void main() {
         expect(tester.widget<GuiButton>(find.byKey(key)).onPressed, isNotNull);
       }
       expect(
-        tester.widget<TextField>(
+        tester.widget<GuiTextField>(
           find.byKey(const Key('ctrl_setpoint_input')),
         ).enabled,
         isTrue,
@@ -344,7 +345,7 @@ void main() {
       expect(tester.widget<Text>(unit()).data, '—');
       // 未选模式：输入框与下发均禁用。
       expect(
-        tester.widget<TextField>(find.byKey(const Key('ctrl_setpoint_input'))).enabled,
+        tester.widget<GuiTextField>(find.byKey(const Key('ctrl_setpoint_input'))).enabled,
         isFalse,
       );
 

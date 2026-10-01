@@ -6,6 +6,7 @@ import '../theme/gui_type.dart';
 import '../widgets/encoder_schematic.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/gui_text_field.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart' show faultText;
 import '../widgets/section_title.dart';
@@ -557,13 +558,15 @@ class _AngleZeroDialogState extends State<_AngleZeroDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
     return AlertDialog(
       title: const Text('指定角度设零点'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          TextField(
+          GuiTextField(
             key: const Key('encoder_zero_angle_field'),
             controller: _controller,
             autofocus: true,
@@ -571,17 +574,14 @@ class _AngleZeroDialogState extends State<_AngleZeroDialog> {
               decimal: true,
               signed: true,
             ),
-            decoration: const InputDecoration(
-              labelText: '角度 (°)',
-              border: OutlineInputBorder(),
-            ),
+            labelText: '角度 (°)',
           ),
           if (_error.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Text(
                 _error,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                style: scale.label.copyWith(color: palette.stFault),
               ),
             ),
         ],

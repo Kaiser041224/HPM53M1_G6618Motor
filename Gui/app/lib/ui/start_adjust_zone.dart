@@ -17,9 +17,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../state/app_state.dart';
+import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/gui_text_field.dart';
 import '../widgets/param_controls.dart' show faultText, numText;
 import 'control_zone.dart' show ctrlMessage;
 import 'panel_title.dart';
@@ -301,10 +303,18 @@ class _StartStopToggleState extends State<_StartStopToggle> {
               color: _hovered ? palette.lineHi : color,
               width: 1,
             ),
+            boxShadow: _hovered
+                ? <BoxShadow>[
+                    BoxShadow(
+                      color: palette.glowSoft,
+                      blurRadius: GuiGlowStyles.softBlur,
+                    ),
+                  ]
+                : const <BoxShadow>[],
           ),
           child: Text(
             '$symbol $label',
-            style: scale.body.copyWith(fontSize: 13, color: color),
+            style: scale.body.copyWith(fontSize: 14, color: color),
           ),
         ),
       ),
@@ -326,39 +336,18 @@ class _SetpointField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    return SizedBox(
-      height: GuiButton.height,
-      child: TextField(
-        key: const Key('ctrl_setpoint_input'),
-        controller: controller,
-        enabled: enabled,
-        keyboardType: const TextInputType.numberWithOptions(
-          decimal: true,
-          signed: true,
-        ),
-        inputFormatters: <TextInputFormatter>[
-          FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-+eE]')),
-        ],
-        style: scale.body.copyWith(fontSize: 13, color: palette.fgStrong),
-        decoration: InputDecoration(
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-          hintText: hint,
-          hintStyle: scale.label.copyWith(color: palette.fgMute),
-          border: const OutlineInputBorder(),
-          enabledBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: palette.lineDim),
-          ),
-          disabledBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: palette.lineDim),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: palette.lineHi),
-          ),
-        ),
+    return GuiTextField(
+      key: const Key('ctrl_setpoint_input'),
+      controller: controller,
+      enabled: enabled,
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: true,
+        signed: true,
       ),
+      inputFormatters: <TextInputFormatter>[
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-+eE]')),
+      ],
+      hintText: hint,
     );
   }
 }

@@ -6,6 +6,7 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
+import '../widgets/gui_text_field.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
@@ -76,15 +77,11 @@ class _ParamZoneState extends State<ParamZone> {
     return Row(
       children: <Widget>[
         Expanded(
-          child: TextField(
+          child: GuiTextField(
             controller: _searchCtrl,
             onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
-              hintText: '按名称过滤',
-              prefixIcon: Icon(Icons.search, size: 18),
-              isDense: true,
-              border: OutlineInputBorder(),
-            ),
+            hintText: '按名称过滤',
+            prefixIcon: Icons.search,
           ),
         ),
         const SizedBox(width: 12),

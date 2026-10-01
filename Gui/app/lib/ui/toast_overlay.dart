@@ -183,7 +183,7 @@ class _GuiToastState extends State<_GuiToast>
                           color: palette.bgBase,
                           border: Border.all(color: palette.accent, width: 1.5),
                         ),
-                        padding: const EdgeInsets.all(1.5),
+                        padding: const EdgeInsets.all(2),
                         child: Container(
                           key: const Key('gui_toast_inner'),
                           decoration: BoxDecoration(
@@ -198,6 +198,7 @@ class _GuiToastState extends State<_GuiToast>
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: <Widget>[
                               // 语气色带：颜色编码（不单独承载，与图标并存）。
                               Container(width: 4, height: 22, color: toneColor),
@@ -217,7 +218,7 @@ class _GuiToastState extends State<_GuiToast>
                                   overflow: TextOverflow.ellipsis,
                                   style: GuiGlowStyles.weak(
                                     scale.body.copyWith(
-                                      fontSize: 13,
+                                      fontSize: 14,
                                       color: palette.fgStrong,
                                     ),
                                   ),

@@ -73,7 +73,7 @@ void main() {
     });
   });
 
-  testWidgets('renders its label, 30px tall and square', (tester) async {
+  testWidgets('renders its label, 32px tall and square', (tester) async {
     await _pump(tester, GuiButton(label: '启动', onPressed: () {}));
 
     expect(find.text('启动'), findsOneWidget);
@@ -85,9 +85,15 @@ void main() {
           )
           .first,
     );
-    expect(box.constraints?.maxHeight, 30);
+    expect(box.constraints?.maxHeight, 32);
     final border = (box.decoration as BoxDecoration).border! as Border;
     expect(border.top.width, 1);
+    // v5 chrome：内容整体居中、字号 14。
+    expect(
+      find.descendant(of: find.byType(GuiButton), matching: find.byType(Center)),
+      findsOneWidget,
+    );
+    expect(tester.widget<Text>(find.text('启动')).style?.fontSize, 14);
   });
 
   testWidgets('fires onPressed when tapped', (tester) async {
