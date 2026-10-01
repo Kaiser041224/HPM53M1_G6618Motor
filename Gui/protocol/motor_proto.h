@@ -71,6 +71,16 @@ typedef enum { MP_APPLY_LIVE = 0, MP_APPLY_REBOOT = 1 } mp_apply_t;
  *       无回读字段（UI 侧自行记录）。
  * 联锁：零点写入与模式切换为停机窗口操作——停机且无故障锁存时 OK，运行中或存在故障
  *       锁存时 MP_STATUS_LOCKED。
+ *
+ * v1.2 增量（additive，固件侧待 M2 实现；旧端对下列 opcode 返回 BAD_CMD）：
+ *   MP_CTRL_SET_TORQUE (0x08)：value = 力矩设定（N·m）。非有限值→RANGE_ERR；负值允许
+ *       （回馈/反转语义）。联锁同 v1.1（停机窗口）。
+ *   MP_CTRL_SET_SPEED (0x09)：value = 转速设定（rpm）。|value| > 20000 → RANGE_ERR；
+ *       负值允许。联锁同 v1.1。
+ *   MP_CTRL_SET_ANGLE (0x0A)：value = 角度设定（°）。非有限值→RANGE_ERR；负值允许。
+ *       联锁同 v1.1。
+ * 响应语义同 v1.1：停机且无故障锁存时 OK；运行中或存在故障锁存时 LOCKED
+ *   （从严保持一致：速度设定亦不允许运行中热改，须先停机改设定再启动）。
  */
 typedef enum {
     MP_CTRL_START                = 0x01,
@@ -80,7 +90,11 @@ typedef enum {
     /* ---- v1.1 增量 ---- */
     MP_CTRL_SET_OUTPUT_ZERO_NOW  = 0x05, /* 当前出轴角归零；value 忽略 */
     MP_CTRL_SET_OUTPUT_ZERO_ABS  = 0x06, /* 指定角度(度)设为出轴零点 */
-    MP_CTRL_SET_MODE             = 0x07  /* 模式：1=力矩/2=速度/3=角度 */
+    MP_CTRL_SET_MODE             = 0x07, /* 模式：1=力矩/2=速度/3=角度 */
+    /* ---- v1.2 增量：设定值写入（联锁同 v1.1，停机窗口） ---- */
+    MP_CTRL_SET_TORQUE           = 0x08, /* 力矩设定（N·m；负值允许） */
+    MP_CTRL_SET_SPEED            = 0x09, /* 转速设定（rpm；|v|>20000 越界；负值允许） */
+    MP_CTRL_SET_ANGLE            = 0x0A  /* 角度设定（°；负值允许） */
 } mp_ctrl_opcode_t;
 
 /* 帧头布局（CRC 覆盖 VER..PAYLOAD，即 5 字节头 + PAYLOAD） */

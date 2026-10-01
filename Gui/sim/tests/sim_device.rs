@@ -293,6 +293,136 @@ fn ctrl_set_output_zero_abs_rejects_non_finite() {
     }
 }
 
+/// 构造 CTRL_CMD 请求帧：`opcode u8 | value f32 LE`。
+fn ctrl_frame(opcode: u8, value: f32) -> Frame {
+    let mut p = vec![opcode];
+    p.extend_from_slice(&value.to_le_bytes());
+    req(cmd::CTRL_CMD, &p)
+}
+
+/// 推进一次 STATUS_GET，返回转子角（enc_rotor_deg）。
+fn rotor_deg(dev: &mut SimDevice) -> f32 {
+    let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    f32_at(&resp.payload, 35)
+}
+
+#[test]
+fn ctrl_v12_setpoints_store_values() {
+    let mut dev = load();
+    // 默认：力矩 1.0 N·m / 速度 600 rpm / 角度 0°
+    assert_eq!(dev.torque_setpoint_nm(), 1.0);
+    assert_eq!(dev.speed_setpoint_rpm(), 600.0);
+    assert_eq!(dev.angle_setpoint_deg(), 0.0);
+    // 负值允许（回馈/反转）
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, -0.5)).payload[0], status::OK);
+    assert_eq!(dev.torque_setpoint_nm(), -0.5);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 1200.0)).payload[0], status::OK);
+    assert_eq!(dev.speed_setpoint_rpm(), 1200.0);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_ANGLE, 45.0)).payload[0], status::OK);
+    assert_eq!(dev.angle_setpoint_deg(), 45.0);
+}
+
+#[test]
+fn ctrl_v12_setpoints_range_errors() {
+    let mut dev = load();
+    for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(
+            dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, v)).payload[0],
+            status::RANGE_ERR,
+            "torque v={v}"
+        );
+        assert_eq!(
+            dev.handle_frame(&ctrl_frame(ctrl::SET_ANGLE, v)).payload[0],
+            status::RANGE_ERR,
+            "angle v={v}"
+        );
+        assert_eq!(
+            dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, v)).payload[0],
+            status::RANGE_ERR,
+            "speed v={v}"
+        );
+    }
+    // |rpm| > 20000 越界，边界 20000 合法（含负值）
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 20001.0)).payload[0], status::RANGE_ERR);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, -20001.0)).payload[0], status::RANGE_ERR);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 20000.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, -20000.0)).payload[0], status::OK);
+}
+
+#[test]
+fn ctrl_v12_setpoints_locked_while_running_or_latched() {
+    let mut dev = load();
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::START, 0.0)).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, 0.5)).payload[0], status::LOCKED);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 600.0)).payload[0], status::LOCKED);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_ANGLE, 10.0)).payload[0], status::LOCKED);
+    // 停机但故障锁存 → 仍 LOCKED
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::STOP, 0.0)).payload[0], status::OK);
+    dev.inject_fault(0x1);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 600.0)).payload[0], status::LOCKED);
+}
+
+#[test]
+fn speed_mode_sets_rotor_angular_rate() {
+    let mut dev = load();
+    // 模式=速度(2) 且默认 600 rpm → 3.6 °/tick（保持既有观感）
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(2))).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 3.6).abs() < 1e-3, "default step={step}");
+    // 1200 rpm → 7.2 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, 1200.0)).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 7.2).abs() < 1e-3, "1200rpm step={step}");
+    // 负速度反向：-600 rpm → -3.6 °/tick
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_SPEED, -600.0)).payload[0], status::OK);
+    let a = rotor_deg(&mut dev);
+    let b = rotor_deg(&mut dev);
+    let step = (b - a).rem_euclid(360.0);
+    assert!((step - 356.4).abs() < 1e-2, "reverse step={step}");
+}
+
+#[test]
+fn torque_mode_scales_current_amplitude() {
+    let mut dev = load();
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(1))).payload[0], status::OK);
+    // 0.5 N·m → 5 A 幅值
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, 0.5)).payload[0], status::OK);
+    let mut max = 0f32;
+    for _ in 0..20 {
+        let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+        max = max.max(f32_at(&resp.payload, 15).abs());
+    }
+    assert!((max - 5.0).abs() < 1e-2, "0.5Nm amp={max}");
+    // 2.0 N·m → 20 A（钳位上限）
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_TORQUE, 2.0)).payload[0], status::OK);
+    let mut max = 0f32;
+    for _ in 0..20 {
+        let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+        max = max.max(f32_at(&resp.payload, 15).abs());
+    }
+    assert!((max - 20.0).abs() < 1e-2, "2Nm amp={max}");
+}
+
+#[test]
+fn angle_mode_ramps_output_angle() {
+    let mut dev = load();
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_MODE, f32::from_bits(3))).payload[0], status::OK);
+    assert_eq!(dev.handle_frame(&ctrl_frame(ctrl::SET_ANGLE, 30.0)).payload[0], status::OK);
+    let mut prev = 0f32;
+    for _ in 0..12 {
+        let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+        let out = f32_at(&resp.payload, 39);
+        let step = (out - prev).rem_euclid(360.0);
+        assert!(step <= 3.0 + 1e-3, "step={step}");
+        prev = out;
+    }
+    assert!((prev - 30.0).abs() < 1e-3, "ramp converged prev={prev}");
+}
+
 #[test]
 fn fault_get_and_clear_roundtrip() {
     let mut dev = load();

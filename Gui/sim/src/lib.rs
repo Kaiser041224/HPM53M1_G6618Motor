@@ -56,16 +56,6 @@ pub struct ParamEntry {
     pub value: ParamValue,
 }
 
-/// v1.1 增量 CTRL_CMD opcode（`Gui/protocol/motor_proto.h` 镜像；固件侧待 M2 实现）。
-pub mod ctrl_v11 {
-    /// 把当前出轴角设为零点（`value` 忽略）。
-    pub const SET_OUTPUT_ZERO_NOW: u8 = 0x05;
-    /// 把指定角度（`value`，度）设为出轴零点。
-    pub const SET_OUTPUT_ZERO_ABS: u8 = 0x06;
-    /// 设置控制模式：`value` 位型低字节 1=力矩 / 2=速度 / 3=角度。
-    pub const SET_MODE: u8 = 0x07;
-}
-
 /// 设备模拟器状态。
 pub struct SimDevice {
     params: BTreeMap<String, ParamEntry>,
@@ -79,6 +69,14 @@ pub struct SimDevice {
     output_zero_deg: f32,
     /// v1.1 控制模式（仅存状态，STATUS 无回读字段）：0=未设置 / 1=力矩 / 2=速度 / 3=角度。
     mode: u8,
+    /// v1.2 力矩设定（N·m，演示用；默认 1.0 = 额定 10 A）。
+    torque_setpoint_nm: f32,
+    /// v1.2 转速设定（rpm，演示用；默认 600 = 既有 3.6 °/tick 观感）。
+    speed_setpoint_rpm: f32,
+    /// v1.2 角度设定（°，演示用；默认 0）。
+    angle_setpoint_deg: f32,
+    /// 角度模式（3）下出轴角的斜坡当前值（°）；仅演示，非固件承诺。
+    angle_current_deg: f32,
     /// STATUS_GET 采样计数；合成信号是它的确定函数（无墙钟依赖，测试可复现）。
     tick: u64,
 }
@@ -116,6 +114,10 @@ impl SimDevice {
             mod_pct: 0.0,
             output_zero_deg: 0.0,
             mode: 0,
+            torque_setpoint_nm: 1.0,
+            speed_setpoint_rpm: 600.0,
+            angle_setpoint_deg: 0.0,
+            angle_current_deg: 0.0,
             tick: 0,
         })
     }
@@ -156,9 +158,38 @@ impl SimDevice {
         self.mode
     }
 
+    /// v1.2 力矩设定（N·m，演示用）。
+    pub fn torque_setpoint_nm(&self) -> f32 {
+        self.torque_setpoint_nm
+    }
+
+    /// v1.2 转速设定（rpm，演示用）。
+    pub fn speed_setpoint_rpm(&self) -> f32 {
+        self.speed_setpoint_rpm
+    }
+
+    /// v1.2 角度设定（°，演示用）。
+    pub fn angle_setpoint_deg(&self) -> f32 {
+        self.angle_setpoint_deg
+    }
+
     /// 联锁：运行中或存在故障锁存时，拒绝停机窗口类操作。
     fn interlocked(&self) -> bool {
         self.motor_running || self.latched_flags != 0
+    }
+
+    /// 角度模式（3）演示：出轴角每 tick 向设定值靠拢 ≤ 3°。
+    fn advance_angle_ramp(&mut self) {
+        if self.mode != 3 {
+            return;
+        }
+        const STEP: f32 = 3.0;
+        let diff = self.angle_setpoint_deg - self.angle_current_deg;
+        if diff.abs() <= STEP {
+            self.angle_current_deg = self.angle_setpoint_deg;
+        } else {
+            self.angle_current_deg += STEP * diff.signum();
+        }
     }
 
     fn dispatch(&mut self, cmd: u8, payload: &[u8]) -> (u8, Vec<u8>) {
@@ -173,6 +204,7 @@ impl SimDevice {
             cmd::PARAM_COMMIT => self.param_commit(),
             cmd::STATUS_GET => {
                 self.tick = self.tick.wrapping_add(1);
+                self.advance_angle_ramp();
                 (status::OK, self.status_body())
             }
             cmd::CTRL_CMD => self.ctrl_cmd(payload),
@@ -325,7 +357,7 @@ impl SimDevice {
                 self.mod_pct = value;
                 (status::OK, Vec::new())
             }
-            ctrl_v11::SET_OUTPUT_ZERO_NOW => {
+            ctrl::SET_OUTPUT_ZERO_NOW => {
                 if self.interlocked() {
                     return (status::LOCKED, Vec::new());
                 }
@@ -333,7 +365,7 @@ impl SimDevice {
                 self.output_zero_deg = (self.tick as f32 * 0.9).rem_euclid(360.0);
                 (status::OK, Vec::new())
             }
-            ctrl_v11::SET_OUTPUT_ZERO_ABS => {
+            ctrl::SET_OUTPUT_ZERO_ABS => {
                 if !value.is_finite() {
                     return (status::RANGE_ERR, Vec::new());
                 }
@@ -343,7 +375,7 @@ impl SimDevice {
                 self.output_zero_deg = value.rem_euclid(360.0);
                 (status::OK, Vec::new())
             }
-            ctrl_v11::SET_MODE => {
+            ctrl::SET_MODE => {
                 if self.interlocked() {
                     return (status::LOCKED, Vec::new());
                 }
@@ -355,6 +387,37 @@ impl SimDevice {
                 self.mode = mode;
                 (status::OK, Vec::new())
             }
+            // ---- v1.2 设定值（联锁同 v1.1：停机窗口；范围检查先于联锁） ----
+            ctrl::SET_TORQUE => {
+                if !value.is_finite() {
+                    return (status::RANGE_ERR, Vec::new());
+                }
+                if self.interlocked() {
+                    return (status::LOCKED, Vec::new());
+                }
+                self.torque_setpoint_nm = value;
+                (status::OK, Vec::new())
+            }
+            ctrl::SET_SPEED => {
+                if !value.is_finite() || value.abs() > 20000.0 {
+                    return (status::RANGE_ERR, Vec::new());
+                }
+                if self.interlocked() {
+                    return (status::LOCKED, Vec::new());
+                }
+                self.speed_setpoint_rpm = value;
+                (status::OK, Vec::new())
+            }
+            ctrl::SET_ANGLE => {
+                if !value.is_finite() {
+                    return (status::RANGE_ERR, Vec::new());
+                }
+                if self.interlocked() {
+                    return (status::LOCKED, Vec::new());
+                }
+                self.angle_setpoint_deg = value;
+                (status::OK, Vec::new())
+            }
             _ => (status::BAD_CMD, Vec::new()),
         }
     }
@@ -364,16 +427,34 @@ impl SimDevice {
     ///
     /// 末尾 7 个 f32 为 tick 的确定函数（三相对称正弦 + 母线/温度/角度合成），
     /// 供上位机图表演示；`freq`/`mod`/状态位仍来自 CTRL 与故障注入。
+    ///
+    /// v1.2 演示联动（非固件承诺）：模式=力矩(1) 按 `|torque|/额定(1.0 N·m→10 A)`
+    /// 缩放三相正弦幅值（钳位 ±20 A）；模式=速度(2) 令转子角速率 =
+    /// `speed_rpm/60×360 °/s`；模式=角度(3) 令出轴角为斜坡值。未设模式(0) 保持既有合成。
     fn status_body(&self) -> Vec<u8> {
         const TAU: f32 = std::f32::consts::TAU;
         let t = self.tick as f32;
-        let i_u = 10.0 * (TAU * t / 20.0).sin();
-        let i_v = 10.0 * (TAU * t / 20.0 - TAU / 3.0).sin();
-        let i_w = 10.0 * (TAU * t / 20.0 + TAU / 3.0).sin();
+        let amp = if self.mode == 1 {
+            (self.torque_setpoint_nm.abs() * 10.0).min(20.0)
+        } else {
+            10.0
+        };
+        let i_u = amp * (TAU * t / 20.0).sin();
+        let i_v = amp * (TAU * t / 20.0 - TAU / 3.0).sin();
+        let i_w = amp * (TAU * t / 20.0 + TAU / 3.0).sin();
         let vbus = 48.0 + 2.0 * (TAU * t / 50.0).sin();
         let ntc_temp = 55.0 + 10.0 * (0.5 + 0.5 * (TAU * t / 100.0).sin());
-        let enc_rotor_deg = (t * 3.6) % 360.0;
-        let enc_output_deg = (t * 0.9 - self.output_zero_deg).rem_euclid(360.0);
+        let rotor_deg_per_tick = if self.mode == 2 {
+            self.speed_setpoint_rpm / 60.0 * 360.0 / 1000.0
+        } else {
+            3.6
+        };
+        let enc_rotor_deg = (t * rotor_deg_per_tick).rem_euclid(360.0);
+        let enc_output_deg = if self.mode == 3 {
+            self.angle_current_deg.rem_euclid(360.0)
+        } else {
+            (t * 0.9 - self.output_zero_deg).rem_euclid(360.0)
+        };
 
         let mut body = Vec::with_capacity(42);
         body.extend_from_slice(&self.fault_flags.to_le_bytes());

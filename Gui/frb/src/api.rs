@@ -357,13 +357,6 @@ pub fn stop_status_watch() -> Result<(), FrbError> {
     crate::watch::stop()
 }
 
-/// v1.1 增量 CTRL_CMD opcode（镜像 `Gui/protocol/motor_proto.h`；固件侧待 M2）。
-mod ctrl_v11 {
-    pub const SET_OUTPUT_ZERO_NOW: u8 = 0x05;
-    pub const SET_OUTPUT_ZERO_ABS: u8 = 0x06;
-    pub const SET_MODE: u8 = 0x07;
-}
-
 async fn ctrl_op(opcode: u8, value: f32) -> Result<(), FrbError> {
     let mut payload = vec![opcode];
     payload.extend_from_slice(&value.to_le_bytes());
@@ -386,18 +379,33 @@ pub async fn ctrl_set_mod(mod_pct: f32) -> Result<(), FrbError> {
 
 /// v1.1：把当前出轴角设为零点（停机窗口联锁；运行中/故障锁存 → `LOCKED`）。
 pub async fn ctrl_set_output_zero_now() -> Result<(), FrbError> {
-    on_tokio(ctrl_op(ctrl_v11::SET_OUTPUT_ZERO_NOW, 0.0)).await?
+    on_tokio(ctrl_op(ctrl::SET_OUTPUT_ZERO_NOW, 0.0)).await?
 }
 
 /// v1.1：把指定角度（度）设为出轴零点（非法非有限值 → `RANGE_ERR`）。
 pub async fn ctrl_set_output_zero_abs(deg: f32) -> Result<(), FrbError> {
-    on_tokio(ctrl_op(ctrl_v11::SET_OUTPUT_ZERO_ABS, deg)).await?
+    on_tokio(ctrl_op(ctrl::SET_OUTPUT_ZERO_ABS, deg)).await?
 }
 
 /// v1.1：设置控制模式（1=力矩 / 2=速度 / 3=角度；非法 → `BAD_CMD`）。
 /// `value` 以 f32 位型低字节承载 u8 模式。
 pub async fn ctrl_set_mode(mode: u8) -> Result<(), FrbError> {
-    on_tokio(ctrl_op(ctrl_v11::SET_MODE, f32::from_bits(mode as u32))).await?
+    on_tokio(ctrl_op(ctrl::SET_MODE, f32::from_bits(mode as u32))).await?
+}
+
+/// v1.2：设置力矩设定（N·m；负值允许；非有限值 → `RANGE_ERR`；运行中 → `LOCKED`）。
+pub async fn ctrl_set_torque(nm: f32) -> Result<(), FrbError> {
+    on_tokio(ctrl_op(ctrl::SET_TORQUE, nm)).await?
+}
+
+/// v1.2：设置转速设定（rpm；负值允许；`|value| > 20000` → `RANGE_ERR`；运行中 → `LOCKED`）。
+pub async fn ctrl_set_speed(rpm: f32) -> Result<(), FrbError> {
+    on_tokio(ctrl_op(ctrl::SET_SPEED, rpm)).await?
+}
+
+/// v1.2：设置角度设定（°；负值允许；非有限值 → `RANGE_ERR`；运行中 → `LOCKED`）。
+pub async fn ctrl_set_angle(deg: f32) -> Result<(), FrbError> {
+    on_tokio(ctrl_op(ctrl::SET_ANGLE, deg)).await?
 }
 
 pub async fn fault_get() -> Result<(u32, u32), FrbError> {

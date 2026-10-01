@@ -1,4 +1,4 @@
-# Gui ↔ 电机控制板 通讯协议规范 v1.1
+# Gui ↔ 电机控制板 通讯协议规范 v1.2
 
 本文件是 `motor_proto.h` 的配套说明，两者共同构成 Gui 上位机与电机控制板之间的
 **线格式契约**。任何一端实现编解码、传输解析、会话状态机时，都以本规范为准；
@@ -7,6 +7,10 @@
 > **v1.1 为 v1 的增量（additive）**：不改变既有帧格式、`VER`、状态码与金向量，
 > 仅在 `CTRL_CMD` 内新增 3 个 opcode（见 §7）。固件侧实现待 M2；当前 sim / 主机
 > 已按本规范实现。旧端对未知 opcode 的降级约定见 §7.4。
+>
+> **v1.2 亦为增量（additive，叠加在 v1.1 之上）**：不改变帧格式、`VER`、状态码与金
+> 向量，仅在 `CTRL_CMD` 内再新增 3 个设定值 opcode（见 §8）。联锁与响应语义与 v1.1
+> 同族（停机窗口）。固件侧实现待 M2；sim / 主机已实现。
 
 - 传输层字节序：**全部小端（little-endian）**。
 - 版本：`MP_VERSION = 0x01`（v1.1 复用，线格式不变）。
@@ -279,7 +283,9 @@ A5 5A  01  84  01  0100  02  A0 81
 
 `opcode`：`MP_CTRL_START=0x01`、`MP_CTRL_STOP=0x02`、`MP_CTRL_SET_FREQ=0x03`、
 `MP_CTRL_SET_MOD=0x04`；v1.1 增量 `MP_CTRL_SET_OUTPUT_ZERO_NOW=0x05`、
-`MP_CTRL_SET_OUTPUT_ZERO_ABS=0x06`、`MP_CTRL_SET_MODE=0x07`（详见 §7）。
+`MP_CTRL_SET_OUTPUT_ZERO_ABS=0x06`、`MP_CTRL_SET_MODE=0x07`（详见 §7）；
+v1.2 增量 `MP_CTRL_SET_TORQUE=0x08`、`MP_CTRL_SET_SPEED=0x09`、
+`MP_CTRL_SET_ANGLE=0x0A`（详见 §8）。
 
 **响应载荷**：`status`（u8）。联锁拒绝返回 `MP_STATUS_LOCKED`。
 
@@ -463,6 +469,101 @@ A5 5A  01  08  02  0500  07 02 00 00 00  3E DB
   据此降级隐藏对应 UI；不得因拒绝而断开连接或视为协议违例。
 - **探测**：主机可在停机时以 `MP_CTRL_SET_MODE`（或 `NOW`）探活；`OK`/`LOCKED` 表示
   设备已实现，`BAD_CMD`/`UNSUPPORTED` 表示未实现。
+
+---
+
+## 8. v1.2 增量：力矩/转速/角度设定（`MP_CMD_CTRL_CMD` 内）
+
+v1.2 叠加在 v1.1 之上，不新增命令字、不改变帧格式、`VER`、状态码表与 `STATUS_GET`
+布局，仅在 `MP_CMD_CTRL_CMD = 0x08`（§3.8）内再扩展 3 个 opcode。请求体恒为
+`opcode u8 | value f32 LE`（5 字节），与 v1.1 相同。
+
+### 8.1 opcode 定义
+
+| opcode | 名称 | 单位 | `value` 语义 | 越界判定 |
+| :--- | :--- | :--- | :--- | :--- |
+| `0x08` | `MP_CTRL_SET_TORQUE` | N·m | 力矩设定；负值允许（回馈/反转语义） | 非有限值（NaN/±Inf）→ `RANGE_ERR` |
+| `0x09` | `MP_CTRL_SET_SPEED` | rpm | 转速设定；负值允许（反转） | `\|value\| > 20000` 或非有限值 → `RANGE_ERR` |
+| `0x0A` | `MP_CTRL_SET_ANGLE` | ° | 角度设定；负值允许 | 非有限值 → `RANGE_ERR` |
+
+要点：
+
+- 三个设定值均为**设备状态**，`STATUS_GET` 布局不变、无回读字段（与 v1.1 的
+  `SET_MODE` 一致）。有效性探测与 v1.1 相同：`OK`/`LOCKED` = 已实现，
+  `BAD_CMD`/`UNSUPPORTED` = 未实现。
+- 单位：力矩 N·m、转速 rpm、角度度（°）。协议层只承载设定值，不规定设备内部额定值；
+  sim 演示联动见 §8.4。
+
+### 8.2 状态码与联锁语义
+
+| 场景 | 返回 `status` |
+| :--- | :--- |
+| 停机且无故障锁存，写入任一设定值 | `MP_STATUS_OK (0x00)` |
+| 运行中或存在未清除故障锁存，写入设定值 | `MP_STATUS_LOCKED (0x04)` |
+| `SET_TORQUE` / `SET_ANGLE` 的 `value` 为 `NaN`/`±Inf` | `MP_STATUS_RANGE_ERR (0x06)` |
+| `SET_SPEED` 的 `\|value\| > 20000`（含非有限值） | `MP_STATUS_RANGE_ERR (0x06)` |
+| 未知 opcode | `MP_STATUS_BAD_CMD (0x01)` |
+
+联锁语义同 v1.1 / `PARAM_COMMIT`：**从严**——即使是速度设定，也不允许运行中热改，
+必须停机改设定后再启动。范围检查先于联锁检查（与 v1.1 `SET_OUTPUT_ZERO_ABS` 一致）。
+
+### 8.3 帧示例
+
+以下帧可作实现自检（CRC16-CCITT-FALSE，范围 `VER..PAYLOAD`，小端放置）。
+
+**`SET_TORQUE` 请求（`value = 0.5` N·m，`SEQ=0`）**：
+
+```
+A5 5A  01  08  00  0500  08 00 00 00 3F  B5 1B
+```
+
+（`0.5f` 位型 `0x3F000000`，小端 `00 00 00 3F`；CRC `0x1BB5`。）
+
+**`SET_SPEED` 请求（`value = 1200` rpm，`SEQ=1`）**：
+
+```
+A5 5A  01  08  01  0500  09 00 00 96 44  A5 60
+```
+
+（`1200.0f` 位型 `0x44960000`，小端 `00 00 96 44`；CRC `0x60A5`。）
+
+**`SET_ANGLE` 请求（`value = 90.0`°，`SEQ=2`）**：
+
+```
+A5 5A  01  08  02  0500  0A 00 00 B4 42  04 6B
+```
+
+（`90.0f` 位型 `0x42B40000`，小端 `00 00 B4 42`；CRC `0x6B04`。）
+
+**`SET_TORQUE` 负值请求（`value = −0.5` N·m，`SEQ=3`，允许）**：
+
+```
+A5 5A  01  08  03  0500  08 00 00 00 BF  48 42
+```
+
+（`−0.5f` 位型 `0xBF000000`，小端 `00 00 00 BF`；CRC `0x4248`。）
+
+成功响应格式同 §7.3：`A5 5A 01 88 <SEQ> 0100 00 <CRC>`；运行中拒绝为
+`status = 0x04`。
+
+### 8.4 sim 演示联动（演示用，非固件承诺）
+
+sim 保存 3 个设定值并与 v1.1 `SET_MODE`（1=力矩 / 2=速度 / 3=角度）联动合成
+`STATUS_GET` 演示信号（仅为上位机图表观感，不构成固件行为契约）：
+
+- **模式 = 速度(2)**：转子角速率 = `speed_rpm / 60 × 360` °/s（换算到 tick 即
+  `/1000` s/tick）；默认 `speed_rpm = 600` 时恢复既有 3.6 °/tick 观感。
+- **模式 = 角度(3)**：出轴角以每 tick ≤ `3°` 的斜坡逼近 `angle_deg` 设定。
+- **模式 = 力矩(1)**：三相正弦幅值 = `|torque_nm| / 1.0 × 10 A`，钳位 `±20 A`。
+- **未设模式（0）**：维持既有合成（转子 3.6 °/tick、电流幅值 10 A），兼容既有测试。
+
+### 8.5 兼容性与协商
+
+- **线格式向后兼容**：不使用新 opcode 的 v1.0 / v1.1 流量与金向量完全不受影响
+  （`test_vectors.json` 不变）。
+- **旧端收到新 opcode**：按“未知 opcode”返回 `MP_STATUS_BAD_CMD (0x01)`，或显式返回
+  `MP_STATUS_UNSUPPORTED (0x05)`；主机须同时容忍两者并据此降级隐藏对应 UI，不得视为
+  协议违例或断连（同 §7.4）。
 
 ---
 

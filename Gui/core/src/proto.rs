@@ -41,6 +41,10 @@ pub mod ctrl {
     pub const SET_OUTPUT_ZERO_NOW: u8 = 0x05;
     pub const SET_OUTPUT_ZERO_ABS: u8 = 0x06;
     pub const SET_MODE: u8 = 0x07;
+    // v1.2 增量（additive）：设定值写入，联锁同 v1.1（停机窗口）。
+    pub const SET_TORQUE: u8 = 0x08;
+    pub const SET_SPEED: u8 = 0x09;
+    pub const SET_ANGLE: u8 = 0x0A;
 }
 
 #[cfg(test)]
@@ -53,5 +57,13 @@ mod tests {
         assert_eq!(ctrl::SET_OUTPUT_ZERO_NOW, 0x05);
         assert_eq!(ctrl::SET_OUTPUT_ZERO_ABS, 0x06);
         assert_eq!(ctrl::SET_MODE, 0x07);
+    }
+
+    /// v1.2 设定值 opcode 与 `motor_proto.h` / sim / frb 三处镜像一致。
+    #[test]
+    fn ctrl_v12_opcodes_match_contract() {
+        assert_eq!(ctrl::SET_TORQUE, 0x08);
+        assert_eq!(ctrl::SET_SPEED, 0x09);
+        assert_eq!(ctrl::SET_ANGLE, 0x0A);
     }
 }
