@@ -26,6 +26,12 @@ $colors = [ordered]@{}
 foreach ($m in [regex]::Matches($src, 'this\.([A-Za-z0-9_]+)\s*=\s*const Color\(0xFF([0-9A-Fa-f]{6})\)')) {
     $colors[$m.Groups[1].Value] = '#' + $m.Groups[2].Value.ToUpper()
 }
+# `this.name = const Color(0xAARRGGBB),`（AARRGGBB，AA ≠ FF）—— v5 groupLine 等带 alpha 的实色。
+foreach ($m in [regex]::Matches($src, 'this\.([A-Za-z0-9_]+)\s*=\s*const Color\(0x([0-9A-Fa-f]{8})\)')) {
+    if ($m.Groups[2].Value.Substring(0, 2) -ne 'FF') {
+        $colors[$m.Groups[1].Value] = '#' + $m.Groups[2].Value.ToUpper()
+    }
+}
 # `this.name = const Color.fromRGBO(r, g, b, a),`
 $rgbo = [ordered]@{}
 foreach ($m in [regex]::Matches($src, 'this\.([A-Za-z0-9_]+)\s*=\s*const Color\.fromRGBO\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)')) {
@@ -46,11 +52,11 @@ $css = [System.IO.File]::ReadAllText($cssPath, [System.Text.Encoding]::UTF8)
 # 语义分组：与 gui_palette.dart 的字段注释保持一致
 $groups = [ordered]@{
     '基底（App 为准）'        = @('bgVoid','bgBase','bgPanel','bgRaise','bgHover','bgActive')
-    '发丝边框'                = @('lineHi','line','lineDim')
+    '发丝边框与组线'          = @('lineHi','line','lineDim','groupLine')
     '文字'                    = @('fg','fgStrong','fgDim','fgMute')
     '强调'                    = @('accent','accent2','accentBlue')
     '状态语义'                = @('stNormal','stWarn','stFault','stLatched','stStale','stPending')
-    '语义读数色'              = @('valueAmber','valueGreen','valueRed','valuePink','valueViolet')
+    '语义读数色（v5 量纲专色）' = @('valueAmber','valueCyan','valueGreen','valueOrange','valueRed','valueMagenta','valuePurple')
     '数据系列'                = @('series1','series2','series3','series4','series5','series6')
     '按钮'                    = @('btnFill','btnBorder','btnText','btnPrimaryBorder','btnPrimaryText','btnDangerBorder','btnDangerText')
     '齿轮示意'                = @('gearGreen','gearGreenRim','gearViolet','gearVioletRim')

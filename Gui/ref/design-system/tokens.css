@@ -1,8 +1,15 @@
 /* ============================================================================
  * Gui 视觉设计 Tokens —— TNO 硅晶之梦 / 复古未来主义 · 合成器浪潮
  * ----------------------------------------------------------------------------
- * 所有色值来自 screenshots/ 参考图的像素级实测，非目测。
+ * ★ 以 App 为准：色板唯一事实源是 Gui/app/lib/theme/gui_palette.dart，
+ *   下方 GENERATED-COLORS 段由 tools/sync-tokens-from-app.ps1 生成，勿手改。
+ *   改色请改 App，再跑一次同步脚本。字体/排版/间距 token 不受同步影响。
+ *
+ * v4 及以前的色值来自 screenshots/ 参考图的像素级实测，非目测。
  * 复现：pwsh -File ../tools/measure-colors.ps1
+ *
+ * v5 发光色系（六色/分割/字阶）见本文件「v5 发光色系」段与
+ * design-system.md §2.6 —— 为发光管语汇选定值，App 落地后由同步脚本回写。
  *
  * 用法（Flutter 侧）：由本文件生成 ThemeExtension 或 Dart 常量表，
  * 页面代码只引用语义 token，禁止硬编码色值。
@@ -18,36 +25,39 @@
   --bg-hover:         #162C30;
   --bg-active:        #1C383C;
 
-  /* ---------- 发丝边框 ---------- */
-  --line-hi:          #3F9E98;
-  --line:             #1E5458;
-  --line-dim:         #123234;
+  /* ---------- 发丝边框与组线 ---------- */
+  --line-hi:          #2ED8E8;
+  --line:             #173E44;
+  --line-dim:         #0F2A2E;
+  --group-line:       #808A4DFF;
 
   /* ---------- 文字 ---------- */
-  --fg:               #A6BAB8;
-  --fg-strong:        #CFDCDA;
-  --fg-dim:           #6E908E;
-  --fg-mute:          #5B8280;
+  --fg:               #B2C9C2;
+  --fg-strong:        #B8F4F8;
+  --fg-dim:           #4E8E92;
+  --fg-mute:          #3E6E72;
 
   /* ---------- 强调 ---------- */
-  --accent:           #3F9E98;
+  --accent:           #2ED8E8;
   --accent2:          #BFA84C;
   --accent-blue:      #085890;
 
   /* ---------- 状态语义 ---------- */
-  --st-normal:        #4E9454;
-  --st-warn:          #B0A038;
-  --st-fault:         #C06858;
-  --st-latched:       #D08880;
-  --st-stale:         #567476;
-  --st-pending:       #A0A048;
+  --st-normal:        #3DDB6E;
+  --st-warn:          #F08030;
+  --st-fault:         #FF4D4D;
+  --st-latched:       #FF8080;
+  --st-stale:         #4E6E72;
+  --st-pending:       #C8B848;
 
-  /* ---------- 语义读数色 ---------- */
+  /* ---------- 语义读数色（v5 量纲专色） ---------- */
   --value-amber:      #BFA84C;
-  --value-green:      #589E5E;
-  --value-red:        #B86858;
-  --value-pink:       #C07898;
-  --value-violet:     #8878B8;
+  --value-cyan:       #2ED8E8;
+  --value-green:      #3DDB6E;
+  --value-orange:     #F08030;
+  --value-red:        #FF4D4D;
+  --value-magenta:    #E040C8;
+  --value-purple:     #8A4DFF;
 
   /* ---------- 数据系列 ---------- */
   --series1:          #3F9E98;
@@ -73,7 +83,7 @@
   --gear-violet-rim:  #5E5288;
 
   /* ---------- 辉光 ---------- */
-  --glow-soft:        rgba(63, 158, 152, 0.12);
+  --glow-soft:        rgba(46, 216, 232, 0.12);
   --glow1:            rgba(127, 227, 219, 0.85);
   --glow2:            rgba(88, 200, 192, 0.48);
   --glow3:            rgba(88, 200, 192, 0.24);
@@ -82,27 +92,44 @@
 
   /* <<< GENERATED-COLORS-END <<< */
 
-  /* ---------- 字体 ----------
-   * ★ VT323 是 TNO 硅晶之梦的 CRT 观感来源（模组 gfx/fonts/vt323_*.fnt），
-   *   而它本身是 Google Fonts 的 OFL 字体，可合法打包 —— 故列为数值首选。
-   *   获取：https://fonts.google.com/specimen/VT323 */
-  --font-display:   "Electrolize", "Bahnschrift Condensed", sans-serif;  /* OFL */
-  --font-alt:       "Aldrich", sans-serif;                                /* OFL */
-  --font-numeric:   "VT323", "Cascadia Mono", "Consolas", monospace;      /* OFL · CRT 终端体 */
-  --font-mono:      "Cascadia Mono", "Consolas", monospace;               /* OFL */
-  --font-zh:        "Noto Sans SC", "Microsoft YaHei UI", sans-serif;     /* OFL */
-  --font-zh-light:  "Noto Sans SC Light", "Noto Sans SC", sans-serif;
-  --font-serif:     "Noto Serif SC", serif;
+  /* ---------- v5 发光色系（注释性 token） ----------
+   * ★ 以 App 为准，数值可随后由 sync-tokens-from-app.ps1 覆盖/并入生成区。
+   * 规则见 design-system.md §2.6；活样张 previews/gui-style-sample.html。
+   * 专色只赋数值/管色，参数名一律 --em-cyan。 */
+  --em-cyan:     #2ED8E8;   /* 青：外框 / 参数名 / 线稿 */
+  --em-violet:   #8A4DFF;   /* 紫：组线 / 标题衬底 / EST 徽标 */
+  --em-magenta:  #E040C8;   /* 洋红：强调值 / 峰值线 / PEAK 徽标 */
+  --em-green:    #3DDB6E;   /* 翠绿：正常 / 低位 */
+  --em-orange:   #F08030;   /* 橙：中位 / 警告（超温转红）*/
+  --em-red:      #FF4D4D;   /* 红：高位 / 故障 */
+  --fg-value:    #B8F4F8;   /* 主值（白青，中性/单位缺失时用）*/
+  --fg-body:     #B2C9C2;   /* 正文 */
+  --fg-sub:      #4E8E92;   /* 次级：标签 / 单位 / 注记 */
+  --divider-row: #173E44;   /* 行分割（低亮青）*/
+  --divider-title:#8A4DFF;  /* 标题 / 组线（低亮紫）*/
+  --frame-width: 1.5px;     /* 面板外框（青）线宽 */
 
-  /* ---------- 排版尺度 ---------- */
+  /* ---------- 字体（CRT 终端字体栈，见 design-system.md §5） ----------
+   * ★ VT323 是 TNO 硅晶之梦的 CRT 观感来源（模组 gfx/fonts/vt323_*.fnt），
+   *   且为 OFL 字体可合法打包 —— 拉丁/数字/单位首选。
+   *   Electrolize / Aldrich / Noto 已退役（勿再引用）。 */
+  --font-display:   "VT323", "Cascadia Mono", "Consolas", monospace;       /* 拉丁标题/数值 · OFL */
+  --font-numeric:   "VT323", "Cascadia Mono", "Consolas", monospace;       /* 数值 · OFL */
+  --font-mono:      "VT323", "Cascadia Mono", "Consolas", monospace;       /* 等宽数字 · OFL */
+  --font-zh:        "Fusion Pixel 12", "Microsoft YaHei UI", sans-serif;   /* 汉字 · OFL */
+  --font-emph:      "Silkscreen", "VT323", monospace;                      /* 区分/增强 · OFL */
+  --font-dense:     "Share Tech Mono", "Consolas", monospace;              /* 密集等宽 · OFL */
+
+  /* ---------- 排版尺度（v5 加大，见 design-system.md §2.6.4） ---------- */
   --ls-title:       0.16em;    /* 标题字距（全大写，硬性要求） */
-  --ls-label:       0.14em;
+  --ls-label:       0.10em;
   --ls-data:        0.02em;
-  --fs-title:       15px;
-  --fs-section:     12.5px;
-  --fs-label:       9px;
-  --fs-data:        26px;
-  --fs-body:        13px;
+  --fs-title:       18px;      /* v5 标题（Fusion Pixel） */
+  --fs-section:     12px;
+  --fs-label:       12px;      /* v5 参数名/标签（Silkscreen） */
+  --fs-data:        36px;      /* v5 数值（VT323） */
+  --fs-unit:        12px;      /* v5 单位（Silkscreen） */
+  --fs-body:        12px;
 
   /* ---------- 间距刻度（4px 基准） ---------- */
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
@@ -110,15 +137,16 @@
 
   /* ---------- 结构 ---------- */
   --corner-radius:  0;         /* 实测：直角，禁圆角 */
-  --seg-height:     9px;       /* 分段条单段高度（实测 9px） */
-  --seg-gap:        2px;       /* 分段间隙（实测 2px） */
+  --seg-height:     9px;       /* ⚠ v4 分段条（被 v5 VFD 条取代，保留兼容） */
+  --seg-gap:        2px;       /* ⚠ v4 分段条间隙 */
   --grid-size:      24px;      /* 背景网格间距 */
   --grid-color:     rgba(88, 200, 192, 0.045);
 }
 
 /* ============================================================================
- * 可复用构件 —— 仅表达结构母题，具体组件在 templates/ 中组合
+ * 可复用构件（v4 母题；v5 见文末「v5 发光色系构件」）
  * ========================================================================== */
+
 
 /* 基底：带青绿偏色的暗底 + 极淡网格 */
 .gui-surface {
@@ -224,3 +252,82 @@
   text-shadow: none !important;
   border-style: dashed !important;
 }
+
+/* ============================================================================
+ * v5 发光色系构件 —— 规范见 design-system.md §2.6
+ * 抽取自活样张 previews/gui-style-sample.html。
+ * 数值 token 以 App 为准，App 落地后由同步脚本并入生成区。
+ * ========================================================================== */
+
+/* 面板外框：青 1.5px 勾勒（直角） */
+.gui-v5-panel { border: var(--frame-width) solid var(--em-cyan); border-radius: 0; }
+
+/* 行分割：低亮青（逐行） */
+.gui-v5-row { border-bottom: 1px solid var(--divider-row); }
+
+/* 标题 / 组线：低亮紫衬底 + 紫底边 */
+.gui-v5-title {
+  border-bottom: 1px solid var(--divider-title);
+  background: linear-gradient(90deg,
+    rgba(138, 77, 255, .34), rgba(224, 64, 200, .10), rgba(138, 77, 255, 0));
+}
+
+/* 参数名：一律青色 */
+.gui-v5-name {
+  color: var(--em-cyan);
+  font-family: var(--font-emph);
+  font-size: var(--fs-label);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+}
+
+/* 数值：36px + tabular；专色由量纲派生，缺省白青中性
+ * 量纲 -> 专色：V/°=青 · A/RPM=翠绿 · W/%=洋红 · °C=橙(超温红) · Hz=紫 */
+.gui-v5-value {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-data);
+  color: var(--fg-value);
+}
+.gui-v5-value.is-color { color: var(--em-cyan); }   /* 由量纲派生时替换为对应 --em-* */
+.gui-v5-unit { font-family: var(--font-emph); font-size: var(--fs-unit); color: var(--fg-sub); }
+
+/* VFD 竖排发光管条：细管 4px / 幽灵 .028 / spill 30px / 雾面 4-10-22px（规格见 §2.6.5）
+ * 用法：<div class="gui-vfd" style="--lc:46,216,232"><div class="gui-vfd-fill" style="width:72%"></div></div> */
+.gui-vfd {
+  position: relative; height: 22px; overflow: hidden;
+  border: 1px solid #0C1A20; background: #050B0E;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .6),
+    inset 0 2px 4px rgba(0, 0, 0, .65),
+    inset 0 -1px 2px rgba(120, 180, 190, .08);
+  --lc: 46, 216, 232; --bc: 160, 235, 240;
+}
+.gui-vfd::before { /* 未点亮管芯幽灵 */
+  content: ''; position: absolute; inset: 0; z-index: 0;
+  background: repeating-linear-gradient(90deg,
+    rgba(0, 0, 0, 0) 0 .5px, rgba(140, 190, 200, .016) .5px 1.5px,
+    rgba(140, 190, 200, .028) 1.5px 3px, rgba(140, 190, 200, .016) 3px 4px);
+}
+.gui-vfd::after { /* 玻璃罩（高光已压制） */
+  content: ''; position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .012) 30%, rgba(0, 0, 0, .07) 88%),
+    linear-gradient(90deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, 0) 12%, rgba(255, 255, 255, 0) 88%, rgba(255, 255, 255, .025));
+}
+.gui-vfd-fill {
+  height: 100%; position: relative; z-index: 1;
+  background: repeating-linear-gradient(90deg,
+    rgba(0, 0, 0, 0) 0 .5px, rgba(var(--lc), .16) .5px 1.5px,
+    rgba(var(--bc), .85) 1.5px 3px, rgba(var(--lc), .16) 3px 4px);
+  filter: drop-shadow(0 0 4px rgba(var(--lc), .5)) drop-shadow(0 0 10px rgba(var(--lc), .3)) drop-shadow(0 0 22px rgba(var(--lc), .18));
+}
+.gui-vfd-fill::after { /* spill 照亮亮缘外 30px 内暗管 */
+  content: ''; position: absolute; left: 100%; top: 0; bottom: 0; width: 30px;
+  background: repeating-linear-gradient(90deg,
+    rgba(0, 0, 0, 0) 0 .5px, rgba(var(--lc), .05) .5px 1.5px,
+    rgba(var(--bc), .12) 1.5px 3px, rgba(var(--lc), .05) 3px 4px);
+  -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+  filter: drop-shadow(0 0 8px rgba(var(--lc), .25));
+}
+.gui-vfd-peak { position: absolute; top: 1px; bottom: 1px; width: 2px; background: var(--em-magenta); z-index: 2;
+  box-shadow: 0 0 6px rgba(224, 64, 200, .7), 0 0 16px rgba(224, 64, 200, .35); }

@@ -5,8 +5,13 @@
 > ### ★ 视觉的唯一事实源是 App 本身
 >
 > 自 2026-09-30 起，**「界面长什么样」以 `Gui/app` 的运行结果为准**。
-> 本目录不再保留 HTML 规范模板与渲染预览 —— 它们停留在旧字体方案
-> （Electrolize / Cascadia / Noto），会与实现漂移并误导。
+> v4 时期的旧 HTML 规范模板与渲染预览已退役（停留在旧字体方案
+> Electrolize / Cascadia / Noto，会与实现漂移）。
+>
+> **现行活样张**只有一份：[`design-system/previews/gui-style-sample.html`](design-system/previews/gui-style-sample.html)
+> —— v5 发光管定稿的单一参考样张，随规范同步维护、可双击打开。
+> 它表达的是**规则**（六色分工 / 框线分工 / 参数专色 / 字阶 / VFD 条构造），
+> 运行结果仍以 App 为准。
 >
 > 本目录负责的是**为什么这么设计**（依据、实测、约束、授权）。
 
@@ -26,9 +31,12 @@ Gui/ref/
 │   └── tno科技树武器详情.png           539x677    科技树详情
 ├── design-system/
 │   ├── design-system.md              完整规范：色板/结构母题/布局/字体/状态语义
+│   │                                 §2.6 = v5 发光色系（现行：六色/框线分工/参数专色/字阶/VFD 条）
 │   │                                 §9 = 模组解包美术资源（权威色板、图表手法、字体来源）
 │   ├── font-licensing.md             字体授权结论（含禁用清单）
-│   └── tokens.css                    CSS 变量 + 可复用构件
+│   ├── tokens.css                    CSS 变量 + 可复用构件（v5 段为注释性，以 App 为准）
+│   └── previews/
+│       └── gui-style-sample.html     ★ 现行活样张（v5 定稿，可直接双击打开）
 └── tools/
     ├── measure-colors.ps1            色板测量（早期色值的来源）
     ├── extract-device-art.ps1        设备 ASCII 艺术字提取（字形 + 色序 + HTML 片段）
@@ -45,8 +53,9 @@ Gui/ref/
 | 目的 | 看哪个 |
 | :--- | :--- |
 | **看界面实际长什么样** | **跑 `Gui/app`**（或看交付的 exe） |
-| 写代码时查色值 / 规则 | `design-system/design-system.md` |
-| 拿到当前色值 | `design-system/tokens.css`（**由 App 生成，勿手改**） |
+| **快速查看 v5 视觉样张** | `design-system/previews/gui-style-sample.html`（双击打开） |
+| 写代码时查色值 / 规则 | `design-system/design-system.md`（现行色板见 §2.6） |
+| 拿到当前色值 | `design-system/tokens.css`（**以 App 为准，色板段由 App 生成，勿手改**） |
 | 确认某字体能否打包 | `design-system/font-licensing.md` |
 | 核对某色值怎么来的 | 跑 `tools/measure-colors.ps1` |
 | 核对设备标识字形 | 跑 `tools/extract-device-art.ps1` |
@@ -106,3 +115,4 @@ powershell -NoProfile -File tools\sync-tokens-from-app.ps1        # App → toke
 | 2026-09-30 | v2：文字改半透明 + 四层轮廓辉光；板块改无边框 + 一亮两暗分割线；连接选项卡移至左上角；设备型号改用终端同款 ASCII 艺术字 |
 | 2026-09-30 | 定稿：清理被取代的中间产物，模板与预览统一命名为 `gui-main`，补齐两个复现脚本与授权文档 |
 | 2026-09-30 | **转为「以 App 为准」**：色板由 `sync-tokens-from-app.ps1` 从 App 生成；字体改 CRT 终端栈（VT323 + Fusion Pixel）并移入 `Gui/app/assets/fonts/`；**退役** HTML 模板、渲染预览、`design-system/fonts/`（消除重复归属） |
+| 2026-10-01 | **v5 发光管定稿**：六色光谱 + 框线分工 + 参数专色（量纲派生）+ 大字号 + VFD 条构造，写入 `design-system.md` §2.6；`tokens.css` 增补 v5 注释性 token；新增单一活样张 `design-system/previews/gui-style-sample.html` |
