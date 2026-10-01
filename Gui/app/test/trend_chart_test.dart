@@ -245,12 +245,35 @@ void main() {
       );
     });
 
-    test('formatSigned / formatExtrema：有符号两位，空为 null', () {
+    test('formatSigned：有符号两位', () {
       expect(TrendChart.formatSigned(10.02), '+10.02');
       expect(TrendChart.formatSigned(-9.87), '-9.87');
-      expect(TrendChart.formatExtrema(10.02, -9.87), '+10.02 / -9.87');
-      expect(TrendChart.formatExtrema(null, null), isNull);
-      expect(TrendChart.formatExtrema(1.0, null), isNull);
+      expect(TrendChart.formatSigned(0), '+0.00');
+    });
+
+    test('windowRms：窗口均方根逐通道实算，空为 null', () {
+      final history = ChartHistory()..pushBatch(<StatusDto>[
+        _sample(iU: 3, iV: 0, iW: -3),
+        _sample(iU: 4, iV: 0, iW: 4),
+      ]);
+
+      final rms = TrendChartPainter.windowRms(history, 0, 0.01);
+      expect(rms, hasLength(3));
+      // sqrt((3² + 4²) / 2) = sqrt(12.5) ≈ 3.5355.
+      expect(rms[0], closeTo(math.sqrt(12.5), 1e-9));
+      expect(rms[1], 0.0);
+      expect(rms[2], closeTo(math.sqrt(12.5), 1e-9));
+
+      // A window past the retained history has no finite sample anywhere.
+      expect(TrendChartPainter.windowRms(history, 100, 1), <double?>[
+        null,
+        null,
+        null,
+      ]);
+      expect(
+        TrendChartPainter.windowRms(ChartHistory(), 0, 2),
+        <double?>[null, null, null],
+      );
     });
 
     test('轴标单位由 span 决定：inspect 远偏移仍用 ms', () {
@@ -310,10 +333,17 @@ void main() {
       expect(find.text('U'), findsOneWidget);
       expect(find.text('V'), findsOneWidget);
       expect(find.text('W'), findsOneWidget);
-      // Signed window extrema in the readout row.
-      expect(find.text('+3.00 / +1.00'), findsOneWidget);
-      expect(find.text('-1.00 / -3.00'), findsOneWidget);
-      expect(find.text('+1.50 / +0.50'), findsOneWidget);
+      // Readout area (below the control bar): per-phase MAX / RMS / MIN.
+      final u = find.byKey(TrendChart.phaseColumnKey(0));
+      expect(find.descendant(of: u, matching: find.text('+3.00')), findsOneWidget);
+      expect(find.descendant(of: u, matching: find.text('2.16')), findsOneWidget);
+      expect(find.descendant(of: u, matching: find.text('+1.00')), findsOneWidget);
+      final v = find.byKey(TrendChart.phaseColumnKey(1));
+      expect(find.descendant(of: v, matching: find.text('-1.00')), findsOneWidget);
+      expect(find.descendant(of: v, matching: find.text('-3.00')), findsOneWidget);
+      final w = find.byKey(TrendChart.phaseColumnKey(2));
+      expect(find.descendant(of: w, matching: find.text('+1.50')), findsOneWidget);
+      expect(find.descendant(of: w, matching: find.text('+0.50')), findsOneWidget);
     });
 
     testWidgets('图表外框为 HairlineFrame main', (tester) async {
@@ -343,51 +373,92 @@ void main() {
     });
   });
 
-  group('TrendChart 窗口极值与三相和行', () {
-    testWidgets('极值行显示窗口内 U/V/W 有符号 max/min（2 位 / green）', (tester) async {
+  group('TrendChart 示数区（波形 → 控制栏 → 示数）', () {
+    testWidgets('三相列：色块 + 通道字母 + MAX/RMS/MIN 三行', (tester) async {
       await _pump(tester, TrendChart(history: _three()));
 
-      final row = find.byKey(TrendChart.extremaRowKey);
-      expect(row, findsOneWidget);
-      // U max 3 / min 1, V max −1 / min −3, W max 1.5 / min 0.5.
-      expect(
-        find.descendant(of: row, matching: find.text('+3.00 / +1.00')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: row, matching: find.text('-1.00 / -3.00')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: row, matching: find.text('+1.50 / +0.50')),
-        findsOneWidget,
-      );
-      // Values take the A-dimension green; channel letters take series colours.
+      final area = find.byKey(TrendChart.readoutAreaKey);
+      expect(area, findsOneWidget);
+
+      const palette = GuiPalette();
+      final series = <Color>[palette.series1, palette.series2, palette.series3];
+      for (var channel = 0; channel < 3; channel++) {
+        final column = find.byKey(TrendChart.phaseColumnKey(channel));
+        expect(column, findsOneWidget);
+        final swatch = tester.widget<Container>(
+          find.byKey(TrendChart.phaseSwatchKey(channel)),
+        );
+        expect(swatch.color, series[channel]);
+        expect(
+          tester
+              .widget<Text>(
+                find.descendant(
+                  of: column,
+                  matching: find.text(TrendChart.channelLetters[channel]),
+                ),
+              )
+              .style
+              ?.color,
+          series[channel],
+        );
+        for (final label in const <String>['MAX', 'RMS', 'MIN']) {
+          expect(
+            find.descendant(of: column, matching: find.text(label)),
+            findsOneWidget,
+            reason: '${TrendChart.channelLetters[channel]} $label',
+          );
+        }
+      }
+      // MAX / RMS / MIN labels repeat once per phase.
+      for (final label in const <String>['MAX', 'RMS', 'MIN']) {
+        expect(find.text(label), findsNWidgets(3));
+      }
+    });
+
+    testWidgets('示数值 / 字母 / 行标字号达到下限（22 / 18 / 11）', (tester) async {
+      await _pump(tester, TrendChart(history: _three()));
+
+      final u = find.byKey(TrendChart.phaseColumnKey(0));
       final value = tester.widget<Text>(
-        find.descendant(of: row, matching: find.text('+3.00 / +1.00')),
+        find.descendant(of: u, matching: find.text('+3.00')),
       );
+      expect(value.style?.fontSize, greaterThanOrEqualTo(22));
       expect(value.style?.color, const GuiPalette().valueGreen);
+      final letter = tester.widget<Text>(
+        find.descendant(of: u, matching: find.text('U')),
+      );
+      expect(letter.style?.fontSize, greaterThanOrEqualTo(18));
+      final label = tester.widget<Text>(
+        find.descendant(of: u, matching: find.text('MAX')),
+      );
+      expect(label.style?.fontSize, greaterThanOrEqualTo(11));
+      expect(label.style?.color, const GuiPalette().fgDim);
+    });
+
+    testWidgets('示数区位于控制栏（SPAN 滑块）下方', (tester) async {
+      await _pump(tester, TrendChart(history: _three()));
+
       expect(
-        tester
-            .widget<Text>(find.descendant(of: row, matching: find.text('U')))
-            .style
-            ?.color,
-        const GuiPalette().series1,
+        tester.getTopLeft(find.byKey(TrendChart.readoutAreaKey)).dy,
+        greaterThan(
+          tester.getTopLeft(find.byKey(TrendChart.spanSliderKey)).dy,
+        ),
+        reason: '顺序应为 波形 → 控制栏 → 示数区',
       );
     });
 
     testWidgets('极值行窗口无数据：单个 —', (tester) async {
       await _pump(tester, TrendChart(history: ChartHistory()));
 
-      final row = find.byKey(TrendChart.extremaRowKey);
-      expect(row, findsOneWidget);
+      final area = find.byKey(TrendChart.readoutAreaKey);
+      expect(area, findsOneWidget);
       expect(
-        find.descendant(of: row, matching: find.text('—')),
+        find.descendant(of: area, matching: find.text('—')),
         findsOneWidget,
       );
     });
 
-    testWidgets('ΣI 行：最新样本三相和（有符号 / magenta / 三相和）', (tester) async {
+    testWidgets('ΣI 列：最新样本三相和（有符号 / magenta / 三相和青标签）', (tester) async {
       await _pump(tester, TrendChart(history: _three()));
 
       final row = find.byKey(TrendChart.sigmaRowKey);
@@ -399,10 +470,10 @@ void main() {
         tester.widget<Text>(sum).style?.color,
         const GuiPalette().valueMagenta,
       );
-      expect(
-        find.descendant(of: row, matching: find.text('三相和')),
-        findsOneWidget,
+      final label = tester.widget<Text>(
+        find.descendant(of: row, matching: find.text('ΣI 三相和')),
       );
+      expect(label.style?.color, const GuiPalette().accent);
     });
 
     testWidgets('ΣI 符号正确性：三相和为负时带负号', (tester) async {
@@ -426,18 +497,19 @@ void main() {
     testWidgets('ΣI 无数据：—', (tester) async {
       await _pump(tester, TrendChart(history: ChartHistory()));
 
-      final row = find.byKey(TrendChart.sigmaRowKey);
-      expect(row, findsOneWidget);
       expect(
-        find.descendant(of: row, matching: find.text('—')),
+        find.descendant(
+          of: find.byKey(TrendChart.readoutAreaKey),
+          matching: find.text('—'),
+        ),
         findsOneWidget,
       );
     });
   });
 
   group('TrendChart 波形高刷（节流移除）', () {
-    test('UI 刷新上限提升到 50 Hz（20 ms 通知窗口）', () {
-      expect(kUiRefreshHz, 50);
+    test('UI 刷新上限提升到 120 Hz（≥ 屏幕 vsync，数据进图无内部节流）', () {
+      expect(kUiRefreshHz, greaterThanOrEqualTo(120));
     });
 
     testWidgets('新样本即时推进视口（无 100ms 数据节流）', (tester) async {
@@ -465,25 +537,29 @@ void main() {
       );
     });
 
-    testWidgets('示数（极值 / ΣI）保持 5 Hz 节流：<200ms 不更新，200ms 才更新', (
+    testWidgets('示数（MAX/RMS/MIN / ΣI）保持 5 Hz 节流：<200ms 不更新，200ms 才更新', (
       tester,
     ) async {
       final history = ChartHistory()
         ..pushBatch(<StatusDto>[_sample(iU: 1), _sample(iU: 2), _sample(iU: 3)]);
       await _pump(tester, TrendChart(history: history));
-      expect(find.text('+3.00 / +1.00'), findsOneWidget);
+      final u = find.byKey(TrendChart.phaseColumnKey(0));
+      expect(find.descendant(of: u, matching: find.text('+3.00')), findsOneWidget);
 
       history.pushBatch(<StatusDto>[_sample(iU: 50)]);
       await _pump(tester, TrendChart(history: history));
 
       expect(
-        find.text('+50.00 / +1.00'),
+        find.descendant(of: u, matching: find.text('+50.00')),
         findsNothing,
         reason: 'readouts keep the 200 ms digit throttle',
       );
 
       await tester.pump(const Duration(milliseconds: 200));
-      expect(find.text('+50.00 / +1.00'), findsOneWidget);
+      expect(
+        find.descendant(of: u, matching: find.text('+50.00')),
+        findsOneWidget,
+      );
     });
   });
 

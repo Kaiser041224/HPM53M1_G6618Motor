@@ -80,6 +80,42 @@ async fn watch_collects_batches_and_signals_advance() {
 }
 
 #[tokio::test]
+async fn watch_pushes_every_sample_as_its_own_batch() {
+    let _guard = serial().await;
+    let addr = spawn_sim().await;
+    api::connect(addr).await.unwrap();
+
+    let collector = Arc::new(Collector::default());
+    let c = collector.clone();
+    gui_frb::watch::start_with(1000, move |batch| c.emit(batch)).unwrap();
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    gui_frb::watch::stop().unwrap();
+
+    let batches = collector.snapshot();
+    assert!(
+        batches.len() >= 50,
+        "expected >=50 per-sample batches in ~120ms, got {}",
+        batches.len()
+    );
+    for batch in &batches {
+        assert_eq!(
+            batch.samples.len(),
+            1,
+            "1 kHz feed must push one sample per batch"
+        );
+    }
+    for pair in batches.windows(2) {
+        assert_eq!(
+            pair[1].seq,
+            pair[0].seq + 1,
+            "each per-sample batch bumps seq by exactly one"
+        );
+    }
+
+    api::disconnect().await.unwrap();
+}
+
+#[tokio::test]
 async fn stop_halts_batches() {
     let _guard = serial().await;
     let addr = spawn_sim().await;

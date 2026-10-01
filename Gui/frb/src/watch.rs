@@ -7,13 +7,18 @@
 use crate::api::{FrbError, StatusBatchDto, StatusDto};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
 const RATE_MIN: u32 = 1;
 const RATE_MAX: u32 = 5000;
-const BATCH_MAX_SAMPLES: usize = 16;
-const BATCH_WINDOW: Duration = Duration::from_millis(20);
+/// Samples per emitted batch. `1` means each 1 ms tick is pushed on its own,
+/// so a 1 kHz watch produces ~1000 events/s with `batch.samples.len() == 1`,
+/// keeping the newest sample one tick from the UI instead of one 20 ms window.
+const FLUSH_EVERY_SAMPLES: usize = 1;
+/// Initial capacity of the (per-tick, hence size-[FLUSH_EVERY_SAMPLES]) batch
+/// buffer; a small constant avoids a realloc on the hot path.
+const BATCH_CAPACITY: usize = FLUSH_EVERY_SAMPLES;
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
 struct WatchHandle {
@@ -104,9 +109,8 @@ where
     let mut interval = tokio::time::interval(period);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    let mut samples: Vec<StatusDto> = Vec::with_capacity(BATCH_MAX_SAMPLES);
+    let mut samples: Vec<StatusDto> = Vec::with_capacity(BATCH_CAPACITY);
     let mut seq: u64 = 0;
-    let mut batch_started: Option<Instant> = None;
     let mut consecutive_failures: u32 = 0;
 
     loop {
@@ -114,15 +118,13 @@ where
         match crate::api::status_sample().await {
             Ok(sample) => {
                 consecutive_failures = 0;
-                let started = *batch_started.get_or_insert_with(Instant::now);
                 samples.push(sample);
-                if samples.len() >= BATCH_MAX_SAMPLES || started.elapsed() >= BATCH_WINDOW {
+                if samples.len() >= FLUSH_EVERY_SAMPLES {
                     let batch = StatusBatchDto {
                         samples: std::mem::take(&mut samples),
                         seq,
                     };
                     seq = seq.wrapping_add(1);
-                    batch_started = None;
                     if !emit(batch) {
                         break;
                     }

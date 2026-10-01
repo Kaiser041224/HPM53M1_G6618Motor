@@ -123,29 +123,49 @@ class TrendChart extends StatefulWidget {
   /// Key of the hover crosshair readout panel.
   static const Key readoutKey = Key('trend_cursor_readout');
 
-  /// Key of the per-channel window-extrema (max / min) readout row below the
-  /// plot.
-  static const Key extremaRowKey = Key('trend_extrema_row');
+  /// Key of the whole numeric readout area below the control bar (the three
+  /// per-phase `MAX / RMS / MIN` columns plus the `ΣI` column).
+  static const Key readoutAreaKey = Key('trend_readout_area');
 
-  /// Key of the three-phase current-sum readout row below the extrema row.
+  /// Key of the `ΣI` three-phase-sum column at the right of the readout area.
   static const Key sigmaRowKey = Key('trend_sigma_row');
 
-  /// Channel letters of the extrema row, in series order.
+  /// Key of one phase column (`U` / `V` / `W`) in the readout area.
+  static Key phaseColumnKey(int channel) =>
+      Key('trend_phase_${channelLetters[channel]}');
+
+  /// Key of one phase colour swatch (12×12 series-colour block).
+  static Key phaseSwatchKey(int channel) =>
+      Key('trend_phase_swatch_${channelLetters[channel]}');
+
+  /// Channel letters of the readout area, in series order.
   static const List<String> channelLetters = <String>['U', 'V', 'W'];
 
+  /// Value font size [logical px] in the readout area (≥ 22).
+  static const double valueSize = 22;
+
+  /// Channel-letter font size [logical px] in the readout area (≥ 18).
+  static const double channelLetterSize = 18;
+
+  /// `MAX` / `RMS` / `MIN` row-label font size [logical px] (≥ 11).
+  static const double rowLabelSize = 11;
+
+  /// Unit (`A`) font size [logical px] in the readout area.
+  static const double unitSize = 11;
+
+  /// Phase colour-swatch edge [logical px].
+  static const double swatchSize = 12;
+
+  /// Fixed width [logical px] of the `MAX` / `RMS` / `MIN` label gutter, so the
+  /// three value columns line up across every phase.
+  static const double rowLabelWidth = 34;
+
   /// Formats [value] with two decimals and an explicit sign (`+3.00` / `-3.00`).
-  /// Shared by the extrema and current-sum readouts.
+  /// Shared by the `MAX` / `MIN` and current-sum readouts.
   static String formatSigned(double value) {
     final text = value.toStringAsFixed(2);
     return value >= 0 ? '+$text' : text;
   }
-
-  /// Formats a signed window-extrema pair as `+10.02 / -9.87`, or null when the
-  /// channel has no finite sample in the window.
-  static String? formatExtrema(double? max, double? min) =>
-      (max == null || min == null)
-      ? null
-      : '${formatSigned(max)} / ${formatSigned(min)}';
 
   @override
   State<TrendChart> createState() => TrendChartState();
@@ -380,21 +400,6 @@ class TrendChartState extends State<TrendChart> {
             ],
           ),
           const SizedBox(height: 8),
-          // Waveform readouts (per-phase window max/min and the three-phase
-          // current sum) are human-readable numbers, so they keep the 5 Hz
-          // digit throttle while the plot itself follows every batch.
-          StableRefresh(
-            refreshKey: (history.version, _viewSpanSec, _anchorSec),
-            builder: (context) => Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                _extremaRow(palette, scale, history),
-                const SizedBox(height: 6),
-                _sigmaRow(palette, scale, history),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
           Row(
             children: <Widget>[
               Expanded(child: Text(TrendChart.caption, style: scale.label)),
@@ -404,8 +409,17 @@ class TrendChartState extends State<TrendChart> {
               ],
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           _controlBar(palette, scale),
+          const SizedBox(height: 14),
+          // Readout area sits BELOW the control bar: waveform (plot + time
+          // axis) → controls (SPAN slider + buttons) → digits. The numeric
+          // readouts are human-readable, so they keep the 5 Hz digit throttle
+          // while the plot above follows every 1 kHz batch.
+          StableRefresh(
+            refreshKey: (history.version, _viewSpanSec, _anchorSec),
+            builder: (context) => _readoutArea(palette, scale, history),
+          ),
         ],
       ),
     );
@@ -548,12 +562,18 @@ class TrendChartState extends State<TrendChart> {
     );
   }
 
-  /// The per-channel window-extrema readout: `U +10.02 / -9.87 A` — the signed
-  /// largest and smallest sample in the visible window, with the letter in the
-  /// series colour, the values in the A-dimension green and the `A` unit. A
-  /// channel with no finite sample in the window renders `—`; a window that
-  /// holds no sample at all renders a single `—` (design-system §6 rule 2).
-  Widget _extremaRow(
+  /// The numeric readout area below the control bar: three phase columns
+  /// (`U` / `V` / `W`) plus a `ΣI` column, laid out to fill the frame width.
+  ///
+  /// Each phase column carries a 12×12 series-colour swatch and the channel
+  /// letter on the left, and a vertical `MAX / RMS / MIN` stack on the right.
+  /// `MAX` / `MIN` are the signed window extrema and `RMS` the window
+  /// root-mean-square, each tinted green for the `A` dimension with its `A`
+  /// unit; the row labels stay a dim small tier. The `ΣI` column shows the
+  /// newest sample's three-phase sum in magenta under the cyan `ΣI 三相和`
+  /// caption. A window with no sample at all renders a single `—`
+  /// (design-system §6 rule 2).
+  Widget _readoutArea(
     GuiPalette palette,
     GuiTypeScale scale,
     ChartHistory history,
@@ -565,10 +585,15 @@ class TrendChartState extends State<TrendChart> {
       viewStart,
       _viewSpanSec,
     );
+    final rms = TrendChartPainter.windowRms(history, viewStart, _viewSpanSec);
     final colors = <Color>[palette.series1, palette.series2, palette.series3];
-    if (extrema.every((e) => e == null)) {
+    var hasAny = false;
+    for (var channel = 0; channel < ChartHistory.channelCount; channel++) {
+      if (extrema[channel] != null || rms[channel] != null) hasAny = true;
+    }
+    if (!hasAny) {
       return Row(
-        key: TrendChart.extremaRowKey,
+        key: TrendChart.readoutAreaKey,
         children: <Widget>[
           Text(
             '—',
@@ -580,56 +605,151 @@ class TrendChartState extends State<TrendChart> {
         ],
       );
     }
-    return Wrap(
-      key: TrendChart.extremaRowKey,
-      spacing: 18,
-      runSpacing: 6,
+    return Row(
+      key: TrendChart.readoutAreaKey,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        for (var channel = 0;
-            channel < TrendChart.channelLetters.length;
-            channel++)
-          _extremaChannel(palette, scale, channel, colors[channel], extrema[channel]),
+        for (var channel = 0; channel < ChartHistory.channelCount; channel++)
+          ...<Widget>[
+            Expanded(
+              child: _phaseColumn(
+                palette,
+                scale,
+                channel,
+                colors[channel],
+                extrema[channel],
+                rms[channel],
+              ),
+            ),
+            const SizedBox(width: 18),
+          ],
+        Expanded(child: _sigmaColumn(palette, scale, history)),
       ],
     );
   }
 
-  /// One phase of [_extremaRow]: letter, signed max / min pair and unit.
-  Widget _extremaChannel(
+  /// One phase column of [_readoutArea]: swatch + letter on the left, the
+  /// `MAX / RMS / MIN` value stack on the right.
+  Widget _phaseColumn(
     GuiPalette palette,
     GuiTypeScale scale,
     int channel,
-    Color letterColor,
+    Color color,
     ({double max, double min})? extrema,
+    double? rms,
   ) {
-    final text = TrendChart.formatExtrema(extrema?.max, extrema?.min);
     return Row(
-      mainAxisSize: MainAxisSize.min,
+      key: TrendChart.phaseColumnKey(channel),
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(
-          TrendChart.channelLetters[channel],
-          style: scale.label.copyWith(color: letterColor),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            Container(
+              key: TrendChart.phaseSwatchKey(channel),
+              width: TrendChart.swatchSize,
+              height: TrendChart.swatchSize,
+              color: color,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              TrendChart.channelLetters[channel],
+              style: scale.data.copyWith(
+                fontSize: TrendChart.channelLetterSize,
+                color: color,
+                shadows: const <Shadow>[],
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 5),
-        Text(
-          text ?? '—',
-          style: scale.data.copyWith(
-            fontSize: 12,
-            color: text == null ? palette.fgMute : tintForUnit(palette, 'A'),
-            shadows: const <Shadow>[],
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              _readoutLine(
+                palette,
+                scale,
+                'MAX',
+                extrema == null ? null : TrendChart.formatSigned(extrema.max),
+              ),
+              const SizedBox(height: 4),
+              _readoutLine(
+                palette,
+                scale,
+                'RMS',
+                rms?.toStringAsFixed(2),
+              ),
+              const SizedBox(height: 4),
+              _readoutLine(
+                palette,
+                scale,
+                'MIN',
+                extrema == null ? null : TrendChart.formatSigned(extrema.min),
+              ),
+            ],
           ),
         ),
-        if (text != null) ...<Widget>[
-          const SizedBox(width: 3),
-          Text('A', style: scale.label),
-        ],
       ],
     );
   }
 
-  /// The three-phase current-sum readout: `ΣI = i_u + i_v + i_w` of the newest
-  /// sample, signed and emphasised in magenta with the `三相和` annotation, so a
-  /// non-zero sum is visible at a glance. `—` when no sample has arrived.
-  Widget _sigmaRow(GuiPalette palette, GuiTypeScale scale, ChartHistory history) {
+  /// One `label value A` line of a phase column. The value takes the `A`
+  /// dimension green (or a dim `—` when the window has no finite sample), the
+  /// label the dim small tier.
+  Widget _readoutLine(
+    GuiPalette palette,
+    GuiTypeScale scale,
+    String label,
+    String? value,
+  ) {
+    final hasValue = value != null;
+    // Shrink-to-fit keeps a narrow column from overflowing; the widget-tree
+    // font sizes stay at their ≥22 / ≥11 design values.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          SizedBox(
+            width: TrendChart.rowLabelWidth,
+            child: Text(
+              label,
+              style: scale.label.copyWith(
+                fontSize: TrendChart.rowLabelSize,
+                color: palette.fgDim,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            hasValue ? value : '—',
+            style: scale.data.copyWith(
+              fontSize: TrendChart.valueSize,
+              color: hasValue ? tintForUnit(palette, 'A') : palette.fgMute,
+              shadows: const <Shadow>[],
+            ),
+          ),
+          if (hasValue) ...<Widget>[
+            const SizedBox(width: 3),
+            Text(
+              'A',
+              style: scale.label.copyWith(
+                fontSize: TrendChart.unitSize,
+                color: palette.fgMute,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// The `ΣI` column of [_readoutArea]: the newest sample's three-phase sum
+  /// `i_u + i_v + i_w`, signed and emphasised in magenta under the cyan
+  /// `ΣI 三相和` caption. `—` when no sample has arrived.
+  Widget _sigmaColumn(GuiPalette palette, GuiTypeScale scale, ChartHistory history) {
     final len = history.len;
     final sum = len == 0
         ? null
@@ -637,25 +757,45 @@ class TrendChartState extends State<TrendChart> {
               history.channelAt(1, len - 1) +
               history.channelAt(2, len - 1);
     final hasData = sum != null && sum.isFinite;
-    return Row(
+    return Column(
       key: TrendChart.sigmaRowKey,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text('ΣI', style: scale.label),
-        const SizedBox(width: 12),
         Text(
-          hasData ? TrendChart.formatSigned(sum) : '—',
-          style: scale.data.copyWith(
-            fontSize: 12,
-            color: hasData ? palette.valueMagenta : palette.fgMute,
-            shadows: const <Shadow>[],
+          'ΣI 三相和',
+          style: scale.label.copyWith(
+            fontSize: TrendChart.rowLabelSize,
+            color: palette.accent,
           ),
         ),
-        if (hasData) ...<Widget>[
-          const SizedBox(width: 3),
-          Text('A', style: scale.label),
-        ],
-        const SizedBox(width: 10),
-        Text('三相和', style: scale.label.copyWith(color: palette.fgMute)),
+        const SizedBox(height: 10),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                hasData ? TrendChart.formatSigned(sum) : '—',
+                style: scale.data.copyWith(
+                  fontSize: TrendChart.valueSize,
+                  color: hasData ? palette.valueMagenta : palette.fgMute,
+                  shadows: const <Shadow>[],
+                ),
+              ),
+              if (hasData) ...<Widget>[
+                const SizedBox(width: 3),
+                Text(
+                  'A',
+                  style: scale.label.copyWith(
+                    fontSize: TrendChart.unitSize,
+                    color: palette.fgMute,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -911,6 +1051,42 @@ class TrendChartPainter extends CustomPainter {
       }
     }
     return extrema;
+  }
+
+  /// Window root-mean-square per channel (series order) over
+  /// `[startSec, startSec + spanSec]` (both edges inclusive, sharing
+  /// [windowExtrema]'s viewport conversion and [windowEdgeEpsilon] tolerance),
+  /// or null for a channel with no finite sample in the window.
+  ///
+  /// RMS is `sqrt(mean(x²))` over every finite sample the viewport covers, so
+  /// it reflects the whole visible window rather than a single instant.
+  static List<double?> windowRms(
+    ChartHistory history,
+    double startSec,
+    double spanSec,
+  ) {
+    final sums = List<double>.filled(ChartHistory.channelCount, 0);
+    final counts = List<int>.filled(ChartHistory.channelCount, 0);
+    final endSec = startSec + spanSec;
+    final first = history.lowerBoundTime(startSec);
+    final last = history.lowerBoundTime(endSec);
+    var end = last;
+    if (last < history.len &&
+        history.timeAt(last) <= endSec + windowEdgeEpsilon) {
+      end = last + 1;
+    }
+    for (var i = first; i < end; i++) {
+      for (var channel = 0; channel < ChartHistory.channelCount; channel++) {
+        final value = history.channelAt(channel, i);
+        if (!value.isFinite) continue;
+        sums[channel] += value * value;
+        counts[channel]++;
+      }
+    }
+    return <double?>[
+      for (var channel = 0; channel < ChartHistory.channelCount; channel++)
+        counts[channel] == 0 ? null : math.sqrt(sums[channel] / counts[channel]),
+    ];
   }
 
   /// Oldest-first index of the sample nearest (in arrival time) to [seconds],

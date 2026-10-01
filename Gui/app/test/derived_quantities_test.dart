@@ -235,8 +235,8 @@ void main() {
     });
   });
 
-  group('相电流移驻门限区', () {
-    testWidgets('三行相电流 + F_ELEC 组，位于相对门限条同列', (tester) async {
+  group('相电流移出示数区', () {
+    testWidgets('门限区仅保留 F_ELEC；I_U/I_V/I_W 相电流框已移除', (tester) async {
       final state = AppState.test(
         status: makeStatus(iU: 1, iV: 2, iW: 3, freq: 50),
         metas: const [],
@@ -245,40 +245,25 @@ void main() {
 
       await _pump(tester, LimitZone(state: state));
 
-      final panel = find.byKey(const Key('limit_phase_panel'));
+      final panel = find.byKey(const Key('limit_freq_panel'));
       expect(panel, findsOneWidget);
       expect(
-        find.descendant(of: panel, matching: find.text('相电流')),
+        find.descendant(of: panel, matching: find.text('F_ELEC')),
         findsOneWidget,
-      );
-      expect(
-        find.descendant(of: panel, matching: find.text('PHASE CURRENTS')),
-        findsOneWidget,
-      );
-      for (final name in const <String>['I_U', 'I_V', 'I_W', 'F_ELEC']) {
-        expect(
-          find.descendant(of: panel, matching: find.text(name)),
-          findsOneWidget,
-          reason: name,
-        );
-      }
-      expect(
-        find.descendant(of: panel, matching: find.text('RMS')),
-        findsNWidgets(3),
       );
       expect(
         find.descendant(of: panel, matching: find.text('SETPOINT')),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: panel, matching: find.text('1.000')),
-        findsOneWidget,
-      );
-      expect(
         find.descendant(of: panel, matching: find.text('50.00')),
         findsOneWidget,
       );
-      // The phase panel sits beside the relative-threshold panel.
+      // The three phase rows moved into the trend chart readout.
+      for (final gone in const <String>['I_U', 'I_V', 'I_W', '相电流']) {
+        expect(find.text(gone), findsNothing, reason: gone);
+      }
+      // The frequency panel still sits beside the relative-threshold panel.
       expect(find.byKey(const Key('limit_heat_panel')), findsOneWidget);
     });
   });

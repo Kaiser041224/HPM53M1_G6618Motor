@@ -13,12 +13,15 @@ export '../bridge/frb/api.dart'
     show ParamMetaDto, ParamValueDto, StatusBatchDto, StatusDto, StatsDto;
 
 /// UI refresh ceiling for batched telemetry [Hz]: the coalescing timer fires
-/// every `1000 / kUiRefreshHz` ms (20 ms at 50 Hz), so at most this many
+/// every `1000 / kUiRefreshHz` ms (8 ms at 120 Hz), so at most this many
 /// notifications per second reach the widget tree no matter how fast batches
-/// arrive. The 1 kHz sample feed still lands in [AppState.chartHistory] in
-/// full; the waveform follows each notification, while the numeric readouts
-/// are throttled further in the widgets.
-const int kUiRefreshHz = 50;
+/// arrive. At 120 Hz the ceiling sits at or above the panel's own vsync
+/// (60–120 Hz), so the waveform tracks the 1 kHz feed within one rendered
+/// frame; the higher data rate only piles up work Flutter already coalesces
+/// per frame, it does not force extra repaints. The 1 kHz sample feed still
+/// lands in [AppState.chartHistory] in full; the waveform follows each
+/// notification, while the numeric readouts keep their own 5 Hz throttle.
+const int kUiRefreshHz = 120;
 
 /// App-wide observable state.
 ///
@@ -58,9 +61,9 @@ class AppState extends ChangeNotifier {
   static const double rttEmaAlpha = 0.2;
 
   /// A live value that has not been refreshed for longer than this degrades to
-  /// [Freshness.stale]. With a 1 kHz batched feed (≈20 ms per batch) this is
-  /// five missed batches — tight enough that a stalled watch shows up promptly
-  /// (design-system §6 rule 2).
+  /// [Freshness.stale]. With a 1 kHz feed (one sample per 1 ms tick) this is
+  /// roughly a hundred missed ticks — tight enough that a stalled watch shows
+  /// up promptly (design-system §6 rule 2).
   static const Duration kStaleAfter = Duration(milliseconds: 100);
 
   /// Freshness key of a status tile; matches the `status_zone.dart` widget keys
@@ -124,7 +127,7 @@ class AppState extends ChangeNotifier {
   bool loadingParams = false;
 
   /// Latest device status sample; the newest sample of the last batch, so a
-  /// tile read here is current to within one ~20 ms batch. Cleared on
+  /// tile read here is current to within one ~1 ms tick. Cleared on
   /// [disconnect].
   frb.StatusDto? status;
 
@@ -193,9 +196,9 @@ class AppState extends ChangeNotifier {
   double? get rpmOutput => _rpmOutputEma;
 
   /// Flat, timestamped 60 s ring of the three phase currents, appended once per
-  /// batch by the 1 kHz watch (≈20 ms batches). Drives the ScopeZone trend
-  /// chart — a 1 kHz, [ChartHistory.capacity]-sample preview, not the reserved
-  /// `STREAM_SUB` stream. Cleared on [disconnect].
+  /// batch by the 1 kHz watch (one sample per 1 ms tick). Drives the ScopeZone
+  /// trend chart — a 1 kHz, [ChartHistory.capacity]-sample preview, not the
+  /// reserved `STREAM_SUB` stream. Cleared on [disconnect].
   final ChartHistory chartHistory = ChartHistory();
 
   /// Appends [snapshot] to [chartHistory].

@@ -13,11 +13,13 @@ import 'panel_title.dart';
 import 'status_zone.dart' show HeatLoadBar;
 
 /// The 门限 (limits) view of the 示波 category: the six relative-threshold
-/// loudness meters (NTC / U / V / W / VBUS / 模组) beside the three phase
-/// currents and the measured electrical frequency.
+/// loudness meters (NTC / U / V / W / VBUS / 模组) beside the measured
+/// electrical frequency.
 ///
-/// Split out of the retired `scope_zone.dart` right column so the scope
-/// category can tab between the waveform and its limits.
+/// The three phase currents no longer live here: their I_U / I_V / I_W boxes
+/// moved into the trend chart's readout area (`TrendChart`), where they sit
+/// below the SPAN control bar next to the waveform they summarise. Only the
+/// F_ELEC readout stays in place.
 class LimitZone extends StatelessWidget {
   const LimitZone({super.key, required this.state});
 
@@ -34,7 +36,7 @@ class LimitZone extends StatelessWidget {
           SectionTitle(
             title: '门限',
             en: 'Limits',
-            trailing: Text('相对门限响度条 · 相电流 RMS', style: scale.label),
+            trailing: Text('相对门限响度条 · 电频率', style: scale.label),
           ),
           const SizedBox(height: 14),
           Row(
@@ -52,9 +54,9 @@ class LimitZone extends StatelessWidget {
               const SizedBox(width: 34),
               Expanded(
                 child: HairlineFrame(
-                  key: const Key('limit_phase_panel'),
+                  key: const Key('limit_freq_panel'),
                   padding: const EdgeInsets.all(10),
-                  child: _PhaseCurrentPanel(state: state),
+                  child: _FrequencyPanel(state: state),
                 ),
               ),
             ],
@@ -130,15 +132,14 @@ class _HeatLoadPanel extends StatelessWidget {
   }
 }
 
-/// The three phase currents (moved here from the 状态监视 tiles) plus the
-/// electrical frequency.
+/// The measured electrical frequency (F_ELEC).
 ///
-/// Each phase row shows its channel name in the matching series colour, the RMS
-/// reading in A (3 decimals, neutral tone) and an `RMS` footnote; the measured
-/// F_ELEC follows as a fourth row (`SETPOINT` footnote, 2 decimals Hz). Missing
-/// values render `—`, never a fabricated `0` (design-system §6 rule 2).
-class _PhaseCurrentPanel extends StatelessWidget {
-  const _PhaseCurrentPanel({required this.state});
+/// The three phase currents that used to share this panel now live in the
+/// trend chart's readout area; only the F_ELEC row stays in place here
+/// (`SETPOINT` footnote, 2 decimals Hz). A missing value renders `—`, never a
+/// fabricated `0` (design-system §6 rule 2).
+class _FrequencyPanel extends StatelessWidget {
+  const _FrequencyPanel({required this.state});
 
   final AppState state;
 
@@ -148,14 +149,8 @@ class _PhaseCurrentPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        const PanelTitle(title: '相电流', en: 'PHASE CURRENTS'),
+        const PanelTitle(title: '电频率', en: 'ELECTRICAL FREQ'),
         const SizedBox(height: 12),
-        _phaseRow(context, name: 'I_U', value: status?.iU),
-        _hairline(context),
-        _phaseRow(context, name: 'I_V', value: status?.iV),
-        _hairline(context),
-        _phaseRow(context, name: 'I_W', value: status?.iW),
-        _hairline(context),
         _valueRow(
           context,
           name: 'F_ELEC',
@@ -167,25 +162,6 @@ class _PhaseCurrentPanel extends StatelessWidget {
       ],
     );
   }
-
-  Widget _hairline(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    // 行分割归一：低亮青 line（#173E44），不再用更暗的 lineDim。
-    return Container(height: palette.lineWidth, color: palette.line);
-  }
-
-  Widget _phaseRow(
-    BuildContext context, {
-    required String name,
-    required double? value,
-  }) => _valueRow(
-    context,
-    name: name,
-    value: value,
-    unit: 'A',
-    precision: 3,
-    note: 'RMS',
-  );
 
   /// One aligned readout row: cyan channel name + dimension-tinted value + note.
   Widget _valueRow(
@@ -204,7 +180,7 @@ class _PhaseCurrentPanel extends StatelessWidget {
         children: <Widget>[
           Text(name, style: guiLabelStyle(palette, scale)),
           const Spacer(),
-          // Monitor readout: sample at 5 Hz so it does not flicker at 25 Hz.
+          // Monitor readout: sample at 5 Hz so it does not flicker at 120 Hz.
           StableDigits(
             text: value == null ? '—' : value.toStringAsFixed(precision),
             builder: (context) => GlowValue(

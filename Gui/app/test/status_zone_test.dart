@@ -375,9 +375,7 @@ void main() {
       expect(unitOf('模组'), '');
     });
 
-    testWidgets('相电流示数按量纲着色（A→green / Hz→purple），名称统一青色', (
-      tester,
-    ) async {
+    testWidgets('F_ELEC 示数按量纲着色（Hz→purple），名称统一青色', (tester) async {
       final state = AppState.test(
         status: makeStatus(iU: 1.82, iV: 1.75, iW: 1.80, freq: 50.0),
         metas: const [],
@@ -386,16 +384,12 @@ void main() {
 
       await _pump(tester, LimitZone(state: state));
 
-      final panel = find.byKey(const Key('limit_phase_panel'));
-      final iu = tester.widget<Text>(
-        find.descendant(of: panel, matching: find.text('I_U')),
+      final panel = find.byKey(const Key('limit_freq_panel'));
+      final name = tester.widget<Text>(
+        find.descendant(of: panel, matching: find.text('F_ELEC')),
       );
-      expect(iu.style?.color, const GuiPalette().accent);
-      expect(iu.style?.shadows, isNotEmpty);
-      final value = tester.widget<Text>(
-        find.descendant(of: panel, matching: find.text('1.820')),
-      );
-      expect(value.style?.color, const GuiPalette().valueGreen);
+      expect(name.style?.color, const GuiPalette().accent);
+      expect(name.style?.shadows, isNotEmpty);
       final freq = tester.widget<Text>(
         find.descendant(of: panel, matching: find.text('50.00')),
       );
@@ -679,7 +673,7 @@ void main() {
 
       await _pump(tester, LimitZone(state: state));
       expect(find.byKey(const Key('limit_heat_panel')), findsOneWidget);
-      expect(find.byKey(const Key('limit_phase_panel')), findsOneWidget);
+      expect(find.byKey(const Key('limit_freq_panel')), findsOneWidget);
       expect(find.byType(HairlineFrame), findsWidgets);
     });
   });

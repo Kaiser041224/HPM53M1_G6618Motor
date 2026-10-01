@@ -133,7 +133,7 @@ void main() {
     );
   });
 
-  testWidgets('示波页直铺：六条响度条与相电流面板同页', (tester) async {
+  testWidgets('示波页直铺：六条响度条与电频率面板同页', (tester) async {
     final state = AppState.test(status: _status(), metas: const []);
     addTearDown(state.dispose);
 
@@ -144,7 +144,10 @@ void main() {
     expect(find.byType(LimitZone), findsOneWidget);
     expect(find.byType(HeatLoadBar), findsNWidgets(6));
     expect(find.text('热与负载 · 相对门限'), findsOneWidget);
-    expect(find.text('相电流'), findsOneWidget);
+    // The phase-current boxes moved into the TrendChart readout area; the
+    // limits zone keeps only the F_ELEC panel.
+    expect(find.text('电频率'), findsOneWidget);
+    expect(find.text('相电流'), findsNothing);
   });
 
   testWidgets('监视·控制合并页：控制栏与故障构成同在，且无需切页', (tester) async {

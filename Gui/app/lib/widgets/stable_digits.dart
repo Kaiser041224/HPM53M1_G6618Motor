@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 
 /// Refresh rate [Hz] for human-readable numeric monitor text.
 ///
-/// The widget tree is notified at `kUiRefreshHz` (50 Hz) so the trend waveform
-/// follows every batch; monitor readouts only need to be legible, so
+/// The widget tree is notified at `kUiRefreshHz` (120 Hz, at or above panel
+/// vsync) so the trend waveform follows the 1 kHz feed every frame; monitor
+/// readouts only need to be legible, so
 /// [StableDigits] samples them at this reduced rate instead. 5 Hz is calm
 /// enough to stop a counter or a current reading from visibly flickering, yet
 /// fast enough to read as "live".
