@@ -216,6 +216,32 @@ void main() {
       expect(formatAxisSeconds(60), '60s');
     });
 
+    test('windowMax：窗口内逐通道最大 |样本|；无数据为 null', () {
+      final history = ChartHistory()..pushBatch(<StatusDto>[
+        _sample(iU: 1, iV: -2, iW: 0.5),
+        _sample(iU: -3, iV: 4, iW: -1.5),
+        _sample(iU: 2, iV: -1, iW: 0.5),
+      ]);
+
+      // Default 1 kHz → samples at 0 / 1 / 2 ms; the 10 ms window holds all.
+      final maxima = TrendChartPainter.windowMax(history, 0, 0.01);
+      expect(maxima, hasLength(3));
+      expect(maxima[0], 3.0);
+      expect(maxima[1], 4.0);
+      expect(maxima[2], 1.5);
+
+      // A window past the retained history has no sample on any channel.
+      expect(TrendChartPainter.windowMax(history, 100, 1), <double?>[
+        null,
+        null,
+        null,
+      ]);
+      expect(
+        TrendChartPainter.windowMax(ChartHistory(), 0, 2),
+        <double?>[null, null, null],
+      );
+    });
+
     test('轴标单位由 span 决定：inspect 远偏移仍用 ms', () {
       expect(formatAxisOffset(0, 0.1), '0');
       expect(formatAxisOffset(5.1, 0.1), '5100ms');
@@ -268,9 +294,10 @@ void main() {
       expect(find.text('2s'), findsWidgets);
       expect(find.text('1s'), findsOneWidget);
       expect(find.text('0'), findsOneWidget);
-      expect(find.text('U'), findsOneWidget);
-      expect(find.text('V'), findsOneWidget);
-      expect(find.text('W'), findsOneWidget);
+      // Each channel letter appears twice: the legend and the MAX row.
+      expect(find.text('U'), findsNWidgets(2));
+      expect(find.text('V'), findsNWidgets(2));
+      expect(find.text('W'), findsNWidgets(2));
       expect(find.text('3.000'), findsOneWidget);
     });
 
@@ -298,6 +325,81 @@ void main() {
 
       expect(find.text('STALE'), findsNothing);
       expect(find.text('LIVE'), findsOneWidget);
+    });
+  });
+
+  group('TrendChart 窗口最大值行', () {
+    testWidgets('波形下方 MAX 行显示窗口内 U/V/W 最大幅值（2 位 / green）', (
+      tester,
+    ) async {
+      await _pump(tester, TrendChart(history: _three()));
+
+      final row = find.byKey(TrendChart.maxRowKey);
+      expect(row, findsOneWidget);
+      expect(find.descendant(of: row, matching: find.text('MAX')), findsOneWidget);
+      // U max |3|, V max |-3|, W max |1.5|.
+      expect(
+        find.descendant(of: row, matching: find.text('3.00')),
+        findsNWidgets(2),
+      );
+      expect(
+        find.descendant(of: row, matching: find.text('1.50')),
+        findsOneWidget,
+      );
+      // Values take the A-dimension green; channel letters take series colours.
+      final value = tester.widget<Text>(
+        find.descendant(of: row, matching: find.text('3.00')).first,
+      );
+      expect(value.style?.color, const GuiPalette().valueGreen);
+      expect(
+        tester
+            .widget<Text>(find.descendant(of: row, matching: find.text('U')))
+            .style
+            ?.color,
+        const GuiPalette().series1,
+      );
+    });
+
+    testWidgets('窗口无数据：MAX 行显示单个 —', (tester) async {
+      await _pump(tester, TrendChart(history: ChartHistory()));
+
+      final row = find.byKey(TrendChart.maxRowKey);
+      expect(row, findsOneWidget);
+      expect(
+        find.descendant(of: row, matching: find.text('—')),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('TrendChart 10 Hz 数据节流', () {
+    testWidgets('新样本 <100ms 不推进视口，≥100ms 才推进', (tester) async {
+      final history = ChartHistory()
+        ..pushBatch(List<StatusDto>.generate(50, (i) => _sample(iU: i / 10)));
+      await _pump(tester, TrendChart(history: history));
+
+      TrendChartPainter painterOf() =>
+          tester.widget<CustomPaint>(_chartPaint()).painter!
+              as TrendChartPainter;
+
+      final before = painterOf().viewStartSec;
+      history.pushBatch(
+        List<StatusDto>.generate(40, (i) => _sample(iU: (i + 50) / 10)),
+      );
+
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(
+        painterOf().viewStartSec,
+        before,
+        reason: 'data-driven viewport is held below the 100 ms chart tick',
+      );
+
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(
+        painterOf().viewStartSec,
+        greaterThan(before),
+        reason: 'the 100 ms chart tick folds in the new samples',
+      );
     });
   });
 

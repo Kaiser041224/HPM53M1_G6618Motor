@@ -567,6 +567,77 @@ void main() {
     });
   });
 
+  group('门限条越限语义（>100%）', () {
+    const palette = GuiPalette();
+
+    testWidgets('>100%：百分比显示真实越限值（105%）', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'U 相', value: 105, threshold: 100, unit: 'A'),
+      );
+
+      expect(find.text('105'), findsOneWidget);
+      expect(find.text('%'), findsOneWidget);
+      // The ratio is preserved (not clamped) so the label is honest.
+      expect(
+        tester
+            .widget<VfdBar>(find.byKey(const Key('heat_bar_U 相')))
+            .ratio,
+        closeTo(1.05, 1e-6),
+      );
+    });
+
+    testWidgets('>100%：柱体与百分比文字转警告橙', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'VBUS', value: 120, threshold: 100, unit: 'V'),
+      );
+
+      expect(
+        tester.widget<VfdBar>(find.byKey(const Key('heat_bar_VBUS'))).tint,
+        palette.valueOrange,
+      );
+      expect(
+        tester.widget<Text>(find.text('120')).style?.color,
+        palette.valueOrange,
+      );
+    });
+
+    testWidgets('百分比封顶 999，防越限溢出', (tester) async {
+      await _pump(
+        tester,
+        const HeatLoadBar(name: 'U 相', value: 2000, threshold: 100, unit: 'A'),
+      );
+
+      expect(find.text('999'), findsOneWidget);
+      expect(find.text('%'), findsOneWidget);
+    });
+
+    testWidgets('≤100%：量纲专色保持（V→cyan / ℃→orange）', (tester) async {
+      await _pump(
+        tester,
+        const Column(
+          children: <Widget>[
+            HeatLoadBar(name: 'VBUS', value: 80, threshold: 100, unit: 'V'),
+            HeatLoadBar(name: 'NTC', value: 95, threshold: 100, unit: '℃'),
+          ],
+        ),
+      );
+
+      expect(
+        tester.widget<VfdBar>(find.byKey(const Key('heat_bar_VBUS'))).tint,
+        palette.valueCyan,
+      );
+      expect(
+        tester.widget<VfdBar>(find.byKey(const Key('heat_bar_NTC'))).tint,
+        palette.valueOrange,
+      );
+      // NTC's orange here is the dimension colour, not the over-limit switch.
+      expect(HeatLoadBar.overLimitTint(palette, 0.95), isNull);
+      expect(HeatLoadBar.overLimitTint(palette, 1.05), palette.valueOrange);
+    });
+  });
+
   group('v3 面板框（HairlineFrame main）', () {
     testWidgets('状态监视：组外框 + 5 瓦片内框双层嵌套（ENC 已迁出）', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);

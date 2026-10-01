@@ -16,30 +16,49 @@ const Duration kTextRefreshPeriod = Duration(
   milliseconds: 1000 ~/ kTextRefreshHz,
 );
 
-/// Throttles the rebuild of an arbitrary subtree to [kTextRefreshHz].
+/// Refresh rate [Hz] for the trend chart's data-driven repaint.
+///
+/// The chart plot is far denser than a text readout, so it is throttled to a
+/// gentler 10 Hz — smooth enough to read as live, calm enough that the eye is
+/// not asked to track a 25 Hz repaint. Pointer interaction bypasses this gate
+/// (see `TrendChart`): only the data-driven cadence is limited.
+const int kChartRefreshHz = 10;
+
+/// Period between accepted chart data updates: `1000 / kChartRefreshHz` = 100 ms.
+const Duration kChartRefreshPeriod = Duration(
+  milliseconds: 1000 ~/ kChartRefreshHz,
+);
+
+/// Throttles the rebuild of an arbitrary subtree to [period].
 ///
 /// The parent rebuilds at the full UI cadence (25 Hz) and hands the latest
 /// state in [refreshKey] together with a [builder] that closes over the current
-/// values. The builder's subtree is cached and only rebuilt once per
-/// [kTextRefreshPeriod] when [refreshKey] differs from the last accepted key;
-/// the very first subtree is built immediately. Returning the same cached
-/// instance on non-tick frames lets Flutter short-circuit the child update,
-/// which is what actually keeps the subtree off the 25 Hz path.
+/// values. The builder's subtree is cached and only rebuilt once per [period]
+/// when [refreshKey] differs from the last accepted key; the very first subtree
+/// is built immediately. Returning the same cached instance on non-tick frames
+/// lets Flutter short-circuit the child update, which is what actually keeps
+/// the subtree off the 25 Hz path.
 ///
+/// [period] defaults to [kTextRefreshPeriod] (5 Hz); pass
+/// [kChartRefreshPeriod] for the trend chart's 10 Hz data cadence.
 /// [StableDigits] is the numeric specialisation built on top of this.
 class StableRefresh extends StatefulWidget {
   const StableRefresh({
     super.key,
     required this.refreshKey,
     required this.builder,
+    this.period = kTextRefreshPeriod,
   });
 
   /// Latest refresh key. The subtree is only rebuilt when this changes and the
-  /// next [kTextRefreshPeriod] tick has elapsed.
+  /// next [period] tick has elapsed.
   final Object? refreshKey;
 
   /// Builds the throttled subtree from the values captured in its closure.
   final WidgetBuilder builder;
+
+  /// Refresh period; defaults to the 5 Hz [kTextRefreshPeriod].
+  final Duration period;
 
   @override
   State<StableRefresh> createState() => _StableRefreshState();
@@ -50,9 +69,9 @@ class _StableRefreshState extends State<StableRefresh> {
   /// tick.
   late Object? _shownKey;
 
-  /// 5 Hz sampler. Cancelled in [dispose] so widget tests leave no pending
+  /// Period sampler. Cancelled in [dispose] so widget tests leave no pending
   /// timer and the tree stops rebuilding once unmounted.
-  late final Timer _timer;
+  late Timer _timer;
 
   /// Cached subtree, rebuilt only when [_pending] is set.
   Widget? _cached;
@@ -64,7 +83,16 @@ class _StableRefreshState extends State<StableRefresh> {
   void initState() {
     super.initState();
     _shownKey = widget.refreshKey;
-    _timer = Timer.periodic(kTextRefreshPeriod, _onTick);
+    _timer = Timer.periodic(widget.period, _onTick);
+  }
+
+  @override
+  void didUpdateWidget(covariant StableRefresh oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.period != widget.period) {
+      _timer.cancel();
+      _timer = Timer.periodic(widget.period, _onTick);
+    }
   }
 
   @override

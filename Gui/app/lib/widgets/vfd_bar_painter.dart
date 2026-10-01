@@ -49,7 +49,8 @@ class VfdBarPainter extends CustomPainter {
     this.warnBand = true,
   });
 
-  /// Filled fraction, nominally `[0, 1]` (already clamped by [VfdBar]).
+  /// Filled fraction, nominally `[0, 1]`; values above one saturate the lit
+  /// width at full scale while the caller signals the over-limit with its tint.
   final double ratio;
 
   /// Accent tube colour, derived from the dimension.
@@ -394,7 +395,9 @@ class VfdBarPainter extends CustomPainter {
 ///
 /// [ratio] drives the lit fraction, [peak] the optional magenta peak-hold
 /// marker, [tint] the tube/spill dimension colour and [warnBand] the 50%/85%
-/// threshold ticks.
+/// threshold ticks. A [ratio] above one is allowed through to the painter,
+/// which saturates the lit width at full scale; the over-limit tint is the
+/// caller's responsibility (see `HeatLoadBar`).
 class VfdBar extends StatelessWidget {
   const VfdBar({
     super.key,
@@ -405,7 +408,8 @@ class VfdBar extends StatelessWidget {
     this.height = VfdBarPainter.barHeight,
   });
 
-  /// Filled fraction, clamped to `[0, 1]` when rendered.
+  /// Filled fraction. Floored at 0; values above one saturate at full scale
+  /// while the caller swaps in the over-limit tint.
   final double ratio;
 
   /// Accent tube colour (see [tintForUnit]).
@@ -422,13 +426,15 @@ class VfdBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final clampedRatio = ratio.clamp(0.0, 1.0).toDouble();
+    // Only the fill width is clamped (inside the painter); the ratio value is
+    // allowed past 1 so the caller can render the true over-limit percentage.
+    final safeRatio = ratio.isFinite && ratio > 0 ? ratio : 0.0;
     final clampedPeak = peak?.clamp(0.0, 1.0).toDouble();
     return SizedBox(
       height: height,
       child: CustomPaint(
         painter: VfdBarPainter(
-          ratio: clampedRatio,
+          ratio: safeRatio,
           peak: clampedPeak,
           tint: tint,
           warnBand: warnBand,

@@ -224,6 +224,12 @@ String _unitForName(String name) {
 /// sampled at [kTextRefreshHz] through [StableRefresh]. When no threshold (or
 /// no value) is available the bar stays an honest empty trough showing `—` —
 /// never a fabricated `0 %` (design-system §6 rule 2).
+///
+/// An **over-limit** row keeps its true ratio (> 1): the lit width saturates at
+/// full scale, both the tube and the `%` readout switch to the warning orange
+/// [GuiPalette.valueOrange], and the label shows the real over-limit percentage
+/// (capped at [maxPercentLabel]) instead of a clamped `100`. The peak line is
+/// still clamped to 100 %.
 class HeatLoadBar extends StatefulWidget {
   const HeatLoadBar({
     super.key,
@@ -246,13 +252,24 @@ class HeatLoadBar extends StatefulWidget {
   /// fixed limit rows still get the correct dimension tint.
   final String? unit;
 
-  /// `|value| / threshold` clamped to `[0, 1]`, or null when undefined.
+  /// `|value| / threshold`, floored at 0, or null when undefined. Values above
+  /// one are kept so an over-limit reading is reported honestly (e.g. `105 %`).
   double? get ratio {
     final t = threshold;
     final v = value;
     if (t == null || v == null || t <= 0) return null;
-    return (v.abs() / t).clamp(0.0, 1.0).toDouble();
+    final raw = (v.abs() / t);
+    return raw.isFinite && raw > 0 ? raw : 0.0;
   }
+
+  /// Highest integer percentage rendered for an over-limit row, so a wildly
+  /// out-of-range reading cannot overflow the fixed-width readout cell.
+  static const int maxPercentLabel = 999;
+
+  /// The warning tint shown once a row exceeds its threshold; `null` keeps the
+  /// dimension-derived tint (only ≤ 100 % shows the physical-unit colour).
+  static Color? overLimitTint(GuiPalette palette, double? ratio) =>
+      (ratio != null && ratio > 1.0) ? palette.valueOrange : null;
 
   /// Three-band semantic tone for a load [ratio] (retained for compatibility
   /// with the loudness-meter semantics): `< 0.50` green, `0.50..0.85` amber,
@@ -293,10 +310,15 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
     if (ratio == null) {
       _peak = 0.0;
       _sinceHigh = Duration.zero;
-    } else if (ratio > _peak) {
-      // A new high jumps the marker immediately and restarts the hold window.
-      _peak = ratio;
-      _sinceHigh = Duration.zero;
+    } else {
+      // The peak marker is clamped to full scale; an over-limit value pins it
+      // at 100 % rather than pushing the line off the trough.
+      final high = ratio.clamp(0.0, 1.0).toDouble();
+      if (high > _peak) {
+        // A new high jumps the marker immediately and restarts the hold window.
+        _peak = high;
+        _sinceHigh = Duration.zero;
+      }
     }
   }
 
@@ -313,8 +335,10 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
     if (_sinceHigh <= kHeatPeakHold) return;
     final step =
         kHeatPeakDecayPerSecond * (kHeatPeakTick.inMilliseconds / 1000.0);
-    // Decay toward the live value, never below it, never below zero.
-    final next = (_peak - step).clamp(ratio, 1.0);
+    // Decay toward the live value (clamped to full scale), never below it,
+    // never below zero. An over-limit value pins the peak at 100 %.
+    final floor = ratio.clamp(0.0, 1.0).toDouble();
+    final next = (_peak - step).clamp(floor, 1.0);
     if (next != _peak) {
       setState(() => _peak = next);
     }
@@ -367,8 +391,14 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
     double peak,
   ) {
     // Dimension-derived tint: the tube colour follows the physical unit, not
-    // the ratio band (design-system §2.6.3).
-    final tint = tintForUnit(palette, widget.unit ?? _unitForName(widget.name));
+    // the ratio band (design-system §2.6.3). Once the row exceeds its
+    // threshold the tint switches to the warning orange and the readout shows
+    // the true over-limit value (e.g. `105 %`).
+    final tint = HeatLoadBar.overLimitTint(palette, ratio) ??
+        tintForUnit(palette, widget.unit ?? _unitForName(widget.name));
+    final percent = (ratio * 100)
+        .round()
+        .clamp(0, HeatLoadBar.maxPercentLabel);
     return Row(
       children: <Widget>[
         SizedBox(
@@ -398,7 +428,7 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
               textBaseline: TextBaseline.alphabetic,
               children: <Widget>[
                 Text(
-                  (ratio * 100).round().toString(),
+                  percent.toString(),
                   style: scale.data.copyWith(color: tint),
                 ),
                 const SizedBox(width: 4),

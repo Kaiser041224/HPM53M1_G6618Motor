@@ -116,15 +116,28 @@ void main() {
       expect(painter.warnBand, isTrue);
     });
 
-    testWidgets('ratio 钳到 [0,1]；peak 为 null 时不画峰值线', (tester) async {
+    testWidgets('ratio > 1 透传（仅填充宽由 painter 钳到满量程）；peak null 不画', (
+      tester,
+    ) async {
       await _pump(
         tester,
         const SizedBox(width: 200, child: VfdBar(ratio: 1.8, tint: tint)),
       );
 
       final painter = _painterOf(tester);
-      expect(painter.ratio, 1.0);
+      // Over-limit ratio is preserved so the caller can show the true `%`.
+      expect(painter.ratio, 1.8);
       expect(painter.peak, isNull);
+      // The lit width itself still saturates at full scale.
+      expect(VfdBarPainter.fillWidth(200, 1.8), 200.0);
+    });
+
+    testWidgets('负 ratio 落地为 0', (tester) async {
+      await _pump(
+        tester,
+        const SizedBox(width: 200, child: VfdBar(ratio: -0.4, tint: tint)),
+      );
+      expect(_painterOf(tester).ratio, 0.0);
     });
 
     testWidgets('warnBand 可关闭门限刻度', (tester) async {

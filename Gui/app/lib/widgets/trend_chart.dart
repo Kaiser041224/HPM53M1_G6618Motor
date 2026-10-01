@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -10,8 +11,10 @@ import 'chart_history.dart';
 import 'glow_value.dart';
 import 'gui_button.dart';
 import 'hairline_frame.dart';
+import 'stable_digits.dart';
 import 'stale_gate.dart';
 import 'status_badge.dart';
+import 'vfd_bar_painter.dart';
 
 /// Formats a span or axis time [seconds] with an adaptive unit: `10ms` /
 /// `50ms` / `200ms` below one second, `2s` / `60s` at or above it. Zero
@@ -122,6 +125,12 @@ class TrendChart extends StatefulWidget {
   /// Key of the hover crosshair readout panel.
   static const Key readoutKey = Key('trend_cursor_readout');
 
+  /// Key of the per-channel window-maximum readout row below the plot.
+  static const Key maxRowKey = Key('trend_max_row');
+
+  /// Channel letters of the window-maximum row, in series order.
+  static const List<String> channelLetters = <String>['U', 'V', 'W'];
+
   @override
   State<TrendChart> createState() => TrendChartState();
 }
@@ -131,6 +140,42 @@ class TrendChartState extends State<TrendChart> {
   double _viewSpanSec = TrendChart.defaultSpanSec;
   double _anchorSec = 0;
   double _plotWidth = 0;
+
+  /// Newest sample time [s] at the last accepted 10 Hz data tick. The plotted
+  /// viewport is anchored here, so arriving samples only advance the trace at
+  /// [kChartRefreshPeriod] rather than the 25 Hz parent cadence; pointer
+  /// interaction still calls [setState] and redraws immediately.
+  double _shownNow = 0;
+
+  /// History revision at the last accepted tick.
+  int _shownVersion = -1;
+
+  /// 10 Hz data sampler; cancelled in [dispose].
+  late final Timer _dataTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _shownNow = widget.history.lastTime;
+    _shownVersion = widget.history.version;
+    _dataTimer = Timer.periodic(kChartRefreshPeriod, _onDataTick);
+  }
+
+  @override
+  void dispose() {
+    _dataTimer.cancel();
+    super.dispose();
+  }
+
+  /// Accepts newly arrived samples at the throttled 10 Hz chart cadence.
+  void _onDataTick(Timer timer) {
+    final history = widget.history;
+    if (history.version == _shownVersion) return;
+    setState(() {
+      _shownVersion = history.version;
+      _shownNow = history.lastTime;
+    });
+  }
 
   /// Crosshair position as a normalized fraction of the plot area, or null
   /// while the pointer is outside.
@@ -246,7 +291,7 @@ class TrendChartState extends State<TrendChart> {
     final history = widget.history;
     final len = history.len;
 
-    final viewEnd = _lastTime - _anchorSec;
+    final viewEnd = _shownNow - _anchorSec;
     final viewStart = viewEnd - _viewSpanSec;
     final visible = history.countInWindow(viewStart, viewEnd);
     final hasData = visible >= 2;
@@ -357,6 +402,14 @@ class TrendChartState extends State<TrendChart> {
                 style: scale.label.copyWith(color: palette.fgMute),
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          // Window maximum per channel, sampled at the trace's 10 Hz data
+          // cadence through a configurable [StableRefresh.period].
+          StableRefresh(
+            period: kChartRefreshPeriod,
+            refreshKey: (history.version, _viewSpanSec, _anchorSec),
+            builder: (context) => _maxRow(palette, scale, history),
           ),
           const SizedBox(height: 8),
           Row(
@@ -538,6 +591,56 @@ class TrendChartState extends State<TrendChart> {
         Text(name, style: scale.label),
         const SizedBox(width: 10),
         GlowValue(value: value, unit: 'A', precision: 3),
+      ],
+    );
+  }
+
+  /// The window-maximum readout: `MAX` then each channel's largest visible
+  /// |sample| in the series colour / green value / `A` unit triad. A window
+  /// that holds no sample renders a single `—` (design-system §6 rule 2).
+  Widget _maxRow(GuiPalette palette, GuiTypeScale scale, ChartHistory history) {
+    final viewEnd = history.lastTime - _anchorSec;
+    final viewStart = viewEnd - _viewSpanSec;
+    final maxima = TrendChartPainter.windowMax(history, viewStart, _viewSpanSec);
+    final colors = <Color>[palette.series1, palette.series2, palette.series3];
+    final valueTint = tintForUnit(palette, 'A');
+    if (maxima.every((m) => m == null)) {
+      return Row(
+        key: TrendChart.maxRowKey,
+        children: <Widget>[
+          Text('MAX', style: scale.label),
+          const SizedBox(width: 12),
+          Text('—', style: scale.label),
+        ],
+      );
+    }
+    return Row(
+      key: TrendChart.maxRowKey,
+      children: <Widget>[
+        Text('MAX', style: scale.label),
+        const SizedBox(width: 12),
+        for (var channel = 0;
+            channel < TrendChart.channelLetters.length;
+            channel++) ...<Widget>[
+          if (channel > 0) const SizedBox(width: 18),
+          Text(
+            TrendChart.channelLetters[channel],
+            style: scale.label.copyWith(color: colors[channel]),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            maxima[channel] == null
+                ? '—'
+                : maxima[channel]!.toStringAsFixed(2),
+            style: scale.data.copyWith(
+              fontSize: 12,
+              color: valueTint,
+              shadows: const <Shadow>[],
+            ),
+          ),
+          const SizedBox(width: 3),
+          Text('A', style: scale.label),
+        ],
       ],
     );
   }
@@ -750,6 +853,33 @@ class TrendChartPainter extends CustomPainter {
     return maxAbs < minYLimit ? minYLimit : maxAbs;
   }
 
+  /// Largest finite |sample| per channel (series order) over the visible window
+  /// `[startSec, startSec + spanSec]` (both edges inclusive, so the live-tail
+  /// newest sample counts), or null for a channel with no finite sample in the
+  /// window. Shares the [ChartHistory.lowerBoundTime] viewport conversion the
+  /// decimator uses, so the readout matches the drawn trace.
+  static List<double?> windowMax(
+    ChartHistory history,
+    double startSec,
+    double spanSec,
+  ) {
+    final maxima = List<double?>.filled(ChartHistory.channelCount, null);
+    final endSec = startSec + spanSec;
+    final first = history.lowerBoundTime(startSec);
+    final last = history.lowerBoundTime(endSec);
+    var end = last;
+    if (last < history.len && history.timeAt(last) <= endSec) end = last + 1;
+    for (var i = first; i < end; i++) {
+      for (var channel = 0; channel < ChartHistory.channelCount; channel++) {
+        final magnitude = history.channelAt(channel, i).abs();
+        if (!magnitude.isFinite) continue;
+        final current = maxima[channel];
+        if (current == null || magnitude > current) maxima[channel] = magnitude;
+      }
+    }
+    return maxima;
+  }
+
   /// Oldest-first index of the sample nearest (in arrival time) to [seconds],
   /// or -1 when the ring is empty. Shares the [ChartHistory.lowerBoundTime]
   /// conversion the decimator uses, so cursor and trace agree on the sample.
@@ -938,7 +1068,9 @@ class TrendChartPainter extends CustomPainter {
     if (oldDelegate.viewSpanSec != viewSpanSec) return true;
     if (oldDelegate.cursor != cursor) return true;
     if (oldDelegate.cursorColor != cursorColor) return true;
-    if (oldDelegate.history.version != history.version) return true;
+    // New samples are folded into [viewStartSec] by the state's 10 Hz data
+    // throttle, so a data-only arrival that does not move the window leaves
+    // the painter untouched (and does not repaint at the 25 Hz parent rate).
     return false;
   }
 }
