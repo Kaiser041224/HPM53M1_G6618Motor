@@ -5,6 +5,7 @@ import 'package:g6618_gui/bridge/frb/api.dart' show FrbError;
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/start_adjust_zone.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 
 StatusDto makeStatus({bool running = false}) => StatusDto(
   faultFlags: 0,
@@ -156,6 +157,66 @@ void main() {
 
       expect(find.byKey(const Key('ctrl_mode_readback_note')), findsOneWidget);
       expect(find.textContaining('无回读'), findsOneWidget);
+    });
+  });
+
+  group('启动·调整 电机启停按钮行（自控制面板迁入）', () {
+    testWidgets('启动 primary / 停止 normal 两枚按钮在位', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, StartAdjustZone(state: state));
+
+      expect(find.byKey(const Key('ctrl_start_button')), findsOneWidget);
+      expect(find.byKey(const Key('ctrl_stop_button')), findsOneWidget);
+      expect(
+        tester
+            .widget<GuiButton>(find.byKey(const Key('ctrl_start_button')))
+            .variant,
+        GuiButtonVariant.primary,
+      );
+      expect(find.widgetWithText(GuiButton, '停止'), findsOneWidget);
+    });
+
+    testWidgets('启动调用 ctrlStart，停止调用 ctrlStop（行为不变）', (tester) async {
+      final ops = <String>[];
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      await _pump(tester, StartAdjustZone(state: state));
+
+      await tester.tap(find.byKey(const Key('ctrl_start_button')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('ctrl_stop_button')));
+      await tester.pump();
+
+      expect(ops, <String>['start', 'stop']);
+    });
+
+    testWidgets('启动失败 code 4 → 联锁 SnackBar 文案', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async =>
+          throw const FrbError(code: 4, message: 'interlock');
+
+      await _pump(tester, StartAdjustZone(state: state));
+
+      await tester.tap(find.byKey(const Key('ctrl_start_button')));
+      await tester.pumpAndSettle();
+
+      final snack = find.byType(SnackBar);
+      expect(
+        find.descendant(of: snack, matching: find.textContaining('联锁')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: snack,
+          matching: find.textContaining('FAULT_CLEAR'),
+        ),
+        findsOneWidget,
+      );
     });
   });
 }

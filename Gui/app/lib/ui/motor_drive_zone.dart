@@ -29,6 +29,7 @@ import '../widgets/section_title.dart';
 import '../widgets/vfd_bar_painter.dart';
 import 'label_style.dart';
 import 'panel_title.dart';
+import 'tuning_blocks.dart';
 
 /// 一条标定 / 测试程序的描述。
 class CalibProgram {
@@ -157,6 +158,10 @@ class MotorDriveZone extends StatelessWidget {
               Expanded(flex: 6, child: _compareFrame(context)),
             ],
           ),
+          // 保护门限自「监视 · 控制」页迁来：它不在右栏五段清单内，
+          // 如实顺延到参数对照下方（同为「影响运行/安全」的参数组）。
+          const SizedBox(height: 24),
+          ProtectionLimitsPanel(state: state),
         ],
       ),
     );

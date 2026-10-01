@@ -15,8 +15,6 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
-import '../widgets/vfd_bar_painter.dart';
-import 'label_style.dart';
 import 'panel_title.dart';
 
 /// 保护门限 —— 固件把这几个参数列为**安全相关**
@@ -135,105 +133,6 @@ class CurrentLoopPanel extends StatelessWidget {
             '▲ FOC 预留 · 当前无消费者，写入暂不改变运行行为',
             key: const Key('current_loop_note'),
             style: scale.label.copyWith(color: palette.stWarn),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 给定设定 —— FREQ / MOD 的当前下发值（只读回显）。
-///
-/// 真正的滑块在 [ControlPanel] 里；这里只把数值与设备回读对照，
-/// 让「我设的」和「设备认的」一眼可比。
-class SetpointReadbackPanel extends StatelessWidget {
-  const SetpointReadbackPanel({super.key, required this.state});
-
-  final AppState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    final status = state.status;
-    final freq = status?.freqHz;
-    final mod = status?.modPct;
-
-    return HairlineFrame(
-      key: const Key('setpoint_readback_frame'),
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          PanelTitle(
-            title: '设备回读',
-            en: 'Setpoint',
-            trailing: Text(
-              'STATUS_GET 快照',
-              style: scale.label.copyWith(color: palette.accent),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: <Widget>[
-              Expanded(child: _readback(context, '频率', 'Hz', freq, 2)),
-              const SizedBox(width: 8),
-              Expanded(child: _readback(context, '调制比', '%', mod, 1)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _readback(
-    BuildContext context,
-    String label,
-    String unit,
-    double? value,
-    int precision,
-  ) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    // 无状态快照时如实显示「—」，不用 0 冒充。
-    final text = value == null ? '—' : value.toStringAsFixed(precision);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-      decoration: BoxDecoration(
-        color: palette.bgVoid,
-        border: Border.all(color: palette.lineDim, width: palette.lineWidth),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Text(label, style: guiLabelStyle(palette, scale)),
-          const SizedBox(height: 5),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: <Widget>[
-                Text(
-                  text,
-                  maxLines: 1,
-                  style: scale.data.copyWith(
-                    fontSize: 21,
-                    color: value == null
-                        ? palette.fgMute
-                        : tintForUnit(palette, unit),
-                  ),
-                ),
-                // 单位保持最暗档，专色只赋数值（§2.6.3）。
-                if (value != null) ...<Widget>[
-                  const SizedBox(width: 4),
-                  Text(unit, style: scale.label),
-                ],
-              ],
-            ),
           ),
         ],
       ),

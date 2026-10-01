@@ -19,6 +19,7 @@ import '../theme/gui_type.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart' show faultText;
+import 'control_zone.dart' show ctrlMessage;
 import 'panel_title.dart';
 
 /// 快捷控制模式（协议 v1.1 `CTRL_CMD SET_MODE`）：(mode, 中文名)。
@@ -58,6 +59,26 @@ class StartAdjustZone extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
+              // 电机启动 / 停止按钮行 —— 自原「控制」面板迁入，行为不变
+              // （失败文案仍走 [ctrlMessage]）。
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  GuiButton(
+                    key: const Key('ctrl_start_button'),
+                    label: '启动',
+                    variant: GuiButtonVariant.primary,
+                    onPressed: () => _run(context, state.ctrlStart),
+                  ),
+                  GuiButton(
+                    key: const Key('ctrl_stop_button'),
+                    label: '停止',
+                    onPressed: () => _run(context, state.ctrlStop),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
@@ -85,6 +106,17 @@ class StartAdjustZone extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// 运行一次启停 [op]；失败时按 [ctrlMessage] 分类弹出 SnackBar
+  /// （运行中启动 / 无故障时停止等联锁码 4）。
+  Future<void> _run(BuildContext context, Future<bool> Function() op) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await op();
+    if (ok) return;
+    messenger.showSnackBar(
+      SnackBar(content: Text(ctrlMessage(state.lastErrorCode))),
     );
   }
 

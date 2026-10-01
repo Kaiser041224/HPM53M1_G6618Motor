@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:g6618_gui/theme/gui_theme.dart';
+import 'package:g6618_gui/ui/panel_title.dart';
 import 'package:g6618_gui/widgets/glow_value.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/section_title.dart';
@@ -306,6 +307,43 @@ void main() {
     );
     expect(find.text('状态监视'), findsOneWidget);
     expect(find.text('STATUS'), findsOneWidget);
+  });
+
+  testWidgets('SectionTitle / PanelTitle 统一渐变标题栏 + 低亮紫下沿', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: SectionTitle(title: '状态监视', en: 'Status'),
+        ),
+      ),
+    );
+    final bar = tester.widget<Container>(
+      find.byKey(const Key('gui_title_bar')),
+    );
+    final gradient =
+        (bar.decoration! as BoxDecoration).gradient! as LinearGradient;
+    expect(gradient.colors, kTitleGradient.colors);
+    expect(gradient.begin, Alignment.centerLeft);
+    expect(gradient.end, Alignment.centerRight);
+    final underline = tester.widget<Container>(
+      find.byKey(const Key('gui_title_underline')),
+    );
+    expect(underline.color, const GuiPalette().groupLine);
+
+    // PanelTitle 复用同一标题栏（全页统一）。
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: PanelTitle(title: '电流环 PI', en: 'Current Loop'),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('gui_title_bar')), findsOneWidget);
+    expect(find.byKey(const Key('gui_title_underline')), findsOneWidget);
   });
 
   testWidgets('GlowValue formats precision, unit and tabular figures', (

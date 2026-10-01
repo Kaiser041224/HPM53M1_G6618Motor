@@ -69,5 +69,27 @@ void main() {
       expect(find.byKey(const Key('angle_loop_frame')), findsNothing);
       expect(find.byKey(const Key('ctrl_mode_1')), findsNothing);
     });
+
+    testWidgets('保护门限自合并页迁入，位于参数对照下方', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, MotorDriveZone(state: state));
+
+      expect(find.byKey(const Key('protection_limits_frame')), findsOneWidget);
+      expect(find.text('保护门限'), findsOneWidget);
+
+      final compareTop = tester
+          .getTopLeft(find.byKey(const Key('config_compare_frame')))
+          .dy;
+      final protectionTop = tester
+          .getTopLeft(find.byKey(const Key('protection_limits_frame')))
+          .dy;
+      expect(
+        compareTop,
+        lessThan(protectionTop),
+        reason: '保护门限应在参数对照下方',
+      );
+    });
   });
 }

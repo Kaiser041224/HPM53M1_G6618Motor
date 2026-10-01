@@ -124,11 +124,12 @@ class _SinglePageState extends State<SinglePage> {
   /// onstage (the others stay built for keep-alive).
   ///
   /// **顺序必须与 [kNavItems] 严格一致** —— 索引即页面。
-  /// - 监视·控制: **左右分栏** —— 左栏监视（`StatusZone → EncoderZone →
-  ///   StartAdjustZone → PidZone`），右栏控制（运行控制 + 故障构成 + 常用调参）。
+  /// - 监视·控制: **左右分栏** —— 左栏监视（`StatusZone → EncoderZone`），
+  ///   右栏控制（`ControlZone` 故障 → `StartAdjustZone` 启动/调整 →
+  ///   `CurrentLoopPanel` 电流环 → `PidZone` 速度环/角度环）。
   ///   合并的理由：调参时必须同时看着读数，分两页来回切是反效率的；
   ///   启动 / 调整与速度环 / 角度环 PID 入口亦从「电机 · 驱动」页迁来同屏。
-  /// - 电机·驱动: `MotorDriveZone`（左标定程序 / 右参数对照）
+  /// - 电机·驱动: `MotorDriveZone`（左标定程序 / 右参数对照 + 保护门限）
   /// - 示波: `ScopeZone (TrendChart panel) → LimitZone`
   /// - 参数: `ParamZone`（全量表，可编辑）
   Widget _content() {
@@ -150,9 +151,13 @@ class _SinglePageState extends State<SinglePage> {
 
   /// 监视·控制合并页：左监视、右控制，整页共享一条滚动。
   ///
-  /// 左栏自上而下：`StatusZone → EncoderZone → StartAdjustZone → PidZone` ——
-  /// 后两者是从「电机 · 驱动」页迁来的启动 / 调整与速度环 / 角度环 PID 入口，
-  /// 使调参时能就近看着读数。
+  /// 左栏自上而下：`StatusZone → EncoderZone`。
+  ///
+  /// 右栏自上而下（严格顺序）：
+  /// `ControlZone`（故障构成 + 清除故障）→
+  /// `StartAdjustZone`（启动 / 停止 + 力矩 / 速度 / 角度模式）→
+  /// `CurrentLoopPanel`（电流环）→ `PidZone`（速度环 / 角度环）。
+  /// FREQ / MOD 滑条与设备回读面板已删除；保护门限迁至「电机 · 驱动」页。
   ///
   /// 两栏各自 `CrossAxisAlignment.start`，故栏内高度互不影响；
   /// 左右比例 11:10 —— 监视侧有 8 个状态瓦片与编码器示意，需要更宽。
@@ -164,14 +169,12 @@ class _SinglePageState extends State<SinglePage> {
     final monitor = _stack(<Widget>[
       StatusZone(state: widget.state),
       EncoderZone(state: widget.state),
-      StartAdjustZone(state: widget.state),
-      PidZone(state: widget.state),
     ]);
     final control = _stack(<Widget>[
       ControlZone(state: widget.state),
-      ProtectionLimitsPanel(state: widget.state),
+      StartAdjustZone(state: widget.state),
       CurrentLoopPanel(state: widget.state),
-      SetpointReadbackPanel(state: widget.state),
+      PidZone(state: widget.state),
     ]);
 
     return LayoutBuilder(

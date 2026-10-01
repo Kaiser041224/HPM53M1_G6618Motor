@@ -32,41 +32,37 @@ const List<(String, String)> kAngleLoopFields = <(String, String)>[
   ('software.control.angle_loop.ki', '积分增益 ki'),
 ];
 
-/// 速度环 / 角度环两组 PID 面板，两栏并排。
+/// 速度环 / 角度环两组 PID 面板，在右栏**上下排列**（各占独立 PanelTitle）。
 class PidZone extends StatelessWidget {
   const PidZone({super.key, required this.state});
 
   final AppState state;
 
-  /// 两栏间距 [logical px]，沿用原电机·驱动页两面板间 14px 分割。
-  static const double _columnGap = 14;
+  /// 两组面板间距 [logical px]，与右栏各段间距一致（`sp-5`, 24px）。
+  static const double _panelGap = 24;
 
   @override
   Widget build(BuildContext context) {
     // 监听：参数值与脏标记随时变化，需随 state 通知重建。
     return ListenableBuilder(
       listenable: state,
-      builder: (context, _) => Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (context, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Expanded(
-            child: _PidLoopPanel(
-              frameKey: const Key('speed_loop_frame'),
-              title: '速度环',
-              en: 'Speed Loop',
-              fields: kSpeedLoopFields,
-              state: state,
-            ),
+          _PidLoopPanel(
+            frameKey: const Key('speed_loop_frame'),
+            title: '速度环',
+            en: 'Speed Loop',
+            fields: kSpeedLoopFields,
+            state: state,
           ),
-          const SizedBox(width: _columnGap),
-          Expanded(
-            child: _PidLoopPanel(
-              frameKey: const Key('angle_loop_frame'),
-              title: '角度环',
-              en: 'Angle Loop',
-              fields: kAngleLoopFields,
-              state: state,
-            ),
+          const SizedBox(height: _panelGap),
+          _PidLoopPanel(
+            frameKey: const Key('angle_loop_frame'),
+            title: '角度环',
+            en: 'Angle Loop',
+            fields: kAngleLoopFields,
+            state: state,
           ),
         ],
       ),

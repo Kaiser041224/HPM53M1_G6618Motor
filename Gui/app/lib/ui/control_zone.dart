@@ -7,10 +7,6 @@ import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
-import '../widgets/segment_bar.dart';
-import '../widgets/stable_digits.dart';
-import '../widgets/vfd_bar_painter.dart';
-import 'label_style.dart';
 import 'panel_title.dart';
 
 /// Semantic label for a single fault bit, extracted read-only from
@@ -32,8 +28,9 @@ String faultBitLabel(int bit) => switch (bit) {
 };
 
 /// Maps a device error code to its user-facing interlock message (migrated
-/// verbatim from the retired dashboard page).
-String _ctrlMessage(int code) => switch (code) {
+/// verbatim from the retired dashboard page). Shared by the fault-clear action
+/// here and the start / stop actions in `start_adjust_zone.dart`.
+String ctrlMessage(int code) => switch (code) {
   4 => '联锁拒绝：若故障锁存请先 FAULT_CLEAR；若运行中请先停止',
   6 => '设备判定越界',
   0x100 => '请求超时',
@@ -47,14 +44,25 @@ int _faultMask(AppState state) => state.latchedFlags != 0
     ? state.latchedFlags
     : (state.status?.faultFlags ?? 0);
 
-/// The 控制 category (L1): the motor control bar (start / stop / clear-fault
-/// buttons plus the FREQ / MOD LED segment sliders) beside the fault
-/// composition panel. Split out of the retired `scope_zone.dart` so the scope
-/// category can own only the waveform and threshold views.
+/// 故障区（「监视 · 控制」页右栏第 1 段）：故障构成 + 清除故障按钮。
+///
+/// 从原「控制」面板瘦身而来 —— 启停按钮迁入 `start_adjust_zone.dart`，
+/// FREQ / MOD 滑条与设备回读面板删除；本区只保留**故障**语义：
+/// 逐位拆解当前 / 锁存故障位，并提供唯一的清除动作。
 class ControlZone extends StatelessWidget {
   const ControlZone({super.key, required this.state});
 
   final AppState state;
+
+  /// Clears latched faults; surfaces a classified failure as a SnackBar.
+  Future<void> _clearFault(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await state.faultClear();
+    if (ok) return;
+    messenger.showSnackBar(
+      SnackBar(content: Text(ctrlMessage(state.lastErrorCode))),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -65,35 +73,34 @@ class ControlZone extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           SectionTitle(
-            title: '控制',
-            en: 'Control',
-            trailing: Text('启动 / 停止 / 调速 · 故障构成', style: scale.label),
+            title: '故障',
+            en: 'Fault',
+            trailing: Text('故障构成 · 清除锁存', style: scale.label),
           ),
           const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Expanded(
-                child: HairlineFrame(
-                  key: const Key('control_frame'),
-                  padding: const EdgeInsets.all(10),
-                  child: ControlPanel(state: state),
+          HairlineFrame(
+            key: const Key('fault_frame'),
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                FaultComposition(
+                  flags: _faultMask(state),
+                  // `_faultMask` prefers the latched set; label it accordingly
+                  // so a latched bit is never captioned `CURRENT`.
+                  latched: state.latchedFlags != 0,
                 ),
-              ),
-              const SizedBox(width: 34),
-              Expanded(
-                child: HairlineFrame(
-                  key: const Key('fault_frame'),
-                  padding: const EdgeInsets.all(10),
-                  child: FaultComposition(
-                    flags: _faultMask(state),
-                    // `_faultMask` prefers the latched set; label it accordingly
-                    // so a latched bit is never captioned `CURRENT`.
-                    latched: state.latchedFlags != 0,
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: GuiButton(
+                    label: '清除故障',
+                    variant: GuiButtonVariant.danger,
+                    onPressed: () => _clearFault(context),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -155,157 +162,6 @@ class FaultComposition extends StatelessWidget {
                 ],
               ),
             ),
-      ],
-    );
-  }
-}
-
-/// Motor control bar: start / stop / clear-fault buttons plus FREQ / MOD LED
-/// segment sliders with their right-aligned setpoints.
-///
-/// Control failures surface the same classified interlock message as before
-/// (see [_ctrlMessage]); the message table is preserved verbatim in the UI
-/// migration.
-class ControlPanel extends StatefulWidget {
-  const ControlPanel({super.key, required this.state});
-
-  final AppState state;
-
-  @override
-  State<ControlPanel> createState() => _ControlPanelState();
-}
-
-class _ControlPanelState extends State<ControlPanel> {
-  late double _freq;
-  late double _mod;
-
-  @override
-  void initState() {
-    super.initState();
-    _freq = widget.state.status?.freqHz ?? 0;
-    _mod = widget.state.status?.modPct ?? 0;
-  }
-
-  /// Runs a control [op] and surfaces its classified failure as a SnackBar.
-  Future<void> _run(Future<bool> Function() op) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final ok = await op();
-    if (!mounted || ok) return;
-    messenger.showSnackBar(
-      SnackBar(content: Text(_ctrlMessage(widget.state.lastErrorCode))),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: <Widget>[
-            GuiButton(
-              label: '启动',
-              variant: GuiButtonVariant.primary,
-              onPressed: () => _run(widget.state.ctrlStart),
-            ),
-            GuiButton(
-              label: '停止',
-              onPressed: () => _run(widget.state.ctrlStop),
-            ),
-            GuiButton(
-              label: '清除故障',
-              variant: GuiButtonVariant.danger,
-              onPressed: () => _run(widget.state.faultClear),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        _ledRow(
-          label: 'FREQ',
-          value: _freq,
-          max: 1000,
-          precision: 2,
-          unit: 'Hz',
-          onChanged: (v) => setState(() => _freq = v),
-          onSend: () => _run(() => widget.state.ctrlSetFreq(_freq)),
-        ),
-        const SizedBox(height: 12),
-        _ledRow(
-          label: 'MOD',
-          value: _mod,
-          max: 100,
-          precision: 1,
-          unit: '%',
-          onChanged: (v) => setState(() => _mod = v),
-          onSend: () => _run(() => widget.state.ctrlSetMod(_mod)),
-        ),
-      ],
-    );
-  }
-
-  Widget _ledRow({
-    required String label,
-    required double value,
-    required double max,
-    required int precision,
-    required String unit,
-    required ValueChanged<double> onChanged,
-    required VoidCallback onSend,
-  }) {
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    final value01 = (value / max).clamp(0.0, 1.0).toDouble();
-    return Row(
-      children: <Widget>[
-        SizedBox(
-          width: 42,
-          child: Text(label, style: guiLabelStyle(palette, scale)),
-        ),
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth;
-              void setFrom(double dx) {
-                final next = (dx / width * max).clamp(0.0, max).toDouble();
-                onChanged(next);
-              }
-
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTapDown: (details) => setFrom(details.localPosition.dx),
-                onHorizontalDragUpdate: (details) =>
-                    setFrom(details.localPosition.dx),
-                onHorizontalDragEnd: (_) => onSend(),
-                child: SegmentBar(value01: value01, warn: value01 > 0.8),
-              );
-            },
-          ),
-        ),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 70,
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerRight,
-            // v5: the setpoint readout takes the dimension accent (FREQ Hz→紫,
-            // MOD %→洋红) while the LED bar keeps the cyan/amber accent.
-            // `glow: true` stacks the single soft layer reserved for bar /
-            // value readouts. The readout is sampled at 5 Hz; the slider stays
-            // instant.
-            child: StableDigits(
-              text: value.toString(),
-              builder: (context) => GlowValue(
-                value: value,
-                unit: unit,
-                precision: precision,
-                tint: tintForUnit(palette, unit),
-                glow: true,
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }

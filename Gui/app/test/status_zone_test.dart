@@ -196,14 +196,14 @@ void main() {
     });
   });
 
-  group('ControlZone 控制条与故障构成', () {
-    testWidgets('控制失败 code 4 保留联锁 SnackBar 文案', (tester) async {
+  group('ControlZone 故障构成与清除', () {
+    testWidgets('清除故障失败 code 4 保留联锁 SnackBar 文案', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
       state.onCtrl = (op) async => throw const FrbLikeError(code: 4);
 
       await _pump(tester, ControlZone(state: state));
-      await tester.tap(find.text('启动'));
+      await tester.tap(find.text('清除故障'));
       await tester.pumpAndSettle();
 
       final snack = find.byType(SnackBar);
@@ -662,13 +662,12 @@ void main() {
       expect(find.byType(HairlineFrame), findsWidgets);
     });
 
-    testWidgets('控制 / 故障 / 门限各自为亮青面板', (tester) async {
+    testWidgets('故障 / 门限各自为亮青面板', (tester) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
       await _pump(tester, ControlZone(state: state));
       expect(find.byKey(const Key('fault_frame')), findsOneWidget);
-      expect(find.byKey(const Key('control_frame')), findsOneWidget);
       expect(find.byType(HairlineFrame), findsWidgets);
 
       await _pump(tester, LimitZone(state: state));
@@ -788,7 +787,9 @@ void main() {
       expect(entry.style?.color, const GuiPalette().valueRed);
     });
 
-    testWidgets('控制按钮为 GuiButton 三级（启动 primary/清除故障 danger）', (tester) async {
+    testWidgets('故障区清除按钮为 danger；启停按钮已迁出（无 FREQ/MOD 回读）', (
+      tester,
+    ) async {
       final state = AppState.test(status: makeStatus(), metas: const []);
       addTearDown(state.dispose);
 
@@ -796,29 +797,16 @@ void main() {
 
       expect(
         tester
-            .widget<GuiButton>(find.widgetWithText(GuiButton, '启动'))
-            .variant,
-        GuiButtonVariant.primary,
-      );
-      expect(
-        tester
             .widget<GuiButton>(find.widgetWithText(GuiButton, '清除故障'))
             .variant,
         GuiButtonVariant.danger,
       );
-      // The setpoint readout lives in the control frame; scope it so the
-      // assertion is stable even if other panels render an F_ELEC value.
-      final control = find.byKey(const Key('control_frame'));
-      // v5 量纲专色：FREQ（Hz）→ 紫。
-      final freq = tester.widget<Text>(
-        find.descendant(of: control, matching: find.text('0.00')),
-      );
-      expect(freq.style?.color, const GuiPalette().valuePurple);
-      // Setpoint readout is a GlowValue: unit renders separately, uppercased.
-      expect(
-        find.descendant(of: control, matching: find.text('HZ')),
-        findsOneWidget,
-      );
+      // 启动 / 停止迁入「启动 · 调整」区；故障区不再有。
+      expect(find.widgetWithText(GuiButton, '启动'), findsNothing);
+      // FREQ / MOD 滑条与设备回读已删除。
+      expect(find.byKey(const Key('control_frame')), findsNothing);
+      expect(find.text('FREQ'), findsNothing);
+      expect(find.text('MOD'), findsNothing);
     });
   });
 
