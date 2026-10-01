@@ -9,7 +9,9 @@ import 'package:g6618_gui/ui/encoder_zone.dart';
 import 'package:g6618_gui/ui/limit_zone.dart';
 import 'package:g6618_gui/ui/motor_drive_zone.dart';
 import 'package:g6618_gui/ui/param_zone.dart';
+import 'package:g6618_gui/ui/pid_zone.dart';
 import 'package:g6618_gui/ui/single_page.dart';
+import 'package:g6618_gui/ui/start_adjust_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
@@ -177,6 +179,53 @@ void main() {
     expect(find.byKey(const Key('setpoint_readback_frame')), findsOneWidget);
     expect(find.text('保护门限'), findsOneWidget);
     expect(find.text('电流环 PI'), findsOneWidget);
+  });
+
+  testWidgets('监视·控制页含迁入的三块：启动/调整 · 速度环 · 角度环，且顺序在编码器之下', (
+    tester,
+  ) async {
+    final state = AppState.test(status: _status(), metas: const []);
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    expect(find.byType(StartAdjustZone), findsOneWidget);
+    expect(find.byType(PidZone), findsOneWidget);
+    expect(find.byKey(const Key('quick_control_frame')), findsOneWidget);
+    expect(find.byKey(const Key('speed_loop_frame')), findsOneWidget);
+    expect(find.byKey(const Key('angle_loop_frame')), findsOneWidget);
+    expect(find.text('启动 / 调整'), findsOneWidget);
+    expect(find.text('速度环'), findsOneWidget);
+    expect(find.text('角度环'), findsOneWidget);
+
+    // 顺序：StatusZone → EncoderZone → StartAdjustZone → PidZone。
+    final monitorTop = tester.getTopLeft(find.byType(StatusZone)).dy;
+    final encTop = tester.getTopLeft(find.byType(EncoderZone)).dy;
+    final startTop = tester.getTopLeft(find.byType(StartAdjustZone)).dy;
+    final pidTop = tester.getTopLeft(find.byType(PidZone)).dy;
+    expect(monitorTop, lessThan(encTop));
+    expect(encTop, lessThan(startTop));
+    expect(startTop, lessThan(pidTop));
+  });
+
+  testWidgets('电机·驱动页不再含迁出的三块（启动/调整 · 速度环 · 角度环）', (tester) async {
+    final state = AppState.test(status: _status(), metas: const []);
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+    await tester.tap(find.byKey(const Key('nav_motor')));
+    await tester.pumpAndSettle();
+
+    // 监视页 offstage 保活，但当前可见的电机·驱动页不应再含这三块。
+    expect(find.byKey(const Key('quick_control_frame')), findsNothing);
+    expect(find.byKey(const Key('speed_loop_frame')), findsNothing);
+    expect(find.byKey(const Key('angle_loop_frame')), findsNothing);
+    expect(find.byKey(const Key('ctrl_mode_1')), findsNothing);
+    expect(find.byType(StartAdjustZone), findsNothing);
+    expect(find.byType(PidZone), findsNothing);
+    // 仍保留：标定程序 + 参数对照。
+    expect(find.byKey(const Key('calib_programs_frame')), findsOneWidget);
+    expect(find.byKey(const Key('config_compare_frame')), findsOneWidget);
   });
 
   testWidgets('电机·驱动页：标定程序全部禁用并标注协议未暴露；参数对照表在位', (tester) async {
