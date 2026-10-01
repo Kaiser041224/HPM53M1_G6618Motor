@@ -36,6 +36,12 @@ Future<void> paramWrite({
 
 Future<void> paramCommit() => RustLib.instance.api.crateApiParamCommit();
 
+/// v1.3：把指定参数恢复为出厂默认值（独立命令字 `PARAM_RESET`）。
+/// 空 `names` = 全部参数恢复出厂（`count=0`）。
+/// 运行中或故障锁存 → `LOCKED (0x04)`；名单含未知名 → `BAD_PARAM (0x02)`。
+Future<void> paramResetFactory({required List<String> names}) =>
+    RustLib.instance.api.crateApiParamResetFactory(names: names);
+
 Future<StatusDto> statusGet() => RustLib.instance.api.crateApiStatusGet();
 
 /// 启动 1 kHz 状态采样任务（`rate_hz` 钳位 1..=5000），

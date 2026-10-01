@@ -23,11 +23,13 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/gui_button.dart';
 import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
 import '../widgets/vfd_bar_painter.dart';
 import 'label_style.dart';
 import 'panel_title.dart';
+import 'toast_overlay.dart';
 
 /// 一条标定 / 测试程序的描述。
 class CalibProgram {
@@ -134,6 +136,94 @@ class MotorDriveZone extends StatelessWidget {
 
   final AppState state;
 
+  /// 参数对照表的全部参数全名 —— 读取 / 写入 / 恢复出厂共用同一范围。
+  static final List<String> configParamNames = <String>[
+    for (final group in kConfigGroups)
+      for (final (name, _, _) in group.params) name,
+  ];
+
+  /// 本表写入范围（`writeStaged(only:)` 的名单）。
+  static final Set<String> configWriteNames = configParamNames.toSet();
+
+  /// 暂存改动 → 确认丢弃 → 重读全部设备参数（table 侧基线刷新）。
+  Future<void> _onRead(BuildContext context) async {
+    if (state.staged.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('读取驱动参数'),
+          content: const Text('暂存改动将被丢弃，继续？'),
+          actions: <Widget>[
+            GuiButton(
+              label: '取消',
+              onPressed: () => Navigator.pop(dialogContext, false),
+            ),
+            GuiButton(
+              label: '继续',
+              variant: GuiButtonVariant.primary,
+              onPressed: () => Navigator.pop(dialogContext, true),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+    }
+    final overlay = Overlay.maybeOf(context);
+    final hadStaged = state.staged.isNotEmpty;
+    await state.readAll();
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      hadStaged ? '已读取设备参数，暂存改动已丢弃' : '已读取设备参数',
+      tone: ToastTone.info,
+    );
+  }
+
+  /// 下发**本表**暂存项（速度/角度环等其它面板的暂存保留）。
+  Future<void> _onWrite(BuildContext context) async {
+    final names = configWriteNames;
+    final overlay = Overlay.maybeOf(context);
+    final count = state.staged.keys.where(names.contains).length;
+    final ok = await state.writeStaged(only: names);
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '已写入 $count 项' : '写入失败：${faultText(state)}',
+      tone: ok ? ToastTone.success : ToastTone.error,
+    );
+  }
+
+  /// 按本表名单恢复出厂参数（设备持久化），随后重读基线。
+  Future<void> _onResetFactory(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('恢复出厂参数'),
+        content: const Text('将本表参数恢复出厂值并写入设备。'),
+        actions: <Widget>[
+          GuiButton(
+            label: '取消',
+            onPressed: () => Navigator.pop(dialogContext, false),
+          ),
+          GuiButton(
+            label: '确认恢复',
+            variant: GuiButtonVariant.primary,
+            onPressed: () => Navigator.pop(dialogContext, true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    final overlay = Overlay.maybeOf(context);
+    final ok = await state.resetFactory(configParamNames);
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '已恢复本表出厂参数' : '恢复失败：${faultText(state)}',
+      tone: ok ? ToastTone.success : ToastTone.error,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scale = GuiTypeScale.of(context);
@@ -190,6 +280,11 @@ class MotorDriveZone extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
+          // 「整定结果也当作一次手动更改」：协议暴露这些例程后，标定 / 整定的
+          // 结果**不做即时下发**，而与手动编辑走同一条 [AppState.stageParam]
+          // 暂存队列（结构上一步到位：例程结果回调直接汇入 stageParam），
+          // 由用户在本页「写入」统一下发 —— 与参数页完全同一语义。
+          // 本版协议 CTRL_CMD 未暴露，故下列按钮仍禁用（不落假路径）。
           for (final p in kCalibPrograms) ...<Widget>[
             _ProgramCard(program: p),
             if (p != kCalibPrograms.last) const SizedBox(height: 8),
@@ -211,6 +306,34 @@ class MotorDriveZone extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
+          // 本表动作组：读取 / 写入（仅本表暂存）/ 恢复出厂（按本表名单）。
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: <Widget>[
+              GuiButton(
+                label: '读取',
+                icon: Icons.refresh,
+                onPressed: () => _onRead(context),
+              ),
+              const SizedBox(width: 8),
+              StagedWriteButton(
+                pending: state.staged.keys
+                    .where(configWriteNames.contains)
+                    .length,
+                badgeKey: const Key('config_pending_badge'),
+                onPressed: state.staged.keys.any(configWriteNames.contains)
+                    ? () => _onWrite(context)
+                    : null,
+              ),
+              const SizedBox(width: 8),
+              GuiButton(
+                label: '恢复出厂',
+                icon: Icons.settings_backup_restore,
+                onPressed: () => _onResetFactory(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           const _CompareHeader(),
           for (final g in kConfigGroups) ...<Widget>[
             _groupHeader(context, g.title, g.params.first.$1),
@@ -274,8 +397,8 @@ class _CompareHeader extends StatelessWidget {
         children: <Widget>[
           Expanded(child: Text('参数', style: style)),
           SizedBox(
-            width: 76,
-            child: Text('当前值', textAlign: TextAlign.right, style: style),
+            width: 120,
+            child: Text('当前 → 暂存', textAlign: TextAlign.right, style: style),
           ),
           SizedBox(
             width: 72,
@@ -321,7 +444,7 @@ class _CompareRow extends StatelessWidget {
 
     final meta = metaOf(state, name);
     final value = state.values[name];
-    final dirty = state.dirty.contains(name);
+    final stagedRaw = state.staged[name];
     // 数值按**量纲**着色（§2.6.3），无单位参数回落白青中性。
     final tint = tintForUnit(palette, meta?.unit ?? '');
 
@@ -365,19 +488,30 @@ class _CompareRow extends StatelessWidget {
               ),
             ),
             SizedBox(
-              width: 76,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
+              width: 120,
+              child: Align(
                 alignment: Alignment.centerRight,
-                child: Text(
-                  currentText,
-                  maxLines: 1,
-                  style: scale.data.copyWith(
-                    fontSize: 15,
-                    color: value == null
-                        ? palette.fgMute
-                        : (dirty ? palette.stWarn : tint),
-                  ),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: stagedRaw != null && meta != null
+                      ? StagedCompare(
+                          ty: meta.ty,
+                          oldRaw: value?.raw,
+                          newRaw: stagedRaw,
+                          unit: meta.unit,
+                          fontSize: 15,
+                          strikeKey: Key('config_strike_$name'),
+                          stagedKey: Key('config_staged_$name'),
+                        )
+                      : Text(
+                          currentText,
+                          maxLines: 1,
+                          style: scale.data.copyWith(
+                            fontSize: 15,
+                            color: value == null ? palette.fgMute : tint,
+                          ),
+                        ),
                 ),
               ),
             ),
@@ -475,6 +609,8 @@ class _ProgramCard extends StatelessWidget {
           ),
           const SizedBox(height: 7),
           // 禁用按钮：保留外观但不接受点击，配合上方说明表达「暂不可用」。
+          // 若将来可点，触发的是整定例程；其结果将作为一次「手动更改」汇入
+          // stageParam 暂存队列，而非直接写设备。
           Opacity(
             opacity: 0.45,
             child: Container(

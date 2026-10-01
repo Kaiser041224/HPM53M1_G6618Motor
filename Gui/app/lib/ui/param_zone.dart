@@ -18,10 +18,11 @@ import 'toast_overlay.dart';
 ///
 /// The entire table — groups, rows, types, ranges, apply badges and values —
 /// is generated from [AppState.metas]; no parameter name is hard-coded here.
-/// Values are tabular and right-aligned; a local edit not yet flushed to flash
-/// gets a warning dot and a same-hue yellow value (design-system §6). The
-/// footer shows the live COMMIT interlock: red/yellow when the drive is
-/// running or a fault is latched, green when a flush would be accepted.
+/// Values are tabular and right-aligned; a locally staged edit shows
+/// `旧值 → 新值` (baseline struck through, staged value in the pending hue)
+/// instead of touching the device. The write button carries the live interlock
+/// directly beneath it: amber when the drive is running or a fault is latched,
+/// green when a write would be accepted.
 class ParamZone extends StatefulWidget {
   const ParamZone({super.key, required this.state});
 
@@ -54,8 +55,6 @@ class _ParamZoneState extends State<ParamZone> {
           _toolbar(context, state),
           const SizedBox(height: 16),
           _body(context, state),
-          const SizedBox(height: 16),
-          _interlock(context, state),
         ],
       ),
     );
@@ -68,7 +67,7 @@ class _ParamZoneState extends State<ParamZone> {
       en: 'Parameters · 元数据驱动',
       hue: TitleHue.violet,
       trailing: Text(
-        '${state.metas.length} 项 · ${state.dirty.length} 项待落盘',
+        '${state.metas.length} 项 · ${state.staged.length} 项待写入',
         style: scale.label,
       ),
     );
@@ -76,6 +75,7 @@ class _ParamZoneState extends State<ParamZone> {
 
   Widget _toolbar(BuildContext context, AppState state) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Expanded(
           child: GuiTextField(
@@ -87,16 +87,35 @@ class _ParamZoneState extends State<ParamZone> {
         ),
         const SizedBox(width: 12),
         GuiButton(
-          label: '读全部',
+          label: '读取',
           icon: Icons.refresh,
-          onPressed: state.loadingParams ? null : () => state.loadMetas(),
+          onPressed: state.loadingParams ? null : () => _onRead(context, state),
+        ),
+        const SizedBox(width: 8),
+        // 写入按钮与其联锁提示同属一组：提示紧贴按钮正下方，随按钮一起移动。
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: <Widget>[
+            GuiButton(
+              label: '写入',
+              variant: GuiButtonVariant.primary,
+              icon: Icons.save,
+              onPressed: state.staged.isEmpty
+                  ? null
+                  : () => _onWrite(context, state),
+            ),
+            const SizedBox(height: 6),
+            _interlock(context, state),
+          ],
         ),
         const SizedBox(width: 8),
         GuiButton(
-          label: 'COMMIT 落盘',
-          variant: GuiButtonVariant.primary,
-          icon: Icons.save,
-          onPressed: () => _confirmCommit(context, state),
+          label: '恢复出厂',
+          icon: Icons.settings_backup_restore,
+          onPressed: state.loadingParams
+              ? null
+              : () => _onResetFactory(context, state),
         ),
       ],
     );
@@ -125,12 +144,13 @@ class _ParamZoneState extends State<ParamZone> {
     return LayoutBuilder(
       builder: (context, constraints) {
         // 两列阈值按「最长参数名放得下」反推，不拍脑袋：
-        // 每行固定列合计约 299px（脏点 10 + 类型 34 + 量程 84 +
-        // 生效徽标 ~57 + 数值 80 + 段间距）；参数表统一 15px 后，
-        // 最长参数名 `hardware.vbus_sense.divider_high_ohm`（37 字符）
-        // 约需 ~300px → 每列需 ~600px，两列加 28px 栏距 ≈ 1230px 内容宽。
-        // 阈值 1280 保证每列参数名不被省略号截断。
-        if (constraints.maxWidth < 1280 || entries.length < 2) {
+        // 每行固定列合计约 366px（类型 34 + 量程 84 + 生效徽标 ~66 +
+        // 数值 140 + 段间距）；参数表统一 15px 后，最长参数名
+        // `hardware.vbus_sense.divider_high_ohm`（37 字符）约需 ~300px
+        // → 每列需 ~666px，两列加 28px 栏距 ≈ 1360px 内容宽。
+        // 阈值 1360 保证每列参数名不被省略号截断（数值列加宽以容
+        // `旧值 → 新值` 对比，故阈值随之上调）。
+        if (constraints.maxWidth < 1360 || entries.length < 2) {
           return _column(context, state, entries);
         }
         final half = (entries.length + 1) ~/ 2;
@@ -221,52 +241,75 @@ class _ParamZoneState extends State<ParamZone> {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
 
-    final dirty = state.dirty.contains(meta.name);
+    final stagedRaw = state.staged[meta.name];
+    final isStaged = stagedRaw != null;
     final value = state.values[meta.name];
     final shown = value == null ? '—' : formatValue(value.ty, value.raw);
 
     // v5 tone mapping: a parameter value takes its physical-dimension accent
-    // (§2.6.3; unitless → neutral white-cyan); a local edit not yet flushed
-    // takes the warning hue plus the dirty dot below. Float values render
+    // (§2.6.3; unitless → neutral white-cyan). A locally staged edit renders as
+    // `旧值 → 新值`: the last-read baseline struck through in fgDim, a mute
+    // arrow, then the staged value in the pending hue. Float values render
     // through `GlowValue(tint:)`; integer / bool values keep the plain tabular
     // text (GlowValue is a measured-value widget, not a decoder).
     final tint = tintForUnit(palette, meta.unit);
     final valueBase = scale.data.copyWith(fontSize: kParamRowFontSize);
-    final Widget valueWidget;
-    if (value == null) {
-      valueWidget = Text(
-        '—',
-        maxLines: 1,
-        style: valueBase.copyWith(color: palette.fgMute),
-      );
-    } else if (dirty) {
-      valueWidget = Text(
-        shown,
-        maxLines: 1,
-        style: valueBase.copyWith(color: palette.stWarn),
-      );
-    } else if (meta.ty == 0) {
-      valueWidget = GlowValue(
-        value: f32FromRaw(value.raw),
-        precision: 2,
-        tint: tint,
-        fontSize: kParamRowFontSize,
+    final Widget throttledValue;
+    if (isStaged) {
+      throttledValue = Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          _strikeThrough(
+            shown,
+            valueBase.copyWith(color: palette.fgDim),
+            palette,
+            lineKey: Key('param_strike_${meta.name}'),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            child: Text(
+              '→',
+              maxLines: 1,
+              style: valueBase.copyWith(color: palette.fgMute),
+            ),
+          ),
+          Text(
+            formatValue(meta.ty, stagedRaw),
+            key: Key('param_staged_${meta.name}'),
+            maxLines: 1,
+            style: GuiGlowStyles.status(palette.stPending, valueBase),
+          ),
+        ],
       );
     } else {
-      valueWidget = Text(
-        shown,
-        maxLines: 1,
-        style: valueBase.copyWith(color: tint),
-      );
+      final Widget plain;
+      if (value == null) {
+        plain = Text(
+          '—',
+          maxLines: 1,
+          style: valueBase.copyWith(color: palette.fgMute),
+        );
+      } else if (meta.ty == 0) {
+        plain = GlowValue(
+          value: f32FromRaw(value.raw),
+          precision: 2,
+          tint: tint,
+          fontSize: kParamRowFontSize,
+        );
+      } else {
+        plain = Text(
+          shown,
+          maxLines: 1,
+          style: valueBase.copyWith(color: tint),
+        );
+      }
+      // Monitor readout: the value column is sampled at 5 Hz. `shown` is the
+      // exact string rendered (including `—` / `true` / `false`), so the refresh
+      // key and the display never disagree. A staged row is local, not live, so
+      // it bypasses the throttle.
+      throttledValue = StableDigits(text: shown, builder: (context) => plain);
     }
-
-    // Monitor readout: the value column is sampled at 5 Hz. `shown` is the
-    // exact string rendered (including `—` / `true` / `false`), so the refresh
-    // key and the display never disagree.
-    final Widget throttledValue = StableDigits(
-      text: shown,
-      builder: (context) => valueWidget,
-    );
 
     final range = '${numText(meta.min)}..${numText(meta.max)}';
     final reboot = meta.apply == 1;
@@ -283,33 +326,18 @@ class _ParamZoneState extends State<ParamZone> {
         padding: const EdgeInsets.symmetric(vertical: 5),
         child: Row(
           children: <Widget>[
-            SizedBox(
-              width: 10,
-              child: dirty
-                  ? Text(
-                      '•',
-                      key: Key('param_dirty_${meta.name}'),
-                      style: GuiGlowStyles.status(palette.stWarn, valueBase),
-                    )
-                  : null,
-            ),
             Expanded(
               child: Text(
                 meta.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: dirty
-                    ? scale.data.copyWith(
-                        fontSize: kParamRowFontSize,
-                        color: palette.stWarn,
-                      )
-                    // 参数名统一青色 + 弱青辉光（§2.6.3）。
-                    : GuiGlowStyles.weak(
-                        scale.data.copyWith(
-                          fontSize: kParamRowFontSize,
-                          color: palette.accent,
-                        ),
-                      ),
+                // 参数名统一青色 + 弱青辉光（§2.6.3）；暂存状态只体现在值列。
+                style: GuiGlowStyles.weak(
+                  scale.data.copyWith(
+                    fontSize: kParamRowFontSize,
+                    color: palette.accent,
+                  ),
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -337,7 +365,7 @@ class _ParamZoneState extends State<ParamZone> {
             ),
             const SizedBox(width: 10),
             SizedBox(
-              width: 80,
+              width: 140,
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerRight,
@@ -350,36 +378,119 @@ class _ParamZoneState extends State<ParamZone> {
     );
   }
 
+  /// Strikes [text] through with a 1px [GuiPalette.fgDim] line. The project
+  /// bans `TextDecoration` emphasis (it can render as a second glyph-baseline
+  /// line), so the strike is drawn as a [Container] line centred over the text.
+  Widget _strikeThrough(
+    String text,
+    TextStyle style,
+    GuiPalette palette, {
+    Key? lineKey,
+  }) {
+    return IntrinsicWidth(
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          Text(text, maxLines: 1, style: style),
+          Container(
+            key: lineKey,
+            height: palette.lineWidth,
+            width: double.infinity,
+            color: palette.fgDim,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _interlock(BuildContext context, AppState state) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final allowed = state.commitAllowed;
-    // v3 tone mapping: a refused flush is flat amber (▲ prefix), an accepted
+    // v3 tone mapping: a refused write is flat amber (▲ prefix), an accepted
     // one flat green; the icon keeps the meaning off colour alone.
     final color = GlowValue.colorFor(
       palette,
       allowed ? Tone.green : Tone.amber,
     );
     final text = allowed
-        ? '✓ 可以落盘'
-        : '▲ 落盘需停机且无故障锁存——当前 ${state.motorRunning ? 'Run' : 'Stop'}，'
+        ? '✓ 可以写入'
+        : '▲ 写入需停机且无故障锁存——当前 ${state.motorRunning ? 'Run' : 'Stop'}，'
               '锁存 ${state.latchedCount} 项，COMMIT 将被拒绝';
-    return Text(text, style: scale.body.copyWith(fontSize: 12, color: color));
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 360),
+      child: Text(
+        text,
+        textAlign: TextAlign.right,
+        style: scale.body.copyWith(fontSize: 12, color: color),
+      ),
+    );
   }
 
-  Future<void> _confirmCommit(BuildContext context, AppState state) async {
+  /// Re-reads the device table; when edits are staged, confirms first that they
+  /// will be discarded.
+  Future<void> _onRead(BuildContext context, AppState state) async {
+    if (state.staged.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('读取设备参数'),
+          content: const Text('暂存改动将被丢弃，继续？'),
+          actions: <Widget>[
+            GuiButton(
+              label: '取消',
+              onPressed: () => Navigator.pop(dialogContext, false),
+            ),
+            GuiButton(
+              label: '继续',
+              variant: GuiButtonVariant.primary,
+              onPressed: () => Navigator.pop(dialogContext, true),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+    }
+    final overlay = Overlay.maybeOf(context);
+    final hadStaged = state.staged.isNotEmpty;
+    await state.readAll();
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      hadStaged ? '已读取设备参数，暂存改动已丢弃' : '已读取设备参数',
+      tone: ToastTone.info,
+    );
+  }
+
+  /// Sends every staged edit (`PARAM_WRITE`) then persists them in one
+  /// `PARAM_COMMIT`, reporting the count written (or the device fault).
+  Future<void> _onWrite(BuildContext context, AppState state) async {
+    final count = state.staged.length;
+    final overlay = Overlay.maybeOf(context);
+    final ok = await state.writeStaged();
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '已写入 $count 项' : '写入失败：${faultText(state)}',
+      tone: ok ? ToastTone.success : ToastTone.error,
+    );
+  }
+
+  /// Restores every parameter to its factory default (and persists it on the
+  /// device), after a confirmation.
+  Future<void> _onResetFactory(BuildContext context, AppState state) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('COMMIT 落盘'),
-        content: const Text('将参数写入设备 flash。须在停机且无故障锁存时执行。'),
+        title: const Text('恢复出厂参数'),
+        content: const Text('将所有参数恢复出厂值并写入设备。'),
         actions: <Widget>[
           GuiButton(
             label: '取消',
             onPressed: () => Navigator.pop(dialogContext, false),
           ),
           GuiButton(
-            label: '确认写入',
+            label: '确认恢复',
             variant: GuiButtonVariant.primary,
             onPressed: () => Navigator.pop(dialogContext, true),
           ),
@@ -388,11 +499,11 @@ class _ParamZoneState extends State<ParamZone> {
     );
     if (confirmed != true || !context.mounted) return;
     final overlay = Overlay.maybeOf(context);
-    final ok = await state.commit();
+    final ok = await state.resetFactory();
     if (overlay == null) return;
     showGuiToastIn(
       overlay,
-      ok ? '参数已落盘' : '落盘失败：${faultText(state)}',
+      ok ? '已恢复出厂参数' : '恢复失败：${faultText(state)}',
       tone: ok ? ToastTone.success : ToastTone.error,
     );
   }

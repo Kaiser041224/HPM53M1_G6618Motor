@@ -19,6 +19,153 @@ import '../theme/gui_type.dart';
 import 'gui_button.dart';
 import 'gui_text_field.dart';
 
+/// 行内 `旧值 → 新值` 对比 —— 参数页 / 调参板块 / 驱动对照表共用同一语义：
+/// 旧值 [GuiPalette.fgDim] 划线，中缝 `→` [GuiPalette.fgMute]，新值
+/// [GuiPalette.stPending] 高亮（单层同色相辉光）。旧值缺失时如实显示 `—`。
+///
+/// 复用同一个控件避免三处各自实现漂移；键由调用方给出，便于测试定位。
+class StagedCompare extends StatelessWidget {
+  const StagedCompare({
+    super.key,
+    required this.ty,
+    required this.oldRaw,
+    required this.newRaw,
+    required this.fontSize,
+    this.unit = '',
+    this.strikeKey,
+    this.stagedKey,
+  });
+
+  /// 参数线类型（决定 [formatValue] 的渲染）。
+  final int ty;
+
+  /// 已读基线原始值；null 表示设备未提供（旧值显示 `—`）。
+  final int? oldRaw;
+
+  /// 暂存新值原始值。
+  final int newRaw;
+
+  /// 字号（全站参数值统一档）。
+  final double fontSize;
+
+  /// 单位后缀，仅附在新值后（旧值与参数页一样不带单位）。
+  final String unit;
+
+  /// 旧值划线 [Container] 的键。
+  final Key? strikeKey;
+
+  /// 新值 [Text] 的键。
+  final Key? stagedKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    final base = GuiTypeScale.of(context).data.copyWith(fontSize: fontSize);
+    final oldText = oldRaw == null ? '—' : formatValue(ty, oldRaw!);
+    var newText = formatValue(ty, newRaw);
+    if (unit.isNotEmpty) newText = '$newText $unit';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        IntrinsicWidth(
+          child: Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              Text(
+                oldText,
+                maxLines: 1,
+                style: base.copyWith(color: palette.fgDim),
+              ),
+              Container(
+                key: strikeKey,
+                height: palette.lineWidth,
+                width: double.infinity,
+                color: palette.fgDim,
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 5),
+          child: Text(
+            '→',
+            maxLines: 1,
+            style: base.copyWith(color: palette.fgMute),
+          ),
+        ),
+        Text(
+          newText,
+          key: stagedKey,
+          maxLines: 1,
+          style: GuiGlowStyles.status(palette.stPending, base),
+        ),
+      ],
+    );
+  }
+}
+
+/// 「写入」按钮 + 待写入计数徽标（本组暂存项数为 [pending]）。
+///
+/// 无暂存（[pending] == 0）或未给回调时按钮禁用，如实表达「无可写入」。
+/// 键由调用方给出，避免同页多个「写入」按钮的徽标键冲突。
+class StagedWriteButton extends StatelessWidget {
+  const StagedWriteButton({
+    super.key,
+    required this.pending,
+    required this.onPressed,
+    this.label = '写入',
+    this.badgeKey,
+  });
+
+  /// 本组暂存项数（决定徽标与启用态）。
+  final int pending;
+
+  /// 按下回调；null 或 [pending] == 0 时禁用。
+  final VoidCallback? onPressed;
+
+  /// 按钮文案（全站统一「写入」）。
+  final String label;
+
+  /// 计数徽标的键。
+  final Key? badgeKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    final enabled = pending > 0 && onPressed != null;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        if (pending > 0) ...[
+          Container(
+            key: badgeKey,
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: palette.stPending.withValues(alpha: 0.7),
+              ),
+            ),
+            child: Text(
+              '$pending',
+              style: scale.label.copyWith(color: palette.stPending),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+        GuiButton(
+          label: label,
+          variant: GuiButtonVariant.primary,
+          icon: Icons.save,
+          onPressed: enabled ? onPressed : null,
+        ),
+      ],
+    );
+  }
+}
+
 /// 参数表统一阅读字号 [logical px]：名称 / 类型 / 范围 / 徽标 / 值同档，
 /// 层级只靠颜色与字重区分，避免同一列内大小混排。
 const double kParamRowFontSize = 15;
@@ -181,7 +328,6 @@ class ParamEditDialog extends StatefulWidget {
 class _ParamEditDialogState extends State<ParamEditDialog> {
   late final TextEditingController _valueCtrl;
   String _error = '';
-  bool _busy = false;
 
   @override
   void initState() {
@@ -205,7 +351,10 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
     _ => TextInputType.text,
   };
 
-  Future<void> _submit() async {
+  /// Validates the input, then **stages** the edit in [AppState.staged] instead
+  /// of touching the device — the change is only sent by the parameter page's
+  /// 写入 action.
+  void _submit() {
     final meta = widget.meta;
     final text = _valueCtrl.text.trim();
 
@@ -263,20 +412,8 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
       return;
     }
 
-    setState(() {
-      _busy = true;
-      _error = '';
-    });
-    final ok = await widget.state.writeParam(meta.name, meta.ty, raw);
-    if (!mounted) return;
-    if (ok) {
-      Navigator.pop(context);
-      return;
-    }
-    setState(() {
-      _busy = false;
-      _error = faultText(widget.state);
-    });
+    widget.state.stageParam(meta.name, meta.ty, raw);
+    Navigator.pop(context);
   }
 
   @override
@@ -302,7 +439,6 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
           GuiTextField(
             controller: _valueCtrl,
             keyboardType: _keyboard,
-            enabled: !_busy,
             autofocus: true,
             labelText: '新值',
           ),
@@ -320,21 +456,18 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
         ],
       ),
       actions: <Widget>[
+        GuiButton(label: '取消', onPressed: () => Navigator.pop(context)),
         GuiButton(
-          label: '取消',
-          onPressed: _busy ? null : () => Navigator.pop(context),
-        ),
-        GuiButton(
-          label: '写入',
+          label: '确定',
           variant: GuiButtonVariant.primary,
-          onPressed: _busy ? null : _submit,
+          onPressed: _submit,
         ),
       ],
     );
   }
 }
 
-/// 弹出参数编辑对话框。写入成功返回 true。
+/// 弹出参数编辑对话框。确定即把编辑写入本地暂存表（不触设备），返回 true。
 Future<bool> openParamEditor(
   BuildContext context,
   AppState state,
@@ -391,7 +524,8 @@ class ParamField extends StatelessWidget {
 
     final meta = metaOf(state, name);
     final value = meta == null ? null : state.values[name];
-    final dirty = state.dirty.contains(name);
+    final stagedRaw = state.staged[name];
+    final dirty = stagedRaw != null;
 
     if (meta == null) {
       // 设备未提供此参数 —— 如实呈现，不给假值。
@@ -399,8 +533,14 @@ class ParamField extends StatelessWidget {
         palette: palette,
         scale: scale,
         label: label,
-        valueText: '—',
-        valueColor: palette.fgMute,
+        valueWidget: Text(
+          '—',
+          maxLines: 1,
+          style: scale.data.copyWith(
+            fontSize: kParamRowFontSize,
+            color: palette.fgMute,
+          ),
+        ),
         hint: '设备未提供',
         hintColor: palette.fgMute,
         enabled: false,
@@ -410,13 +550,34 @@ class ParamField extends StatelessWidget {
     final shown = value == null ? '—' : formatValue(meta.ty, value.raw);
     final unit = value == null ? '' : meta.unit;
 
-    // 脏（已下发未落盘）走告警黄并加点；其余走琥珀读数色。
-    final valueColor = value == null
-        ? palette.fgMute
-        : (dirty ? palette.stWarn : palette.valueAmber);
+    // 暂存（已改动未写入）显示 `旧值 → 新值` 对比；否则显示琥珀读数。
+    final Widget valueWidget;
+    if (dirty) {
+      valueWidget = StagedCompare(
+        ty: meta.ty,
+        oldRaw: value?.raw,
+        newRaw: stagedRaw,
+        unit: unit,
+        fontSize: kParamRowFontSize,
+        strikeKey: Key('field_strike_$name'),
+        stagedKey: Key('field_staged_$name'),
+      );
+    } else {
+      valueWidget = Text(
+        '$shown${unit.isEmpty ? '' : ' $unit'}',
+        maxLines: 1,
+        style: GuiGlowStyles.softTint(
+          value == null ? palette.fgMute : palette.valueAmber,
+          scale.data.copyWith(
+            fontSize: kParamRowFontSize,
+            color: value == null ? palette.fgMute : palette.valueAmber,
+          ),
+        ),
+      );
+    }
 
     final hint = dirty
-        ? '● 未落盘'
+        ? '● 未写入'
         : (rangeText(meta).isEmpty
               ? (meta.apply == 1 ? 'REBOOT 生效' : 'LIVE 生效')
               : '${rangeText(meta)} ${meta.unit}'.trimRight());
@@ -427,8 +588,7 @@ class ParamField extends StatelessWidget {
         palette: palette,
         scale: scale,
         label: label,
-        valueText: '$shown${unit.isEmpty ? '' : ' $unit'}',
-        valueColor: valueColor,
+        valueWidget: valueWidget,
         hint: hint,
         hintColor: dirty ? palette.stWarn : palette.fgMute,
         enabled: true,
@@ -442,8 +602,7 @@ class ParamField extends StatelessWidget {
     required GuiPalette palette,
     required GuiTypeScale scale,
     required String label,
-    required String valueText,
-    required Color valueColor,
+    required Widget valueWidget,
     required String hint,
     required Color hintColor,
     required bool enabled,
@@ -479,22 +638,13 @@ class ParamField extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 5),
+            // 单层同色相辉光（0.12）：小字号琥珀值不再拾取青色跨色相光晕，
+            // 字符基线下方因此不再叠出第二条线（「双黄线」根治）。样式由
+            // 值控件自身携带（暂存对比亦自带各自色相），此处只做缩放兜底。
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
-              child: Text(
-                valueText,
-                maxLines: 1,
-                // 单层同色相辉光（0.12）：小字号琥珀值不再拾取青色跨色相光晕，
-                // 字符基线下方因此不再叠出第二条线（「双黄线」根治）。
-                style: GuiGlowStyles.softTint(
-                  valueColor,
-                  scale.data.copyWith(
-                    fontSize: kParamRowFontSize,
-                    color: valueColor,
-                  ),
-                ),
-              ),
+              child: valueWidget,
             ),
             const SizedBox(height: 3),
             Text(

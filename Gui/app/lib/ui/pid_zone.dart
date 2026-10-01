@@ -17,6 +17,7 @@ import '../state/app_state.dart';
 import '../theme/gui_type.dart';
 import '../widgets/param_controls.dart';
 import 'panel_title.dart';
+import 'toast_overlay.dart';
 
 /// 速度环 PID 参数位（全限定名）。设备 schema 无 kd。
 const List<(String, String)> kSpeedLoopFields = <(String, String)>[
@@ -39,6 +40,30 @@ class PidZone extends StatelessWidget {
 
   /// 两组面板间距 [logical px]，与右栏各段间距一致（`sp-5`, 24px）。
   static const double _panelGap = 24;
+
+  /// 本组写入范围：速度环 + 角度环参数全名集合。与 `CurrentLoopPanel` 的
+  /// 写入范围互不重叠 —— 各面板只下发自己的暂存项。
+  static final Set<String> writeNames = <String>{
+    for (final (name, _) in kSpeedLoopFields) name,
+    for (final (name, _) in kAngleLoopFields) name,
+  };
+
+  /// 待写入计数：本组（速度环 + 角度环）暂存项数。
+  int get _pending =>
+      state.staged.keys.where(PidZone.writeNames.contains).length;
+
+  /// 下发本组暂存（速度环 + 角度环）并一并 commit，随后 toast 结果。
+  Future<void> _write(BuildContext context) async {
+    final overlay = Overlay.maybeOf(context);
+    final count = _pending;
+    final ok = await state.writeStaged(only: PidZone.writeNames);
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '已写入 $count 项' : '写入失败：${faultText(state)}',
+      tone: ok ? ToastTone.success : ToastTone.error,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,6 +89,15 @@ class PidZone extends StatelessWidget {
             hue: TitleHue.magenta,
             fields: kAngleLoopFields,
             state: state,
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: StagedWriteButton(
+              pending: _pending,
+              badgeKey: const Key('pid_pending_badge'),
+              onPressed: _pending > 0 ? () => _write(context) : null,
+            ),
           ),
         ],
       ),

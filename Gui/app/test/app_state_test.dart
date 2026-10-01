@@ -193,6 +193,286 @@ void main() {
     });
   });
 
+  group('暂存-写入模型', () {
+    test('stageParam / discardStaged 只改本地暂存，不触设备', () {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      var touched = false;
+      state.onParamWrite = (name, ty, raw) async => touched = true;
+
+      state.stageParam('motor.a', 1, 5);
+      expect(state.staged['motor.a'], 5);
+      expect(state.dirty, contains('motor.a'));
+
+      state.discardStaged();
+      expect(state.staged, isEmpty);
+      expect(touched, isFalse);
+      expect(state.requestFailures, 0);
+    });
+
+    test('writeStaged 逐项 write 后 commit，成功清暂存并刷新值', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+          ParamMetaDto(
+            index: 1,
+            name: 'motor.b',
+            ty: 0,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      final writes = <(String, int, int)>[];
+      var commits = 0;
+      state.onParamWrite = (name, ty, raw) async => writes.add((name, ty, raw));
+      state.onParamCommit = () async => commits++;
+      state.stageParam('motor.a', 1, 111);
+      state.stageParam('motor.b', 0, 222);
+
+      final ok = await state.writeStaged();
+
+      expect(ok, isTrue);
+      expect(writes, <(String, int, int)>[
+        ('motor.a', 1, 111),
+        ('motor.b', 0, 222),
+      ]);
+      expect(commits, 1);
+      expect(state.staged, isEmpty);
+      expect(state.values['motor.a']!.raw, 111);
+      expect(state.requestFailures, 0);
+    });
+
+    test('writeStaged 中途失败即停、不 commit、保留暂存并记录设备码', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+          ParamMetaDto(
+            index: 1,
+            name: 'motor.b',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      final writes = <String>[];
+      var commits = 0;
+      state.onParamWrite = (name, ty, raw) async {
+        if (name == 'motor.b') {
+          throw const FrbError(code: 4, message: 'interlock active');
+        }
+        writes.add(name);
+      };
+      state.onParamCommit = () async => commits++;
+      state.stageParam('motor.a', 1, 1);
+      state.stageParam('motor.b', 1, 2);
+
+      final ok = await state.writeStaged();
+
+      expect(ok, isFalse);
+      expect(writes, <String>['motor.a']);
+      expect(commits, 0);
+      expect(state.staged.keys, containsAll(<String>['motor.a', 'motor.b']));
+      expect(state.lastErrorCode, 4);
+      expect(state.requestFailures, 1);
+    });
+
+    test('无暂存时 writeStaged 直接 false，不触设备', () async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onParamCommit = () async => fail('should not commit');
+
+      expect(await state.writeStaged(), isFalse);
+    });
+
+    test('writeStaged(only:) 只下发名单内项，名单外暂存保留', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+          ParamMetaDto(
+            index: 1,
+            name: 'motor.b',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      final writes = <String>[];
+      var commits = 0;
+      state.onParamWrite = (name, ty, raw) async => writes.add(name);
+      state.onParamCommit = () async => commits++;
+      state.stageParam('motor.a', 1, 1);
+      state.stageParam('motor.b', 1, 2);
+
+      final ok = await state.writeStaged(only: <String>{'motor.a'});
+
+      expect(ok, isTrue);
+      expect(writes, <String>['motor.a']);
+      expect(commits, 1);
+      expect(state.staged.containsKey('motor.a'), isFalse);
+      expect(state.staged['motor.b'], 2);
+      expect(state.values['motor.a']!.raw, 1);
+      expect(state.requestFailures, 0);
+    });
+
+    test('writeStaged(only:) 名单无匹配暂存 → false，不触设备', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      state.onParamCommit = () async => fail('should not commit');
+      state.stageParam('motor.a', 1, 1);
+
+      final ok = await state.writeStaged(only: <String>{'motor.b'});
+
+      expect(ok, isFalse);
+      expect(state.staged['motor.a'], 1);
+    });
+
+    test('readAll 清空暂存并以设备值刷新基线', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      state.values['motor.a'] = const ParamValueDto(ty: 1, raw: 5);
+      state.onParamRead = (name) async => const ParamValueDto(ty: 1, raw: 9);
+      state.stageParam('motor.a', 1, 7);
+
+      await state.readAll();
+
+      expect(state.staged, isEmpty);
+      expect(state.values['motor.a']!.raw, 9);
+    });
+
+    test('resetFactory 下发空名单 → 重读全部并清暂存', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+          ParamMetaDto(
+            index: 1,
+            name: 'motor.b',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      final resets = <List<String>>[];
+      final reads = <String>[];
+      state.onParamReset = (names) async => resets.add(names);
+      state.onParamRead = (name) async {
+        reads.add(name);
+        return const ParamValueDto(ty: 1, raw: 1);
+      };
+      state.stageParam('motor.a', 1, 5);
+
+      final ok = await state.resetFactory();
+
+      expect(ok, isTrue);
+      expect(resets.single, isEmpty);
+      expect(reads, <String>['motor.a', 'motor.b']);
+      expect(state.staged, isEmpty);
+      expect(state.requestFailures, 0);
+    });
+
+    test('resetFactory 联锁拒绝 code 4 → false、记录设备码、不重读', () async {
+      final state = AppState.test(
+        metas: const <ParamMetaDto>[
+          ParamMetaDto(
+            index: 0,
+            name: 'motor.a',
+            ty: 1,
+            apply: 0,
+            unit: '',
+            min: 0,
+            max: 100,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      var read = false;
+      state.onParamReset = (names) async =>
+          throw const FrbError(code: 4, message: 'locked');
+      state.onParamRead = (name) async {
+        read = true;
+        return const ParamValueDto(ty: 1, raw: 1);
+      };
+
+      final ok = await state.resetFactory();
+
+      expect(ok, isFalse);
+      expect(state.lastErrorCode, 4);
+      expect(read, isFalse);
+      expect(state.requestFailures, 1);
+    });
+  });
+
   group('数据三态 freshnessOf', () {
     test('从未更新 → unknown；刚更新 → live', () {
       final state = AppState.test();

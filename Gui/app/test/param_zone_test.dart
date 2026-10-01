@@ -129,40 +129,65 @@ void main() {
     await tester.tap(find.text('software.fault.vbus_ov_v'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, '120');
-    await tester.tap(find.text('写入'));
+    await tester.tap(find.text('确定'));
     await tester.pumpAndSettle();
     expect(find.textContaining('范围'), findsOneWidget);
   });
 
-  testWidgets('编辑写入后往返：值更新且标记 dirty（圆点 + 黄值）', (tester) async {
+  testWidgets('暂存编辑显示「旧值 → 新值」：旧值 fgDim 划线，新值 stPending 高亮', (tester) async {
     final state = AppState.test(
       metas: [makeMeta(0, 'motor.i_rated_a', ty: 0, min: 0, max: 10)],
     );
     addTearDown(state.dispose);
     state.values['motor.i_rated_a'] = ParamValueDto(ty: 0, raw: f32(7.0));
-    state.dirty.add('motor.i_rated_a');
+    state.stageParam('motor.i_rated_a', 0, f32(8.0));
 
     await _pump(tester, state);
 
-    expect(
-      find.byKey(const Key('param_dirty_motor.i_rated_a')),
-      findsOneWidget,
+    final oldValue = tester.widget<Text>(find.text('7.00'));
+    expect(oldValue.style?.color, const GuiPalette().fgDim);
+
+    final strike = tester.widget<Container>(
+      find.byKey(const Key('param_strike_motor.i_rated_a')),
     );
-    final value = tester.widget<Text>(find.text('7.00'));
-    expect(value.style?.color, const GuiPalette().stWarn);
-    expect(find.textContaining('项待落盘'), findsOneWidget);
+    expect(strike.color, const GuiPalette().fgDim);
+    expect(strike.constraints?.maxHeight, 1);
+
+    expect(find.text('→'), findsOneWidget);
+
+    final stagedValue = tester.widget<Text>(
+      find.byKey(const Key('param_staged_motor.i_rated_a')),
+    );
+    expect(stagedValue.data, '8.00');
+    expect(stagedValue.style?.color, const GuiPalette().stPending);
+
+    expect(find.textContaining('项待写入'), findsOneWidget);
   });
 
-  testWidgets('COMMIT 二次确认文案保留「停机」「故障锁存」', (tester) async {
+  testWidgets('无暂存时「写入」按钮禁用', (tester) async {
     final state = AppState.test(metas: [makeMeta(0, 'motor.pole_pairs')]);
     addTearDown(state.dispose);
 
     await _pump(tester, state);
-    await tester.tap(find.text('COMMIT 落盘'));
+
+    final write = tester.widget<GuiButton>(
+      find.widgetWithText(GuiButton, '写入'),
+    );
+    expect(write.onPressed, isNull);
+  });
+
+  testWidgets('有暂存时点「读取」弹出「暂存改动将被丢弃，继续？」确认', (tester) async {
+    final state = AppState.test(metas: [makeMeta(0, 'motor.pole_pairs')]);
+    addTearDown(state.dispose);
+    state.stageParam('motor.pole_pairs', 1, 4);
+
+    await _pump(tester, state);
+    await tester.tap(find.text('读取'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('停机'), findsWidgets);
-    expect(find.textContaining('故障锁存'), findsWidgets);
+    expect(find.textContaining('暂存改动将被丢弃'), findsOneWidget);
+    expect(find.widgetWithText(GuiButton, '继续'), findsOneWidget);
+    expect(find.widgetWithText(GuiButton, '取消'), findsOneWidget);
   });
 
   testWidgets('联锁提示行：运行 + 锁存时琥珀拒绝（▲ 前缀），含当前状态与锁存计数', (tester) async {
@@ -175,16 +200,16 @@ void main() {
 
     await _pump(tester, state);
 
-    final line = tester.widget<Text>(find.textContaining('落盘需停机'));
-    // v3 tone mapping: a refused flush is flat amber, not the warn status hue.
+    final line = tester.widget<Text>(find.textContaining('写入需停机'));
+    // v3 tone mapping: a refused write is flat amber, not the warn status hue.
     expect(line.style?.color, const GuiPalette().valueAmber);
-    expect(find.textContaining('▲ 落盘需停机'), findsOneWidget);
+    expect(find.textContaining('▲ 写入需停机'), findsOneWidget);
     expect(find.textContaining('当前 Run'), findsOneWidget);
     expect(find.textContaining('锁存 1 项'), findsOneWidget);
     expect(find.textContaining('COMMIT 将被拒绝'), findsOneWidget);
   });
 
-  testWidgets('联锁提示行：停机无锁存时绿字可落盘', (tester) async {
+  testWidgets('联锁提示行：停机无锁存时绿字可以写入', (tester) async {
     final state = AppState.test(
       metas: [makeMeta(0, 'motor.pole_pairs')],
       status: makeStatus(),
@@ -193,11 +218,11 @@ void main() {
 
     await _pump(tester, state);
 
-    final line = tester.widget<Text>(find.textContaining('可以落盘'));
+    final line = tester.widget<Text>(find.textContaining('可以写入'));
     expect(line.style?.color, const GuiPalette().valueGreen);
   });
 
-  testWidgets('参数值列量纲着色：无单位→白青中性；脏值走 stWarn', (tester) async {
+  testWidgets('参数值列量纲着色：无单位→白青中性；暂存新值走 stPending', (tester) async {
     final state = AppState.test(
       metas: [
         makeMeta(0, 'motor.rs_ohm', ty: 0, min: 0, max: 10),
@@ -207,14 +232,16 @@ void main() {
     addTearDown(state.dispose);
     state.values['motor.rs_ohm'] = ParamValueDto(ty: 0, raw: f32(0.158));
     state.values['motor.ls_h'] = ParamValueDto(ty: 0, raw: f32(0.000119));
-    state.dirty.add('motor.ls_h');
+    state.stageParam('motor.ls_h', 0, f32(0.0002));
 
     await _pump(tester, state);
 
     final clean = tester.widget<Text>(find.text('0.16'));
     expect(clean.style?.color, const GuiPalette().fgStrong);
-    final dirtyValue = tester.widget<Text>(find.text('0.00'));
-    expect(dirtyValue.style?.color, const GuiPalette().stWarn);
+    final stagedValue = tester.widget<Text>(
+      find.byKey(const Key('param_staged_motor.ls_h')),
+    );
+    expect(stagedValue.style?.color, const GuiPalette().stPending);
   });
 
   testWidgets('参数值列按量纲着色（V→cyan）', (tester) async {
@@ -276,21 +303,24 @@ void main() {
     expect(border.bottom.color, const Color(0xFF173E44));
   });
 
-  testWidgets('工具栏与对话框按钮为 GuiButton（读全部/COMMIT primary）', (tester) async {
+  testWidgets('工具栏：读取 / 写入(primary) / 恢复出厂 为 GuiButton，写入有暂存时可用', (tester) async {
     final state = AppState.test(metas: [makeMeta(0, 'motor.pole_pairs')]);
     addTearDown(state.dispose);
+    state.stageParam('motor.pole_pairs', 1, 4);
 
     await _pump(tester, state);
 
-    expect(find.widgetWithText(GuiButton, '读全部'), findsOneWidget);
-    final commit = tester.widget<GuiButton>(
-      find.widgetWithText(GuiButton, 'COMMIT 落盘'),
+    expect(find.widgetWithText(GuiButton, '读取'), findsOneWidget);
+    expect(find.widgetWithText(GuiButton, '恢复出厂'), findsOneWidget);
+    final write = tester.widget<GuiButton>(
+      find.widgetWithText(GuiButton, '写入'),
     );
-    expect(commit.variant, GuiButtonVariant.primary);
+    expect(write.variant, GuiButtonVariant.primary);
+    expect(write.onPressed, isNotNull);
 
-    await tester.tap(find.text('COMMIT 落盘'));
+    await tester.tap(find.text('恢复出厂'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(GuiButton, '确认写入'), findsOneWidget);
+    expect(find.widgetWithText(GuiButton, '确认恢复'), findsOneWidget);
     expect(find.widgetWithText(GuiButton, '取消'), findsOneWidget);
   });
 

@@ -15,6 +15,7 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/param_controls.dart';
 import 'panel_title.dart';
+import 'toast_overlay.dart';
 
 /// 保护门限 —— 固件把这几个参数列为**安全相关**
 /// （`app_terminal_cmd_param.c` 的 `s_safety_params`），终端 set 时会警告；
@@ -84,6 +85,28 @@ class CurrentLoopPanel extends StatelessWidget {
     ('software.control.current_loop.ki', '积分增益 ki'),
   ];
 
+  /// 本面板的写入范围（与速度环 / 角度环互不重叠）。
+  static final Set<String> writeNames = <String>{
+    for (final (name, _) in fields) name,
+  };
+
+  /// 待写入计数：电流环暂存项数。
+  int get _pending =>
+      state.staged.keys.where(CurrentLoopPanel.writeNames.contains).length;
+
+  /// 下发电流环暂存并 commit，随后 toast 结果。
+  Future<void> _write(BuildContext context) async {
+    final overlay = Overlay.maybeOf(context);
+    final count = _pending;
+    final ok = await state.writeStaged(only: CurrentLoopPanel.writeNames);
+    if (overlay == null) return;
+    showGuiToastIn(
+      overlay,
+      ok ? '已写入 $count 项' : '写入失败：${faultText(state)}',
+      tone: ok ? ToastTone.success : ToastTone.error,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
@@ -121,6 +144,15 @@ class CurrentLoopPanel extends StatelessWidget {
             '▲ FOC 预留 · 当前无消费者，写入暂不改变运行行为',
             key: const Key('current_loop_note'),
             style: scale.label.copyWith(color: palette.stWarn),
+          ),
+          const SizedBox(height: 9),
+          Align(
+            alignment: Alignment.centerRight,
+            child: StagedWriteButton(
+              pending: _pending,
+              badgeKey: const Key('current_loop_pending_badge'),
+              onPressed: _pending > 0 ? () => _write(context) : null,
+            ),
           ),
         ],
       ),

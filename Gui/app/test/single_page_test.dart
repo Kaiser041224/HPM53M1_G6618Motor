@@ -329,7 +329,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(ParamZone), findsOneWidget);
-    expect(find.text('COMMIT 落盘'), findsOneWidget);
+    expect(find.text('写入'), findsOneWidget);
     // No L2 tab row survives anywhere.
     expect(find.byKey(const Key('tab_monitor_status')), findsNothing);
     expect(find.byKey(const Key('tab_scope_waveform')), findsNothing);

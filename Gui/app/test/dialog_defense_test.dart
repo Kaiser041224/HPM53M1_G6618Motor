@@ -168,7 +168,7 @@ void main() {
             body: Builder(
               builder: (context) => Center(
                 child: ElevatedButton(
-                  onPressed: () => showGuiToast(context, '参数已落盘'),
+                  onPressed: () => showGuiToast(context, '参数已写入'),
                   child: const Text('go'),
                 ),
               ),

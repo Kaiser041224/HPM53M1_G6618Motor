@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/pid_zone.dart';
+import 'package:g6618_gui/widgets/gui_button.dart';
 
 StatusDto makeStatus() => StatusDto(
   faultFlags: 0,
@@ -89,6 +90,86 @@ void main() {
       // speed_loop.kp 有值 → 1.50；其余缺值仍「设备未提供」（4 - 1 = 3）。
       expect(find.text('1.50'), findsOneWidget);
       expect(find.text('设备未提供'), findsNWidgets(3));
+    });
+
+    testWidgets('暂存字段显示「旧值 → 新值」对比：旧值划线，新值 stPending', (tester) async {
+      const kp = 'software.control.speed_loop.kp';
+      final state = AppState.test(
+        status: makeStatus(),
+        metas: <ParamMetaDto>[_f32Meta(kp, min: 0, max: 10)],
+      );
+      addTearDown(state.dispose);
+      state.values[kp] = ParamValueDto(ty: 0, raw: f32(1.5));
+      state.stageParam(kp, 0, f32(2.0));
+
+      await _pump(tester, PidZone(state: state));
+
+      final staged = tester.widget<Text>(
+        find.byKey(const Key('field_staged_$kp')),
+      );
+      expect(staged.data, '2.00');
+      expect(staged.style?.color, const GuiPalette().stPending);
+
+      final strike = tester.widget<Container>(
+        find.byKey(const Key('field_strike_$kp')),
+      );
+      expect(strike.color, const GuiPalette().fgDim);
+      expect(find.text('→'), findsOneWidget);
+    });
+
+    testWidgets('无暂存时 PidZone「写入」禁用', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, PidZone(state: state));
+
+      final write = tester.widget<GuiButton>(
+        find.widgetWithText(GuiButton, '写入'),
+      );
+      expect(write.onPressed, isNull);
+    });
+
+    testWidgets('有暂存时「写入」可用，且只下发速度环+角度环名集合', (tester) async {
+      const kp = 'software.control.speed_loop.kp';
+      const external = 'software.fault.vbus_ov_v';
+      final state = AppState.test(
+        status: makeStatus(),
+        metas: <ParamMetaDto>[
+          _f32Meta(kp, min: 0, max: 10),
+          ParamMetaDto(
+            index: 1,
+            name: external,
+            ty: 0,
+            apply: 0,
+            unit: 'V',
+            min: 0,
+            max: 80,
+          ),
+        ],
+      );
+      addTearDown(state.dispose);
+      final writes = <String>[];
+      var commits = 0;
+      state.onParamWrite = (name, ty, raw) async => writes.add(name);
+      state.onParamCommit = () async => commits++;
+      state.stageParam(kp, 0, f32(2.0));
+      state.stageParam(external, 0, 123);
+
+      await _pump(tester, PidZone(state: state));
+
+      expect(find.byKey(const Key('pid_pending_badge')), findsOneWidget);
+      final write = tester.widget<GuiButton>(
+        find.widgetWithText(GuiButton, '写入'),
+      );
+      expect(write.onPressed, isNotNull);
+
+      await tester.tap(find.text('写入'));
+      await tester.pumpAndSettle();
+
+      expect(writes, <String>[kp]);
+      expect(commits, 1);
+      expect(state.staged.containsKey(kp), isFalse);
+      expect(state.staged[external], 123);
     });
   });
 }

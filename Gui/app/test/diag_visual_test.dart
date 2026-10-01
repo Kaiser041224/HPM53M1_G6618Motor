@@ -138,7 +138,7 @@ void main() {
               builder: (context) => Center(
                 child: ElevatedButton(
                   onPressed: () =>
-                      showGuiToast(context, '参数已落盘', tone: ToastTone.success),
+                      showGuiToast(context, '参数已写入', tone: ToastTone.success),
                   child: const Text('go'),
                 ),
               ),

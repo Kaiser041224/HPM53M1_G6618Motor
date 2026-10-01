@@ -120,8 +120,15 @@ class AppState extends ChangeNotifier {
   /// Last known value of each parameter, keyed by name.
   final Map<String, frb.ParamValueDto> values = {};
 
-  /// Names written locally but not yet flushed to flash via [commit].
-  final Set<String> dirty = {};
+  /// Parameter edits staged locally for the next [writeStaged], keyed by name to
+  /// the raw value in the parameter's own [ParamMetaDto.ty] encoding. Nothing
+  /// reaches the device until [writeStaged] runs, so the UI can show an
+  /// `old → new` comparison before committing.
+  final Map<String, int> staged = {};
+
+  /// Legacy alias for panels outside the parameter page (bottom bar / motor
+  /// drive readouts): the names currently staged for writing.
+  Set<String> get dirty => staged.keys.toSet();
 
   /// True while [loadMetas] is in flight.
   bool loadingParams = false;
@@ -577,11 +584,14 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Re-reads every parameter value into [values].
+  /// Re-reads every parameter value into [values], refreshing the baseline.
+  /// Any [staged] edit is dropped — the freshly read device values become the
+  /// new baseline (the UI confirms the discard before calling this).
   Future<void> readAll() async {
+    staged.clear();
     for (final m in metas) {
       try {
-        values[m.name] = await frb.paramRead(name: m.name);
+        values[m.name] = await _readParam(m.name);
       } on Exception catch (e) {
         _recordFailure(e);
       }
@@ -589,35 +599,120 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Writes [raw] (in [ty] encoding) to [name]; marks the entry dirty.
-  Future<bool> writeParam(String name, int ty, int raw) async {
-    try {
-      await frb.paramWrite(name: name, ty: ty, raw: raw);
-      values[name] = frb.ParamValueDto(ty: ty, raw: raw);
-      dirty.add(name);
-      _clearError();
-      notifyListeners();
-      return true;
-    } on Exception catch (e) {
-      _recordFailure(e);
-      notifyListeners();
-      return false;
-    }
+  /// Reads one parameter through the injected test seam when present.
+  Future<frb.ParamValueDto> _readParam(String name) {
+    final injected = onParamRead;
+    return injected != null ? injected(name) : frb.paramRead(name: name);
   }
 
-  /// Flushes dirty parameters to flash; clears [dirty] on success.
-  Future<bool> commit() async {
+  /// Test-only replacement for [frb.paramWrite]; receives `(name, ty, raw)`.
+  @visibleForTesting
+  Future<void> Function(String name, int ty, int raw)? onParamWrite;
+
+  /// Test-only replacement for [frb.paramCommit].
+  @visibleForTesting
+  Future<void> Function()? onParamCommit;
+
+  /// Test-only replacement for [frb.paramRead]; receives the parameter name.
+  @visibleForTesting
+  Future<frb.ParamValueDto> Function(String name)? onParamRead;
+
+  /// Test-only replacement for [frb.paramResetFactory]; receives the names to
+  /// restore (an empty list restores every parameter).
+  @visibleForTesting
+  Future<void> Function(List<String> names)? onParamReset;
+
+  /// Stages [raw] (encoded as [ty]) for [name] **without** touching the device.
+  /// The edit only takes effect when [writeStaged] runs.
+  void stageParam(String name, int ty, int raw) {
+    staged[name] = raw;
+    _clearError();
+    notifyListeners();
+  }
+
+  /// Drops every staged edit; the device is untouched.
+  void discardStaged() {
+    if (staged.isEmpty) return;
+    staged.clear();
+    notifyListeners();
+  }
+
+  /// Writes the staged edits to the device, then persists them with a single
+  /// commit. Stops at the first failure and reports it through [lastError],
+  /// leaving [staged] intact so the user can retry. Clears the written entries
+  /// and returns true only when the whole write + commit succeeded.
+  ///
+  /// [only] restricts the batch to the named subset (a table's own parameters);
+  /// entries staged outside it stay staged and untouched, so several panels can
+  /// stage independently and flush in isolation. Null (the default) writes every
+  /// staged entry. Returns false when [only] selects nothing.
+  Future<bool> writeStaged({Set<String>? only}) async {
+    final entries = staged.entries
+        .where((entry) => only == null || only.contains(entry.key))
+        .toList(growable: false);
+    if (entries.isEmpty) return false;
     try {
-      await frb.paramCommit();
-      dirty.clear();
-      _clearError();
-      notifyListeners();
-      return true;
+      for (final entry in entries) {
+        final ty = _metaOf(entry.key)?.ty ?? 0;
+        await _writeParam(entry.key, ty, entry.value);
+        values[entry.key] = frb.ParamValueDto(ty: ty, raw: entry.value);
+      }
+      await _commitParams();
     } on Exception catch (e) {
       _recordFailure(e);
       notifyListeners();
       return false;
     }
+    for (final entry in entries) {
+      staged.remove(entry.key);
+    }
+    _clearError();
+    notifyListeners();
+    return true;
+  }
+
+  /// Restores the factory values for [names] (empty = every parameter) on the
+  /// device, then re-reads the table so the baseline reflects the restored
+  /// values. The device persists the restoration itself.
+  Future<bool> resetFactory([List<String> names = const <String>[]]) async {
+    try {
+      final injected = onParamReset;
+      if (injected != null) {
+        await injected(names);
+      } else {
+        await frb.paramResetFactory(names: names);
+      }
+      await readAll();
+    } on Exception catch (e) {
+      _recordFailure(e);
+      notifyListeners();
+      return false;
+    }
+    _clearError();
+    notifyListeners();
+    return true;
+  }
+
+  /// Writes one parameter through the injected test seam when present.
+  Future<void> _writeParam(String name, int ty, int raw) {
+    final injected = onParamWrite;
+    return injected != null
+        ? injected(name, ty, raw)
+        : frb.paramWrite(name: name, ty: ty, raw: raw);
+  }
+
+  /// Commits through the injected test seam when present.
+  Future<void> _commitParams() {
+    final injected = onParamCommit;
+    return injected != null ? injected() : frb.paramCommit();
+  }
+
+  /// Looks up the loaded metadata for [name], or null when unknown.
+  frb.ParamMetaDto? _metaOf(String name) {
+    for (final m in metas) {
+      if (m.name == name) return m;
+    }
+    return null;
   }
 
   /// Runs a control [op] (through [onCtrl] when injected) and records any
@@ -760,6 +855,7 @@ class AppState extends ChangeNotifier {
       rttMs = null;
       status = null;
       latchedFlags = 0;
+      staged.clear();
       chartHistory.clear();
       _lastSeq = null;
       droppedBatches = 0;
