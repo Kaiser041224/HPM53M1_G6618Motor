@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/gui_type.dart';
+import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 
 /// Light sub-panel heading (v5).
@@ -56,6 +57,58 @@ class PanelTitle extends StatelessWidget {
             const Spacer(),
             trailing!,
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 一体化面板：外层统一 [HairlineFrame]（青 1.5px）包裹「标题条 + 内容区」。
+///
+/// 标题条（[PanelTitle] 的渐变底 + 低亮紫下沿）**贴齐外框内缘**，与内容之间
+/// 以标题条自身的下沿作为唯一分隔，形成无缝整体；内容区四周保留 [contentPadding]。
+/// 复刻样张 `.mini-panel` / `.panel-title`（`gui-style-sample.html`）的负外边距效果，
+/// 但用零内边距 + 内容侧内边距实现，避免负 margin 的布局副作用。
+class PanelBox extends StatelessWidget {
+  const PanelBox({
+    super.key,
+    this.frameKey,
+    required this.title,
+    this.en,
+    this.trailing,
+    required this.child,
+    this.contentPadding = const EdgeInsets.all(10),
+  });
+
+  /// [HairlineFrame] 的 key（沿用旧面板 key，避免调用方 / 测试漂移）。
+  final Key? frameKey;
+
+  /// 面板标题（同 [PanelTitle]）。
+  final String title;
+
+  /// 可选英文副标。
+  final String? en;
+
+  /// 可选右侧内容。
+  final Widget? trailing;
+
+  /// 标题条之下的内容区。
+  final Widget child;
+
+  /// 内容区内边距（默认 10）。
+  final EdgeInsetsGeometry contentPadding;
+
+  @override
+  Widget build(BuildContext context) {
+    return HairlineFrame(
+      key: frameKey,
+      padding: EdgeInsets.zero,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          PanelTitle(title: title, en: en, trailing: trailing),
+          Padding(padding: contentPadding, child: child),
         ],
       ),
     );

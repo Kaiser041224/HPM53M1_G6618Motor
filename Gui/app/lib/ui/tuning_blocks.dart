@@ -13,7 +13,6 @@ import 'package:flutter/material.dart';
 import '../state/app_state.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
-import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import 'panel_title.dart';
 
@@ -38,38 +37,29 @@ class ProtectionLimitsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    return HairlineFrame(
-      key: const Key('protection_limits_frame'),
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    return PanelBox(
+      frameKey: const Key('protection_limits_frame'),
+      title: '保护门限',
+      en: 'Protection',
+      trailing: Text(
+        'SAFETY · 改动即影响保护动作',
+        style: scale.label.copyWith(color: palette.stWarn),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          PanelTitle(
-            title: '保护门限',
-            en: 'Protection',
-            trailing: Text(
-              'SAFETY · 改动即影响保护动作',
-              style: scale.label.copyWith(color: palette.stWarn),
+          for (final (name, label) in fields) ...<Widget>[
+            Expanded(
+              child: ParamField(
+                state: state,
+                name: name,
+                label: label,
+                safety: true,
+                compact: true,
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              for (final (name, label) in fields) ...<Widget>[
-                Expanded(
-                  child: ParamField(
-                    state: state,
-                    name: name,
-                    label: label,
-                    safety: true,
-                    compact: true,
-                  ),
-                ),
-                if (name != fields.last.$1) const SizedBox(width: 8),
-              ],
-            ],
-          ),
+            if (name != fields.last.$1) const SizedBox(width: 8),
+          ],
         ],
       ),
     );
@@ -97,21 +87,17 @@ class CurrentLoopPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    return HairlineFrame(
-      key: const Key('current_loop_frame'),
-      padding: const EdgeInsets.all(10),
+    return PanelBox(
+      frameKey: const Key('current_loop_frame'),
+      title: '电流环 PI',
+      en: 'Current Loop',
+      trailing: Text(
+        '目标带宽 1 kHz',
+        style: scale.label.copyWith(color: palette.valuePurple),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          PanelTitle(
-            title: '电流环 PI',
-            en: 'Current Loop',
-            trailing: Text(
-              '目标带宽 1 kHz',
-              style: scale.label.copyWith(color: palette.valuePurple),
-            ),
-          ),
-          const SizedBox(height: 10),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[

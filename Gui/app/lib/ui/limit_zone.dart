@@ -4,7 +4,6 @@ import '../state/app_state.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
-import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/vfd_bar_painter.dart';
@@ -42,23 +41,9 @@ class LimitZone extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Expanded(
-                child: HairlineFrame(
-                  padding: const EdgeInsets.all(10),
-                  child: _HeatLoadPanel(
-                    key: const Key('limit_heat_panel'),
-                    state: state,
-                  ),
-                ),
-              ),
+              Expanded(child: _HeatLoadPanel(state: state)),
               const SizedBox(width: 34),
-              Expanded(
-                child: HairlineFrame(
-                  key: const Key('limit_freq_panel'),
-                  padding: const EdgeInsets.all(10),
-                  child: _FrequencyPanel(state: state),
-                ),
-              ),
+              Expanded(child: _FrequencyPanel(state: state)),
             ],
           ),
         ],
@@ -74,23 +59,26 @@ class LimitZone extends StatelessWidget {
 /// with no threshold (or no value) stays an empty grey bar with an honest `—`
 /// — never a fabricated `0 %` (design-system §6 rule 2).
 class _HeatLoadPanel extends StatelessWidget {
-  const _HeatLoadPanel({super.key, required this.state});
+  const _HeatLoadPanel({required this.state});
 
   final AppState state;
 
   @override
   Widget build(BuildContext context) {
     final status = state.status;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        const PanelTitle(title: '热与负载 · 相对门限', en: '%'),
-        const SizedBox(height: 12),
-        for (final bar in _bars(status)) ...<Widget>[
-          bar,
-          const SizedBox(height: 10),
+    return PanelBox(
+      frameKey: const Key('limit_heat_panel'),
+      title: '热与负载 · 相对门限',
+      en: '%',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          for (final bar in _bars(status)) ...<Widget>[
+            bar,
+            const SizedBox(height: 10),
+          ],
         ],
-      ],
+      ),
     );
   }
 
@@ -146,20 +134,23 @@ class _FrequencyPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = state.status;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        const PanelTitle(title: '电频率', en: 'ELECTRICAL FREQ'),
-        const SizedBox(height: 12),
-        _valueRow(
-          context,
-          name: 'F_ELEC',
-          value: status?.freqHz,
-          unit: 'Hz',
-          precision: 2,
-          note: 'SETPOINT',
-        ),
-      ],
+    return PanelBox(
+      frameKey: const Key('limit_freq_panel'),
+      title: '电频率',
+      en: 'ELECTRICAL FREQ',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _valueRow(
+            context,
+            name: 'F_ELEC',
+            value: status?.freqHz,
+            unit: 'Hz',
+            precision: 2,
+            note: 'SETPOINT',
+          ),
+        ],
+      ),
     );
   }
 

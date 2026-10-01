@@ -681,6 +681,24 @@ class AppState extends ChangeNotifier {
     return ok;
   }
 
+  /// v1.2: sets the torque setpoint [nm] (`N·m`). A non-finite value → `RANGE_ERR`
+  /// (code 6); switching while running → `LOCKED` (code 4). Returns false on
+  /// failure (see [lastErrorCode]).
+  Future<bool> setTorque(double nm) =>
+      _ctrl('setTorque', () => frb.ctrlSetTorque(nm: nm));
+
+  /// v1.2: sets the speed setpoint [rpm]. `|value| > 20000` → `RANGE_ERR`
+  /// (code 6); switching while running → `LOCKED` (code 4). Returns false on
+  /// failure (see [lastErrorCode]).
+  Future<bool> setSpeed(double rpm) =>
+      _ctrl('setSpeed', () => frb.ctrlSetSpeed(rpm: rpm));
+
+  /// v1.2: sets the angle setpoint [deg] (`°`). A non-finite value → `RANGE_ERR`
+  /// (code 6); switching while running → `LOCKED` (code 4). Returns false on
+  /// failure (see [lastErrorCode]).
+  Future<bool> setAngle(double deg) =>
+      _ctrl('setAngle', () => frb.ctrlSetAngle(deg: deg));
+
   /// Connects to [addr] and reads the device name from PROTO_INFO.
   /// Returns true on success; on failure [lastError] is populated.
   Future<bool> connect(String addr) async {

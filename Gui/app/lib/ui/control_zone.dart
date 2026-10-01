@@ -5,7 +5,6 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
-import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 import 'panel_title.dart';
 
@@ -78,16 +77,17 @@ class ControlZone extends StatelessWidget {
             trailing: Text('故障构成 · 清除锁存', style: scale.label),
           ),
           const SizedBox(height: 14),
-          HairlineFrame(
-            key: const Key('fault_frame'),
-            padding: const EdgeInsets.all(10),
+          PanelBox(
+            frameKey: const Key('fault_frame'),
+            // `_faultMask` prefers the latched set; label it accordingly so a
+            // latched bit is never captioned `CURRENT`.
+            title: '故障构成与指令',
+            en: state.latchedFlags != 0 ? 'LATCHED' : 'CURRENT',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 FaultComposition(
                   flags: _faultMask(state),
-                  // `_faultMask` prefers the latched set; label it accordingly
-                  // so a latched bit is never captioned `CURRENT`.
                   latched: state.latchedFlags != 0,
                 ),
                 const SizedBox(height: 12),
@@ -137,11 +137,6 @@ class FaultComposition extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        PanelTitle(
-          title: '故障构成与指令',
-          en: latched ? 'LATCHED' : 'CURRENT',
-        ),
-        const SizedBox(height: 12),
         if (bits.isEmpty)
           Text('无故障锁存', style: scale.body.copyWith(color: palette.fgMute))
         else

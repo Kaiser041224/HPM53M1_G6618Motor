@@ -346,6 +346,57 @@ void main() {
     expect(find.byKey(const Key('gui_title_underline')), findsOneWidget);
   });
 
+  testWidgets('标题条内边距：文字距渐变底左右缘 ≥10px、垂直居中', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: SectionTitle(title: '状态监视', en: 'Status'),
+        ),
+      ),
+    );
+    final bar = tester.widget<Container>(
+      find.byKey(const Key('gui_title_bar')),
+    );
+    final padding = bar.padding! as EdgeInsets;
+    expect(padding.left, greaterThanOrEqualTo(10), reason: '左缘不顶格');
+    expect(padding.right, greaterThanOrEqualTo(10), reason: '右缘不溢出');
+    expect(padding.top, greaterThan(0));
+    expect(padding.bottom, greaterThan(0));
+  });
+
+  testWidgets('PanelBox 一体化：标题条与内容同处一个 HairlineFrame（标题贴齐外框）', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: const Scaffold(
+          body: PanelBox(title: '保护门限', en: 'Protection', child: Text('内容')),
+        ),
+      ),
+    );
+    // 单一外框包裹「标题条 + 内容区」；标题条贴齐内缘（frame 无内边距）。
+    final frame = tester.widget<HairlineFrame>(find.byType(HairlineFrame));
+    expect(frame.padding, EdgeInsets.zero);
+    expect(
+      find.descendant(
+        of: find.byType(HairlineFrame),
+        matching: find.byKey(const Key('gui_title_bar')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(HairlineFrame),
+        matching: find.text('内容'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('GlowValue formats precision, unit and tabular figures', (
     WidgetTester tester,
   ) async {

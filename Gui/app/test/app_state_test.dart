@@ -166,6 +166,33 @@ void main() {
     });
   });
 
+  group('v1.2 设定值 API', () {
+    test('setTorque / setSpeed / setAngle 注入回调收到 op 名并返回 true', () async {
+      final ops = <String>[];
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async => ops.add(op);
+
+      expect(await state.setTorque(1.5), isTrue);
+      expect(await state.setSpeed(600.0), isTrue);
+      expect(await state.setAngle(-30.0), isTrue);
+
+      expect(ops, <String>['setTorque', 'setSpeed', 'setAngle']);
+      expect(state.requestFailures, 0);
+    });
+
+    test('设定值失败：记录设备码 code 6 且 requestFailures +1', () async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+      state.onCtrl = (op) async =>
+          throw const FrbError(code: 6, message: 'range');
+
+      expect(await state.setSpeed(20001.0), isFalse);
+      expect(state.lastErrorCode, 6);
+      expect(state.requestFailures, 1);
+    });
+  });
+
   group('数据三态 freshnessOf', () {
     test('从未更新 → unknown；刚更新 → live', () {
       final state = AppState.test();

@@ -50,7 +50,8 @@ class GuiTitleFrame extends StatelessWidget {
         Container(
           key: const Key('gui_title_bar'),
           decoration: const BoxDecoration(gradient: kTitleGradient),
-          padding: const EdgeInsets.symmetric(vertical: 7),
+          // 文字距渐变底左右缘 ≥10px 且垂直居中：不顶格、不溢出背景（修正旧版顶格）。
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           child: child,
         ),
         Container(

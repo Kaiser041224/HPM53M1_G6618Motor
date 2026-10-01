@@ -71,6 +71,18 @@ Future<void> ctrlSetOutputZeroAbs({required double deg}) =>
 Future<void> ctrlSetMode({required int mode}) =>
     RustLib.instance.api.crateApiCtrlSetMode(mode: mode);
 
+/// v1.2：设置力矩设定（N·m；负值允许；非有限值 → `RANGE_ERR`；运行中 → `LOCKED`）。
+Future<void> ctrlSetTorque({required double nm}) =>
+    RustLib.instance.api.crateApiCtrlSetTorque(nm: nm);
+
+/// v1.2：设置转速设定（rpm；负值允许；`|value| > 20000` → `RANGE_ERR`；运行中 → `LOCKED`）。
+Future<void> ctrlSetSpeed({required double rpm}) =>
+    RustLib.instance.api.crateApiCtrlSetSpeed(rpm: rpm);
+
+/// v1.2：设置角度设定（°；负值允许；非有限值 → `RANGE_ERR`；运行中 → `LOCKED`）。
+Future<void> ctrlSetAngle({required double deg}) =>
+    RustLib.instance.api.crateApiCtrlSetAngle(deg: deg);
+
 Future<(int, int)> faultGet() => RustLib.instance.api.crateApiFaultGet();
 
 Future<void> faultClear() => RustLib.instance.api.crateApiFaultClear();

@@ -11,7 +11,7 @@
 ///
 /// 注：启动 / 调整（快捷控制模式）与速度环 / 角度环 PID 调整入口已迁至
 /// 「监视 · 控制」页（见 `start_adjust_zone.dart` / `pid_zone.dart`），
-/// 使调参时能与读数同屏。
+/// 使调参时能与读数同屏；保护门限亦回归该页右栏底部（角度环之下）。
 ///
 /// Copyright (c) 2026 Alliance HardwareGroup
 /// SPDX-License-Identifier: BSD-3-Clause
@@ -23,13 +23,11 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
-import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import '../widgets/section_title.dart';
 import '../widgets/vfd_bar_painter.dart';
 import 'label_style.dart';
 import 'panel_title.dart';
-import 'tuning_blocks.dart';
 
 /// 一条标定 / 测试程序的描述。
 class CalibProgram {
@@ -158,10 +156,6 @@ class MotorDriveZone extends StatelessWidget {
               Expanded(flex: 6, child: _compareFrame(context)),
             ],
           ),
-          // 保护门限自「监视 · 控制」页迁来：它不在右栏五段清单内，
-          // 如实顺延到参数对照下方（同为「影响运行/安全」的参数组）。
-          const SizedBox(height: 24),
-          ProtectionLimitsPanel(state: state),
         ],
       ),
     );
@@ -171,18 +165,14 @@ class MotorDriveZone extends StatelessWidget {
   Widget _calibFrame(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
-    return HairlineFrame(
-      key: const Key('calib_programs_frame'),
-      padding: const EdgeInsets.all(10),
+    return PanelBox(
+      frameKey: const Key('calib_programs_frame'),
+      title: '标定程序',
+      en: 'Calibration',
+      trailing: Text('${kCalibPrograms.length} 项', style: scale.label),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          PanelTitle(
-            title: '标定程序',
-            en: 'Calibration',
-            trailing: Text('${kCalibPrograms.length} 项', style: scale.label),
-          ),
-          const SizedBox(height: 6),
           // 协议未暴露的总说明 —— 放在最前，避免逐条重复。
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -210,18 +200,14 @@ class MotorDriveZone extends StatelessWidget {
   /// 右栏：参数对照表。
   Widget _compareFrame(BuildContext context) {
     final scale = GuiTypeScale.of(context);
-    return HairlineFrame(
-      key: const Key('config_compare_frame'),
-      padding: const EdgeInsets.all(10),
+    return PanelBox(
+      frameKey: const Key('config_compare_frame'),
+      title: '参数对照',
+      en: 'Configuration',
+      trailing: Text('当前值 vs 出厂预设', style: scale.label),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          PanelTitle(
-            title: '参数对照',
-            en: 'Configuration',
-            trailing: Text('当前值 vs 出厂预设', style: scale.label),
-          ),
-          const SizedBox(height: 10),
           const _CompareHeader(),
           for (final g in kConfigGroups) ...<Widget>[
             _groupHeader(context, g.title, g.params.first.$1),

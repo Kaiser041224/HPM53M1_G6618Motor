@@ -15,7 +15,6 @@ import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
 import '../theme/gui_type.dart';
-import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart';
 import 'panel_title.dart';
 
@@ -90,34 +89,25 @@ class _PidLoopPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scale = GuiTypeScale.of(context);
-    return HairlineFrame(
-      key: frameKey,
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    return PanelBox(
+      frameKey: frameKey,
+      title: title,
+      en: en,
+      trailing: Text('由设备元数据提供', style: scale.label),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          PanelTitle(
-            title: title,
-            en: en,
-            trailing: Text('由设备元数据提供', style: scale.label),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              for (final (name, label) in fields) ...<Widget>[
-                Expanded(
-                  child: ParamField(
-                    state: state,
-                    name: name,
-                    label: label,
-                    compact: true,
-                  ),
-                ),
-                if (name != fields.last.$1) const SizedBox(width: 8),
-              ],
-            ],
-          ),
+          for (final (name, label) in fields) ...<Widget>[
+            Expanded(
+              child: ParamField(
+                state: state,
+                name: name,
+                label: label,
+                compact: true,
+              ),
+            ),
+            if (name != fields.last.$1) const SizedBox(width: 8),
+          ],
         ],
       ),
     );

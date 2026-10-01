@@ -162,13 +162,13 @@ void main() {
     expect(find.byType(ControlZone), findsOneWidget);
     expect(find.byType(StatusZone), findsOneWidget);
     expect(find.byType(EncoderZone), findsOneWidget);
-    expect(find.text('启动'), findsOneWidget);
-    expect(find.text('停止'), findsOneWidget);
+    // 启停合并为单键切换（停机态显示「▶ 启动」）。
+    expect(find.byKey(const Key('ctrl_start_stop_toggle')), findsOneWidget);
     expect(find.text('清除故障'), findsOneWidget);
     expect(find.text('故障构成与指令'), findsOneWidget);
   });
 
-  testWidgets('合并页右栏五段自上而下：故障 → 启动/调整 → 电流环 → 速度环 → 角度环', (
+  testWidgets('合并页右栏六段自上而下：故障 → 启动/调整 → 电流环 → 速度环 → 角度环 → 保护门限', (
     tester,
   ) async {
     final state = AppState.test(status: _status(), metas: const []);
@@ -181,23 +181,27 @@ void main() {
     final current = find.byKey(const Key('current_loop_frame'));
     final speed = find.byKey(const Key('speed_loop_frame'));
     final angle = find.byKey(const Key('angle_loop_frame'));
+    final protection = find.byKey(const Key('protection_limits_frame'));
 
     expect(fault, findsOneWidget);
     expect(start, findsOneWidget);
     expect(current, findsOneWidget);
     expect(speed, findsOneWidget);
     expect(angle, findsOneWidget);
+    expect(protection, findsOneWidget);
 
     final faultTop = tester.getTopLeft(fault).dy;
     final startTop = tester.getTopLeft(start).dy;
     final currentTop = tester.getTopLeft(current).dy;
     final speedTop = tester.getTopLeft(speed).dy;
     final angleTop = tester.getTopLeft(angle).dy;
+    final protectionTop = tester.getTopLeft(protection).dy;
 
     expect(faultTop, lessThan(startTop), reason: '故障在最上');
     expect(startTop, lessThan(currentTop), reason: '启动/调整在电流环之上');
     expect(currentTop, lessThan(speedTop), reason: '电流环在速度环之上');
     expect(speedTop, lessThan(angleTop), reason: '速度环在角度环之上');
+    expect(angleTop, lessThan(protectionTop), reason: '保护门限在最底部（角度环之下）');
 
     // 右栏在左栏（监视）右侧，即确属「右栏」而非堆叠。
     expect(
@@ -205,9 +209,14 @@ void main() {
       greaterThan(tester.getTopLeft(find.byType(StatusZone)).dx),
       reason: '右栏应位于监视栏右侧',
     );
+    expect(
+      tester.getTopLeft(protection).dx,
+      greaterThan(tester.getTopLeft(find.byType(StatusZone)).dx),
+      reason: '保护门限在右栏',
+    );
   });
 
-  testWidgets('FREQ / MOD 与设备回读面板已删除；保护门限不在合并页', (tester) async {
+  testWidgets('FREQ / MOD 与设备回读面板已删除；保护门限回归合并页右栏底部', (tester) async {
     final state = AppState.test(status: _status(), metas: const []);
     addTearDown(state.dispose);
 
@@ -217,7 +226,9 @@ void main() {
     expect(find.text('MOD'), findsNothing);
     expect(find.byKey(const Key('setpoint_readback_frame')), findsNothing);
     expect(find.text('设备回读'), findsNothing);
-    expect(find.byKey(const Key('protection_limits_frame')), findsNothing);
+    // 保护门限自「电机 · 驱动」页回迁到合并页右栏最底部。
+    expect(find.byKey(const Key('protection_limits_frame')), findsOneWidget);
+    expect(find.text('保护门限'), findsOneWidget);
   });
 
   testWidgets('左栏保持 StatusZone → EncoderZone；启动/调整与 PID 已移至右栏', (tester) async {
@@ -262,10 +273,11 @@ void main() {
     expect(find.byKey(const Key('ctrl_mode_1')), findsNothing);
     expect(find.byType(StartAdjustZone), findsNothing);
     expect(find.byType(PidZone), findsNothing);
-    // 仍保留：标定程序 + 参数对照；保护门限自合并页迁至此处。
+    // 保护门限已回迁合并页右栏底部，不再在此页。
+    expect(find.byKey(const Key('protection_limits_frame')), findsNothing);
+    // 仍保留：标定程序 + 参数对照。
     expect(find.byKey(const Key('calib_programs_frame')), findsOneWidget);
     expect(find.byKey(const Key('config_compare_frame')), findsOneWidget);
-    expect(find.byKey(const Key('protection_limits_frame')), findsOneWidget);
   });
 
   testWidgets('电机·驱动页：标定程序全部禁用并标注协议未暴露；参数对照表在位', (tester) async {
