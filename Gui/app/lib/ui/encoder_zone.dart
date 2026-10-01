@@ -33,6 +33,9 @@ class EncoderZone extends StatelessWidget {
     );
   }
 
+  /// 齿轮示意图的最大宽度 [logical px] —— 居中限宽，避免大窗口下过度拉伸。
+  static const double _schematicMaxWidth = 460;
+
   Widget _build(BuildContext context) {
     final scale = GuiTypeScale.of(context);
     final status = state.status;
@@ -55,29 +58,36 @@ class EncoderZone extends StatelessWidget {
         HairlineFrame(
           key: const Key('encoder_frame'),
           padding: const EdgeInsets.all(14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          // **上下排布**（动画在上、读数在下），不是左右并排。
+          //
+          // 并排时读数区只分到约 40% 宽（合并页左栏里约 280px），
+          // 「标签 + 中文注记 + 数值 + 状态徽标」这一行必然被截断。
+          // 改为上下后读数区拿到整幅宽度，文字不再压缩。
+          // 动画本身也不需要横向铺满，故居中并限宽。
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Expanded(
-                flex: 5,
-                child: EncoderSchematic(
-                  key: const Key('encoder_schematic'),
-                  rotorDeg: rotorFreshness == Freshness.live
-                      ? state.status?.encRotorDeg
-                      : null,
-                  outputDeg: outputFreshness == Freshness.live
-                      ? state.status?.encOutputDeg
-                      : null,
-                  ratioLabel: state.outputRatio == null
-                      ? '—'
-                      : state.outputRatio!.toStringAsFixed(2),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: _schematicMaxWidth,
+                  ),
+                  child: EncoderSchematic(
+                    key: const Key('encoder_schematic'),
+                    rotorDeg: rotorFreshness == Freshness.live
+                        ? state.status?.encRotorDeg
+                        : null,
+                    outputDeg: outputFreshness == Freshness.live
+                        ? state.status?.encOutputDeg
+                        : null,
+                    ratioLabel: state.outputRatio == null
+                        ? '—'
+                        : state.outputRatio!.toStringAsFixed(2),
+                  ),
                 ),
               ),
-              const SizedBox(width: 28),
-              Expanded(
-                flex: 4,
-                child: _dataColumn(context, rotorFreshness, outputFreshness),
-              ),
+              const SizedBox(height: 18),
+              _dataColumn(context, rotorFreshness, outputFreshness),
             ],
           ),
         ),
@@ -100,6 +110,8 @@ class EncoderZone extends StatelessWidget {
           zh: '转子角',
           value: state.status?.encRotorDeg,
           freshness: rotorFreshness,
+          // 与转子齿轮同色（gearGreen == valueGreen），强化「这一路」的关联。
+          tone: Tone.green,
         ),
         const SizedBox(height: 8),
         _rpmRow(
@@ -109,6 +121,7 @@ class EncoderZone extends StatelessWidget {
           note: '角差分 EST',
           value: state.rpmRotor,
           freshness: rotorFreshness,
+          tone: Tone.green,
         ),
         const SizedBox(height: 14),
         _encoderRow(
@@ -118,6 +131,8 @@ class EncoderZone extends StatelessWidget {
           zh: '出轴角',
           value: state.status?.encOutputDeg,
           freshness: outputFreshness,
+          // 与出轴齿轮同色（gearViolet == valueViolet）。
+          tone: Tone.violet,
         ),
         const SizedBox(height: 8),
         _rpmRow(
@@ -127,6 +142,7 @@ class EncoderZone extends StatelessWidget {
           note: '磁编 · 角差分 EST',
           value: state.rpmOutput,
           freshness: outputFreshness,
+          tone: Tone.violet,
         ),
         const SizedBox(height: 14),
         _divider(context),
@@ -149,7 +165,12 @@ class EncoderZone extends StatelessWidget {
         const SizedBox(height: 14),
         _divider(context),
         const SizedBox(height: 14),
-        _plainRow(context, key: const Key('encoder_zero'), label: '零点', zh: 'ZERO'),
+        _plainRow(
+          context,
+          key: const Key('encoder_zero'),
+          label: '零点',
+          zh: 'ZERO',
+        ),
         const SizedBox(height: 10),
         _plainRow(
           context,
@@ -171,6 +192,7 @@ class EncoderZone extends StatelessWidget {
     required String zh,
     required double? value,
     required Freshness freshness,
+    required Tone tone,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -184,7 +206,10 @@ class EncoderZone extends StatelessWidget {
           child: Text(
             zh,
             overflow: TextOverflow.ellipsis,
-            style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
+            style: scale.body.copyWith(
+              fontSize: GuiTypeScale.pixelSize,
+              color: palette.fgDim,
+            ),
           ),
         ),
         StaleGate(
@@ -193,12 +218,8 @@ class EncoderZone extends StatelessWidget {
           // Angle readout is a monitor value: sample it at 5 Hz.
           live: StableDigits(
             text: value == null ? '—' : value.toStringAsFixed(1),
-            builder: (context) => GlowValue(
-              value: value,
-              unit: '°',
-              precision: 1,
-              tone: Tone.neutral,
-            ),
+            builder: (context) =>
+                GlowValue(value: value, unit: '°', precision: 1, tone: tone),
           ),
         ),
         const SizedBox(width: 12),
@@ -218,6 +239,7 @@ class EncoderZone extends StatelessWidget {
     required String note,
     required double? value,
     required Freshness freshness,
+    required Tone tone,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -230,7 +252,10 @@ class EncoderZone extends StatelessWidget {
           child: Text(
             zh,
             overflow: TextOverflow.ellipsis,
-            style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
+            style: scale.body.copyWith(
+              fontSize: GuiTypeScale.pixelSize,
+              color: palette.fgDim,
+            ),
           ),
         ),
         StaleGate(
@@ -239,15 +264,22 @@ class EncoderZone extends StatelessWidget {
           // Speed estimate is a monitor value: sample it at 5 Hz.
           live: StableDigits(
             text: value == null ? '—' : value.toStringAsFixed(1),
-            builder: (context) => GlowValue(
-              value: value,
-              precision: 1,
-              tone: Tone.neutral,
-            ),
+            builder: (context) =>
+                GlowValue(value: value, precision: 1, tone: tone),
           ),
         ),
         const SizedBox(width: 12),
-        Text(note, style: scale.label),
+        // 中文 note 在 12px 下比 10px 宽约 1/5 —— 必须可收缩，
+        // 否则窄栏（分栏左列）会被它撑破。
+        Flexible(
+          child: Text(
+            note,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+            style: scale.label,
+          ),
+        ),
       ],
     );
   }
@@ -270,7 +302,10 @@ class EncoderZone extends StatelessWidget {
           child: Text(
             zh,
             overflow: TextOverflow.ellipsis,
-            style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
+            style: scale.body.copyWith(
+              fontSize: GuiTypeScale.pixelSize,
+              color: palette.fgDim,
+            ),
           ),
         ),
         StableDigits(
@@ -300,7 +335,10 @@ class EncoderZone extends StatelessWidget {
           child: Text(
             zh,
             overflow: TextOverflow.ellipsis,
-            style: scale.body.copyWith(fontSize: 10, color: palette.fgDim),
+            style: scale.body.copyWith(
+              fontSize: GuiTypeScale.pixelSize,
+              color: palette.fgDim,
+            ),
           ),
         ),
         // Resolution / zero readouts are monitor values: sample at 5 Hz.

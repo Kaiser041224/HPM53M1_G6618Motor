@@ -1,9 +1,18 @@
 # Gui 视觉设计系统
 
-- 版本：v2.0（2026-09-30）
+- 版本：v3.0（2026-09-30，转为「以 App 为准」）
 - 风格定位：**TNO 硅晶之梦 · 复古未来主义（Retro-futurism）· 合成器浪潮（Synthwave）**
 - 适用对象：`Gui/app`（Flutter 上位机）；同时作为固件 USB Terminal 的配色基准
-- 配套：`tokens.css`（可直接引用）· `fonts/`（OFL 字体）· `../templates/gui-main.html`（规范模板）· `../previews/gui-main.png`
+- 配套：`tokens.css`（**由 App 生成，勿手改**）· `font-licensing.md`
+
+> ### ★ 界面效果以 `Gui/app` 运行结果为准
+>
+> 本文件保留的是**设计与依据**（为什么这么设计），不是「长什么样」的规范副本。
+> 原 `templates/` 与 `previews/` 已退役 —— 它们停留在旧字体方案，会与实现漂移。
+>
+> - **色板**：唯一事实源是 `Gui/app/lib/theme/gui_palette.dart`，
+>   `tokens.css` 由 `../tools/sync-tokens-from-app.ps1` 生成。
+> - **字体**：唯一归属是 `Gui/app/assets/fonts/`。
 
 > **本目录所有色值均由脚本从参考图逐像素量取，非目测。**
 > 复现：`powershell -NoProfile -File ../tools/measure-colors.ps1`
@@ -19,6 +28,19 @@
 ---
 
 ## 2. 色板
+
+> ### ★ 单一事实源：App 实现
+>
+> 自 2026-09-30 起，**色板以 `Gui/app/lib/theme/gui_palette.dart` 为准** ——
+> 那是开发时对着实际屏幕调出来的值（v4 muted，比截图与模组源码都暗约 20%，
+> 属刻意的观感取舍）。
+>
+> `tokens.css` 的色板段由 **`tools/sync-tokens-from-app.ps1` 从 App 生成**，
+> 请勿手改；改色请改 App，再跑一次同步脚本。
+> 该脚本只替换标记区间，字体/排版/间距等非颜色 token 不受影响，且幂等。
+>
+> 下文 §2.1–§2.5 保留的是**推导过程与依据**（为何是这些色相），
+> 具体数值以 App 为准。
 
 ### 2.1 基底 —— 极暗蓝黑 → 青绿
 
@@ -37,21 +59,46 @@
 > **深处偏蓝黑，面板层偏青绿**，梯度由蓝黑向青绿展开。
 > **背景不是中性灰** —— 换 `#121212` 一类会立刻失去合成器浪潮的味道。
 
-### 2.2 强调色 —— 按色相家族实测峰值
+### 2.2 强调色 —— 模组源码权威值
 
-| 家族 | **峰值色** | 像素数 | 定位 |
-| :--- | :--- | ---: | :--- |
-| **青 Cyan** | **`#58C8C0`** | **14,604** | **主强调** |
-| **黄 Yellow** | **`#C8C000`** | 4,084 | **次强调** |
-| 绿 Green | `#40B040` | 2,813 | 状态 · 正常 |
-| 红 Red | `#F88070` | 1,365 | 状态 · 故障 |
-| 蓝 Blue | `#085890` | 685 | 深底色块 |
-| 品红 Magenta | `#A02048` | **396** | **几乎不存在（1.5%）** |
+参考素材本身就是 TNO 模组，其源码 `interface/TNO_fonts.gfx` 里定义了一套
+**带语义命名的调色板**（模组用 `§<字母>` 引用）。以下是权威值，**优先于像素统计**：
 
-> ### ⚠ 实测推翻的常见印象
+| 记号 | 色值 | 设计者命名 | Token |
+| :--- | :--- | :--- | :--- |
+| `D` | **`#59C7C2`** | Default CRT blue (Baby Blue) | `--accent` 主强调 |
+| `w` | **`#D3C900`** | Gold | `--accent-2` 次强调 |
+| `*` | `#009BB2` | Cyan | `--accent-blue` |
+| `M` | `#23CEFF` | Light Neon Blue (old CRT default) | `--accent-bright` |
+| `F` | `#B2C9C2` | New default | `--fg-base` 主文字 |
+| `S` | **`#FF8072`** | Salmon | `--st-fault` 故障 |
+| `n` | **`#3CB43C`** | Dark Green | `--st-normal` 正常 |
+| `L` | `#C3B091` | Tan | 备用 |
+| `R` | `#E08282` | Red | 备用 |
+| `I` | `#7447D1` | Deep Purple | 备用 |
+| `P` | `#A91B4F` | Pink | 备用 |
+
+完整 32 色清单见 `D:\Download\TNO-assets\DESIGN-NOTES.md` §1。
+
+> ### ★ 统计测量与源码定义互相印证
+> 本项目早期的色板是**从截图像素统计**得出的。拿到模组源码后逐一对照，
+> **每个测得的色都对上了模组的命名色**：
+>
+> | 统计测得 | 源码命名色 | 名称 |
+> | :--- | :--- | :--- |
+> | `#58C8C0` | `#59C7C2` | `D` CRT blue |
+> | `#40B040` | `#3CB43C` | `n` Dark Green |
+> | `#F88070` | `#FF8072` | `S` Salmon |
+> | `#C8C000` | `#D3C900` | `w` Gold |
+> | `#A02048` | `#A91B4F` | `P` Pink |
+>
+> 结论：**统计方法确实还原出了设计系统本身，不是噪声。**
+> 此后 tokens 一律采用源码权威值；统计脚本保留，用于核对参考图是否更换。
+
+> ### ⚠ 实测推翻的常见印象（不变）
 > 合成器浪潮通常被理解为**青 + 热粉 `#FF00FF`**。
-> 但实测品红**仅占 1.5%**，真实次强调是**黄 `#C8C000`**。
-> 这是更偏 **CRT 终端（青 + 琥珀）** 的配色，不是迈阿密风云式粉青。**以实测为准。**
+> 实测品红**仅占 1.5%**，而源码里的次强调是 **Gold `#D3C900`**。
+> 这是更偏 **CRT 终端（青 + 琥珀）** 的配色，不是迈阿密风云式粉青。
 
 ### 2.3 文字 —— 半透明是刻意的
 
@@ -206,24 +253,50 @@ CRT 辉光 · 网格/点阵底纹 · 刻度线 · 十字准星。
 
 ---
 
-## 5. 字体
+## 5. 字体 —— CRT 终端字体栈
 
-| 角色 | 字体 | 授权 |
+选型来自 **TNO 硅晶之梦模组本体解包**：其 `interface/TNO_fonts.gfx` 的
+首个字体即 `vt323_72_WT_outline`（DEC VT320 终端体）。故拉丁与数字一律 VT323；
+VT323 **不含汉字**（U+4E00+），汉字另配同为像素位图的 Fusion Pixel。
+
+| 角色 | 字体 | 授权 | 随包 |
+| :--- | :--- | :--- | :--- |
+| **拉丁 / 数字 / 单位** | **VT323** | SIL OFL 1.1 | ✓ 153 KB |
+| **汉字（正文 / 标题）** | **Fusion Pixel 12**（12px 原生） | SIL OFL 1.1 | ✓ 7.05 MB |
+| **汉字（标签类）** | **Fusion Pixel 10**（10px 原生） | SIL OFL 1.1 | ✓ 3.86 MB |
+| **区分 / 增强** | **Silkscreen**（像素强调体） | SIL OFL 1.1 | ✓ 32 KB |
+| 密集等宽（备选） | Share Tech Mono | SIL OFL 1.1 | ✓ 43 KB |
+
+**合计 11.1 MB**，全部随 `Gui/app/assets/fonts/` 打包，注册于 `pubspec.yaml`。
+授权原文同目录（`OFL-*.txt`），并在 `main.dart` 里登记进 `LicenseRegistry`。
+
+### ★ 像素网格（最容易踩的坑）
+
+Fusion Pixel 是**位图式**字体，只在**原生尺寸及其整数倍**上锐利。
+把 12px 压到 10px 等于落在 0.833 倍网格 —— 像素边界对不齐，边缘发虚。
+故**按用途分配原生档，而不是随意缩放**：
+
+| 档位 | 用途 | 依据 |
 | :--- | :--- | :--- |
-| **标题 / 导航 / 按钮** | **Electrolize** | **SIL OFL 1.1** |
-| 备选标题 | Aldrich | SIL OFL 1.1 |
-| **数值 / 参数名** | **Cascadia Mono** | **SIL OFL 1.1** |
-| **中文** | **Noto Sans SC**（Light / Regular / Medium） | **SIL OFL 1.1** |
-| 中文描述文字 | Noto Serif SC | SIL OFL 1.1 |
+| **10px** | 标签 / 单位 / 注记 | 汉字 advance 恰为字号本身，10px/字 ≈ 原先 9px Noto + 0.14em 字距的 10.26px，**不会撑破既有行宽** |
+| **12px** | 正文、中文标题 | 像素网格主档 |
+| **24px** | 确需放大的标题 | 2 倍，仍为整数倍故保持锐利 |
 
-字体文件与授权原文见 `fonts/`。**授权结论详见 [`font-licensing.md`](font-licensing.md)。**
+> **VT323 不含 `█`（U+2588）**，而设备 ASCII 艺术字整幅由块字符构成 ——
+> 该处必须用 Fusion Pixel，否则艺术字会渲染成豆腐块。
+> 已写成回归测试（`theme_test.dart`）。
 
 ### 排版规则
 
-- 标题：**全大写 + 字距 0.14–0.22em**（硬性要求，不用大写立刻失去气质）
+- 标题：**全大写 + 字距 0.10–0.16em**（硬性要求，不用大写立刻失去气质）
 - 数值：**等宽 + tabular figures + 右对齐**，刷新时宽度不得变化
-- 中文：**不追求窄体**（免费字体里不存在真正的中文窄体），改用细字重 + 字距模拟技术感
+- **中文层级不靠字号拉开** —— 像素字体放大即失真。改由颜色、字距与
+  下方亮线承担。这正是 CRT 终端「同字号、靠亮度分层」的做法
 - 精度由**量纲**决定：电流 3 位、母线 1 位、频率 2 位 —— 不用全局常量
+- **尺寸受布局约束**：改动字号前先跑测试，`label` 承载中西混排注记，
+  放宽会撑破既有单行布局（曾出现 34px 溢出）
+
+**授权结论详见 [`font-licensing.md`](font-licensing.md)。**
 
 ---
 
@@ -297,3 +370,94 @@ powershell -NoProfile -File ../tools/extract-device-art.ps1
 - **强调**：`(max-min)/max >= 0.40` 且 `(max+min)/2 >= 80`，按色相家族分组
   （青 160–200° / 绿 90–160° / 黄 40–70° / 品红 280–345° / 红 345–15° / 蓝 200–250°），
   取各家族出现次数最多的量化色为峰值色
+
+### 字形覆盖校验
+
+```powershell
+# 打包任何中文字体前必跑：解析 cmap，核对工程源码用到的每个汉字
+powershell -NoProfile -File ..\tools\check-font-coverage.ps1 `
+  -Font <font.ttf> -SourceDir ..\..\app\lib
+```
+
+> 已用它否掉两个候选：**Ark Pixel 12px** 缺 `执辨热警拖滚` 六字；
+> **Zpix** 虽覆盖完整但为**付费授权**，不可打包。
+> 最终选用覆盖完整且为 OFL 的 **Fusion Pixel 10/12**。
+
+---
+
+## 9. 模组解包美术资源
+
+TNO 模组本体（`TNO - Best Served Cold Patch A-34-1-9-0a`）已解包归档，
+是本设计系统的**一手依据**。
+
+- **归档位置**：`D:\Download\TNO-assets\`（**仓库外**，版权资产不入库）
+- **规模**：45,402 文件 / 3.64 GB，按用途重组为 7 类
+- **索引**：该目录下的 `README.md`（总览）· `CATALOG.md`（全量清册）
+  · `DESIGN-NOTES.md`（**设计要点，最该先看**）
+
+```text
+D:\Download\TNO-assets\
+├── 01-design-sources/     .gui 界面布局 + .gfx 精灵定义 + 字体（文本，可直接读）
+├── 02-ui-textures/        UI 贴图 26,936 文件
+├── 03-content-art/        事件图 / 领袖 / 国旗 / 加载图 / 超事件
+├── 04-models-and-fx/      3D 模型 / 实体 / 特效
+├── 05-map-art/            地图美术
+├── 06-layered-sources/    111 个 .pdn 分层源文件（原散落各处，已归拢）
+└── 07-misc/               光标 / 缩略图 / gfx 根散件
+```
+
+> ⚠ **版权**：归档内容为 TNO 模组 / Paradox Interactive 资产，
+> **仅供设计研究与比例测量，不得用于产品分发**。
+> 可合法复用的只有两样：**设计手法**与**OFL 字体**。
+
+### 9.1 权威色板（模组源码，32 色）
+
+`01-design-sources/interface-defs/TNO_fonts.gfx` 定义了一套**带语义命名**的
+调色板（模组用 `§<字母>` 引用）。关键几色：
+
+| 记号 | 色值 | 设计者命名 | 对应本系统 |
+| :--- | :--- | :--- | :--- |
+| `D` | `#59C7C2` | **Default CRT blue (Baby Blue)** | 主强调色相来源 |
+| `w` | `#D3C900` | Gold | 次强调色相来源 |
+| `S` | `#FF8072` | Salmon | 故障色相来源 |
+| `n` | `#3CB43C` | Dark Green | 正常色相来源 |
+| `F` | `#B2C9C2` | New default | 主文字色相来源 |
+
+> **统计测量与源码定义互证**：本项目早期从截图像素统计出的 `#58C8C0`、
+> `#40B040`、`#F88070` 等，逐一对应上源码的 `D`/`n`/`S` ——
+> 说明统计方法确实还原了设计系统本身，而非噪声。
+> 完整 32 色见归档目录的 `DESIGN-NOTES.md` §1。
+
+### 9.2 图表实现手法（可直接借鉴）
+
+来源：`01-design-sources/interface-defs/TNO_countryeconomyview.gui`（9159 行）。
+
+```text
+gridboxtype = {
+    name = "inflation_line_segments"
+    slotsize = { width = 10 height = 200 }
+    max_slots_horizontal = 16
+    add_horizontal = yes
+}
+```
+
+**「折线图」实际是 16 个 10px 宽的竖向槽位拼出来的**，每槽显示一段高度；
+配套 `inflation_value_labels` 是另一个 gridbox 负责 Y 轴标签。
+文件头注明图表框架来自 `Yard1/HoI4-Scripted-GUI-Pie-Chart` 与 Flaxbeard。
+
+> **启示**：图表不一定要用绘图库 —— 分段槽位 + 每段高度即可。
+> 本系统的「分段条（LED 语汇）」（§3.4）本质是同一手法。
+
+### 9.3 字体来源
+
+| 文件 | 字体 | 处置 |
+| :--- | :--- | :--- |
+| `gfx/fonts/vt323_*_outline.fnt` | VT323（9 档字号） | **采纳** —— 已打包，OFL |
+| `gfx/fonts/aldrich_*_outline.fnt` | Aldrich | 归档参考 |
+| `gfx/fonts/Bomb_*.fnt` + `BombardierTNOV6.otf` | Bombardier | 授权待核实，未采用 |
+| `gfx/fonts/tnr_*` + `TimesNewerRoman-Regular.otf` | Times Newer Roman | 随附授权 PDF |
+| `gfx/fonts/hoi4_typewriter*.fnt` | 打字机 | 归档参考 |
+
+> 模组中文用的是**方正系列（商业字体，不可打包）**，
+> 本项目已替换为同为像素位图的 **Fusion Pixel**（OFL），
+> 且经字形覆盖校验确认覆盖工程全部汉字。

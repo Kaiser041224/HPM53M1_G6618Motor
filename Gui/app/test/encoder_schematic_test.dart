@@ -114,7 +114,13 @@ void main() {
         EncoderSchematicPainter.pitchCircleWidth,
         lessThan(EncoderSchematicPainter.strokeWidth),
       );
-      expect(EncoderSchematicPainter.lighteningHoleCount, 4);
+      // 简化画法移除了减重孔与键槽；齿轮的识别性改由
+      // 轮齿 + 轮毂 + 中心孔 + 节圆承担，这四样必须仍在。
+      expect(EncoderSchematicPainter.hubFactor, greaterThan(0));
+      expect(
+        EncoderSchematicPainter.hubBoreFactor,
+        lessThan(EncoderSchematicPainter.hubFactor),
+      );
     });
 
     test(
@@ -252,16 +258,59 @@ void main() {
       }
     });
 
-    testWidgets('live rotor spins the input wheel continuously', (
-      tester,
-    ) async {
+    testWidgets('转子正转 → 齿轮正转；转子反转 → 齿轮反转', (tester) async {
+      // 新契约：齿轮转动由**转子读数**驱动，不再是恒速装饰循环。
+      // 因此它必须跟随真实方向 —— 这正是「正反转要符合」的要求。
+      //
+      // 显示角带 lerp 平滑，单帧仍在追赶旧目标，故每段都喂多次读数
+      // 让它收敛后再比较方向。
+      Future<void> drive(int fromDeg, int toDeg, int steps) async {
+        final int span = toDeg - fromDeg;
+        for (var i = 0; i <= steps; i++) {
+          final int deg = fromDeg + (span * i / steps).round();
+          await _pump(
+            tester,
+            EncoderSchematic(
+              rotorDeg: deg.toDouble(),
+              outputDeg: 0,
+              ratioLabel: '1.00',
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+      }
+
       await _pump(
         tester,
         const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
       );
-      final before = _painter(tester).inputAngleDeg;
+      final start = _painter(tester).inputAngleDeg;
+
+      await drive(0, 240, 12); // 正转 240°
+      final forward = _painter(tester).inputAngleDeg;
+      expect(forward, greaterThan(start), reason: '转子正转时齿轮应正转');
+
+      await drive(240, 0, 12); // 反转回 0
+      expect(
+        _painter(tester).inputAngleDeg,
+        lessThan(forward),
+        reason: '转子反转时齿轮应反转',
+      );
+    });
+
+    testWidgets('读数不变则齿轮不空转（电机没转，齿轮就不该转）', (tester) async {
+      await _pump(
+        tester,
+        const EncoderSchematic(rotorDeg: 42, outputDeg: 0, ratioLabel: '1.00'),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      final settled = _painter(tester).inputAngleDeg;
       await tester.pump(const Duration(milliseconds: 500));
-      expect(_painter(tester).inputAngleDeg, isNot(closeTo(before, 1e-9)));
+      expect(
+        _painter(tester).inputAngleDeg,
+        closeTo(settled, 1e-9),
+        reason: '读数恒定 = 电机静止，齿轮必须停住（旧实现会恒速空转）',
+      );
     });
 
     testWidgets('null rotor honest-stops the gears', (tester) async {
@@ -313,8 +362,22 @@ void main() {
         tester,
         const EncoderSchematic(rotorDeg: 0, outputDeg: 0, ratioLabel: '1.00'),
       );
+      // 恢复瞬间相位不跳变。
       expect(_painter(tester).inputAngleDeg, closeTo(frozen, 1e-6));
-      await tester.pump(const Duration(milliseconds: 500));
+
+      // 恢复后**转子开始转动**（喂递增读数），齿轮才随之继续；
+      // 恒定的读数意味着电机没动，齿轮也不该动。
+      for (var i = 1; i <= 8; i++) {
+        await _pump(
+          tester,
+          EncoderSchematic(
+            rotorDeg: (i * 20).toDouble(),
+            outputDeg: 0,
+            ratioLabel: '1.00',
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
       expect(_painter(tester).inputAngleDeg, isNot(closeTo(frozen, 1e-9)));
     });
   });

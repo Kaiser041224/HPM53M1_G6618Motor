@@ -53,8 +53,6 @@ double shortestArcDeg(double delta) {
   return (input, output);
 }
 
-/// One full input-wheel revolution — a constant `360° / 12 s == 30°/s`.
-const Duration _inputWheelTurnPeriod = Duration(seconds: 12);
 
 /// Output-wheel rotation [°] meshing-coupled to an input rotation.
 ///
@@ -76,14 +74,18 @@ double coupledOutputGearAngleDeg(
 /// positive. A null angle parks its pointer at 12 o'clock and pins a `—` badge
 /// on the face.
 ///
-/// The gear pair is drawn as two real involute-style wheels: addendum (tip),
-/// dedendum (root) and dashed pitch circles, trapezoidal teeth (narrow tip, wide
-/// root) meshing with a half-pitch phase offset, plus hubs with a bore, keyway
-/// and four lightening holes. The input wheel is soft green, the output soft
-/// violet; each body is low-alpha filled and rim-stroked. While the rotor
-/// reading is live the pair turns as one rigid mesh — input at a constant visual
-/// speed, output coupled in reverse by the tooth ratio — and honest-stops at its
-/// frozen phase when the rotor goes stale. The pair is annotated
+/// The gear pair is drawn as two simplified wheels: addendum (tip), dedendum
+/// (root) and dashed pitch circles, trapezoidal teeth (narrow tip, wide root)
+/// meshing with a half-pitch phase offset, plus a hub and centre bore.
+/// Lightening holes and the keyway were dropped — at this size they read as
+/// noise rather than structure. The input wheel is soft green, the output soft
+/// violet; each body is low-alpha filled and rim-stroked.
+///
+/// **Rotation is driven by the rotor reading, not a decorative loop** — the
+/// pair shares the dial pointers' integrator, so it turns forward when the
+/// rotor advances, reverses when it retreats, and freezes honestly on a stale
+/// reading. The output wheel stays meshing-coupled (`θ_out = −θ_in · z1/z2`).
+/// The pair is annotated
 /// `i = {ratio} : 1` underneath (prefix `i =` fgDim, value amber; `i = —` when no
 /// ratio is loaded). Every line and label colour comes from [GuiPalette].
 class EncoderSchematic extends StatefulWidget {
@@ -128,20 +130,26 @@ class _PointerState {
 /// Drives the meshing gear pair's rotation, integrates the perceptual dial
 /// pointers and hosts the painting.
 ///
-/// The input wheel turns at a constant visual speed (one revolution per
-/// [_inputWheelTurnPeriod]); the output wheel follows the meshing-coupled
-/// reversal. Independently, each dial pointer accumulates
+/// The input wheel and both dial pointers share one integrator: each
+/// accumulates
 /// `Δ × [kPointerSpeedScale]` of the measured angle change per frame, clamped
 /// to [kPointerMaxDps] and lerped 25% toward that target — a *direction and
 /// trend* cue, not a literal crank readout. A `null` reading freezes the
 /// pointer honestly; the data columns elsewhere stay exact.
 class EncoderSchematicState extends State<EncoderSchematic>
     with TickerProviderStateMixin {
-  late final AnimationController _rotation;
   late final Ticker _pointerTicker;
 
   final _PointerState _rotorPointer = _PointerState();
   final _PointerState _outputPointer = _PointerState();
+
+  /// 齿轮对的转动量 —— **由转子读数驱动**，与指针同构。
+  ///
+  /// 早先用 `AnimationController.repeat()` 恒速空转，不看读数：
+  /// 于是永远同向、不随电机反转，也反映不出真实转速。
+  /// 现在它与指针共用同一套积分（同 scale、同限速），因此
+  /// 正转即正转、反转即反转，读数为空即原地冻结。
+  final _PointerState _gearDrive = _PointerState();
   Duration _lastTick = Duration.zero;
 
   /// Lerp fraction applied to each pointer per animation frame.
@@ -159,13 +167,9 @@ class EncoderSchematicState extends State<EncoderSchematic>
   @override
   void initState() {
     super.initState();
-    _rotation = AnimationController(
-      vsync: this,
-      duration: _inputWheelTurnPeriod,
-    );
     _pointerTicker = createTicker(_onPointerTick);
     _seedPointers();
-    _syncRotation();
+    _seedPointer(_gearDrive, widget.rotorDeg);
     _syncTicker();
   }
 
@@ -173,7 +177,6 @@ class EncoderSchematicState extends State<EncoderSchematic>
   void didUpdateWidget(covariant EncoderSchematic oldWidget) {
     super.didUpdateWidget(oldWidget);
     _seedPointers();
-    _syncRotation();
     _syncTicker();
   }
 
@@ -192,17 +195,6 @@ class EncoderSchematicState extends State<EncoderSchematic>
     }
   }
 
-  /// Runs the pair while the rotor is live; honest-stops it on `null`.
-  ///
-  /// [AnimationController.repeat] resumes from the current value, so a
-  /// stale → live transition picks the gears back up at the frozen phase.
-  void _syncRotation() {
-    if (widget.rotorDeg == null) {
-      _rotation.stop();
-    } else if (!_rotation.isAnimating) {
-      _rotation.repeat();
-    }
-  }
 
   /// Runs the pointer integrator while either dial is live.
   void _syncTicker() {
@@ -226,6 +218,8 @@ class EncoderSchematicState extends State<EncoderSchematic>
     _lastTick = elapsed;
     _advancePointer(_rotorPointer, widget.rotorDeg, dt);
     _advancePointer(_outputPointer, widget.outputDeg, dt);
+    // 齿轮与转子指针同源同速 —— 方向自然一致。
+    _advancePointer(_gearDrive, widget.rotorDeg, dt);
     if (mounted) setState(() {});
   }
 
@@ -257,7 +251,6 @@ class EncoderSchematicState extends State<EncoderSchematic>
   @override
   void dispose() {
     _pointerTicker.dispose();
-    _rotation.dispose();
     super.dispose();
   }
 
@@ -328,10 +321,10 @@ class EncoderSchematicState extends State<EncoderSchematic>
             clipBehavior: Clip.none,
             children: <Widget>[
               Positioned.fill(
-                child: AnimatedBuilder(
-                  animation: _rotation,
-                  builder: (context, _) {
-                    final double inputAngleDeg = _rotation.value * 360;
+                child: Builder(
+                  builder: (context) {
+                    // 显示角 —— 首次读数前为 0（尚未转动）。
+                    final double inputAngleDeg = _gearDrive.display ?? 0;
                     final (int zInput, int zOutput) = gearTeethPair(
                       widget.ratioLabel,
                     );
@@ -460,7 +453,7 @@ class EncoderSchematicPainter extends CustomPainter {
   /// Output gear deep rim.
   final Color gearVioletRim;
 
-  /// Page base colour, used to punch out bores, keyways and lightening holes.
+  /// Page base colour, used to punch out the gear bores.
   final Color bgBase;
 
   /// Single soft glow colour, used only at the pointer tips.
@@ -490,14 +483,6 @@ class EncoderSchematicPainter extends CustomPainter {
   /// Centre bore radius as a multiple of the pitch radius.
   static const double hubBoreFactor = 0.13;
 
-  /// Lightening-hole radius as a multiple of the pitch radius.
-  static const double lighteningHoleFactor = 0.15;
-
-  /// Lightening-hole orbit radius as a multiple of the pitch radius.
-  static const double lighteningHoleOrbitFactor = 0.55;
-
-  /// Number of circular lightening holes drilled in each wheel.
-  static const int lighteningHoleCount = 4;
 
   /// Dashed pitch-circle stroke width.
   static const double pitchCircleWidth = 0.6;
@@ -691,9 +676,9 @@ class EncoderSchematicPainter extends CustomPainter {
     );
   }
 
-  /// Draws one real gear wheel: toothed body, hubs, bore, keyway, holes.
+  /// Draws one gear wheel: toothed body, hub and centre bore.
   ///
-  /// [rotation] turns the whole wheel — teeth, lightening holes and keyway —
+  /// [rotation] turns the whole wheel — teeth, hub and bore —
   /// as one rigid body about its centre.
   void _drawGear(
     Canvas canvas,
@@ -716,35 +701,17 @@ class EncoderSchematicPainter extends CustomPainter {
     final rim = _stroke(rimColor, strokeWidth);
     canvas.drawPath(outline, rim);
 
-    // Four circular lightening holes punched through the web.
-    final holeRadius = pitchRadius * lighteningHoleFactor;
-    final orbit = pitchRadius * lighteningHoleOrbitFactor;
-    final holeOutline = _stroke(rimColor, 1);
-    for (var i = 0; i < lighteningHoleCount; i++) {
-      final angle = math.pi / 4 + i * math.pi / 2;
-      final hole = Offset(math.cos(angle), math.sin(angle)) * orbit;
-      canvas.drawCircle(hole, holeRadius, _fill(bgBase));
-      canvas.drawCircle(hole, holeRadius, holeOutline);
-    }
+    // 简化画法：不再画减重孔与键槽 —— 在本组件尺寸下它们只有几像素、
+    // 读作噪点而非结构。齿轮的识别性由「轮齿 + 轮毂 + 中心孔 + 节圆」承担。
 
     // Hub outer circle.
     final hubRadius = pitchRadius * hubFactor;
     canvas.drawCircle(Offset.zero, hubRadius, _stroke(rimColor, 1));
 
-    // Centre bore + keyway, punched to the page base and rimmed in the wheel
-    // colour.
+    // Centre bore, punched to the page base and rimmed in the wheel colour.
     final boreRadius = pitchRadius * hubBoreFactor;
-    final keywayOutline = _stroke(rimColor, 1);
     canvas.drawCircle(Offset.zero, boreRadius, _fill(bgBase));
-    canvas.drawCircle(Offset.zero, boreRadius, keywayOutline);
-    final keyway = Rect.fromLTRB(
-      -boreRadius * 0.35,
-      -hubRadius,
-      boreRadius * 0.35,
-      -boreRadius * 0.4,
-    );
-    canvas.drawRect(keyway, _fill(bgBase));
-    canvas.drawRect(keyway, keywayOutline);
+    canvas.drawCircle(Offset.zero, boreRadius, _stroke(rimColor, 1));
 
     // Dashed pitch circle.
     _drawDashedCircle(

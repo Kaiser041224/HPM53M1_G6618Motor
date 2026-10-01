@@ -51,18 +51,23 @@ Future<void> _configureWindow() async {
   }
 }
 
-/// Registers the SIL OFL 1.1 license texts bundled with the Electrolize and
-/// Aldrich display fonts so `showLicensePage` can display them.
+/// Registers the SIL OFL 1.1 license texts bundled with the CRT terminal font
+/// stack (VT323 / Fusion Pixel 12 / Silkscreen / Share Tech Mono) so
+/// `showLicensePage` can display them.
 void _registerFontLicenses() {
   LicenseRegistry.addLicense(() async* {
-    yield LicenseEntryWithLineBreaks(
-      const <String>['Electrolize'],
-      await rootBundle.loadString('assets/fonts/OFL-Electrolize.txt'),
-    );
-    yield LicenseEntryWithLineBreaks(
-      const <String>['Aldrich'],
-      await rootBundle.loadString('assets/fonts/OFL-Aldrich.txt'),
-    );
+    yield LicenseEntryWithLineBreaks(const <String>[
+      'VT323',
+    ], await rootBundle.loadString('assets/fonts/OFL-VT323.txt'));
+    yield LicenseEntryWithLineBreaks(const <String>[
+      'Fusion Pixel 12',
+    ], await rootBundle.loadString('assets/fonts/OFL-FusionPixel.txt'));
+    yield LicenseEntryWithLineBreaks(const <String>[
+      'Silkscreen',
+    ], await rootBundle.loadString('assets/fonts/OFL-Silkscreen.txt'));
+    yield LicenseEntryWithLineBreaks(const <String>[
+      'Share Tech Mono',
+    ], await rootBundle.loadString('assets/fonts/OFL-ShareTechMono.txt'));
   });
 }
 

@@ -1,4 +1,4 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,7 +32,7 @@ void main() {
       expect(palette.fg, const Color(0xFFA6BAB8));
       expect(palette.fgStrong, const Color(0xFFCFDCDA));
       expect(palette.fgDim, const Color(0xFF6E908E));
-      expect(palette.fgMute, const Color(0xFF507270));
+      expect(palette.fgMute, const Color(0xFF5B8280));
       for (final tier in <Color>[
         palette.fg,
         palette.fgStrong,
@@ -55,7 +55,7 @@ void main() {
       expect(palette.stWarn, const Color(0xFFB0A038));
       expect(palette.stFault, const Color(0xFFC06858));
       expect(palette.stLatched, const Color(0xFFD08880));
-      expect(palette.stStale, const Color(0xFF445C5E));
+      expect(palette.stStale, const Color(0xFF567476));
       expect(palette.stPending, const Color(0xFFA0A048));
     });
 
@@ -127,26 +127,44 @@ void main() {
     expect((cardShape as RoundedRectangleBorder).borderRadius, BorderRadius.zero);
   });
 
-  test('GuiTypeScale applies display/mono families and letter spacing', () {
+  test('GuiTypeScale 采用 CRT 终端字体栈与字距', () {
     const palette = GuiPalette();
     final scale = GuiTypeScale(const GuiPalette());
-    expect(scale.section.fontFamily, 'Electrolize');
+    expect(scale.section.fontFamily, 'VT323');
     expect(scale.section.color, palette.accent);
-    expect(scale.section.letterSpacing, closeTo(12.5 * 0.16, 0.001));
-    expect(scale.label.fontFamily, 'Electrolize');
+    expect(scale.section.letterSpacing, closeTo(13 * 0.16, 0.001));
+    expect(scale.label.fontFamily, 'VT323');
     expect(scale.label.color, palette.fgMute);
-    expect(scale.data.fontFamily, 'Cascadia Mono');
+    expect(scale.data.fontFamily, 'VT323');
     expect(scale.data.color, palette.fgStrong);
     expect(scale.data.fontFeatures, contains(const FontFeature.tabularFigures()));
   });
 
-    test('GuiTypeScale.sectionTitle is grey-white Chinese 16px w600 (v4)', () {
+  test('汉字落在像素网格上：Fusion Pixel 12，尺寸为 12 的整数倍', () {
     const palette = GuiPalette();
     final scale = GuiTypeScale(const GuiPalette());
-    expect(scale.sectionTitle.fontFamily, 'Noto Sans SC');
-    expect(scale.sectionTitle.fontSize, 16);
-    expect(scale.sectionTitle.fontWeight, FontWeight.w600);
+    expect(scale.sectionTitle.fontFamily, 'Fusion Pixel 12');
+    expect(scale.sectionTitle.fontSize, GuiTypeScale.pixelSize);
     expect(scale.sectionTitle.color, palette.fgStrong);
+    expect(scale.body.fontFamily, 'Fusion Pixel 12');
+    expect(scale.body.fontSize, GuiTypeScale.pixelSize);
+    // 放大档必须是整数倍，否则位图字体被平滑、失去锐利。
+    expect(
+      GuiTypeScale.pixelSizeLarge % GuiTypeScale.pixelSize,
+      0,
+      reason: '放大档须为像素网格的整数倍',
+    );
+  });
+
+  test('区分/增强用 Silkscreen，密集表格用 Share Tech Mono', () {
+    final scale = GuiTypeScale(const GuiPalette());
+    expect(scale.emph.fontFamily, 'Silkscreen');
+    expect(scale.dense.fontFamily, 'Share Tech Mono');
+  });
+
+  test('设备块字 █ 只在汉字像素体里 —— 艺术字不得改用 VT323', () {
+    // VT323 不含 U+2588，艺术字整幅由块字符构成，用错字体即变豆腐块。
+    expect(GuiTypeScale.zhFamily, isNot(GuiTypeScale.displayFamily));
   });
 
   group('GuiGlowStyles', () {
@@ -343,5 +361,77 @@ void main() {
       ),
     );
     expect(find.text('—'), findsOneWidget);
+  });
+
+  // ── 对比度底线 ────────────────────────────────────────────────────────────
+  //
+  // 显示效果的可读性下限。这套配色刻意压暗（v4 muted），但压暗不能压到
+  // 读不出来 —— 尤其 `stStale`：失效态是**安全提示**，看不见就失去意义。
+  //
+  // 阈值取 WCAG 2.1：正文 4.5:1、大字/次要 3.0:1。
+  // 这里只对**文字类** token 设卡；线框、填充块不适用。
+  group('对比度底线（bgBase 之上）', () {
+    const palette = GuiPalette();
+
+    /// WCAG 相对亮度。
+    double luminance(Color c) {
+      double channel(double v) =>
+          v <= 0.03928 ? v / 12.92 : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
+      return 0.2126 * channel(c.r) +
+          0.7152 * channel(c.g) +
+          0.0722 * channel(c.b);
+    }
+
+    /// 两色对比度（1..21）。
+    double contrast(Color a, Color b) {
+      final double la = luminance(a);
+      final double lb = luminance(b);
+      final double hi = math.max(la, lb);
+      final double lo = math.min(la, lb);
+      return (hi + 0.05) / (lo + 0.05);
+    }
+
+    test('正文级文字 >= 4.5:1', () {
+      final Color bg = palette.bgBase;
+      for (final MapEntry<String, Color> e in <String, Color>{
+        'fg': palette.fg,
+        'fgStrong': palette.fgStrong,
+        'fgDim': palette.fgDim,
+        // fgMute 承载 9px 小字，同样按正文标准卡。
+        'fgMute': palette.fgMute,
+      }.entries) {
+        expect(
+          contrast(e.value, bg),
+          greaterThanOrEqualTo(4.5),
+          reason: '${e.key} 在 bgBase 上的对比度不足',
+        );
+      }
+    });
+
+    test('状态色 >= 4.5:1（都是要读出来的读数）', () {
+      final Color bg = palette.bgBase;
+      for (final MapEntry<String, Color> e in <String, Color>{
+        'stNormal': palette.stNormal,
+        'stWarn': palette.stWarn,
+        'stFault': palette.stFault,
+        'stLatched': palette.stLatched,
+      }.entries) {
+        expect(
+          contrast(e.value, bg),
+          greaterThanOrEqualTo(4.5),
+          reason: '${e.key} 在 bgBase 上的对比度不足',
+        );
+      }
+    });
+
+    test('stStale 达大字下限，且明显暗于 stNormal（保住"退后"语义）', () {
+      final double stale = contrast(palette.stStale, palette.bgBase);
+      expect(stale, greaterThanOrEqualTo(3.0), reason: '失效态低到看不见');
+      expect(
+        stale,
+        lessThan(contrast(palette.stNormal, palette.bgBase)),
+        reason: '失效态必须比正常态暗，否则失去"退后"语义',
+      );
+    });
   });
 }

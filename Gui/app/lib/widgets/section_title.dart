@@ -39,10 +39,14 @@ class SectionTitle extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: <Widget>[
+              // flex 99:1 —— 与 PanelTitle 同理：Flexible 与 Spacer 等权时
+              // 会平分剩余空间，标题只拿到一半而被截断。
               Flexible(
+                flex: 99,
                 child: Text(
                   title,
                   style: scale.sectionTitle,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -50,8 +54,10 @@ class SectionTitle extends StatelessWidget {
                 const SizedBox(width: 8),
                 Text(en!.toUpperCase(), style: scale.label),
               ],
-              const Spacer(),
-              ?trailing,
+              if (trailing != null) ...[
+                const Spacer(),
+                trailing!,
+              ],
             ],
           ),
         ),

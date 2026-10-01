@@ -25,7 +25,9 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.fg = const Color(0xFFA6BAB8),
     this.fgStrong = const Color(0xFFCFDCDA),
     this.fgDim = const Color(0xFF6E908E),
-    this.fgMute = const Color(0xFF507270),
+    // 9px 小字也用它，故须满足小字对比度下限（bgBase 上 >= 4.5:1）。
+    // 原 #507270 只有 3.63:1，小字号下偏糊；提亮到 4.51:1，色相不变。
+    this.fgMute = const Color(0xFF5B8280),
     this.valueAmber = const Color(0xFFBFA84C),
     this.valueGreen = const Color(0xFF589E5E),
     this.valueRed = const Color(0xFFB86858),
@@ -44,7 +46,10 @@ class GuiPalette extends ThemeExtension<GuiPalette> {
     this.stWarn = const Color(0xFFB0A038),
     this.stFault = const Color(0xFFC06858),
     this.stLatched = const Color(0xFFD08880),
-    this.stStale = const Color(0xFF445C5E),
+    // 失效态是**安全提示**：必须看得出"这里没数据"。原 #445C5E 仅 2.68:1，
+    // 低于大字下限 3.0，实际近乎不可见 —— 提亮到 3.79:1，
+    // 仍明显暗于正常态（stNormal 5.18:1），保住"退后"的语义。
+    this.stStale = const Color(0xFF567476),
     this.stPending = const Color(0xFFA0A048),
     this.btnFill = const Color(0xFF222C2E),
     this.btnBorder = const Color(0xFF3E6466),

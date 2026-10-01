@@ -41,11 +41,13 @@ class DeviceAscii extends StatelessWidget {
         ),
       );
     }
+    // 块字符 █（U+2588）只在 Fusion Pixel 12 里有，VT323 没有 ——
+    // 艺术字整幅由块字符构成，故必须用中文像素体，否则会渲染成豆腐块。
+    // 顺带两者同属像素位图，气质一致。
     final glyph = TextStyle(
-      fontFamily: GuiTypeScale.monoFamily,
-      fontFamilyFallback: GuiTypeScale.monoFallback,
-      fontSize: 15,
-      height: 1.08,
+      fontFamily: GuiTypeScale.zhFamily,
+      fontSize: GuiTypeScale.pixelSize,
+      height: 1.34,
       letterSpacing: 0,
       color: palette.fgStrong,
     );
@@ -60,10 +62,7 @@ class DeviceAscii extends StatelessWidget {
           ),
         if (modelName != null) ...<Widget>[
           const SizedBox(height: 6),
-          Text(
-            modelName!,
-            style: scale.label.copyWith(color: palette.fgDim),
-          ),
+          Text(modelName!, style: scale.label.copyWith(color: palette.fgDim)),
         ],
       ],
     );

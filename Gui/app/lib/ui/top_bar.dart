@@ -157,7 +157,9 @@ class _TopBarState extends State<TopBar> with WindowListener {
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          ok ? '已连接 ${widget.state.deviceName}' : '连接失败：${widget.state.lastError}',
+          ok
+              ? '已连接 ${widget.state.deviceName}'
+              : '连接失败：${widget.state.lastError}',
         ),
       ),
     );
@@ -183,10 +185,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            _bar(context),
-            if (_expanded) _panel(context),
-          ],
+          children: <Widget>[_bar(context), if (_expanded) _panel(context)],
         ),
       ),
     );
@@ -325,7 +324,8 @@ class _TopBarState extends State<TopBar> with WindowListener {
             children: <Widget>[
               Text(
                 s.deviceName,
-                style: scale.sectionTitle.copyWith(fontSize: 14),
+                // 设备名可能含中文 —— 落在像素网格上（12），不压到 14。
+                style: scale.sectionTitle,
               ),
               const SizedBox(height: 6),
               Text(
@@ -367,12 +367,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
           const Key('top_bar_uptime_value'),
         ),
         const SizedBox(height: 4),
-        _telemetryRow(
-          context,
-          'SEQ',
-          null,
-          const Key('top_bar_seq_value'),
-        ),
+        _telemetryRow(context, 'SEQ', null, const Key('top_bar_seq_value')),
         const SizedBox(height: 4),
         _telemetryRow(
           context,
@@ -384,7 +379,12 @@ class _TopBarState extends State<TopBar> with WindowListener {
     );
   }
 
-  Widget _telemetryRow(BuildContext context, String label, String? value, Key key) {
+  Widget _telemetryRow(
+    BuildContext context,
+    String label,
+    String? value,
+    Key key,
+  ) {
     final scale = GuiTypeScale.of(context);
     final palette = GuiPalette.of(context);
     return Row(

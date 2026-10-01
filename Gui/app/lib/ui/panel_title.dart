@@ -27,10 +27,20 @@ class PanelTitle extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
       children: <Widget>[
+        // **flex 必须远大于 Spacer**。
+        //
+        // 两者若都是 flex:1，会平分剩余空间，标题只拿到一半 ——
+        // 窄栏（如合并页右栏的控制面板）下中文标题因此被省略号截掉。
+        // 给标题 99 对 1 的权重，既保住「标题尽量展开」，
+        // 又让 trailing 仍被推到最右。
         Flexible(
+          flex: 99,
           child: Text(
             title,
-            style: scale.sectionTitle.copyWith(fontSize: 13),
+            // 中文必须落在像素网格上（Fusion Pixel 只在原生尺寸锐利），
+            // 故不再压到 13，直接用刻度里的 12。
+            style: scale.sectionTitle,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -38,8 +48,10 @@ class PanelTitle extends StatelessWidget {
           const SizedBox(width: 8),
           Text(en!.toUpperCase(), style: scale.label),
         ],
-        const Spacer(),
-        ?trailing,
+        if (trailing != null) ...[
+          const Spacer(),
+          trailing!,
+        ],
       ],
     );
   }

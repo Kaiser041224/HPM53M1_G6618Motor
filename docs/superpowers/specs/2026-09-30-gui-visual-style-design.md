@@ -25,7 +25,7 @@
 | 文字 | 半透明 rgba + 四层轮廓辉光 + 描边；按重要性分三级给光 |
 | 布局 | **单页平铺**（参数与状态监视同屏）；连接选项卡固定**左上角**，点击展开详细设置 |
 | 设备标识 | 型号**不做常驻标题**，连接后显示于连接选项卡右侧，用固件 USB 终端**同款 ASCII 艺术字** |
-| 字体 | Electrolize（标题）+ Cascadia Mono（数值）+ Noto Sans SC（中文），全部 SIL OFL 1.1 |
+| 字体 | **VT323**（拉丁/数字，TNO 模组同款 CRT 终端体）+ **Fusion Pixel 10/12**（汉字像素位图）+ Silkscreen（区分增强），全部 SIL OFL 1.1 |
 | 数据可视 | 实心饼图（无描边无缝）+ 实心面积图 + 双向网格；分段条用 LED 语汇 |
 
 ---
@@ -88,13 +88,16 @@
 
 ## 6. 交付物索引
 
+> **界面效果以 `Gui/app` 运行结果为准。** 下表中的 `templates/` 与 `previews/`
+> 已于 2026-09-30 退役（停留在旧字体方案，会与实现漂移）。
+
 | 交付物 | 位置 |
 | :--- | :--- |
-| 完整规范 | `Gui/ref/design-system/design-system.md` |
-| CSS tokens + 构件 | `Gui/ref/design-system/tokens.css` |
-| 字体 + 授权原文 | `Gui/ref/design-system/fonts/` |
+| **实现（视觉唯一事实源）** | **`Gui/app`** —— 色板 `lib/theme/gui_palette.dart`、字体 `assets/fonts/` |
+| 完整规范（设计与依据） | `Gui/ref/design-system/design-system.md` |
+| CSS tokens（**由 App 生成，勿手改**） | `Gui/ref/design-system/tokens.css` |
+| 字体（唯一归属） | `Gui/app/assets/fonts/` |
 | 字体授权结论 | `Gui/ref/design-system/font-licensing.md` |
-| 规范模板 | `Gui/ref/templates/gui-main.html` |
-| 渲染预览 | `Gui/ref/previews/gui-main.png` |
-| 复现工具 | `Gui/ref/tools/measure-colors.ps1` · `extract-device-art.ps1` |
+| 复现工具 | `Gui/ref/tools/` —— `measure-colors.ps1` · `extract-device-art.ps1` · `check-font-coverage.ps1` · `sync-tokens-from-app.ps1` |
 | 参考截图 | `Gui/ref/screenshots/` |
+| 模组解包美术资源（仓库外） | `D:\Download\TNO-assets\` |

@@ -9,7 +9,9 @@ import 'bottom_bar.dart';
 import 'control_zone.dart';
 import 'encoder_zone.dart';
 import 'limit_zone.dart';
+import 'motor_drive_zone.dart';
 import 'param_zone.dart';
+import 'tuning_blocks.dart';
 import 'scope_zone.dart';
 import 'status_zone.dart';
 import 'top_bar.dart';
@@ -38,20 +40,24 @@ class NavItem {
 }
 
 /// The L1 categories, in sidebar order.
+///
+/// 控制已与监视合并（调参时必须同时看读数）；「电机 · 驱动」紧随其后 ——
+/// 它是接着监视·控制的最常用落点（看读数 → 改驱动/电机参数），
+/// 示波与全量参数表排在后面。
 const List<NavItem> kNavItems = <NavItem>[
   NavItem(
     key: 'nav_monitor',
-    zh: '监视',
+    zh: '监视 · 控制',
     latin: 'MONITOR',
     icon: Icons.dashboard_outlined,
   ),
-  NavItem(key: 'nav_scope', zh: '示波', latin: 'SCOPE', icon: Icons.show_chart),
   NavItem(
-    key: 'nav_control',
-    zh: '控制',
-    latin: 'CONTROL',
-    icon: Icons.power_settings_new,
+    key: 'nav_motor',
+    zh: '电机 · 驱动',
+    latin: 'MOTOR',
+    icon: Icons.settings_input_component,
   ),
+  NavItem(key: 'nav_scope', zh: '示波', latin: 'SCOPE', icon: Icons.show_chart),
   NavItem(key: 'nav_params', zh: '参数', latin: 'PARAMS', icon: Icons.tune),
 ];
 
@@ -79,6 +85,12 @@ class _SinglePageState extends State<SinglePage> {
 
   /// Vertical gap between the stacked zones of one page (`sp-5`, 24px).
   static const double _sectionGap = 24;
+
+  /// 监视·控制页并排分栏所需的最小内容宽 [logical px]。
+  ///
+  /// 低于此值改为上下堆叠。取值依据：编码器面板实测需要约 410px，
+  /// 控制栏约 400px，加 24px 栏间距 → 约 834px，留余量取 880。
+  static const double _twoColumnMinWidth = 880;
 
   /// Sidebar width [logical px].
   static const double _sidebarWidth = 150;
@@ -109,31 +121,64 @@ class _SinglePageState extends State<SinglePage> {
   /// The page stack for the current L1 category; only the selected page is
   /// onstage (the others stay built for keep-alive).
   ///
-  /// Each page lays its zones out flat inside one scroll viewport, separated
-  /// by [_sectionGap]:
-  /// - 监视: `StatusZone → EncoderZone`
+  /// **顺序必须与 [kNavItems] 严格一致** —— 索引即页面。
+  /// - 监视·控制: **左右分栏** —— 左栏监视（`StatusZone → EncoderZone`），
+  ///   右栏控制（运行控制 + 故障构成 + 常用调参）。合并的理由：调参时
+  ///   必须同时看着读数，分两页来回切是反效率的。
+  /// - 电机·驱动: `MotorDriveZone`（左标定程序 / 右参数对照）
   /// - 示波: `ScopeZone (TrendChart panel) → LimitZone`
-  /// - 控制: `ControlZone`
-  /// - 参数: `ParamZone`
+  /// - 参数: `ParamZone`（全量表，可编辑）
   Widget _content() {
     return _PageStack(
       index: _navIndex,
       children: <Widget>[
-        _scroll(
-          _stack(<Widget>[
-            StatusZone(state: widget.state),
-            EncoderZone(state: widget.state),
-          ]),
-        ),
+        _scroll(_monitorControlPage()),
+        _scroll(MotorDriveZone(state: widget.state)),
         _scroll(
           _stack(<Widget>[
             ScopeZone(state: widget.state),
             LimitZone(state: widget.state),
           ]),
         ),
-        _scroll(ControlZone(state: widget.state)),
         _scroll(ParamZone(state: widget.state)),
       ],
+    );
+  }
+
+  /// 监视·控制合并页：左监视、右控制，整页共享一条滚动。
+  ///
+  /// 两栏各自 `CrossAxisAlignment.start`，故栏内高度互不影响；
+  /// 左右比例 11:10 —— 监视侧有 8 个状态瓦片与编码器示意，需要更宽。
+  ///
+  /// **窄屏兜底**：两栏并排需要约 [_twoColumnMinWidth] 的内容宽（窗口约
+  /// 1030px，与 `window_manager` 的 `minimumSize` 1024 相当）。低于此宽度
+  /// 改为上下堆叠 —— 窗口可自由缩放，不能假定总是够宽。
+  Widget _monitorControlPage() {
+    final monitor = _stack(<Widget>[
+      StatusZone(state: widget.state),
+      EncoderZone(state: widget.state),
+    ]);
+    final control = _stack(<Widget>[
+      ControlZone(state: widget.state),
+      ProtectionLimitsPanel(state: widget.state),
+      CurrentLoopPanel(state: widget.state),
+      SetpointReadbackPanel(state: widget.state),
+    ]);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < _twoColumnMinWidth) {
+          return _stack(<Widget>[monitor, control]);
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(flex: 11, child: monitor),
+            const SizedBox(width: _sectionGap),
+            Expanded(flex: 10, child: control),
+          ],
+        );
+      },
     );
   }
 
@@ -281,7 +326,10 @@ class _SidebarItemState extends State<_SidebarItem> {
                   children: <Widget>[
                     Text(
                       widget.item.zh,
-                      style: scale.body.copyWith(fontSize: 12, color: textColor),
+                      style: scale.body.copyWith(
+                        fontSize: 12,
+                        color: textColor,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -300,4 +348,3 @@ class _SidebarItemState extends State<_SidebarItem> {
     );
   }
 }
-

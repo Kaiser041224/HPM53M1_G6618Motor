@@ -9,72 +9,86 @@
  * ========================================================================== */
 
 :root {
-  /* ---------- 基底：极暗蓝黑 → 青绿面板（实测锚定） ----------
-   * 实测基底首位为 #081018（55.2%，R<G<B 偏蓝黑），次位 #081010（16.9%，青绿）。
-   * 故底色并非单一偏色：深处偏蓝黑，面板层偏青绿。梯度即由此展开。 */
-  --bg-void:        #04080C;   /* 最深 / 视口外（由实测基底向下延伸） */
-  --bg-base:        #081018;   /* 实测第 1 位 55.2% —— 深蓝黑主背景 */
-  --bg-panel:       #0A161A;   /* 面板底（向实测第 2 位 #081010 的青绿收敛） */
-  --bg-raise:       #102024;   /* 抬升 / 表头 */
-  --bg-hover:       #162C30;   /* 悬停 */
-  --bg-active:      #1C383C;   /* 激活态 */
+  /* >>> GENERATED-COLORS-BEGIN —— 本段由 tools/sync-tokens-from-app.ps1 生成，勿手改 >>> */
+  /* ---------- 基底（App 为准） ---------- */
+  --bg-void:          #04080C;
+  --bg-base:          #081018;
+  --bg-panel:         #0A161A;
+  --bg-raise:         #102024;
+  --bg-hover:         #162C30;
+  --bg-active:        #1C383C;
 
-  /* ---------- 边框：多重发丝线（一亮两暗） ---------- */
-  --line-hi:        #58C8C0;   /* 亮线 1px —— 实测主强调 */
-  --line:           #1E5C60;   /* 常规边框 1px */
-  --line-dim:       #14393C;   /* 暗线 1px —— 第二/第三条 */
-  --line-width:     1px;       /* 恒为 1px，厚重感靠叠线不靠加粗 */
+  /* ---------- 发丝边框 ---------- */
+  --line-hi:          #3F9E98;
+  --line:             #1E5458;
+  --line-dim:         #123234;
 
-  /* ---------- 文字（半透明：让底层网格与辉光透出） ----------
-   * 全部使用 rgba 而非实色 —— 这是该风格的关键：
-   * 实色文字会"贴"在背景上，半透明文字才像悬浮在 CRT 光晕里。 */
-  --fg:             rgba(184, 212, 210, 0.76);   /* 主文字 */
-  --fg-strong:      rgba(127, 227, 219, 0.94);   /* 数值（最亮，允许接近实色） */
-  --fg-dim:         rgba(110, 143, 142, 0.66);   /* 次级文字 */
-  --fg-mute:        rgba(74, 102, 104, 0.78);    /* 标签 / 单位 */
+  /* ---------- 文字 ---------- */
+  --fg:               #A6BAB8;
+  --fg-strong:        #CFDCDA;
+  --fg-dim:           #6E908E;
+  --fg-mute:          #5B8280;
 
-  /* ---------- 轮廓辉光（多层叠加：紧芯 + 内晕 + 外晕 + 远晕） ----------
-   * 单层 text-shadow 只会糊；多层才有"灯管"的层次。 */
-  --glow-1:  0 0 1px  rgba(127, 227, 219, 0.85);   /* 紧贴字形的芯 */
-  --glow-2:  0 0 6px  rgba(88, 200, 192, 0.48);    /* 内晕 */
-  --glow-3:  0 0 18px rgba(88, 200, 192, 0.24);    /* 外晕 */
-  --glow-4:  0 0 34px rgba(88, 200, 192, 0.11);    /* 远晕（大面积时才有感） */
-  --stroke:  0.4px rgba(127, 227, 219, 0.46);      /* 轮廓描边 */
-
-  /* 状态色辉光（与状态同色，不串色） */
-  --glow-yellow: 0 0 1px rgba(200,192,0,.8), 0 0 6px rgba(200,192,0,.42), 0 0 18px rgba(200,192,0,.2);
-  --glow-green:  0 0 1px rgba(64,176,64,.8),  0 0 6px rgba(64,176,64,.42),  0 0 18px rgba(64,176,64,.2);
-  --glow-red:    0 0 1px rgba(248,128,112,.85),0 0 6px rgba(248,128,112,.45),0 0 18px rgba(248,128,112,.22);
-  --glow-pink:   0 0 1px rgba(255,135,215,.8), 0 0 6px rgba(255,135,215,.42),0 0 18px rgba(255,135,215,.2);
-  --glow-violet: 0 0 1px rgba(175,135,255,.8), 0 0 6px rgba(175,135,255,.42),0 0 18px rgba(175,135,255,.2);
-
-  /* ---------- 强调：按色相家族实测，峰值色 ---------- */
-  --accent:         #58C8C0;   /* 青  14,604 px  主强调 */
-  --accent-2:       #C8C000;   /* 黄   4,084 px  次强调（非品红！） */
-  --accent-blue:    #085890;   /* 蓝     685 px  深底色块 */
-  --accent-glow:    rgba(88, 200, 192, 0.45);  /* 辉光 */
+  /* ---------- 强调 ---------- */
+  --accent:           #3F9E98;
+  --accent2:          #BFA84C;
+  --accent-blue:      #085890;
 
   /* ---------- 状态语义 ---------- */
-  --st-normal:      #40B040;   /* 绿  2,813 px */
-  --st-warn:        #C8C000;   /* 黄 —— 与次强调同源 */
-  --st-fault:       #F88070;   /* 红  1,365 px */
-  --st-latched:     #FF9E96;   /* 亮红：锁存强化 */
-  --st-stale:       #4A6668;   /* 灰青：数据失效 */
-  --st-pending:     #B8B848;   /* 暗黄：待落盘 */
+  --st-normal:        #4E9454;
+  --st-warn:          #B0A038;
+  --st-fault:         #C06858;
+  --st-latched:       #D08880;
+  --st-stale:         #567476;
+  --st-pending:       #A0A048;
 
-  /* ---------- 数据系列色（示波器 / 多通道） ----------
-   * 前两色取自 UI 实测色板以保证同源；
-   * 后续引入固件 Terminal 的蒸汽波光谱，两端共享血统。 */
-  --series-1:       #58C8C0;
-  --series-2:       #C8C000;
-  --series-3:       #FF87D7;   /* 蒸汽波 213 粉 */
-  --series-4:       #AF87FF;   /* 蒸汽波 141 紫 */
-  --series-5:       #87FFAF;   /* 蒸汽波 121 薄荷 */
-  --series-6:       #F88070;
+  /* ---------- 语义读数色 ---------- */
+  --value-amber:      #BFA84C;
+  --value-green:      #589E5E;
+  --value-red:        #B86858;
+  --value-pink:       #C07898;
+  --value-violet:     #8878B8;
 
-  /* ---------- 字体 ---------- */
+  /* ---------- 数据系列 ---------- */
+  --series1:          #3F9E98;
+  --series2:          #BFA84C;
+  --series3:          #C07898;
+  --series4:          #8878B8;
+  --series5:          #589E90;
+  --series6:          #B86858;
+
+  /* ---------- 按钮 ---------- */
+  --btn-fill:         #222C2E;
+  --btn-border:       #3E6466;
+  --btn-text:         #A6BAB8;
+  --btn-primary-border: #3F9E98;
+  --btn-primary-text: #6FB8B2;
+  --btn-danger-border: #C06858;
+  --btn-danger-text:  #D08880;
+
+  /* ---------- 齿轮示意 ---------- */
+  --gear-green:       #589E5E;
+  --gear-green-rim:   #3C6E44;
+  --gear-violet:      #8878B8;
+  --gear-violet-rim:  #5E5288;
+
+  /* ---------- 辉光 ---------- */
+  --glow-soft:        rgba(63, 158, 152, 0.12);
+  --glow1:            rgba(127, 227, 219, 0.85);
+  --glow2:            rgba(88, 200, 192, 0.48);
+  --glow3:            rgba(88, 200, 192, 0.24);
+  --glow4:            rgba(88, 200, 192, 0.11);
+  --stroke:           rgba(127, 227, 219, 0.46);
+
+  /* <<< GENERATED-COLORS-END <<< */
+
+  /* ---------- 字体 ----------
+   * ★ VT323 是 TNO 硅晶之梦的 CRT 观感来源（模组 gfx/fonts/vt323_*.fnt），
+   *   而它本身是 Google Fonts 的 OFL 字体，可合法打包 —— 故列为数值首选。
+   *   获取：https://fonts.google.com/specimen/VT323 */
   --font-display:   "Electrolize", "Bahnschrift Condensed", sans-serif;  /* OFL */
   --font-alt:       "Aldrich", sans-serif;                                /* OFL */
+  --font-numeric:   "VT323", "Cascadia Mono", "Consolas", monospace;      /* OFL · CRT 终端体 */
   --font-mono:      "Cascadia Mono", "Consolas", monospace;               /* OFL */
   --font-zh:        "Noto Sans SC", "Microsoft YaHei UI", sans-serif;     /* OFL */
   --font-zh-light:  "Noto Sans SC Light", "Noto Sans SC", sans-serif;

@@ -67,8 +67,10 @@ class BottomBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: <Widget>[
-          _status(context),
-          const Spacer(),
+          // 用 Expanded 而非 Flexible + Spacer：后者两者都是 flex:1，
+          // 会互相争夺同一份弹性空间，状态区仍会被挤爆。
+          Expanded(child: _status(context)),
+          const SizedBox(width: 16),
           _telemetry(context),
         ],
       ),
@@ -89,15 +91,26 @@ class BottomBar extends StatelessWidget {
           key: const Key('bottom_bar_badge'),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            border: Border.all(color: palette.lineDim, width: palette.lineWidth),
+            border: Border.all(
+              color: palette.lineDim,
+              width: palette.lineWidth,
+            ),
           ),
           child: StatusBadge(state: item, label: label),
         ),
         const SizedBox(width: 10),
-        Text(
-          detail,
-          key: const Key('bottom_bar_detail'),
-          style: scale.body.copyWith(fontSize: 11, color: palette.fgDim),
+        Flexible(
+          child: Text(
+            detail,
+            key: const Key('bottom_bar_detail'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            // 中文落在像素网格上（10 为 Fusion Pixel 小号原生档）。
+            style: scale.body.copyWith(
+              fontSize: GuiTypeScale.pixelSize,
+              color: palette.fgDim,
+            ),
+          ),
         ),
       ],
     );
@@ -153,8 +166,7 @@ class BottomBar extends StatelessWidget {
     // reading off as live (design-system §6 rule 2). DIRTY is client-local
     // state (not a polled reading), so it is gated only on the connection.
     final crcLive = state.freshnessOf(AppState.keyCrc) == Freshness.live;
-    final resyncLive =
-        state.freshnessOf(AppState.keyResync) == Freshness.live;
+    final resyncLive = state.freshnessOf(AppState.keyResync) == Freshness.live;
     final retryLive = state.freshnessOf(AppState.keyRetry) == Freshness.live;
     final framesLive = state.freshnessOf(AppState.keyFrames) == Freshness.live;
 
@@ -173,11 +185,7 @@ class BottomBar extends StatelessWidget {
       ),
       ('bottom_bar_dirty', 'DIRTY', n ? '${state.dirty.length}' : '—'),
       ('bottom_bar_seq', 'SEQ', '—'),
-      (
-        'bottom_bar_frames',
-        '帧',
-        n && framesLive ? '${state.attempts}' : '—',
-      ),
+      ('bottom_bar_frames', '帧', n && framesLive ? '${state.attempts}' : '—'),
     ];
 
     final children = <Widget>[];

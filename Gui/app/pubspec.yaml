@@ -59,19 +59,42 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # TNO 硅晶之梦 design-system typefaces (SIL OFL, redistributable).
+  # CRT 终端字体栈（全部 SIL OFL 1.1，可随产品分发）。
+  #
+  # 选型依据：TNO「硅晶之梦」模组本体解包所得 —— 其 `TNO_fonts.gfx` 的
+  # 首个字体即 vt323_72_WT_outline（DEC VT320 终端体）。VT323 只含拉丁与数字，
+  # 汉字另配同为像素位图的 Fusion Pixel 12（已校验覆盖工程全部 307 个汉字）。
   fonts:
-    - family: Electrolize
+    # 拉丁 / 数字 / 单位 —— 主字体
+    - family: VT323
       fonts:
-        - asset: assets/fonts/Electrolize-Regular.ttf
-    - family: Aldrich
+        - asset: assets/fonts/VT323-Regular.ttf
+    # 汉字 —— 像素位图，与 VT323 同气质。
+    #
+    # 只注册这一个档：像素字体只在设计尺寸（及整数倍）上锐利，而
+    # Fusion Pixel 仅提供 8 / 10 / 12 三档，12 是可用的最大原生档。
+    # 中文没有 14/16 原生档，硬拉大只会发虚 —— 故统一 12px，
+    # 层级改由颜色与间距承担。
+    - family: Fusion Pixel 12
       fonts:
-        - asset: assets/fonts/Aldrich-Regular.ttf
+        - asset: assets/fonts/FusionPixel12-zh_hans.ttf
+    # 需要区分 / 增强处（告警标签、强调小标题）
+    - family: Silkscreen
+      fonts:
+        - asset: assets/fonts/Silkscreen-Regular.ttf
+        - asset: assets/fonts/Silkscreen-Bold.ttf
+          weight: 700
+    # 备选终端等宽（比 VT323 更收敛，用于密集表格）
+    - family: Share Tech Mono
+      fonts:
+        - asset: assets/fonts/ShareTechMono-Regular.ttf
 
   # SIL OFL 1.1 license texts must ship alongside the redistributed fonts.
   assets:
-    - assets/fonts/OFL-Electrolize.txt
-    - assets/fonts/OFL-Aldrich.txt
+    - assets/fonts/OFL-VT323.txt
+    - assets/fonts/OFL-FusionPixel.txt
+    - assets/fonts/OFL-Silkscreen.txt
+    - assets/fonts/OFL-ShareTechMono.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:

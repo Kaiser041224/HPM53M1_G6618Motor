@@ -134,7 +134,7 @@ class StatusTile extends StatelessWidget {
                   zh,
                   overflow: TextOverflow.ellipsis,
                   style: scale.body.copyWith(
-                    fontSize: 10,
+                    fontSize: GuiTypeScale.pixelSize,
                     color: palette.fgDim,
                   ),
                 ),
@@ -156,16 +156,10 @@ class StatusTile extends StatelessWidget {
     );
   }
 
-  Widget _footer(
-    BuildContext context,
-    GuiPalette palette,
-    GuiTypeScale scale,
-  ) {
+  Widget _footer(BuildContext context, GuiPalette palette, GuiTypeScale scale) {
     if (freshness == Freshness.stale) {
       final seconds = staleSeconds;
-      final text = seconds == null
-          ? '⚠ 未更新'
-          : '⚠ ${_seconds(seconds)} 秒未更新';
+      final text = seconds == null ? '⚠ 未更新' : '⚠ ${_seconds(seconds)} 秒未更新';
       return Text(
         text,
         style: GuiGlowStyles.status(palette.stWarn, scale.label),
@@ -202,11 +196,7 @@ const Duration kHeatPeakTick = kTextRefreshPeriod;
 /// Exposed as a public widget so tests can read the held [position] without
 /// reaching into the private bar state.
 class HeatPeakLine extends StatelessWidget {
-  const HeatPeakLine({
-    super.key,
-    required this.position,
-    required this.color,
-  });
+  const HeatPeakLine({super.key, required this.position, required this.color});
 
   /// Peak position as a fraction of full scale, clamped to `[0, 1]`.
   final double position;
@@ -336,8 +326,9 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
     // Peak is part of the refresh key so its (throttled) decay repaints too.
     return StableRefresh(
       refreshKey: (ratio, _peak),
-      builder: (context) =>
-          ratio == null ? _emptyRow(palette, scale) : _meterRow(palette, scale, ratio, _peak),
+      builder: (context) => ratio == null
+          ? _emptyRow(palette, scale)
+          : _meterRow(palette, scale, ratio, _peak),
     );
   }
 
@@ -396,9 +387,7 @@ class _HeatLoadBarState extends State<HeatLoadBar> {
                 return Stack(
                   clipBehavior: Clip.none,
                   children: <Widget>[
-                    Positioned.fill(
-                      child: ColoredBox(color: palette.bgRaise),
-                    ),
+                    Positioned.fill(child: ColoredBox(color: palette.bgRaise)),
                     if (fillWidth > 0) ...<Widget>[
                       Positioned(
                         left: 0,

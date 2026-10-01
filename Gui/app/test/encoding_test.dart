@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:g6618_gui/ui/param_page.dart';
+import 'package:g6618_gui/widgets/param_controls.dart';
 
 void main() {
   test('f32ToRaw encodes 36.0 as the canonical IEEE-754 bit pattern', () {
