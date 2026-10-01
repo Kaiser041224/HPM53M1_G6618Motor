@@ -58,12 +58,29 @@ typedef enum {
 typedef enum { MP_TYPE_F32 = 0, MP_TYPE_U32 = 1, MP_TYPE_I32 = 2, MP_TYPE_BOOL = 3 } mp_type_t;
 typedef enum { MP_APPLY_LIVE = 0, MP_APPLY_REBOOT = 1 } mp_apply_t;
 
-/* CTRL_CMD opcode（请求体首字节，后跟 f32 value） */
+/* CTRL_CMD opcode（请求体首字节，后跟 f32 value）
+ *
+ * v1.1 增量（additive，固件侧待 M2 实现；旧端对下列 opcode 返回 BAD_CMD）：
+ *   MP_CTRL_SET_OUTPUT_ZERO_NOW (0x05)：把“当前出轴角”设为零点，value 忽略（传 0）。
+ *       语义：enc_output_deg 显示自此偏移归零。**仅出轴**——转子零点不在此命令，
+ *       属电机·驱动域（由驱动/编码器侧单独处理）。
+ *   MP_CTRL_SET_OUTPUT_ZERO_ABS (0x06)：value = 指定角度（度），把该角度设为出轴零点。
+ *       非有限值（NaN/±Inf）返回 MP_STATUS_RANGE_ERR。
+ *   MP_CTRL_SET_MODE (0x07)：value 以 f32 位型低字节承载 u8 模式（1=力矩 / 2=速度 /
+ *       3=角度）；非法值返回 MP_STATUS_BAD_CMD。模式仅存设备状态，STATUS 布局不变、
+ *       无回读字段（UI 侧自行记录）。
+ * 联锁：零点写入与模式切换为停机窗口操作——停机且无故障锁存时 OK，运行中或存在故障
+ *       锁存时 MP_STATUS_LOCKED。
+ */
 typedef enum {
-    MP_CTRL_START    = 0x01,
-    MP_CTRL_STOP     = 0x02,
-    MP_CTRL_SET_FREQ = 0x03,
-    MP_CTRL_SET_MOD  = 0x04
+    MP_CTRL_START                = 0x01,
+    MP_CTRL_STOP                 = 0x02,
+    MP_CTRL_SET_FREQ             = 0x03,
+    MP_CTRL_SET_MOD              = 0x04,
+    /* ---- v1.1 增量 ---- */
+    MP_CTRL_SET_OUTPUT_ZERO_NOW  = 0x05, /* 当前出轴角归零；value 忽略 */
+    MP_CTRL_SET_OUTPUT_ZERO_ABS  = 0x06, /* 指定角度(度)设为出轴零点 */
+    MP_CTRL_SET_MODE             = 0x07  /* 模式：1=力矩/2=速度/3=角度 */
 } mp_ctrl_opcode_t;
 
 /* 帧头布局（CRC 覆盖 VER..PAYLOAD，即 5 字节头 + PAYLOAD） */

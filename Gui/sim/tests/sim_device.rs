@@ -202,6 +202,98 @@ fn ctrl_set_range_errors_and_unknown_opcode() {
 }
 
 #[test]
+fn ctrl_set_output_zero_now_zeros_display() {
+    let mut dev = load();
+    // 推进 tick 使当前合成出轴角明显非零（10 次 → raw = 10*0.9 = 9.0°）
+    for _ in 0..10 {
+        dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    }
+    // v1.1 NOW：把当前出轴角设为零点（value 忽略）
+    let mut p = vec![0x05u8];
+    p.extend_from_slice(&0f32.to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &p)).payload[0], status::OK);
+    // 下一次采样 tick=11：显示角 = (11*0.9 − 9.0) mod 360 = 0.9（说明已归零）
+    let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    let output = f32_at(&resp.payload, 39);
+    assert!((output - 0.9).abs() < 1e-3, "output={output}");
+}
+
+#[test]
+fn ctrl_set_output_zero_abs_offsets_display() {
+    let mut dev = load();
+    // v1.1 ABS：指定 90° 为出轴零点
+    let mut p = vec![0x06u8];
+    p.extend_from_slice(&90f32.to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &p)).payload[0], status::OK);
+    // tick=1：显示角 = (0.9 − 90) mod 360 = 270.9
+    let resp = dev.handle_frame(&req(cmd::STATUS_GET, &[]));
+    let output = f32_at(&resp.payload, 39);
+    assert!((output - 270.9).abs() < 1e-2, "output={output}");
+}
+
+#[test]
+fn ctrl_zero_and_mode_locked_while_running() {
+    let mut dev = load();
+    let mut start = vec![ctrl::START];
+    start.extend_from_slice(&0f32.to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &start)).payload[0], status::OK);
+    // 运行中：零点写入与模式切换 → LOCKED（联锁同 flash 类操作）
+    let mut now = vec![0x05u8];
+    now.extend_from_slice(&0f32.to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &now)).payload[0], status::LOCKED);
+    let mut abs = vec![0x06u8];
+    abs.extend_from_slice(&10f32.to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &abs)).payload[0], status::LOCKED);
+    let mut mode = vec![0x07u8];
+    mode.extend_from_slice(&f32::from_bits(1).to_le_bytes());
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &mode)).payload[0], status::LOCKED);
+    // 停机 + 故障锁存同样 LOCKED
+    let mut stop = vec![ctrl::STOP];
+    stop.extend_from_slice(&0f32.to_le_bytes());
+    dev.handle_frame(&req(cmd::CTRL_CMD, &stop));
+    dev.inject_fault(0x1);
+    assert_eq!(dev.handle_frame(&req(cmd::CTRL_CMD, &now)).payload[0], status::LOCKED);
+}
+
+#[test]
+fn ctrl_set_mode_accepts_valid_rejects_bad() {
+    let mut dev = load();
+    for mode in [1u32, 2, 3] {
+        let mut p = vec![0x07u8];
+        p.extend_from_slice(&f32::from_bits(mode).to_le_bytes());
+        assert_eq!(
+            dev.handle_frame(&req(cmd::CTRL_CMD, &p)).payload[0],
+            status::OK,
+            "mode={mode}"
+        );
+        assert_eq!(dev.control_mode(), mode as u8);
+    }
+    for bad in [0u32, 4, 0xFF] {
+        let mut p = vec![0x07u8];
+        p.extend_from_slice(&f32::from_bits(bad).to_le_bytes());
+        assert_eq!(
+            dev.handle_frame(&req(cmd::CTRL_CMD, &p)).payload[0],
+            status::BAD_CMD,
+            "bad={bad}"
+        );
+    }
+}
+
+#[test]
+fn ctrl_set_output_zero_abs_rejects_non_finite() {
+    let mut dev = load();
+    for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut p = vec![0x06u8];
+        p.extend_from_slice(&v.to_le_bytes());
+        assert_eq!(
+            dev.handle_frame(&req(cmd::CTRL_CMD, &p)).payload[0],
+            status::RANGE_ERR,
+            "v={v}"
+        );
+    }
+}
+
+#[test]
 fn fault_get_and_clear_roundtrip() {
     let mut dev = load();
     let resp = dev.handle_frame(&req(cmd::FAULT_GET, &[]));

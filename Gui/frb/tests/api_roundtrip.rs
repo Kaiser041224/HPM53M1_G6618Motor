@@ -48,6 +48,17 @@ fn api_roundtrip_against_sim() {
         // 故障注入不可经 API → 用 fault_get/clear 路径验证可读
         let (flags, latched) = gui_frb::api::fault_get().await.unwrap();
         assert_eq!(flags | latched, 0);
+
+        // v1.1：出轴零点 NOW → 读角归零（停机窗口）
+        let mut pre = 0f32;
+        for _ in 0..10 {
+            pre = gui_frb::api::status_get().await.unwrap().enc_output_deg;
+        }
+        gui_frb::api::ctrl_set_output_zero_now().await.unwrap();
+        let post = gui_frb::api::status_get().await.unwrap().enc_output_deg;
+        assert!(pre > 5.0, "pre={pre}");
+        assert!((post - 0.9).abs() < 1e-2, "post={post}");
+
         gui_frb::api::disconnect().await.unwrap();
         assert!(!gui_frb::api::is_connected());
     });

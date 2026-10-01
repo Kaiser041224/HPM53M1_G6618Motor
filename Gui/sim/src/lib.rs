@@ -56,6 +56,16 @@ pub struct ParamEntry {
     pub value: ParamValue,
 }
 
+/// v1.1 增量 CTRL_CMD opcode（`Gui/protocol/motor_proto.h` 镜像；固件侧待 M2 实现）。
+pub mod ctrl_v11 {
+    /// 把当前出轴角设为零点（`value` 忽略）。
+    pub const SET_OUTPUT_ZERO_NOW: u8 = 0x05;
+    /// 把指定角度（`value`，度）设为出轴零点。
+    pub const SET_OUTPUT_ZERO_ABS: u8 = 0x06;
+    /// 设置控制模式：`value` 位型低字节 1=力矩 / 2=速度 / 3=角度。
+    pub const SET_MODE: u8 = 0x07;
+}
+
 /// 设备模拟器状态。
 pub struct SimDevice {
     params: BTreeMap<String, ParamEntry>,
@@ -65,6 +75,10 @@ pub struct SimDevice {
     motor_running: bool,
     freq_hz: f32,
     mod_pct: f32,
+    /// 出轴角零点偏移（度）；显示角 = (tick*0.9 − 偏移) mod 360。
+    output_zero_deg: f32,
+    /// v1.1 控制模式（仅存状态，STATUS 无回读字段）：0=未设置 / 1=力矩 / 2=速度 / 3=角度。
+    mode: u8,
     /// STATUS_GET 采样计数；合成信号是它的确定函数（无墙钟依赖，测试可复现）。
     tick: u64,
 }
@@ -100,6 +114,8 @@ impl SimDevice {
             motor_running: false,
             freq_hz: 0.0,
             mod_pct: 0.0,
+            output_zero_deg: 0.0,
+            mode: 0,
             tick: 0,
         })
     }
@@ -133,6 +149,16 @@ impl SimDevice {
     /// 参数表（按名字典序）。
     pub fn params(&self) -> &BTreeMap<String, ParamEntry> {
         &self.params
+    }
+
+    /// 当前控制模式（v1.1；0=未设置，1=力矩，2=速度，3=角度）。
+    pub fn control_mode(&self) -> u8 {
+        self.mode
+    }
+
+    /// 联锁：运行中或存在故障锁存时，拒绝停机窗口类操作。
+    fn interlocked(&self) -> bool {
+        self.motor_running || self.latched_flags != 0
     }
 
     fn dispatch(&mut self, cmd: u8, payload: &[u8]) -> (u8, Vec<u8>) {
@@ -299,6 +325,36 @@ impl SimDevice {
                 self.mod_pct = value;
                 (status::OK, Vec::new())
             }
+            ctrl_v11::SET_OUTPUT_ZERO_NOW => {
+                if self.interlocked() {
+                    return (status::LOCKED, Vec::new());
+                }
+                // 把“当前出轴角”（本 tick 的合成原始角）设为零点，显示自此归零。
+                self.output_zero_deg = (self.tick as f32 * 0.9).rem_euclid(360.0);
+                (status::OK, Vec::new())
+            }
+            ctrl_v11::SET_OUTPUT_ZERO_ABS => {
+                if !value.is_finite() {
+                    return (status::RANGE_ERR, Vec::new());
+                }
+                if self.interlocked() {
+                    return (status::LOCKED, Vec::new());
+                }
+                self.output_zero_deg = value.rem_euclid(360.0);
+                (status::OK, Vec::new())
+            }
+            ctrl_v11::SET_MODE => {
+                if self.interlocked() {
+                    return (status::LOCKED, Vec::new());
+                }
+                // value 以 f32 位型承载 u8 模式（低字节）。
+                let mode = value.to_bits() as u8;
+                if !(1..=3).contains(&mode) {
+                    return (status::BAD_CMD, Vec::new());
+                }
+                self.mode = mode;
+                (status::OK, Vec::new())
+            }
             _ => (status::BAD_CMD, Vec::new()),
         }
     }
@@ -317,7 +373,7 @@ impl SimDevice {
         let vbus = 48.0 + 2.0 * (TAU * t / 50.0).sin();
         let ntc_temp = 55.0 + 10.0 * (0.5 + 0.5 * (TAU * t / 100.0).sin());
         let enc_rotor_deg = (t * 3.6) % 360.0;
-        let enc_output_deg = (t * 0.9) % 360.0;
+        let enc_output_deg = (t * 0.9 - self.output_zero_deg).rem_euclid(360.0);
 
         let mut body = Vec::with_capacity(42);
         body.extend_from_slice(&self.fault_flags.to_le_bytes());

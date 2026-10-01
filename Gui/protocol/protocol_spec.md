@@ -1,11 +1,15 @@
-# Gui ↔ 电机控制板 通讯协议规范 v1
+# Gui ↔ 电机控制板 通讯协议规范 v1.1
 
 本文件是 `motor_proto.h` 的配套说明，两者共同构成 Gui 上位机与电机控制板之间的
 **线格式契约**。任何一端实现编解码、传输解析、会话状态机时，都以本规范为准；
 一旦与 `motor_proto.h` 冲突，以 `motor_proto.h` 的宏/枚举定义为准。
 
+> **v1.1 为 v1 的增量（additive）**：不改变既有帧格式、`VER`、状态码与金向量，
+> 仅在 `CTRL_CMD` 内新增 3 个 opcode（见 §7）。固件侧实现待 M2；当前 sim / 主机
+> 已按本规范实现。旧端对未知 opcode 的降级约定见 §7.4。
+
 - 传输层字节序：**全部小端（little-endian）**。
-- 版本：`MP_VERSION = 0x01`。
+- 版本：`MP_VERSION = 0x01`（v1.1 复用，线格式不变）。
 - 最大载荷：`MP_MAX_PAYLOAD = 512` 字节。
 - 单帧最大线长：`2(SOF) + 5(hdr) + 512(payload) + 2(CRC) = 521` 字节。
 
@@ -274,7 +278,8 @@ A5 5A  01  84  01  0100  02  A0 81
 | 1–4 | `value` | f32 LE | 参数值；`START`/`STOP` 忽略 |
 
 `opcode`：`MP_CTRL_START=0x01`、`MP_CTRL_STOP=0x02`、`MP_CTRL_SET_FREQ=0x03`、
-`MP_CTRL_SET_MOD=0x04`。
+`MP_CTRL_SET_MOD=0x04`；v1.1 增量 `MP_CTRL_SET_OUTPUT_ZERO_NOW=0x05`、
+`MP_CTRL_SET_OUTPUT_ZERO_ABS=0x06`、`MP_CTRL_SET_MODE=0x07`（详见 §7）。
 
 **响应载荷**：`status`（u8）。联锁拒绝返回 `MP_STATUS_LOCKED`。
 
@@ -369,6 +374,95 @@ CAN 经典帧单帧数据 ≤ 8 字节，无法容纳最大 521 字节的协议�
 | 3..31 | — | 保留，v1 恒 `0`；接收端忽略未知位 |
 
 金帧 `proto_info_resp_sim` 中 `caps = 0x00000003`，即 `CAP_PARAM_WRITE | CAP_CONTROL`。
+
+---
+
+## 7. v1.1 增量：出轴零点与模式（`MP_CMD_CTRL_CMD` 内）
+
+v1.1 不新增命令字、不改变帧格式与 `STATUS_GET` 布局，仅在 `MP_CMD_CTRL_CMD = 0x08`
+（§3.8）内扩展 opcode。请求体恒为 `opcode u8 | value f32 LE`（5 字节）。
+
+### 7.1 opcode 定义
+
+| opcode | 名称 | `value` 语义 |
+| :--- | :--- | :--- |
+| `0x05` | `MP_CTRL_SET_OUTPUT_ZERO_NOW` | 忽略（传 `0.0`）。把**当前出轴角**设为零点，`enc_output_deg` 显示自此偏移归零 |
+| `0x06` | `MP_CTRL_SET_OUTPUT_ZERO_ABS` | 指定角度（度），把该角度设为出轴零点 |
+| `0x07` | `MP_CTRL_SET_MODE` | 以 f32 位型低字节承载 u8：`1`=力矩 / `2`=速度 / `3`=角度 |
+
+要点：
+
+- **仅出轴**：零点命令作用于 `enc_output_deg` 合成显示，**不**改变 `enc_rotor_deg`。
+  转子零点属电机·驱动域，不在本协议命令内。
+- `MP_CTRL_SET_MODE` 的模式**仅存设备状态**：`STATUS_GET` 布局不变、无回读字段
+  （UI 侧自行记录当前模式）。
+- 显示角合成关系（sim 参考实现）：`enc_output_deg = (tick_raw − zero) mod 360`，
+  其中 `NOW` 令 `zero = 当前 tick_raw`，`ABS` 令 `zero = value mod 360`。
+
+### 7.2 状态码与联锁语义
+
+| 场景 | 返回 `status` |
+| :--- | :--- |
+| 停机且无故障锁存，零点写入 / 模式切换 | `MP_STATUS_OK (0x00)` |
+| 运行中或存在未清除故障锁存，下发零点 / 模式 | `MP_STATUS_LOCKED (0x04)` |
+| `MP_CTRL_SET_OUTPUT_ZERO_ABS` 的 `value` 为 `NaN`/`±Inf` | `MP_STATUS_RANGE_ERR (0x06)` |
+| `MP_CTRL_SET_MODE` 模式非 `1/2/3` | `MP_STATUS_BAD_CMD (0x01)` |
+| 未知 opcode | `MP_STATUS_BAD_CMD (0x01)` |
+
+零点写入与模式切换均属**停机窗口操作**，联锁语义同 `PARAM_COMMIT`（§3.6）。
+
+### 7.3 帧示例
+
+以下帧可作实现自检（CRC16-CCITT-FALSE，范围 `VER..PAYLOAD`，小端放置）。
+
+**`SET_OUTPUT_ZERO_NOW` 请求（`SEQ=0`）**：
+
+```
+A5 5A  01  08  00  0500  05 00 00 00 00  73 FD
+```
+
+| 偏移 | 字节 | 含义 |
+| :--- | :--- | :--- |
+| 2 | `01` | `VER` |
+| 3 | `08` | `CMD = MP_CMD_CTRL_CMD` |
+| 4 | `00` | `SEQ = 0` |
+| 5–6 | `05 00` | `LEN = 5` |
+| 7 | `05` | `opcode = MP_CTRL_SET_OUTPUT_ZERO_NOW` |
+| 8–11 | `00 00 00 00` | `value = 0.0f`（忽略） |
+| 12–13 | `73 FD` | CRC16 `0xFD73` |
+
+**成功响应（`SEQ=0`）**：`A5 5A 01 88 00 0100 00 7D 5C`（`status=OK`，CRC `0x5C7D`）。
+
+**运行中拒绝响应（`SEQ=0`）**：`A5 5A 01 88 00 0100 04 F9 1C`（`status=LOCKED`，CRC `0x1CF9`）。
+
+**`SET_OUTPUT_ZERO_ABS` 请求（`value=90.0`，`SEQ=1`）**：
+
+```
+A5 5A  01  08  01  0500  06 00 00 B4 42  3D EE
+```
+
+（`90.0f` 位型 `0x42B40000`，小端 `00 00 B4 42`；CRC `0xEE3D`。）
+
+**`SET_MODE` 请求（`mode=2`，`SEQ=2`）**：
+
+```
+A5 5A  01  08  02  0500  07 02 00 00 00  3E DB
+```
+
+（f32 位型低字节 `0x02`；CRC `0xDB3E`。）
+
+### 7.4 v1.1 兼容性与协商
+
+- **线格式向后兼容**：未使用新 opcode 的 v1.0 流量与金向量完全不受影响
+  （`test_vectors.json` 不变）。
+- **旧端（固件 v1.0）收到新 opcode**：
+  - 若仅按“未知 opcode”处理 → 返回 `MP_STATUS_BAD_CMD (0x01)`；
+  - 若设备显式声明不支持 → 返回 `MP_STATUS_UNSUPPORTED (0x05)`。
+- **主机容错约定**：v1.1 不新增 `caps` 位（仍沿用 `CAP_CONTROL`）。主机下发新 opcode
+  时，须同时容忍 `BAD_CMD` 与 `UNSUPPORTED` 两种拒绝，并将两者视为“设备不支持”，
+  据此降级隐藏对应 UI；不得因拒绝而断开连接或视为协议违例。
+- **探测**：主机可在停机时以 `MP_CTRL_SET_MODE`（或 `NOW`）探活；`OK`/`LOCKED` 表示
+  设备已实现，`BAD_CMD`/`UNSUPPORTED` 表示未实现。
 
 ---
 

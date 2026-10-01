@@ -36,4 +36,22 @@ pub mod ctrl {
     pub const STOP: u8 = 0x02;
     pub const SET_FREQ: u8 = 0x03;
     pub const SET_MOD: u8 = 0x04;
+    // v1.1 增量（additive，镜像 `motor_proto.h` 的 mp_ctrl_opcode_t；
+    // 收敛 sim/frb 各自的本地 `ctrl_v11`，消除镜像漂移）。
+    pub const SET_OUTPUT_ZERO_NOW: u8 = 0x05;
+    pub const SET_OUTPUT_ZERO_ABS: u8 = 0x06;
+    pub const SET_MODE: u8 = 0x07;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v1.1 ctrl opcode 与 `motor_proto.h` / sim / frb 三处镜像一致。
+    #[test]
+    fn ctrl_v11_opcodes_match_contract() {
+        assert_eq!(ctrl::SET_OUTPUT_ZERO_NOW, 0x05);
+        assert_eq!(ctrl::SET_OUTPUT_ZERO_ABS, 0x06);
+        assert_eq!(ctrl::SET_MODE, 0x07);
+    }
 }
