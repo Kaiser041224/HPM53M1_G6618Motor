@@ -4,6 +4,9 @@ import '../theme/gui_type.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/section_title.dart';
 
+// Re-export the title hue vocabulary so panel call sites need only one import.
+export '../widgets/section_title.dart' show TitleHue, kDefaultTitleHue;
+
 /// Light sub-panel heading (v5).
 ///
 /// A smaller sibling of [SectionTitle]: a white-cyan semibold Chinese title
@@ -13,7 +16,13 @@ import '../widgets/section_title.dart';
 /// ([GuiPalette.groupLine], §2.6.2). Sharing [GuiTitleFrame] keeps the whole
 /// page's titles identical without duplicating the chrome.
 class PanelTitle extends StatelessWidget {
-  const PanelTitle({super.key, required this.title, this.en, this.trailing});
+  const PanelTitle({
+    super.key,
+    required this.title,
+    this.en,
+    this.trailing,
+    this.hue = kDefaultTitleHue,
+  });
 
   /// Primary (usually Chinese) title, rendered white-cyan and semibold.
   final String title;
@@ -24,10 +33,14 @@ class PanelTitle extends StatelessWidget {
   /// Optional trailing content, right-aligned.
   final Widget? trailing;
 
+  /// Gradient hue family (v6).
+  final TitleHue hue;
+
   @override
   Widget build(BuildContext context) {
     final scale = GuiTypeScale.of(context);
     return GuiTitleFrame(
+      hue: hue,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
@@ -76,6 +89,7 @@ class PanelBox extends StatelessWidget {
     required this.title,
     this.en,
     this.trailing,
+    this.hue = kDefaultTitleHue,
     required this.child,
     this.contentPadding = const EdgeInsets.all(10),
   });
@@ -92,6 +106,9 @@ class PanelBox extends StatelessWidget {
   /// 可选右侧内容。
   final Widget? trailing;
 
+  /// 标题条渐变色相（v6）。
+  final TitleHue hue;
+
   /// 标题条之下的内容区。
   final Widget child;
 
@@ -107,7 +124,7 @@ class PanelBox extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          PanelTitle(title: title, en: en, trailing: trailing),
+          PanelTitle(title: title, en: en, trailing: trailing, hue: hue),
           Padding(padding: contentPadding, child: child),
         ],
       ),

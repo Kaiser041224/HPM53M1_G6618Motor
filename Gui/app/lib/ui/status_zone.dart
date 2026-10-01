@@ -605,6 +605,7 @@ class StatusZone extends StatelessWidget {
         SectionTitle(
           title: '状态监视',
           en: 'Status',
+          hue: TitleHue.cyan,
           trailing: Text(header.toString(), style: scale.label),
         ),
         const SizedBox(height: 14),

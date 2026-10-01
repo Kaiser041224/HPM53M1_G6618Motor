@@ -69,8 +69,22 @@ ThemeData buildGuiTheme() {
       backgroundColor: palette.bgBase,
       elevation: 8,
       shadowColor: palette.accent.withValues(alpha: palette.glowSoft.a),
-      titleTextStyle: scale.sectionTitle.copyWith(color: palette.fgStrong),
-      contentTextStyle: scale.body.copyWith(color: palette.fgStrong),
+      // 弹窗路径切断对 `ColorScheme.secondary`（琥珀 accent2）的引用：
+      // Material 3 的 `Dialog.iconColor` 缺省即回落到 secondary，任何未显式
+      // 着色的对话框图标都会因此变琥珀。这里显式绑到青 accent。
+      iconColor: palette.accent,
+      // 关闭 M3 高度叠色（surfaceTint）—— 深底弹窗不要任何色相偏移。
+      surfaceTintColor: Colors.transparent,
+      // 标题 / 正文显式声明无下划线：杜绝任何继承来的 TextDecoration
+      // 在字符底部渲成第二条线（「双黄线」防御）。
+      titleTextStyle: scale.sectionTitle.copyWith(
+        color: palette.fgStrong,
+        decoration: TextDecoration.none,
+      ),
+      contentTextStyle: scale.body.copyWith(
+        color: palette.fgStrong,
+        decoration: TextDecoration.none,
+      ),
     ),
     bottomSheetTheme: BottomSheetThemeData(
       shape: square,
@@ -132,6 +146,9 @@ ThemeData buildGuiTheme() {
         fontSize: GuiTypeScale.pixelSize,
         letterSpacing: GuiTypeScale.pixelSize * 0.04,
         color: palette.fgStrong,
+        // Tooltip 走 Overlay（无 Material 祖先），显式清掉 MaterialApp 兜底
+        // 样式的黄色双下划线 —— 否则提示文字底部会渗出双黄线。
+        decoration: TextDecoration.none,
       ),
     ),
   );

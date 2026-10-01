@@ -145,6 +145,7 @@ class MotorDriveZone extends StatelessWidget {
           SectionTitle(
             title: '电机 · 驱动',
             en: 'Motor / Drive',
+            hue: TitleHue.magenta,
             trailing: Text('标定程序 · 驱动板与电机参数', style: scale.label),
           ),
           const SizedBox(height: 14),
@@ -169,6 +170,7 @@ class MotorDriveZone extends StatelessWidget {
       frameKey: const Key('calib_programs_frame'),
       title: '标定程序',
       en: 'Calibration',
+      hue: TitleHue.cyan,
       trailing: Text('${kCalibPrograms.length} 项', style: scale.label),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -204,6 +206,7 @@ class MotorDriveZone extends StatelessWidget {
       frameKey: const Key('config_compare_frame'),
       title: '参数对照',
       en: 'Configuration',
+      hue: TitleHue.green,
       trailing: Text('当前值 vs 出厂预设', style: scale.label),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

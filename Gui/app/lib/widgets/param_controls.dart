@@ -141,6 +141,7 @@ class ApplyBadge extends StatelessWidget {
         style: scale.label.copyWith(
           color: color,
           fontSize: fontSize ?? scale.label.fontSize,
+          decoration: TextDecoration.none,
         ),
       ),
     );
@@ -292,7 +293,10 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
           Text(
             '${typeName(meta.ty)} · ${rangeText(meta)} ${meta.unit}'
                 .trimRight(),
-            style: scale.label.copyWith(color: palette.fgDim),
+            style: scale.label.copyWith(
+              color: palette.fgDim,
+              decoration: TextDecoration.none,
+            ),
           ),
           const SizedBox(height: 8),
           GuiTextField(
@@ -307,7 +311,10 @@ class _ParamEditDialogState extends State<ParamEditDialog> {
               padding: const EdgeInsets.only(top: 12),
               child: Text(
                 _error,
-                style: scale.label.copyWith(color: palette.stFault),
+                style: scale.label.copyWith(
+                  color: palette.stFault,
+                  decoration: TextDecoration.none,
+                ),
               ),
             ),
         ],
@@ -478,8 +485,10 @@ class ParamField extends StatelessWidget {
               child: Text(
                 valueText,
                 maxLines: 1,
-                style: GuiGlowStyles.softWith(
-                  palette,
+                // 单层同色相辉光（0.12）：小字号琥珀值不再拾取青色跨色相光晕，
+                // 字符基线下方因此不再叠出第二条线（「双黄线」根治）。
+                style: GuiGlowStyles.softTint(
+                  valueColor,
                   scale.data.copyWith(
                     fontSize: kParamRowFontSize,
                     color: valueColor,

@@ -55,6 +55,17 @@ class GuiGlowStyles {
         Shadow(color: palette.glowSoft, blurRadius: softBlur),
       ]);
 
+  /// Same-hue soft glow for a tinted small readout (v6 fix for the "double
+  /// yellow line"): one faint layer sourced from the text's own [hue] instead
+  /// of the cyan [GuiPalette.glowSoft], so small amber text no longer picks up
+  /// a cross-colour halo straddling its baseline. Still a **single** layer —
+  /// never stacked — and no brighter than the shared 0.12 soft alpha.
+  static TextStyle softTint(Color hue, TextStyle base) => base.copyWith(
+    shadows: <Shadow>[
+      Shadow(color: hue.withValues(alpha: 0.12), blurRadius: softBlur),
+    ],
+  );
+
   /// Weak glow: one faint halo, labels recede.
   static TextStyle weak(TextStyle base) => base.copyWith(
     shadows: <Shadow>[

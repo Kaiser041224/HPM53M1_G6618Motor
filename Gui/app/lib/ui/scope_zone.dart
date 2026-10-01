@@ -31,6 +31,7 @@ class ScopeZone extends StatelessWidget {
           SectionTitle(
             title: '波形',
             en: 'Waveform',
+            hue: TitleHue.cyan,
             trailing: Text(
               '一级流预留 · STREAM_SUB 返回 UNSUPPORTED',
               style: scale.label,

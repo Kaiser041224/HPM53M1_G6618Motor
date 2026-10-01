@@ -35,6 +35,7 @@ class LimitZone extends StatelessWidget {
           SectionTitle(
             title: '门限',
             en: 'Limits',
+            hue: TitleHue.magenta,
             trailing: Text('相对门限响度条 · 电频率', style: scale.label),
           ),
           const SizedBox(height: 14),
@@ -70,6 +71,7 @@ class _HeatLoadPanel extends StatelessWidget {
       frameKey: const Key('limit_heat_panel'),
       title: '热与负载 · 相对门限',
       en: '%',
+      hue: TitleHue.green,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -138,6 +140,7 @@ class _FrequencyPanel extends StatelessWidget {
       frameKey: const Key('limit_freq_panel'),
       title: '电频率',
       en: 'ELECTRICAL FREQ',
+      hue: TitleHue.cyan,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[

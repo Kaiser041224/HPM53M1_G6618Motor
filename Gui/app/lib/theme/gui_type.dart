@@ -24,6 +24,15 @@ import 'gui_palette.dart';
 /// 硬拉大只会发虚，故**统一到 12 并把层级交给颜色与间距**，
 /// 这也正是 CRT 终端「同字号、靠亮度分层」的做法。
 /// 确需放大的标题用 [pixelSizeLarge]（2 倍整数，仍锐利）。
+///
+/// ## 无下划线（W42 双黄线根治）
+///
+/// 每个样式都显式声明 `decoration: TextDecoration.none`。原因：`MaterialApp`
+/// 会把 [WidgetsApp] 的兜底样式设成一条**黄色双下划线**的错误提示
+/// （`app.dart` 的 `_errorTextStyle`），任何**不在 `Material` 之下**的文本
+/// （典型：`Overlay` 里的 toast / tooltip；`Scaffold` 主体不受影响）若样式
+/// 未显式给出 `decoration`，就会继承这条基线下的双黄线。在源头统一清掉，
+/// 比在每个浮层调用点各自补 `decoration: none` 更可靠。
 class GuiTypeScale {
   const GuiTypeScale(this.palette);
 
@@ -65,6 +74,7 @@ class GuiTypeScale {
     fontSize: 18,
     letterSpacing: 18 * 0.16,
     color: palette.fg,
+    decoration: TextDecoration.none,
   );
 
   /// 小节标题的拉丁副标 —— VT323 全大写，强调色。
@@ -74,6 +84,7 @@ class GuiTypeScale {
     fontSize: 16,
     letterSpacing: 16 * 0.16,
     color: palette.accent,
+    decoration: TextDecoration.none,
   );
 
   /// 标签 / 单位 —— VT323（拉丁）+ Fusion Pixel 12（汉字）。
@@ -86,6 +97,7 @@ class GuiTypeScale {
     fontSize: pixelSize,
     letterSpacing: pixelSize * 0.04,
     color: palette.fgMute,
+    decoration: TextDecoration.none,
   );
 
   /// 中文小节标题 —— Fusion Pixel 12，落在像素网格上。
@@ -97,6 +109,7 @@ class GuiTypeScale {
     fontSize: pixelSize,
     letterSpacing: pixelSize * 0.08,
     color: palette.fgStrong,
+    decoration: TextDecoration.none,
   );
 
   /// 中文放大标题 —— 2 倍像素网格，用于确需突出的位置。
@@ -105,6 +118,7 @@ class GuiTypeScale {
     fontSize: pixelSizeLarge,
     letterSpacing: pixelSizeLarge * 0.06,
     color: palette.fgStrong,
+    decoration: TextDecoration.none,
   );
 
   /// 大号读数 —— VT323，等宽数字保证刷新时不抖动。
@@ -115,6 +129,7 @@ class GuiTypeScale {
     letterSpacing: 36 * 0.01,
     color: palette.fgStrong,
     fontFeatures: const [FontFeature.tabularFigures()],
+    decoration: TextDecoration.none,
   );
 
   /// 中文正文 —— Fusion Pixel 12。
@@ -123,6 +138,7 @@ class GuiTypeScale {
     fontSize: pixelSize,
     letterSpacing: pixelSize * 0.04,
     color: palette.fg,
+    decoration: TextDecoration.none,
   );
 
   /// 强调标签 —— Silkscreen，用于需要与常规文本区分的短标签
@@ -132,6 +148,7 @@ class GuiTypeScale {
     fontSize: 12,
     letterSpacing: 12 * 0.1,
     color: palette.fgStrong,
+    decoration: TextDecoration.none,
   );
 
   /// 密集等宽 —— Share Tech Mono，用于参数名等需要更高字符密度的场合。
@@ -140,5 +157,6 @@ class GuiTypeScale {
     fontSize: 12,
     color: palette.fg,
     fontFeatures: const [FontFeature.tabularFigures()],
+    decoration: TextDecoration.none,
   );
 }

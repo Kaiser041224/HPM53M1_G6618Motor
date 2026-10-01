@@ -350,7 +350,12 @@ void main() {
     );
     final gradient =
         (bar.decoration! as BoxDecoration).gradient! as LinearGradient;
-    expect(gradient.colors, kTitleGradient.colors);
+    // 默认（violet）渐变与 [kTitleGradient] 同色：按 ARGB32 比较，
+    // 因为运行时色来自 `withValues(alpha:)`（double），与 const 分量不等值。
+    expect(
+      gradient.colors.map((c) => c.toARGB32()).toList(),
+      kTitleGradient.colors.map((c) => c.toARGB32()).toList(),
+    );
     expect(gradient.begin, Alignment.centerLeft);
     expect(gradient.end, Alignment.centerRight);
     final underline = tester.widget<Container>(

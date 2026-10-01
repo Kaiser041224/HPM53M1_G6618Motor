@@ -52,6 +52,7 @@ class PidZone extends StatelessWidget {
             frameKey: const Key('speed_loop_frame'),
             title: '速度环',
             en: 'Speed Loop',
+            hue: TitleHue.green,
             fields: kSpeedLoopFields,
             state: state,
           ),
@@ -60,6 +61,7 @@ class PidZone extends StatelessWidget {
             frameKey: const Key('angle_loop_frame'),
             title: '角度环',
             en: 'Angle Loop',
+            hue: TitleHue.magenta,
             fields: kAngleLoopFields,
             state: state,
           ),
@@ -76,6 +78,7 @@ class _PidLoopPanel extends StatelessWidget {
     required this.frameKey,
     required this.title,
     required this.en,
+    required this.hue,
     required this.fields,
     required this.state,
   });
@@ -83,6 +86,7 @@ class _PidLoopPanel extends StatelessWidget {
   final Key frameKey;
   final String title;
   final String en;
+  final TitleHue hue;
   final List<(String, String)> fields;
   final AppState state;
 
@@ -93,6 +97,7 @@ class _PidLoopPanel extends StatelessWidget {
       frameKey: frameKey,
       title: title,
       en: en,
+      hue: hue,
       trailing: Text('由设备元数据提供', style: scale.label),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

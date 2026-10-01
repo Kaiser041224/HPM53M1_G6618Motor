@@ -178,6 +178,7 @@ class _StartAdjustZoneState extends State<StartAdjustZone> {
           frameKey: const Key('quick_control_frame'),
           title: '启动 / 调整',
           en: 'Quick Control',
+          hue: TitleHue.cyan,
           trailing: Text(
             '协议 v1.1 / v1.2',
             key: const Key('ctrl_mode_v11_note'),

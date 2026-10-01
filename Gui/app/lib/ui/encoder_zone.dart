@@ -86,6 +86,7 @@ class EncoderZone extends StatelessWidget {
         SectionTitle(
           title: '编码器',
           en: 'ENCODERS',
+          hue: TitleHue.green,
           trailing: Text('KTH7823 ×2 · 转子 / 出轴', style: scale.label),
         ),
         const SizedBox(height: 14),

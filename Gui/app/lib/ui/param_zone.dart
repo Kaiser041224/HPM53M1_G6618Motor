@@ -66,6 +66,7 @@ class _ParamZoneState extends State<ParamZone> {
     return SectionTitle(
       title: '参数',
       en: 'Parameters · 元数据驱动',
+      hue: TitleHue.violet,
       trailing: Text(
         '${state.metas.length} 项 · ${state.dirty.length} 项待落盘',
         style: scale.label,

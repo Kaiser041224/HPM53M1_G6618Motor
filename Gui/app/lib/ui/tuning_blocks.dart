@@ -41,6 +41,7 @@ class ProtectionLimitsPanel extends StatelessWidget {
       frameKey: const Key('protection_limits_frame'),
       title: '保护门限',
       en: 'Protection',
+      hue: TitleHue.violet,
       trailing: Text(
         'SAFETY · 改动即影响保护动作',
         style: scale.label.copyWith(color: palette.stWarn),
@@ -91,6 +92,7 @@ class CurrentLoopPanel extends StatelessWidget {
       frameKey: const Key('current_loop_frame'),
       title: '电流环 PI',
       en: 'Current Loop',
+      hue: TitleHue.violet,
       trailing: Text(
         '目标带宽 1 kHz',
         style: scale.label.copyWith(color: palette.valuePurple),

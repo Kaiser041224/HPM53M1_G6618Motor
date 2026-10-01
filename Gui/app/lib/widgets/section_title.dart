@@ -4,17 +4,67 @@ import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
 import 'hairline_frame.dart';
 
-/// v5 unified title-bar gradient: violet → magenta → transparent, left to
-/// right. The exact stop sequence is taken from the approved sample
-/// `Gui/ref/design-system/previews/gui-style-sample.html` (`.panel-title`,
-/// `.mini-title`): `rgba(138,77,255,.38)` → `rgba(224,64,200,.12)` →
-/// `transparent`.
+/// Title-bar hue families (v6).
+///
+/// Every title keeps the same gradient *structure* — hue @38% → hue @12% →
+/// transparent, left to right — but may pick a hue so adjacent headings read as
+/// a sequence instead of one monochrome wall. The hue only reinforces the
+/// title text, which is always present, so colour never carries meaning alone
+/// (design-system §6 rule 1).
+enum TitleHue {
+  /// Violet — the approved sample family (default).
+  violet,
+
+  /// Magenta.
+  magenta,
+
+  /// Green.
+  green,
+
+  /// Amber.
+  amber,
+
+  /// Cyan.
+  cyan,
+}
+
+/// Resolves the palette colour behind [hue].
+Color titleHueColor(GuiPalette palette, TitleHue hue) => switch (hue) {
+  TitleHue.violet => palette.valuePurple,
+  TitleHue.magenta => palette.valueMagenta,
+  TitleHue.green => palette.valueGreen,
+  TitleHue.amber => palette.valueAmber,
+  TitleHue.cyan => palette.accent,
+};
+
+/// Default title hue — violet, the family of the approved sample.
+const TitleHue kDefaultTitleHue = TitleHue.violet;
+
+/// Builds the v6 gradient for [hue] from [palette]: the hue at 38%, the hue at
+/// 12%, then fully transparent — the same three-stop structure as the original
+/// violet sample, only parameterised by hue.
+LinearGradient titleGradientFor(GuiPalette palette, TitleHue hue) {
+  final Color c = titleHueColor(palette, hue);
+  return LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: <Color>[
+      c.withValues(alpha: 0.38),
+      c.withValues(alpha: 0.12),
+      c.withValues(alpha: 0.0),
+    ],
+    stops: const <double>[0.0, 0.5, 1.0],
+  );
+}
+
+/// The default ([TitleHue.violet]) gradient as an ARGB constant, kept for
+/// callers / tests that predate the hue parameter.
 const LinearGradient kTitleGradient = LinearGradient(
   begin: Alignment.centerLeft,
   end: Alignment.centerRight,
   colors: <Color>[
     Color(0x618A4DFF),
-    Color(0x1FE040C8),
+    Color(0x1F8A4DFF),
     Color(0x008A4DFF),
   ],
   stops: <double>[0.0, 0.5, 1.0],
@@ -36,10 +86,17 @@ TextStyle guiTitleStyle(TextStyle base) => base.copyWith(shadows: kTitleGlow);
 /// group line. Centralising the chrome here keeps every title on the page
 /// identical — titles only differ in their type tier.
 class GuiTitleFrame extends StatelessWidget {
-  const GuiTitleFrame({super.key, required this.child});
+  const GuiTitleFrame({
+    super.key,
+    required this.child,
+    this.hue = kDefaultTitleHue,
+  });
 
   /// The title row (title text + optional English caption / trailing widget).
   final Widget child;
+
+  /// Gradient hue family (v6). Defaults to violet.
+  final TitleHue hue;
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +108,7 @@ class GuiTitleFrame extends StatelessWidget {
         Container(
           key: const Key('gui_title_bar'),
           decoration: BoxDecoration(
-            gradient: kTitleGradient,
+            gradient: titleGradientFor(palette, hue),
             // 与内容外框同色系的青色锐利边框（accent，与 HairlineFrame 同档 1.5px），
             // 包住整条渐变标题条 —— 全页标题风格统一。
             border: Border.all(
@@ -85,6 +142,7 @@ class SectionTitle extends StatelessWidget {
     required this.title,
     this.en,
     this.trailing,
+    this.hue = kDefaultTitleHue,
   });
 
   /// Primary (usually Chinese) title, rendered big and white-cyan.
@@ -96,10 +154,14 @@ class SectionTitle extends StatelessWidget {
   /// Optional trailing content, right-aligned.
   final Widget? trailing;
 
+  /// Gradient hue family (v6).
+  final TitleHue hue;
+
   @override
   Widget build(BuildContext context) {
     final scale = GuiTypeScale.of(context);
     return GuiTitleFrame(
+      hue: hue,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,

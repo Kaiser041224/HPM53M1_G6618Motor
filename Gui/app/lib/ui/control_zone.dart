@@ -77,6 +77,7 @@ class ControlZone extends StatelessWidget {
           SectionTitle(
             title: '故障',
             en: 'Fault',
+            hue: TitleHue.magenta,
             trailing: Text('故障构成 · 清除锁存', style: scale.label),
           ),
           const SizedBox(height: 14),
@@ -86,6 +87,7 @@ class ControlZone extends StatelessWidget {
             // latched bit is never captioned `CURRENT`.
             title: '故障构成与指令',
             en: state.latchedFlags != 0 ? 'LATCHED' : 'CURRENT',
+            hue: TitleHue.violet,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[

@@ -201,32 +201,43 @@ void main() {
   });
 
   group('E. 全库无 Material 默认下划 / 琥珀残留', () {
-    test('lib/**/*.dart 不含 TextDecoration.underline / UnderlineInputBorder / Colors.amber', () {
-      final files = Directory('lib')
-          .listSync(recursive: true)
-          .whereType<File>()
-          .where((f) => f.path.endsWith('.dart'))
-          .toList();
-      expect(files, isNotEmpty);
+    test(
+      'lib/**/*.dart 不含 TextDecoration.underline / UnderlineInputBorder / Colors.amber',
+      () {
+        final files = Directory('lib')
+            .listSync(recursive: true)
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.dart'))
+            .toList();
+        expect(files, isNotEmpty);
 
-      for (final file in files) {
-        final src = file.readAsStringSync();
-        expect(
-          src.contains('TextDecoration'),
-          isFalse,
-          reason: '${file.path} 不得出现 TextDecoration（下划强调须为 Container 线）',
-        );
-        expect(
-          src.contains('UnderlineInputBorder'),
-          isFalse,
-          reason: '${file.path} 不得出现 Material 下划线输入框',
-        );
-        expect(
-          src.contains('Colors.amber') || src.contains('amberAccent'),
-          isFalse,
-          reason: '${file.path} 不得出现 Material 琥珀默认色',
-        );
-      }
-    });
+        for (final file in files) {
+          final src = file.readAsStringSync();
+          // 只允许显式的 `TextDecoration.none`（弹窗防御），任何真正的
+          // 下划线 / 删除线 / 上划线强调都必须以 Container 线实现。
+          for (final banned in <String>[
+            'TextDecoration.underline',
+            'TextDecoration.lineThrough',
+            'TextDecoration.overline',
+          ]) {
+            expect(
+              src.contains(banned),
+              isFalse,
+              reason: '${file.path} 不得出现 $banned（下划强调须为 Container 线）',
+            );
+          }
+          expect(
+            src.contains('UnderlineInputBorder'),
+            isFalse,
+            reason: '${file.path} 不得出现 Material 下划线输入框',
+          );
+          expect(
+            src.contains('Colors.amber') || src.contains('amberAccent'),
+            isFalse,
+            reason: '${file.path} 不得出现 Material 琥珀默认色',
+          );
+        }
+      },
+    );
   });
 }
