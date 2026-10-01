@@ -145,6 +145,23 @@ class MotorDriveZone extends StatelessWidget {
   /// 本表写入范围（`writeStaged(only:)` 的名单）。
   static final Set<String> configWriteNames = configParamNames.toSet();
 
+  /// 派生参数：由其它参数计算得出（YAML 引号表达式），设备参数表不含独立条目，
+  /// 故不进入「恢复出厂」名单——其数值随来源参数一并恢复。若把它们下发，设备会
+  /// 以 `BAD_PARAM (0x02)` 整体拒绝（sim 与真实元数据生成器的已知差异）。
+  static const Set<String> configDerivedNames = <String>{
+    'hardware.current_sense.a_per_volt',
+    'hardware.vbus_sense.v_per_volt',
+    'motor.encoder.rotor_ratio',
+    'motor.encoder.output_ratio',
+  };
+
+  /// 「恢复出厂」名单：本表**非派生**参数（设备侧均可识别）。名单编码后超过单帧
+  /// `MP_MAX_PAYLOAD (512)`，由 bridge 的 `param_reset_factory` 自动分片下发。
+  static final List<String> configResetNames = <String>[
+    for (final name in configParamNames)
+      if (!configDerivedNames.contains(name)) name,
+  ];
+
   /// 暂存改动 → 确认丢弃 → 重读全部设备参数（table 侧基线刷新）。
   Future<void> _onRead(BuildContext context) async {
     if (state.staged.isNotEmpty) {
@@ -215,7 +232,7 @@ class MotorDriveZone extends StatelessWidget {
     );
     if (confirmed != true || !context.mounted) return;
     final overlay = Overlay.maybeOf(context);
-    final ok = await state.resetFactory(configParamNames);
+    final ok = await state.resetFactory(configResetNames);
     if (overlay == null) return;
     showGuiToastIn(
       overlay,

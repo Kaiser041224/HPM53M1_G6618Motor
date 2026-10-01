@@ -280,26 +280,62 @@ pub async fn param_commit() -> Result<(), FrbError> {
     .await?
 }
 
+/// 将已编码名字按 `MP_MAX_PAYLOAD (512)` 上限切分成分片请求体。
+///
+/// 每片形如 `count u8 | [name_len u8 | name]×count`，且长度不超过上限；
+/// 名字总数不受单帧 `count` 限制（超过 255 时另起一片）。空输入返回空表。
+fn pack_reset_payloads(encoded: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    const MAX: usize = gui_core::proto::MAX_PAYLOAD;
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let mut entries: Vec<u8> = Vec::new();
+    let mut count: u8 = 0;
+    for entry in encoded {
+        let full = !entries.is_empty() && 1 + entries.len() + entry.len() > MAX;
+        if full || count == u8::MAX {
+            let mut payload = Vec::with_capacity(1 + entries.len());
+            payload.push(count);
+            payload.extend_from_slice(&entries);
+            out.push(payload);
+            entries.clear();
+            count = 0;
+        }
+        entries.extend_from_slice(entry);
+        count += 1;
+    }
+    if count > 0 {
+        let mut payload = Vec::with_capacity(1 + entries.len());
+        payload.push(count);
+        payload.extend_from_slice(&entries);
+        out.push(payload);
+    }
+    out
+}
+
 /// v1.3：把指定参数恢复为出厂默认值（独立命令字 `PARAM_RESET`）。
 /// 空 `names` = 全部参数恢复出厂（`count=0`）。
 /// 运行中或故障锁存 → `LOCKED (0x04)`；名单含未知名 → `BAD_PARAM (0x02)`。
+///
+/// 单帧请求体上限为 `MP_MAX_PAYLOAD (512)`；名单整体超出时**自动按帧分片**逐条下发，
+/// 避免旧的「整份编码 → BadPayload → 0x1FF」缺陷。名字编码失败（>255 字节）仍属
+/// 内部错误，返回 `0x1FF`。
 pub async fn param_reset_factory(names: Vec<String>) -> Result<(), FrbError> {
     on_tokio(async move {
-        if names.len() > u8::MAX as usize {
-            return Err(FrbError {
-                code: 0x1FF,
-                message: "too many names".into(),
-            });
-        }
-        let mut payload = vec![names.len() as u8];
+        // 先整体编码：名字超过 255 字节属主机侧编码错误，发送前即拒绝（0x1FF）。
+        let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(names.len());
         for name in &names {
-            let encoded = encode_name(name).map_err(|_| FrbError {
+            encoded.push(encode_name(name).map_err(|_| FrbError {
                 code: 0x1FF,
                 message: "name too long".into(),
-            })?;
-            payload.extend_from_slice(&encoded);
+            })?);
         }
-        request(cmd::PARAM_RESET, payload, RequestKind::Write).await?;
+        // 空名单 = 全部参数恢复出厂（空 payload 与 count=0 等价）。
+        if encoded.is_empty() {
+            request(cmd::PARAM_RESET, vec![0], RequestKind::Write).await?;
+            return Ok(());
+        }
+        for payload in pack_reset_payloads(&encoded) {
+            request(cmd::PARAM_RESET, payload, RequestKind::Write).await?;
+        }
         Ok(())
     })
     .await?
@@ -532,5 +568,66 @@ mod tests {
         let err = parse_proto_info_body(&body).unwrap_err();
         assert_eq!(err.code, 0x1FF);
         assert_eq!(err.message, "short PROTO_INFO name");
+    }
+
+    /// 驱动页「恢复出厂」名单（与 `motor_drive_zone.dart::configResetNames` 对齐）。
+    const DRIVER_PAGE_RESET: &[&str] = &[
+        "hardware.inverter.pwm_freq_hz",
+        "hardware.inverter.deadtime_ns",
+        "hardware.adc.sample_cycle",
+        "hardware.adc.trigger_delay_ns",
+        "motor.pole_pairs",
+        "motor.rs_ohm",
+        "motor.ls_h",
+        "motor.ke_vs_per_rad",
+        "motor.kt_nm_per_a",
+        "motor.i_rated_a",
+        "motor.rpm_max",
+        "hardware.current_sense.shunt_ohm",
+        "hardware.current_sense.amp_gain",
+        "hardware.current_sense.bias_v",
+        "hardware.vbus_sense.divider_high_ohm",
+        "hardware.vbus_sense.divider_low_ohm",
+        "motor.encoder.resolution_bits",
+        "motor.encoder.rotor_ring_teeth",
+        "motor.encoder.rotor_pinion_teeth",
+        "motor.encoder.output_pinion_teeth",
+    ];
+
+    #[test]
+    fn pack_reset_payloads_keeps_small_list_in_one_frame() {
+        let encoded = vec![encode_name("motor.pole_pairs").unwrap()];
+        let packs = pack_reset_payloads(&encoded);
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0][0], 1);
+    }
+
+    #[test]
+    fn pack_reset_payloads_splits_driver_page_list_within_limit() {
+        let encoded: Vec<Vec<u8>> =
+            DRIVER_PAGE_RESET.iter().map(|n| encode_name(n).unwrap()).collect();
+        let packs = pack_reset_payloads(&encoded);
+        assert!(packs.len() >= 2, "驱动页名单编码后 >512B，须分片：{}", packs.len());
+        let mut seen: Vec<String> = Vec::new();
+        for p in &packs {
+            assert!(p.len() <= gui_core::proto::MAX_PAYLOAD, "分片超限：{}", p.len());
+            let count = p[0] as usize;
+            let mut pos = 1;
+            for _ in 0..count {
+                seen.push(gui_core::params::decode_name(p, &mut pos).unwrap());
+            }
+            assert_eq!(pos, p.len(), "分片应恰好消费完");
+        }
+        assert_eq!(seen, DRIVER_PAGE_RESET.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn pack_reset_payloads_caps_count_at_u8_max() {
+        let encoded = vec![encode_name("").unwrap(); 300];
+        let packs = pack_reset_payloads(&encoded);
+        assert_eq!(packs.len(), 2);
+        assert_eq!(packs[0][0], 255);
+        assert_eq!(packs[1][0], 45);
+        assert!(packs.iter().all(|p| p.len() <= gui_core::proto::MAX_PAYLOAD));
     }
 }

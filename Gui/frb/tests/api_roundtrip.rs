@@ -90,11 +90,67 @@ fn api_roundtrip_against_sim() {
         gui_frb::api::param_write(VBUS.into(), 0, 55.0f32.to_bits()).await.unwrap();
         gui_frb::api::param_reset_factory(vec![]).await.unwrap();
         assert_eq!(gui_frb::api::param_read(VBUS.into()).await.unwrap().raw, 36.0f32.to_bits());
-        // 未知名 → BAD_PARAM(2)；运行中 → LOCKED(4)
-        assert_eq!(gui_frb::api::param_reset_factory(vec!["nope.none".into()]).await.unwrap_err().code, 2);
+        // ② 名单含未知名 → BAD_PARAM(2)，且同帧整体拒绝（不部分恢复）。
+        gui_frb::api::param_write("motor.pole_pairs".into(), 1, 20).await.unwrap();
+        assert_eq!(
+            gui_frb::api::param_reset_factory(vec![
+                "motor.pole_pairs".into(),
+                "nope.none".into()
+            ])
+            .await
+            .unwrap_err()
+            .code,
+            2
+        );
+        assert_eq!(
+            gui_frb::api::param_read("motor.pole_pairs".into()).await.unwrap().raw,
+            20,
+            "含未知名应整体拒绝，不得部分恢复"
+        );
+        // ③ 运行中 → LOCKED(4)。
         gui_frb::api::ctrl_start().await.unwrap();
-        assert_eq!(gui_frb::api::param_reset_factory(vec![]).await.unwrap_err().code, 4);
+        assert_eq!(
+            gui_frb::api::param_reset_factory(vec!["motor.pole_pairs".into()])
+                .await
+                .unwrap_err()
+                .code,
+            4
+        );
         gui_frb::api::ctrl_stop().await.unwrap();
+
+        // v1.3 回归（驱动页「恢复出厂」）：按本表**非派生**名单恢复（20 名，编码后
+        // 载荷 > MP_MAX_PAYLOAD=512，旧实现直接 0x1FF）。名单须与
+        // Gui/app/lib/ui/motor_drive_zone.dart 的 configResetNames 保持一致；派生项
+        // （a_per_volt / v_per_volt / rotor_ratio / output_ratio）不在设备参数表中，
+        // 随其来源参数一并恢复，不单独下发。
+        const DRIVER_PAGE_RESET: &[&str] = &[
+            "hardware.inverter.pwm_freq_hz",
+            "hardware.inverter.deadtime_ns",
+            "hardware.adc.sample_cycle",
+            "hardware.adc.trigger_delay_ns",
+            "motor.pole_pairs",
+            "motor.rs_ohm",
+            "motor.ls_h",
+            "motor.ke_vs_per_rad",
+            "motor.kt_nm_per_a",
+            "motor.i_rated_a",
+            "motor.rpm_max",
+            "hardware.current_sense.shunt_ohm",
+            "hardware.current_sense.amp_gain",
+            "hardware.current_sense.bias_v",
+            "hardware.vbus_sense.divider_high_ohm",
+            "hardware.vbus_sense.divider_low_ohm",
+            "motor.encoder.resolution_bits",
+            "motor.encoder.rotor_ring_teeth",
+            "motor.encoder.rotor_pinion_teeth",
+            "motor.encoder.output_pinion_teeth",
+        ];
+        // 改动一个名单内参数，恢复后应回到出厂值（10）。
+        gui_frb::api::param_write("motor.pole_pairs".into(), 1, 20).await.unwrap();
+        gui_frb::api::param_reset_factory(DRIVER_PAGE_RESET.iter().map(|s| s.to_string()).collect())
+            .await
+            .unwrap();
+        assert_eq!(gui_frb::api::param_read("motor.pole_pairs".into()).await.unwrap().raw, 10);
 
         gui_frb::api::disconnect().await.unwrap();
         assert!(!gui_frb::api::is_connected());

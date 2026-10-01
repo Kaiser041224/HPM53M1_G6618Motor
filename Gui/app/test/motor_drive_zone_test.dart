@@ -231,7 +231,13 @@ void main() {
       await tester.tap(find.text('确认恢复'));
       await tester.pumpAndSettle();
 
-      expect(resets.single, MotorDriveZone.configParamNames);
+      expect(resets.single, MotorDriveZone.configResetNames);
+      // 派生参数不下发（设备参数表无独立条目）；非派生项全部保留。
+      expect(
+        resets.single,
+        isNot(contains('hardware.current_sense.a_per_volt')),
+      );
+      expect(resets.single.length, MotorDriveZone.configParamNames.length - 4);
     });
   });
 }
