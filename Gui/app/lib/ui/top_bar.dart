@@ -9,7 +9,6 @@ import '../widgets/gui_text_field.dart';
 import '../widgets/hairline_frame.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
-import '../widgets/status_badge.dart';
 import '../widgets/window_caption.dart';
 import 'label_style.dart';
 import 'toast_overlay.dart';
@@ -22,10 +21,17 @@ String formatUptime(Duration d) {
 
 /// Persistent top bar for the single-page layout (design-system §4.2/§4.3).
 ///
-/// Left: the connection tab, which expands a detail panel below the whole bar
-/// (never over the device identity). Middle: the device identity read from the
-/// `PROTO_INFO` handshake, or the `DEVICE ID PENDING` placeholder. Right: the
-/// poll/uptime/SEQ/frame telemetry, then the window caption cluster.
+/// The bar carries three resident zones and nothing collapses:
+///
+/// - **left** — the connection block: a compact transport segment (TCP live,
+///   USB / UART disabled pending M2), the address field and the connect /
+///   disconnect actions ([GuiButton] vocabulary);
+/// - **middle** — the device identity read from the `PROTO_INFO` handshake:
+///   the block art plus a two-column key:value grid (model / MCU / PROTO / FW /
+///   CAPABILITIES). The handshake and link-quality detail lives on the bottom
+///   bar, so the bar never grows a second section row;
+/// - **right** — the poll / uptime / SEQ / frames telemetry, then the window
+///   caption cluster.
 ///
 /// The middle identity area doubles as the custom title bar: dragging it moves
 /// the window and double-clicking it toggles maximize (native chrome is hidden
@@ -56,6 +62,13 @@ class TopBar extends StatefulWidget {
   /// Overrides blank-area dragging; defaults to `windowManager.startDragging()`.
   final VoidCallback? onDragStart;
 
+  /// Width [logical px] at or above which all three zones share one row.
+  ///
+  /// Below it the connection block drops to its own line (the identity /
+  /// telemetry / caption row stays first), so the bar still fits from the
+  /// 1024px window minimum up.
+  static const double wideBreakpoint = 1800;
+
   @override
   State<TopBar> createState() => _TopBarState();
 }
@@ -64,10 +77,8 @@ class _TopBarState extends State<TopBar> with WindowListener {
   final TextEditingController _addrCtrl = TextEditingController(
     text: '127.0.0.1:9000',
   );
-  bool _expanded = false;
   bool _busy = false;
   bool _maximized = false;
-  bool _connectTabHovered = false;
 
   @override
   void initState() {
@@ -180,16 +191,11 @@ class _TopBarState extends State<TopBar> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
-    // v3 fills the screen with bright hairline panels: the whole top bar is one
-    // `HairlineFrame(main)` (bright cyan 1.5px) instead of a bare strip.
     return HairlineFrame(
       child: Container(
         color: palette.bgPanel,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[_bar(context), if (_expanded) _panel(context)],
-        ),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: _bar(context),
       ),
     );
   }
@@ -197,45 +203,58 @@ class _TopBarState extends State<TopBar> with WindowListener {
   // ── top bar ─────────────────────────────────────────────────────────────
 
   Widget _bar(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      decoration: BoxDecoration(
-        // The surrounding frame already draws the bright outer edge; only add
-        // an inner seam when the details panel is expanded below the bar.
-        border: _expanded
-            ? Border(
-                bottom: BorderSide(
-                  color: palette.line,
-                  width: palette.lineWidth,
-                ),
-              )
-            : null,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          _connectTab(context),
-          const SizedBox(width: 20),
-          Expanded(child: _dragRegion(_identity(context))),
-          const SizedBox(width: 20),
-          _telemetry(context),
-          const SizedBox(width: 12),
-          WindowCaptionBar(
-            maximized: _maximized,
-            onMinimize: _minimize,
-            onToggleMaximize: _toggleMaximize,
-            onClose: _close,
-          ),
-        ],
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final connection = _connectionBlock(context);
+        final identity = _dragRegion(_deviceInfo(context));
+        final telemetry = _telemetry(context);
+        final caption = WindowCaptionBar(
+          maximized: _maximized,
+          onMinimize: _minimize,
+          onToggleMaximize: _toggleMaximize,
+          onClose: _close,
+        );
+
+        if (constraints.maxWidth >= TopBar.wideBreakpoint) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              connection,
+              const SizedBox(width: 20),
+              Expanded(child: identity),
+              const SizedBox(width: 16),
+              telemetry,
+              const SizedBox(width: 12),
+              caption,
+            ],
+          );
+        }
+        // Narrow: identity / telemetry / caption first, the connection block
+        // wraps onto its own line so nothing is ever clipped.
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Expanded(child: identity),
+                const SizedBox(width: 16),
+                telemetry,
+                const SizedBox(width: 12),
+                caption,
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(alignment: Alignment.centerLeft, child: connection),
+          ],
+        );
+      },
     );
   }
 
   /// The blank middle of the bar acts as the custom title bar: drag to move the
-  /// window, double-click to toggle maximize (design-system §4.2 keeps the
-  /// connect tab at the far left and the identity beside it; the empty space
-  /// around the identity is the only free area).
+  /// window, double-click to toggle maximize (design-system §4.2).
   Widget _dragRegion(Widget child) {
     return GestureDetector(
       key: const Key('top_bar_drag_region'),
@@ -246,137 +265,231 @@ class _TopBarState extends State<TopBar> with WindowListener {
     );
   }
 
-  Widget _connectTab(BuildContext context) {
+  // ── left: connection block ───────────────────────────────────────────────
+
+  Widget _connectionBlock(BuildContext context) {
     final s = widget.state;
-    final palette = GuiPalette.of(context);
-    final highlighted = _expanded || _connectTabHovered;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _connectTabHovered = true),
-      onExit: (_) => setState(() => _connectTabHovered = false),
-      child: InkWell(
-        key: const Key('top_bar_connect_tab'),
-        onTap: () => setState(() => _expanded = !_expanded),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            // v3 button vocabulary: idle hairline, bright cyan on hover/expand
-            // with one very faint same-hue glow.
-            border: Border.all(
-              color: highlighted ? palette.lineHi : palette.line,
-              width: palette.lineWidth,
-            ),
-            boxShadow: highlighted
-                ? <BoxShadow>[
-                    BoxShadow(
-                      color: palette.glowSoft,
-                      blurRadius: GuiGlowStyles.softBlur,
-                    ),
-                  ]
-                : const <BoxShadow>[],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Text(
-                _expanded ? '▾' : '▸',
-                style: GuiTypeScale.of(context).label,
-              ),
-              const SizedBox(width: 6),
-              StatusBadge(
-                state: s.connected ? ItemState.normal : ItemState.stale,
-                label: s.connected ? '连接 · TCP' : '连接 · 未建立',
-              ),
-            ],
+    return Wrap(
+      key: const Key('top_bar_connection_block'),
+      spacing: 12,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        _linkSegment(context),
+        SizedBox(
+          width: 160,
+          child: GuiTextField(
+            controller: _addrCtrl,
+            hintText: '127.0.0.1:9000',
           ),
         ),
+        GuiButton(
+          label: '连接',
+          variant: GuiButtonVariant.primary,
+          icon: Icons.link,
+          onPressed: _busy ? null : _doConnect,
+        ),
+        GuiButton(
+          label: '断开',
+          icon: Icons.link_off,
+          onPressed: (_busy || !s.connected) ? null : _doDisconnect,
+        ),
+      ],
+    );
+  }
+
+  /// Compact transport segment. TCP is the live link; USB / UART are disabled
+  /// placeholders tagged `M2` rather than silently offering dead controls.
+  Widget _linkSegment(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: const <Widget>[
+        GuiButton(
+          key: Key('top_bar_link_tcp'),
+          label: 'TCP',
+          variant: GuiButtonVariant.primary,
+          onPressed: _noop,
+        ),
+        SizedBox(width: 6),
+        GuiButton(
+          key: Key('top_bar_link_usb'),
+          label: 'USB M2',
+          onPressed: null,
+        ),
+        SizedBox(width: 6),
+        GuiButton(
+          key: Key('top_bar_link_uart'),
+          label: 'UART M2',
+          onPressed: null,
+        ),
+      ],
+    );
+  }
+
+  // ── middle: device identity ─────────────────────────────────────────────
+
+  Widget _deviceInfo(BuildContext context) {
+    final s = widget.state;
+    final connected = s.connected && s.deviceName.isNotEmpty;
+    // Scale down rather than overflow when the bar is narrower than the art
+    // plus the info grid (the shell window minimum is 1024, but the app also
+    // degrades gracefully on smaller test surfaces).
+    return FittedBox(
+      key: const Key('top_bar_device_info'),
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          DeviceAscii(connected: connected),
+          const SizedBox(width: 16),
+          _infoGrid(context, connected),
+        ],
       ),
     );
   }
 
-  Widget _identity(BuildContext context) {
+  /// Two-column key:value grid under the art. Labels stay [GuiPalette.fgDim],
+  /// values [GuiPalette.fgStrong]. `FW` is honestly `—`: the protocol does not
+  /// carry a firmware version.
+  Widget _infoGrid(BuildContext context, bool connected) {
     final s = widget.state;
-    final palette = GuiPalette.of(context);
-    final scale = GuiTypeScale.of(context);
-    final connected = s.connected && s.deviceName.isNotEmpty;
-    if (!connected) {
-      return Row(
-        children: <Widget>[
-          const DeviceAscii(connected: false),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Text(
-              '设备型号由 PROTO_INFO 握手取得，连接前不作假定；展开左侧选项卡可选链路与地址。',
-              style: scale.body.copyWith(color: palette.fgMute),
+    final proto = connected ? 'v${s.protoMajor}.${s.protoMinor}' : '—';
+    final caps = connected
+        ? '0x${s.capabilities.toRadixString(16).padLeft(2, '0')}'
+        : '—';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _modelEntry(context, connected ? s.deviceName : '—'),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 20,
+          runSpacing: 4,
+          children: <Widget>[
+            _infoEntry(
+              context,
+              'MCU',
+              'HPM53M1',
+              valueKey: const Key('top_bar_mcu_value'),
             ),
-          ),
-        ],
-      );
-    }
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerLeft,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const DeviceAscii(connected: true),
-          const SizedBox(width: 24),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                s.deviceName,
-                // 设备名可能含中文 —— 落在像素网格上（12），不压到 14。
-                style: scale.sectionTitle,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'MCU HPM53M1 · PROTO v${s.protoMajor}.${s.protoMinor}',
-                style: scale.label.copyWith(color: palette.fgDim),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'FW — · SERIAL 未提供',
-                style: scale.label.copyWith(color: palette.fgMute),
-              ),
-            ],
-          ),
-        ],
-      ),
+            _infoEntry(
+              context,
+              'PROTO',
+              proto,
+              valueKey: const Key('top_bar_proto_value'),
+            ),
+            _infoEntry(
+              context,
+              'FW',
+              '—',
+              valueKey: const Key('top_bar_fw_value'),
+            ),
+            _infoEntry(
+              context,
+              'CAP',
+              caps,
+              valueKey: const Key('top_bar_cap_value'),
+            ),
+          ],
+        ),
+      ],
     );
   }
+
+  /// The model line. The value is the one free-text field (a `PROTO_INFO`
+  /// name); the enclosing [FittedBox] keeps an over-long name from forcing the
+  /// bar to overflow.
+  Widget _modelEntry(BuildContext context, String value) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: <Widget>[
+        Text('MODEL', style: scale.label.copyWith(color: palette.fgDim)),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          key: const Key('top_bar_model_value'),
+          style: scale.sectionTitle.copyWith(color: palette.fgStrong),
+        ),
+      ],
+    );
+  }
+
+  Widget _infoEntry(
+    BuildContext context,
+    String label,
+    String value, {
+    required Key valueKey,
+  }) {
+    final palette = GuiPalette.of(context);
+    final scale = GuiTypeScale.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: <Widget>[
+        Text(label, style: scale.label.copyWith(color: palette.fgDim)),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          key: valueKey,
+          style: scale.label.copyWith(color: palette.fgStrong),
+        ),
+      ],
+    );
+  }
+
+  // ── right: telemetry ─────────────────────────────────────────────────────
 
   Widget _telemetry(BuildContext context) {
     final s = widget.state;
     final connected = s.connected;
+    // Compact 2x2 readout grid: four rows would make the resident bar needlessly
+    // tall next to the block art.
     return Column(
+      key: const Key('top_bar_telemetry'),
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: <Widget>[
-        _telemetryRow(
-          context,
-          'POLL',
-          connected ? '500 ms' : null,
-          const Key('top_bar_poll_value'),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            _telemetryRow(
+              context,
+              'POLL',
+              connected ? '500 ms' : null,
+              const Key('top_bar_poll_value'),
+            ),
+            const SizedBox(width: 18),
+            _telemetryRow(
+              context,
+              'UPTIME',
+              connected && s.sessionUptime != null
+                  ? formatUptime(s.sessionUptime!)
+                  : null,
+              const Key('top_bar_uptime_value'),
+            ),
+          ],
         ),
         const SizedBox(height: 4),
-        _telemetryRow(
-          context,
-          'UPTIME',
-          connected && s.sessionUptime != null
-              ? formatUptime(s.sessionUptime!)
-              : null,
-          const Key('top_bar_uptime_value'),
-        ),
-        const SizedBox(height: 4),
-        _telemetryRow(context, 'SEQ', null, const Key('top_bar_seq_value')),
-        const SizedBox(height: 4),
-        _telemetryRow(
-          context,
-          '帧',
-          connected ? '${s.attempts}' : null,
-          const Key('top_bar_frames_value'),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            _telemetryRow(context, 'SEQ', null, const Key('top_bar_seq_value')),
+            const SizedBox(width: 18),
+            _telemetryRow(
+              context,
+              '帧',
+              connected ? '${s.attempts}' : null,
+              const Key('top_bar_frames_value'),
+            ),
+          ],
         ),
       ],
     );
@@ -408,175 +521,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
       ],
     );
   }
-
-  // ── expanded connection panel ────────────────────────────────────────────
-
-  Widget _panel(BuildContext context) {
-    final palette = GuiPalette.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-      decoration: BoxDecoration(
-        color: palette.bgBase,
-        border: Border(
-          bottom: BorderSide(color: palette.line, width: palette.lineWidth),
-        ),
-      ),
-      child: Wrap(
-        spacing: 40,
-        runSpacing: 18,
-        crossAxisAlignment: WrapCrossAlignment.start,
-        children: <Widget>[
-          _transportSection(context),
-          _addressSection(context),
-          _handshakeSection(context),
-          _linkQualitySection(context),
-        ],
-      ),
-    );
-  }
-
-  Widget _sectionHeading(BuildContext context, String zh, String en) {
-    final scale = GuiTypeScale.of(context);
-    final palette = GuiPalette.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(zh, style: scale.body.copyWith(color: palette.fgDim)),
-        const SizedBox(height: 2),
-        Text(
-          en.toUpperCase(),
-          style: scale.label.copyWith(color: palette.accent),
-        ),
-      ],
-    );
-  }
-
-  Widget _transportSection(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        _sectionHeading(context, '链路选择', 'transport'),
-        const SizedBox(height: 10),
-        // 统一到 GuiButton 三级：TCP 为当前链路（primary），其余暂无实现（禁用）。
-        // 取代 Material SegmentedButton，避免其默认主题色渗入。
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            GuiButton(
-              label: 'TCP / 无线',
-              variant: GuiButtonVariant.primary,
-              onPressed: () {},
-            ),
-            const SizedBox(width: 8),
-            const GuiButton(label: 'USB BULK', onPressed: null),
-            const SizedBox(width: 8),
-            const GuiButton(label: 'UART · CDC', onPressed: null),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _addressSection(BuildContext context) {
-    final s = widget.state;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        _sectionHeading(context, '地址', 'address'),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            SizedBox(
-              width: 220,
-              child: GuiTextField(
-                controller: _addrCtrl,
-                labelText: '地址',
-                hintText: '127.0.0.1:9000',
-              ),
-            ),
-            const SizedBox(width: 10),
-            GuiButton(
-              label: '连接',
-              variant: GuiButtonVariant.primary,
-              icon: Icons.link,
-              onPressed: _busy ? null : _doConnect,
-            ),
-            const SizedBox(width: 8),
-            GuiButton(
-              label: '断开',
-              icon: Icons.link_off,
-              onPressed: (_busy || !s.connected) ? null : _doDisconnect,
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _handshakeSection(BuildContext context) {
-    final s = widget.state;
-    final connected = s.connected;
-    final caps = '0x${s.capabilities.toRadixString(16).padLeft(2, '0')}';
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        _sectionHeading(context, '握手与能力', 'handshake'),
-        const SizedBox(height: 10),
-        _kvRow(
-          context,
-          'PROTOCOL',
-          connected ? 'v${s.protoMajor}.${s.protoMinor}' : '—',
-        ),
-        _kvRow(context, 'CAPABILITIES', connected ? caps : '—'),
-        _kvRow(context, 'PARAM META', '${s.metas.length} 项'),
-      ],
-    );
-  }
-
-  Widget _linkQualitySection(BuildContext context) {
-    final s = widget.state;
-    final connected = s.connected;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        _sectionHeading(context, '链路质量', 'link quality'),
-        const SizedBox(height: 10),
-        _kvRow(
-          context,
-          'RTT',
-          s.rttMs == null ? '—' : '${s.rttMs!.toStringAsFixed(1)} ms',
-        ),
-        _kvRow(context, 'CRC · 丢包', connected ? '${s.crcErrors}' : '—'),
-        _kvRow(context, '重连次数', connected ? '${s.reconnects}' : '—'),
-      ],
-    );
-  }
-
-  Widget _kvRow(BuildContext context, String label, String value) {
-    final scale = GuiTypeScale.of(context);
-    final palette = GuiPalette.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          SizedBox(
-            width: 110,
-            child: Text(label, style: guiLabelStyle(palette, scale)),
-          ),
-          const SizedBox(width: 8),
-          StableDigits(
-            text: value,
-            style: GuiGlowStyles.soft(scale.data.copyWith(fontSize: 12)),
-          ),
-        ],
-      ),
-    );
-  }
 }
+
+/// Static no-op used by the currently selected transport segment.
+void _noop() {}

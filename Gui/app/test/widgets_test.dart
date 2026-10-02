@@ -163,44 +163,57 @@ void main() {
       expect(find.byType(DashedFrame), findsOneWidget);
     });
 
-    testWidgets('connected renders five rows of block art', (tester) async {
+    testWidgets('connected paints a 5 x 38 cell grid', (tester) async {
       await _pump(tester, const DeviceAscii(connected: true));
       expect(find.text('DEVICE ID PENDING'), findsNothing);
-      final rows = tester
-          .widgetList<Text>(
-            find.descendant(
-              of: find.byType(DeviceAscii),
-              matching: find.byType(Text),
-            ),
-          )
-          .where((t) => t.data?.contains('█') ?? false)
-          .toList();
-      expect(rows.length, artLines.length);
-      for (final line in artLines) {
-        expect(rows.any((t) => t.data == line), isTrue);
+      final paint = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(DeviceAscii),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final painter = paint.painter! as DeviceArtPainter;
+      expect(painter.rows.length, 5);
+      for (final row in painter.rows) {
+        expect(row.length, 38);
       }
     });
 
-    testWidgets('connected shows the model name when provided', (tester) async {
-      await _pump(
-        tester,
-        const DeviceAscii(connected: true, modelName: 'G6618 Motor Controller'),
+    testWidgets('connected grid has solid cells on every row', (tester) async {
+      await _pump(tester, const DeviceAscii(connected: true));
+      final paint = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(DeviceAscii),
+          matching: find.byType(CustomPaint),
+        ),
       );
-      expect(find.text('G6618 Motor Controller'), findsOneWidget);
+      final painter = paint.painter! as DeviceArtPainter;
+      final totals = painter.rows
+          .map((row) => row.where((c) => c != ArtCell.empty).length)
+          .toList();
+      expect(totals.length, 5);
+      expect(totals.every((n) => n > 0), isTrue);
     });
 
-    testWidgets('art rows use the five stop colors, in order', (tester) async {
+    testWidgets('art grid uses the five stop colors, in order', (tester) async {
       await _pump(tester, const DeviceAscii(connected: true));
-      for (var i = 0; i < artLines.length; i++) {
-        expect(
-          find.byWidgetPredicate(
-            (w) =>
-                w is Text &&
-                w.data == artLines[i] &&
-                w.style?.color == artColorStops[i],
-          ),
-          findsOneWidget,
-        );
+      final paint = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byType(DeviceAscii),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final painter = paint.painter! as DeviceArtPainter;
+      expect(painter.stops, artColorStops);
+    });
+
+    testWidgets('art glow keeps the ascii same-hue tiers', (tester) async {
+      final shadows = DeviceArtPainter.glowFor(artColorStops.first);
+      expect(shadows.length, greaterThan(1));
+      for (final shadow in shadows) {
+        expect(shadow.color.r, closeTo(artColorStops.first.r, 0.001));
+        expect(shadow.color.g, closeTo(artColorStops.first.g, 0.001));
+        expect(shadow.color.b, closeTo(artColorStops.first.b, 0.001));
       }
     });
   });
@@ -214,6 +227,18 @@ void main() {
       }
     });
 
+    test('cell grid is 5 rows x 38 columns with solid counts per row', () {
+      expect(artRows.length, 5);
+      final counts = <int>[];
+      for (final row in artRows) {
+        expect(row.length, 38);
+        counts.add(row.where((c) => c == ArtCell.full).length);
+      }
+      // Extracted from the firmware banner: solid `█` count per row.
+      expect(counts, <int>[25, 13, 26, 18, 25]);
+      expect(counts.every((n) => n > 0), isTrue);
+    });
+
     test('color stops follow the firmware 256-color order 45..213', () {
       expect(artColorStops, const <Color>[
         Color(0xFF00D7FF),
@@ -223,23 +248,6 @@ void main() {
         Color(0xFFFF87FF),
       ]);
     });
-  });
-
-  testWidgets('device art rows carry a same-hue glow', (tester) async {
-    await _pump(tester, const DeviceAscii(connected: true));
-    final row = tester.widget<Text>(
-      find.byWidgetPredicate(
-        (w) =>
-            w is Text &&
-            w.data == artLines.first &&
-            w.style?.color == artColorStops.first,
-      ),
-    );
-    final shadows = row.style?.shadows ?? const <Shadow>[];
-    expect(shadows, isNotEmpty);
-    for (final shadow in shadows) {
-      expect(shadow.color.r, closeTo(artColorStops.first.r, 0.001));
-    }
   });
 
   group('GlowValue 量纲 tint 透传', () {
