@@ -324,6 +324,35 @@ void main() {
       expect(find.byKey(const Key('window_caption_close')), findsOneWidget);
     });
 
+    testWidgets('窗口键紧贴顶栏右上角：无内边距 / 无间隔', (
+      WidgetTester tester,
+    ) async {
+      final state = AppState.test();
+      addTearDown(state.dispose);
+
+      await _pump(tester, state);
+
+      final barTopRight = tester.getTopRight(find.byType(TopBar));
+      final closeTopRight = tester.getTopRight(
+        find.byKey(const Key('window_caption_close')),
+      );
+      expect(
+        (barTopRight.dx - closeTopRight.dx).abs(),
+        lessThan(0.01),
+        reason: '关闭键右缘与顶栏右缘齐平（无 inset）',
+      );
+
+      final barTopLeft = tester.getTopLeft(find.byType(TopBar));
+      final minTopLeft = tester.getTopLeft(
+        find.byKey(const Key('window_caption_minimize')),
+      );
+      expect(
+        (minTopLeft.dy - barTopLeft.dy).abs(),
+        lessThan(0.01),
+        reason: '三键顶缘与顶栏顶缘齐平',
+      );
+    });
+
     testWidgets('caption buttons fire the injected callbacks', (
       WidgetTester tester,
     ) async {

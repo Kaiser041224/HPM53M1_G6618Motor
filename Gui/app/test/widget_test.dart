@@ -33,6 +33,40 @@ void main() {
     expect(app.theme?.colorScheme.brightness, Brightness.dark);
   });
 
+  testWidgets('整窗青色勾边：根容器 1.5px accent 直角外框包裹 SinglePage', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const GuiApp());
+
+    final frame = tester.widget<Container>(
+      find.byKey(const Key('window_frame')),
+    );
+    final deco = frame.decoration! as BoxDecoration;
+    const palette = GuiPalette();
+    final border = deco.border! as Border;
+    for (final side in <BorderSide>[
+      border.top,
+      border.right,
+      border.bottom,
+      border.left,
+    ]) {
+      expect(side.color, palette.accent);
+      expect(side.width, 1.5);
+    }
+    expect(deco.color, palette.bgVoid);
+    expect(deco.borderRadius, isNull, reason: '直角');
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('window_frame')),
+        matching: find.byType(SinglePage),
+      ),
+      findsOneWidget,
+    );
+  });
+
   test('AppState starts disconnected with zeroed counters', () {
     final state = AppState();
     expect(state.connected, isFalse);

@@ -18,23 +18,25 @@ enum WindowCaptionButtonKind {
   close,
 }
 
-/// Resolved visual style for a caption button in a given hover state.
+/// Resolved visual style for a caption button in a given interaction state.
+///
+/// v5 replaces the old framed button with a **solid square color block**: there
+/// is no border at all — each window key is a single flat fill (one semantic
+/// hue per key), hover brightens the fill one step and adds a very weak
+/// same-hue glow, and a press darkens it.
 @immutable
 class WindowCaptionStyle {
   const WindowCaptionStyle({
     required this.background,
-    required this.border,
     required this.color,
     required this.glowShadows,
   });
 
-  /// Button fill; a raised surface at rest, brightened on hover.
+  /// Solid block fill; the key's semantic hue, brightened on hover and
+  /// darkened while pressed. Never framed.
   final Color background;
 
-  /// 1px outline; dim at rest, brightened same-hue on hover.
-  final Color border;
-
-  /// Glyph stroke color.
+  /// Glyph stroke color, drawn on top of the block.
   final Color color;
 
   /// Same-hue glow layers drawn behind the glyph (empty at rest).
@@ -44,9 +46,10 @@ class WindowCaptionStyle {
 /// Paints a caption glyph as geometric strokes (design-system §3.1: square).
 ///
 /// The symbol is a vector path, not a font glyph, so it stays crisp at 1.5px
-/// and never depends on an icon font. Hover glow reuses the palette's
-/// same-hue glow tiers (design-system §2.4), so a red close button glows red
-/// and every other button glows cyan — status hues never cross.
+/// and never depends on an icon font. v5 draws it ~14px in a dark stroke over
+/// the key's solid color block (highest contrast on the bright cyan / violet /
+/// magenta fills). Hover glow is same-hue: a cyan block glows cyan, the violet
+/// key violet and the magenta key magenta — the fills never cross-colorize.
 class WindowCaptionGlyphPainter extends CustomPainter {
   const WindowCaptionGlyphPainter({
     required this.kind,
@@ -83,7 +86,7 @@ class WindowCaptionGlyphPainter extends CustomPainter {
     bool maximized = false,
   }) {
     final center = Offset(size.width / 2, size.height / 2);
-    const half = 5.0;
+    const half = 7.0;
     switch (kind) {
       case WindowCaptionButtonKind.minimize:
         return <Path>[
@@ -102,21 +105,21 @@ class WindowCaptionGlyphPainter extends CustomPainter {
         ];
       case WindowCaptionButtonKind.maximize:
         if (maximized) {
-          const offset = Offset(2.5, -2.5);
+          const offset = Offset(3, -3);
           final back = Rect.fromCenter(
             center: center + offset,
-            width: 8,
-            height: 8,
+            width: 11,
+            height: 11,
           );
           final front = Rect.fromCenter(
             center: center - offset,
-            width: 8,
-            height: 8,
+            width: 11,
+            height: 11,
           );
           return <Path>[Path()..addRect(back), Path()..addRect(front)];
         }
         return <Path>[
-          Path()..addRect(Rect.fromCenter(center: center, width: 10, height: 10)),
+          Path()..addRect(Rect.fromCenter(center: center, width: 14, height: 14)),
         ];
     }
   }
@@ -159,11 +162,12 @@ class WindowCaptionGlyphPainter extends CustomPainter {
 
 /// A single 44×30 square caption button.
 ///
-/// Dimension and radius come from the design-system structure tokens: square
-/// corners (§3.1) and a fixed chrome cell. Hover matches the rest of the chrome
-/// (`bgHover`); close is the one deliberate exception — its hover fill is the
-/// fault color with a fault-colored glow and a near-white glyph, so the
-/// destructive affordance reads unambiguously and its glow never turns cyan.
+/// v5 drops the framed button for a **solid square color block**, flush to the
+/// window's top-right corner: one semantic hue per key (minimize = light cyan,
+/// maximize/restore = violet, close = magenta), a ~14px dark stroke glyph, and
+/// no border at all. Hover brightens the fill one step and adds a very weak
+/// same-hue glow; pressing darkens the fill. Color + glyph + tooltip still
+/// carry the design-system §6 triple encoding.
 class WindowCaptionButton extends StatefulWidget {
   const WindowCaptionButton({
     super.key,
@@ -173,10 +177,22 @@ class WindowCaptionButton extends StatefulWidget {
     this.onPressed,
   });
 
+  /// Fixed chrome cell width [logical px]; all three keys are equal width.
+  static const double width = 44;
+
+  /// Fixed chrome cell height [logical px].
+  static const double height = 30;
+
+  /// Hover fill brightening, as a white lerp fraction.
+  static const double hoverLift = 0.18;
+
+  /// Pressed fill darkening, as a black lerp fraction.
+  static const double pressDrop = 0.22;
+
   /// Which glyph to draw.
   final WindowCaptionButtonKind kind;
 
-  /// Tooltip text; together with glyph and hover color this completes the
+  /// Tooltip text; together with glyph and color this completes the
   /// design-system §6 triple encoding (color + icon + text).
   final String tooltip;
 
@@ -186,40 +202,46 @@ class WindowCaptionButton extends StatefulWidget {
   /// Tap callback, injected so the button can be tested without a window.
   final VoidCallback? onPressed;
 
-  /// Resolves the fill, border, glyph color and glow layers for [kind] and
-  /// [hovered].
+  /// The key's solid fill hue at rest, before any hover / press adjustment.
   ///
-  /// Centralized (and public) so tests assert the hover styling directly
-  /// instead of relying on pointer hit-testing. At rest every button carries a
-  /// [GuiPalette.bgRaise] fill and a dim [GuiPalette.lineDim] outline, matching
-  /// the TNO button vocabulary; hover brightens the border same-hue (cyan for
-  /// the window keys, [GuiPalette.stFault] for close) and deepens the fill.
+  /// Sourced from the palette's semantic spectrum: minimize is a lightened
+  /// [GuiPalette.valueCyan] (the "浅青" block), maximize [GuiPalette.valuePurple]
+  /// and close [GuiPalette.valueMagenta].
+  static Color fillFor(GuiPalette palette, WindowCaptionButtonKind kind) {
+    switch (kind) {
+      case WindowCaptionButtonKind.minimize:
+        return Color.lerp(palette.valueCyan, Colors.white, 0.22)!;
+      case WindowCaptionButtonKind.maximize:
+        return palette.valuePurple;
+      case WindowCaptionButtonKind.close:
+        return palette.valueMagenta;
+    }
+  }
+
+  /// Resolves the solid fill, glyph color and glow layers for [kind] in the
+  /// given interaction state.
+  ///
+  /// Centralized (and public) so tests assert the styling directly instead of
+  /// relying on pointer hit-testing. There is deliberately **no border**: at
+  /// rest the fill is [fillFor]; [hovered] lifts it by [hoverLift] and adds one
+  /// weak same-hue glow layer; [pressed] drops it by [pressDrop]. The glyph is
+  /// always a dark [GuiPalette.bgVoid] stroke for contrast on the bright block.
   static WindowCaptionStyle styleFor(
     GuiPalette palette,
     WindowCaptionButtonKind kind, {
     required bool hovered,
+    bool pressed = false,
   }) {
-    final isClose = kind == WindowCaptionButtonKind.close;
-    final background = hovered
-        ? (isClose ? palette.stFault : palette.bgHover)
-        : palette.bgRaise;
-    final border = hovered
-        ? (isClose ? palette.stFault : palette.accent)
-        : palette.lineDim;
-    final color = (hovered && isClose) ? palette.fgStrong : palette.fg;
-    final List<Shadow> glowShadows;
-    if (!hovered) {
-      glowShadows = const <Shadow>[];
-    } else if (isClose) {
-      glowShadows =
-          GuiGlowStyles.status(palette.stFault, const TextStyle()).shadows!;
-    } else {
-      glowShadows = GuiGlowStyles.softWith(palette, const TextStyle()).shadows!;
-    }
+    final base = fillFor(palette, kind);
+    final background = pressed
+        ? Color.lerp(base, Colors.black, pressDrop)!
+        : (hovered ? Color.lerp(base, Colors.white, hoverLift)! : base);
+    final glowShadows = (hovered && !pressed)
+        ? GuiGlowStyles.status(base, const TextStyle()).shadows!
+        : const <Shadow>[];
     return WindowCaptionStyle(
       background: background,
-      border: border,
-      color: color,
+      color: palette.bgVoid,
       glowShadows: glowShadows,
     );
   }
@@ -230,6 +252,7 @@ class WindowCaptionButton extends StatefulWidget {
 
 class _WindowCaptionButtonState extends State<WindowCaptionButton> {
   bool _hovered = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -238,6 +261,7 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
       palette,
       widget.kind,
       hovered: _hovered,
+      pressed: _pressed,
     );
     return Tooltip(
       message: widget.tooltip,
@@ -245,27 +269,29 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
         cursor: SystemMouseCursors.basic,
         onEnter: (_) => setState(() => _hovered = true),
         onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onPressed,
-          child: SizedBox(
-            width: 44,
-            height: 30,
-            child: Container(
-              key: Key('window_caption_surface_${widget.kind.name}'),
-              decoration: BoxDecoration(
-                color: style.background,
-                border: Border.all(
-                  color: style.border,
-                  width: palette.lineWidth,
-                ),
-              ),
-              child: CustomPaint(
-                painter: WindowCaptionGlyphPainter(
-                  kind: widget.kind,
-                  color: style.color,
-                  glowShadows: style.glowShadows,
-                  maximized: widget.maximized,
+        // Press feedback uses a raw Listener: it is independent of the gesture
+        // arena, so the fill darkens the instant the pointer goes down instead
+        // of waiting on the Tooltip's competing recognizers.
+        child: Listener(
+          onPointerDown: (_) => setState(() => _pressed = true),
+          onPointerUp: (_) => setState(() => _pressed = false),
+          onPointerCancel: (_) => setState(() => _pressed = false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onPressed,
+            child: SizedBox(
+              width: WindowCaptionButton.width,
+              height: WindowCaptionButton.height,
+              child: Container(
+                key: Key('window_caption_surface_${widget.kind.name}'),
+                decoration: BoxDecoration(color: style.background),
+                child: CustomPaint(
+                  painter: WindowCaptionGlyphPainter(
+                    kind: widget.kind,
+                    color: style.color,
+                    glowShadows: style.glowShadows,
+                    maximized: widget.maximized,
+                  ),
                 ),
               ),
             ),
@@ -286,6 +312,13 @@ class WindowCaptionBar extends StatelessWidget {
     this.onToggleMaximize,
     this.onClose,
   });
+
+  /// Cluster width [logical px]: three equal-width keys, for reserving the
+  /// corner slot in the top bar when the cluster is overlaid flush.
+  static const double width = WindowCaptionButton.width * 3;
+
+  /// Cluster height [logical px].
+  static const double height = WindowCaptionButton.height;
 
   /// Whether the window is currently maximized.
   final bool maximized;

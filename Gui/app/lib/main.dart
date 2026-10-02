@@ -157,7 +157,17 @@ class _GuiAppState extends State<GuiApp> {
         title: _windowTitle,
         debugShowCheckedModeBanner: false,
         theme: buildGuiTheme(),
-        home: SinglePage(state: _state),
+        // v5 window chrome: one bright cyan 1.5px square outline drawn inside
+        // the native frame, over the void background. The whole page — top bar
+        // and bottom bar included — nests inside it with no gap.
+        home: Container(
+          key: const Key('window_frame'),
+          decoration: BoxDecoration(
+            color: const GuiPalette().bgVoid,
+            border: Border.all(color: const GuiPalette().accent, width: 1.5),
+          ),
+          child: SinglePage(state: _state),
+        ),
       ),
     );
   }

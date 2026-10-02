@@ -21,6 +21,17 @@ WindowCaptionGlyphPainter _painterFor(WidgetTester tester, Key key) {
       .first;
 }
 
+/// Perceptual luminance (sRGB coefficients) of a resolved [Color].
+double _luminance(Color color) =>
+    0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+
+BoxDecoration _surfaceDecoration(WidgetTester tester, String kind) {
+  final container = tester.widget<Container>(
+    find.byKey(Key('window_caption_surface_$kind')),
+  );
+  return container.decoration! as BoxDecoration;
+}
+
 void main() {
   group('WindowCaptionBar', () {
     testWidgets('renders minimize / maximize / close with tooltips', (
@@ -96,88 +107,127 @@ void main() {
     });
   });
 
-  group('WindowCaptionButton.styleFor', () {
+  group('WindowCaptionButton 实心分色色块', () {
     const palette = GuiPalette();
 
-    test('idle carries a fill and a 1px border, with the fg symbol and no glow', () {
-      final style = WindowCaptionButton.styleFor(
+    test('每键一色：min 浅青 / max 紫 / close 洋红，三色互异', () {
+      final minimize = WindowCaptionButton.fillFor(
         palette,
         WindowCaptionButtonKind.minimize,
-        hovered: false,
       );
-      expect(style.background, palette.bgRaise);
-      expect(style.border, palette.lineDim);
-      expect(style.color, palette.fg);
-      expect(style.glowShadows, isEmpty);
-    });
-
-    test('minimize hover uses bgHover with a cyan border and glow, never red', () {
-      final style = WindowCaptionButton.styleFor(
+      final maximize = WindowCaptionButton.fillFor(
         palette,
-        WindowCaptionButtonKind.minimize,
-        hovered: true,
+        WindowCaptionButtonKind.maximize,
       );
-      expect(style.background, palette.bgHover);
-      expect(style.border, palette.accent);
-      expect(style.color, palette.fg);
-      expect(style.glowShadows, isNotEmpty);
-      for (final shadow in style.glowShadows) {
-        expect(shadow.color.r, closeTo(palette.accent.r, 0.001));
-        expect(shadow.color.g, closeTo(palette.accent.g, 0.001));
-        expect(shadow.color.b, closeTo(palette.accent.b, 0.001));
-      }
-    });
-
-    test('minimize hover glow follows the supplied palette, not the default', () {
-      const custom = GuiPalette(glowSoft: Color(0xFF112233));
-      final style = WindowCaptionButton.styleFor(
-        custom,
-        WindowCaptionButtonKind.minimize,
-        hovered: true,
-      );
-      expect(style.background, custom.bgHover);
-      final colors = style.glowShadows.map((s) => s.color).toSet();
-      expect(colors, contains(custom.glowSoft));
-      expect(colors, isNot(contains(const GuiPalette().glowSoft)));
-    });
-
-    test('close hover is stFault fill with a red border, near-white symbol and red glow', () {
-      final style = WindowCaptionButton.styleFor(
+      final close = WindowCaptionButton.fillFor(
         palette,
         WindowCaptionButtonKind.close,
+      );
+
+      expect(maximize, palette.valuePurple);
+      expect(close, palette.valueMagenta);
+      // 浅青：比 valueCyan 更亮，且仍是青色系（g/b 高于 r）。
+      expect(_luminance(minimize), greaterThan(_luminance(palette.valueCyan)));
+      expect(minimize.g, greaterThan(minimize.r));
+      expect(minimize.b, greaterThan(minimize.r));
+
+      expect(<Color>{minimize, maximize, close}.length, 3, reason: '三键分色');
+    });
+
+    test('rest：实心填充、深色描线、无辉光、无边框概念', () {
+      for (final kind in WindowCaptionButtonKind.values) {
+        final style = WindowCaptionButton.styleFor(
+          palette,
+          kind,
+          hovered: false,
+        );
+        expect(style.background, WindowCaptionButton.fillFor(palette, kind));
+        expect(style.color, palette.bgVoid, reason: '深色描线压在色块上');
+        expect(style.glowShadows, isEmpty);
+      }
+    });
+
+    test('hover 提亮一档 + 同色极弱辉光；press 压暗', () {
+      const kind = WindowCaptionButtonKind.maximize;
+      final base = WindowCaptionButton.fillFor(palette, kind);
+
+      final hover = WindowCaptionButton.styleFor(
+        palette,
+        kind,
         hovered: true,
       );
-      expect(style.background, palette.stFault);
-      expect(style.border, palette.stFault);
-      expect(style.color, palette.fgStrong);
-      expect(style.glowShadows, isNotEmpty);
-      for (final shadow in style.glowShadows) {
-        expect(shadow.color.r, closeTo(palette.stFault.r, 0.001));
-        expect(shadow.color.g, closeTo(palette.stFault.g, 0.001));
-        expect(shadow.color.b, closeTo(palette.stFault.b, 0.001));
+      expect(
+        hover.background,
+        Color.lerp(base, Colors.white, WindowCaptionButton.hoverLift),
+      );
+      expect(_luminance(hover.background), greaterThan(_luminance(base)));
+      expect(hover.glowShadows, isNotEmpty);
+      for (final shadow in hover.glowShadows) {
+        expect(shadow.color.r, closeTo(base.r, 0.02));
+        expect(shadow.color.g, closeTo(base.g, 0.02));
+        expect(shadow.color.b, closeTo(base.b, 0.02));
       }
+
+      final pressed = WindowCaptionButton.styleFor(
+        palette,
+        kind,
+        hovered: true,
+        pressed: true,
+      );
+      expect(_luminance(pressed.background), lessThan(_luminance(base)));
     });
   });
 
-  testWidgets('caption button paints a 1px border and an interior fill', (
-    tester,
-  ) async {
+  testWidgets('三键色块为直角实心、无边框，尺寸等宽 44×30', (tester) async {
     await _pump(tester, const WindowCaptionBar());
+    const palette = GuiPalette();
 
-    final container = tester.widget<Container>(
-      find.byKey(const Key('window_caption_surface_minimize')),
+    for (final kind in WindowCaptionButtonKind.values) {
+      final deco = _surfaceDecoration(tester, kind.name);
+      expect(deco.color, WindowCaptionButton.fillFor(palette, kind));
+      expect(deco.border, isNull, reason: '色块无边框');
+      expect(deco.borderRadius, isNull, reason: '直角');
+    }
+
+    final widths = <double>[
+      for (final kind in WindowCaptionButtonKind.values)
+        tester.getSize(find.byKey(Key('window_caption_surface_${kind.name}'))).width,
+    ];
+    expect(widths.toSet().length, 1, reason: '三键等宽');
+    expect(widths.first, WindowCaptionButton.width);
+    expect(
+      tester
+          .getSize(find.byKey(const Key('window_caption_surface_minimize')))
+          .height,
+      WindowCaptionButton.height,
     );
-    final deco = container.decoration! as BoxDecoration;
-    expect(deco.color, const GuiPalette().bgRaise);
-    final border = deco.border! as Border;
-    expect(border.top.width, 1);
-    expect(border.top.color, const GuiPalette().lineDim);
   });
 
-  testWidgets('close gains its fault-hover style under a real pointer', (
-    tester,
-  ) async {
+  testWidgets('按下态把色块压暗', (tester) async {
     await _pump(tester, const WindowCaptionBar());
+    const palette = GuiPalette();
+    final base = WindowCaptionButton.fillFor(
+      palette,
+      WindowCaptionButtonKind.minimize,
+    );
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('window_caption_minimize'))),
+    );
+    await tester.pump();
+    final pressed = _surfaceDecoration(tester, 'minimize').color!;
+    expect(_luminance(pressed), lessThan(_luminance(base)));
+    await gesture.up();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('close 在真实指针下获得同色辉光', (tester) async {
+    await _pump(tester, const WindowCaptionBar());
+    const palette = GuiPalette();
+    final base = WindowCaptionButton.fillFor(
+      palette,
+      WindowCaptionButtonKind.close,
+    );
 
     final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await gesture.addPointer(location: Offset.zero);
@@ -188,10 +238,11 @@ void main() {
     await tester.pumpAndSettle();
 
     final painter = _painterFor(tester, const Key('window_caption_close'));
-    expect(painter.color, const GuiPalette().fgStrong);
     expect(painter.glowShadows, isNotEmpty);
     for (final shadow in painter.glowShadows) {
-      expect(shadow.color.r, closeTo(const GuiPalette().stFault.r, 0.001));
+      expect(shadow.color.r, closeTo(base.r, 0.02));
+      expect(shadow.color.g, closeTo(base.g, 0.02));
+      expect(shadow.color.b, closeTo(base.b, 0.02));
     }
   });
 }

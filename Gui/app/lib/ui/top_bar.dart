@@ -183,12 +183,29 @@ class _TopBarState extends State<TopBar> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
-    return HairlineFrame(
-      child: Container(
-        color: palette.bgPanel,
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        child: _bar(context),
-      ),
+    return Stack(
+      children: <Widget>[
+        HairlineFrame(
+          child: Container(
+            color: palette.bgPanel,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            child: _bar(context),
+          ),
+        ),
+        // The caption cluster is overlaid in the window's extreme top-right
+        // corner, on top of the bar frame, so the three keys sit flush against
+        // the window edge with no inset.
+        Positioned(
+          top: 0,
+          right: 0,
+          child: WindowCaptionBar(
+            maximized: _maximized,
+            onMinimize: _minimize,
+            onToggleMaximize: _toggleMaximize,
+            onClose: _close,
+          ),
+        ),
+      ],
     );
   }
 
@@ -199,11 +216,11 @@ class _TopBarState extends State<TopBar> with WindowListener {
       builder: (context, constraints) {
         final connection = _connectionBlock(context);
         final identity = _dragRegion(_deviceInfo(context));
-        final caption = WindowCaptionBar(
-          maximized: _maximized,
-          onMinimize: _minimize,
-          onToggleMaximize: _toggleMaximize,
-          onClose: _close,
+        // Reserve the corner the overlaid caption cluster occupies so the
+        // identity never runs underneath it.
+        const captionSlot = SizedBox(
+          width: WindowCaptionBar.width,
+          height: WindowCaptionBar.height,
         );
 
         if (constraints.maxWidth >= TopBar.wideBreakpoint) {
@@ -213,8 +230,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
               connection,
               const SizedBox(width: 20),
               Expanded(child: identity),
-              const SizedBox(width: 16),
-              caption,
+              captionSlot,
             ],
           );
         }
@@ -228,8 +244,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Expanded(child: identity),
-                const SizedBox(width: 16),
-                caption,
+                captionSlot,
               ],
             ),
             const SizedBox(height: 10),
