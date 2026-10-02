@@ -20,27 +20,36 @@ enum WindowCaptionButtonKind {
 
 /// Resolved visual style for a caption button in a given interaction state.
 ///
-/// v5 replaces the old framed button with a **solid square color block**: there
-/// is no border at all — each window key is a single flat fill (one semantic
-/// hue per key), hover brightens the fill one step and adds a very weak
-/// same-hue glow, and a press darkens it.
+/// v5 restyles each window key as an **old lattice-lamp indicator**: a
+/// desaturated, translucent lamp face ([background]) under a dark grille,
+/// ringed by a 1px accent socket ([border]) and seated in a dark vignette
+/// ([outlineShadows]). Hover lifts the lamp one step and adds a weak same-hue
+/// glow; press dims it.
 @immutable
 class WindowCaptionStyle {
   const WindowCaptionStyle({
     required this.background,
     required this.color,
     required this.glowShadows,
+    required this.border,
+    required this.outlineShadows,
   });
 
-  /// Solid block fill; the key's semantic hue, brightened on hover and
-  /// darkened while pressed. Never framed.
+  /// Translucent, desaturated lamp face; the key's semantic hue muted and
+  /// brightened one step on hover / dimmed while pressed. Never an opaque cap.
   final Color background;
 
-  /// Glyph stroke color, drawn on top of the block.
+  /// Light glyph stroke drawn on top of the dark grille.
   final Color color;
 
   /// Same-hue glow layers drawn behind the glyph (empty at rest).
   final List<Shadow> glowShadows;
+
+  /// 1px accent-cyan socket ring around the lamp face.
+  final BorderSide border;
+
+  /// Dark outward vignette that seats the lamp in a recessed socket.
+  final List<BoxShadow> outlineShadows;
 }
 
 /// Paints a caption glyph as geometric strokes (design-system §3.1: square).
@@ -160,14 +169,55 @@ class WindowCaptionGlyphPainter extends CustomPainter {
       !listEquals(oldDelegate.glowShadows, glowShadows);
 }
 
+/// Paints the lampshade grille laid over a caption lamp face (brief item 2).
+///
+/// A **bidirectional 1px dark line lattice** at [spacing] px pitch: the "old
+/// lattice lampshade" grille vocabulary. It is a grid rather than the VFD bar's
+/// vertical tubes, but shares the same dark-line / periodic-cell language.
+class WindowCaptionLatticePainter extends CustomPainter {
+  const WindowCaptionLatticePainter({required this.color});
+
+  /// Grille cell pitch [px] (brief: 格距 ~4px).
+  static const double spacing = 4.0;
+
+  /// Grille line width [px] (brief: 暗色 1px).
+  static const double lineWidth = 1.0;
+
+  /// Dark grille line colour, laid over the translucent lamp face.
+  final Color color;
+
+  /// Line offsets `0, spacing, 2·spacing, …` across [extent], both axes.
+  static List<double> latticeLines(double extent) => <double>[
+    for (var x = 0.0; x <= extent; x += spacing) x,
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = lineWidth;
+    for (final x in latticeLines(size.width)) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (final y in latticeLines(size.height)) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(WindowCaptionLatticePainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 /// A single 44×30 square caption button.
 ///
-/// v5 drops the framed button for a **solid square color block**, flush to the
+/// v5 styles each key as an **old lattice-lamp indicator**, inset from the
 /// window's top-right corner: one semantic hue per key (minimize = light cyan,
-/// maximize/restore = violet, close = magenta), a ~14px dark stroke glyph, and
-/// no border at all. Hover brightens the fill one step and adds a very weak
-/// same-hue glow; pressing darkens the fill. Color + glyph + tooltip still
-/// carry the design-system §6 triple encoding.
+/// maximize/restore = violet, close = magenta) shown as a desaturated
+/// translucent lamp face under a dark grille, ringed by a 1px accent socket and
+/// seated in a dark vignette. A ~14px light hue stroke glyph rides on top.
+/// Hover lifts the lamp one step and adds a weak same-hue glow; pressing dims
+/// it. Color + glyph + tooltip still carry the §6 triple encoding.
 class WindowCaptionButton extends StatefulWidget {
   const WindowCaptionButton({
     super.key,
@@ -183,11 +233,26 @@ class WindowCaptionButton extends StatefulWidget {
   /// Fixed chrome cell height [logical px].
   static const double height = 30;
 
+  /// Lamp-face fill opacity (brief item 1: α ≈ 0.45~0.55). The block reads as a
+  /// dim lamp glowing behind a grille, not a solid key cap. Local constant
+  /// sourced from the v5 lattice-lamp brief, not a palette token.
+  static const double fillAlpha = 0.5;
+
+  /// Lamp-face desaturation toward neutral grey (brief item 1: 色彩向灰调收).
+  /// Local constant sourced from the v5 lattice-lamp brief.
+  static const double fillDesaturate = 0.4;
+
   /// Hover fill brightening, as a white lerp fraction.
   static const double hoverLift = 0.18;
 
+  /// Hover also raises the translucent lamp-face alpha one step.
+  static const double hoverAlphaLift = 0.12;
+
   /// Pressed fill darkening, as a black lerp fraction.
   static const double pressDrop = 0.22;
+
+  /// Pressed lamp-face alpha drop.
+  static const double pressAlphaDrop = 0.15;
 
   /// Which glyph to draw.
   final WindowCaptionButtonKind kind;
@@ -218,31 +283,71 @@ class WindowCaptionButton extends StatefulWidget {
     }
   }
 
-  /// Resolves the solid fill, glyph color and glow layers for [kind] in the
-  /// given interaction state.
+  /// The desaturated, translucent lamp face for [kind].
+  ///
+  /// Brief item 1: the semantic hue ([fillFor]) is pulled toward a neutral grey
+  /// of the same level ([fillDesaturate]) and made translucent ([fillAlpha]) so
+  /// the key reads as a dim indicator lamp, not an opaque cap.
+  static Color lampFaceFor(GuiPalette palette, WindowCaptionButtonKind kind) {
+    final hue = fillFor(palette, kind);
+    final greyLevel = (hue.r + hue.g + hue.b) / 3;
+    final grey = Color.from(
+      alpha: 1,
+      red: greyLevel,
+      green: greyLevel,
+      blue: greyLevel,
+    );
+    return Color.lerp(hue, grey, fillDesaturate)!.withValues(alpha: fillAlpha);
+  }
+
+  /// The light glyph stroke for [kind].
+  ///
+  /// Brief item 6: a light stroke reads on the dark grille, so the key hue is
+  /// lightened while staying per-key distinct (triple encoding).
+  static Color glyphFor(GuiPalette palette, WindowCaptionButtonKind kind) =>
+      Color.lerp(fillFor(palette, kind), Colors.white, 0.72)!;
+
+  /// Resolves the lamp face, glyph color, glow, socket ring and vignette for
+  /// [kind] in the given interaction state.
   ///
   /// Centralized (and public) so tests assert the styling directly instead of
-  /// relying on pointer hit-testing. There is deliberately **no border**: at
-  /// rest the fill is [fillFor]; [hovered] lifts it by [hoverLift] and adds one
-  /// weak same-hue glow layer; [pressed] drops it by [pressDrop]. The glyph is
-  /// always a dark [GuiPalette.bgVoid] stroke for contrast on the bright block.
+  /// relying on pointer hit-testing. At rest the face is [lampFaceFor];
+  /// [hovered] lifts it by [hoverLift] and raises its alpha by [hoverAlphaLift]
+  /// plus one weak same-hue glow; [pressed] darkens it by [pressDrop] and drops
+  /// its alpha by [pressAlphaDrop]. The glyph is the light [glyphFor] stroke,
+  /// the socket ring is the 1px accent cyan and the vignette is a dark outward
+  /// box shadow (brief item 3/4).
   static WindowCaptionStyle styleFor(
     GuiPalette palette,
     WindowCaptionButtonKind kind, {
     required bool hovered,
     bool pressed = false,
   }) {
-    final base = fillFor(palette, kind);
-    final background = pressed
-        ? Color.lerp(base, Colors.black, pressDrop)!
-        : (hovered ? Color.lerp(base, Colors.white, hoverLift)! : base);
+    final base = lampFaceFor(palette, kind);
+    final Color background;
+    if (pressed) {
+      background = Color.lerp(base, Colors.black, pressDrop)!.withValues(
+        alpha: (base.a - pressAlphaDrop).clamp(0.0, 1.0),
+      );
+    } else if (hovered) {
+      background = Color.lerp(base, Colors.white, hoverLift)!.withValues(
+        alpha: (base.a + hoverAlphaLift).clamp(0.0, 1.0),
+      );
+    } else {
+      background = base;
+    }
+    final hue = fillFor(palette, kind);
     final glowShadows = (hovered && !pressed)
-        ? GuiGlowStyles.status(base, const TextStyle()).shadows!
+        ? GuiGlowStyles.status(hue, const TextStyle()).shadows!
         : const <Shadow>[];
     return WindowCaptionStyle(
       background: background,
-      color: palette.bgVoid,
+      color: glyphFor(palette, kind),
       glowShadows: glowShadows,
+      border: BorderSide(color: palette.accent, width: 1),
+      outlineShadows: const <BoxShadow>[
+        BoxShadow(color: Color(0x8C000000), blurRadius: 8, spreadRadius: 1),
+      ],
     );
   }
 
@@ -284,14 +389,29 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
               height: WindowCaptionButton.height,
               child: Container(
                 key: Key('window_caption_surface_${widget.kind.name}'),
-                decoration: BoxDecoration(color: style.background),
-                child: CustomPaint(
-                  painter: WindowCaptionGlyphPainter(
-                    kind: widget.kind,
-                    color: style.color,
-                    glowShadows: style.glowShadows,
-                    maximized: widget.maximized,
-                  ),
+                decoration: BoxDecoration(
+                  color: style.background,
+                  border: Border.fromBorderSide(style.border),
+                  boxShadow: style.outlineShadows,
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    // 格栅罩: dark 1px lattice over the translucent lamp face.
+                    CustomPaint(
+                      painter: WindowCaptionLatticePainter(
+                        color: palette.bgVoid.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    CustomPaint(
+                      painter: WindowCaptionGlyphPainter(
+                        kind: widget.kind,
+                        color: style.color,
+                        glowShadows: style.glowShadows,
+                        maximized: widget.maximized,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -314,11 +434,16 @@ class WindowCaptionBar extends StatelessWidget {
   });
 
   /// Cluster width [logical px]: three equal-width keys, for reserving the
-  /// corner slot in the top bar when the cluster is overlaid flush.
+  /// corner slot in the top bar.
   static const double width = WindowCaptionButton.width * 3;
 
   /// Cluster height [logical px].
   static const double height = WindowCaptionButton.height;
+
+  /// Right inset [logical px] applied when the cluster is overlaid in the top
+  /// bar (brief item 5): the keys pull ~10px off the window corner so the lamp
+  /// sockets and their vignette have breathing room from the cyan window frame.
+  static const double rightInset = 10;
 
   /// Whether the window is currently maximized.
   final bool maximized;

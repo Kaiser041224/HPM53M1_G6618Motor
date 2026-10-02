@@ -7,6 +7,7 @@ import 'package:g6618_gui/ui/top_bar.dart';
 import 'package:g6618_gui/widgets/device_ascii.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
+import 'package:g6618_gui/widgets/window_caption.dart';
 
 /// Pumps [TopBar] on the Gui theme at a wide surface so the resident connection
 /// block, the device identity and the telemetry column all fit. Window-chrome
@@ -324,7 +325,7 @@ void main() {
       expect(find.byKey(const Key('window_caption_close')), findsOneWidget);
     });
 
-    testWidgets('窗口键紧贴顶栏右上角：无内边距 / 无间隔', (
+    testWidgets('窗口键组左移 ~10px：与顶栏右缘留呼吸', (
       WidgetTester tester,
     ) async {
       final state = AppState.test();
@@ -332,14 +333,21 @@ void main() {
 
       await _pump(tester, state);
 
+      expect(
+        WindowCaptionBar.rightInset,
+        inInclusiveRange(8, 12),
+        reason: '三键组整体左移 ~10px',
+      );
+
       final barTopRight = tester.getTopRight(find.byType(TopBar));
       final closeTopRight = tester.getTopRight(
         find.byKey(const Key('window_caption_close')),
       );
+      // 关闭键右缘应从顶栏右缘内缩约 rightInset，而非贴死。
       expect(
-        (barTopRight.dx - closeTopRight.dx).abs(),
-        lessThan(0.01),
-        reason: '关闭键右缘与顶栏右缘齐平（无 inset）',
+        (barTopRight.dx - closeTopRight.dx - WindowCaptionBar.rightInset).abs(),
+        lessThan(0.5),
+        reason: '三键组左移，不贴死窗口角',
       );
 
       final barTopLeft = tester.getTopLeft(find.byType(TopBar));
@@ -349,7 +357,7 @@ void main() {
       expect(
         (minTopLeft.dy - barTopLeft.dy).abs(),
         lessThan(0.01),
-        reason: '三键顶缘与顶栏顶缘齐平',
+        reason: '三键顶缘仍与顶栏顶缘齐平',
       );
     });
 

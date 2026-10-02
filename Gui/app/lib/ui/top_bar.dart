@@ -192,12 +192,12 @@ class _TopBarState extends State<TopBar> with WindowListener {
             child: _bar(context),
           ),
         ),
-        // The caption cluster is overlaid in the window's extreme top-right
-        // corner, on top of the bar frame, so the three keys sit flush against
-        // the window edge with no inset.
+        // The caption cluster is overlaid in the window's top-right area, on
+        // top of the bar frame, inset by [WindowCaptionBar.rightInset] so the
+        // three lamp keys pull off the window corner rather than sitting flush.
         Positioned(
           top: 0,
-          right: 0,
+          right: WindowCaptionBar.rightInset,
           child: WindowCaptionBar(
             maximized: _maximized,
             onMinimize: _minimize,
@@ -216,10 +216,10 @@ class _TopBarState extends State<TopBar> with WindowListener {
       builder: (context, constraints) {
         final connection = _connectionBlock(context);
         final identity = _dragRegion(_deviceInfo(context));
-        // Reserve the corner the overlaid caption cluster occupies so the
-        // identity never runs underneath it.
+        // Reserve the corner plus the left-shift the overlaid caption cluster
+        // occupies so the identity never runs underneath it.
         const captionSlot = SizedBox(
-          width: WindowCaptionBar.width,
+          width: WindowCaptionBar.width + WindowCaptionBar.rightInset,
           height: WindowCaptionBar.height,
         );
 
