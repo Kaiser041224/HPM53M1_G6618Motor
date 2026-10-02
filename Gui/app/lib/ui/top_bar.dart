@@ -7,17 +7,8 @@ import '../widgets/device_ascii.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/gui_text_field.dart';
 import '../widgets/hairline_frame.dart';
-import '../widgets/stable_digits.dart';
-import '../widgets/stale_gate.dart';
 import '../widgets/window_caption.dart';
-import 'label_style.dart';
 import 'toast_overlay.dart';
-
-/// Formats a session duration as `HH:MM:SS` (hours may exceed two digits).
-String formatUptime(Duration d) {
-  String two(int v) => v.toString().padLeft(2, '0');
-  return '${two(d.inHours)}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)}';
-}
 
 /// Persistent top bar for the single-page layout (design-system §4.2/§4.3).
 ///
@@ -28,10 +19,11 @@ String formatUptime(Duration d) {
 ///   disconnect actions ([GuiButton] vocabulary);
 /// - **middle** — the device identity read from the `PROTO_INFO` handshake:
 ///   the block art plus a two-column key:value grid (model / MCU / PROTO / FW /
-///   CAPABILITIES). The handshake and link-quality detail lives on the bottom
-///   bar, so the bar never grows a second section row;
-/// - **right** — the poll / uptime / SEQ / frames telemetry, then the window
-///   caption cluster.
+///   CAPABILITIES), wrapped together in a bright [HairlineFrame] that delimits
+///   the parameter area. The handshake, link-quality detail and all telemetry
+///   live on the bottom bar, so the bar never grows a second section row;
+/// - **right** — the window caption cluster (minimize / maximize-restore /
+///   close).
 ///
 /// The middle identity area doubles as the custom title bar: dragging it moves
 /// the window and double-clicking it toggles maximize (native chrome is hidden
@@ -207,7 +199,6 @@ class _TopBarState extends State<TopBar> with WindowListener {
       builder: (context, constraints) {
         final connection = _connectionBlock(context);
         final identity = _dragRegion(_deviceInfo(context));
-        final telemetry = _telemetry(context);
         final caption = WindowCaptionBar(
           maximized: _maximized,
           onMinimize: _minimize,
@@ -223,14 +214,12 @@ class _TopBarState extends State<TopBar> with WindowListener {
               const SizedBox(width: 20),
               Expanded(child: identity),
               const SizedBox(width: 16),
-              telemetry,
-              const SizedBox(width: 12),
               caption,
             ],
           );
         }
-        // Narrow: identity / telemetry / caption first, the connection block
-        // wraps onto its own line so nothing is ever clipped.
+        // Narrow: identity / caption first, the connection block wraps onto its
+        // own line so nothing is ever clipped.
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -240,8 +229,6 @@ class _TopBarState extends State<TopBar> with WindowListener {
               children: <Widget>[
                 Expanded(child: identity),
                 const SizedBox(width: 16),
-                telemetry,
-                const SizedBox(width: 12),
                 caption,
               ],
             ),
@@ -338,27 +325,35 @@ class _TopBarState extends State<TopBar> with WindowListener {
       key: const Key('top_bar_device_info'),
       fit: BoxFit.scaleDown,
       alignment: Alignment.centerLeft,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          DeviceAscii(connected: connected),
-          const SizedBox(width: 16),
-          _infoGrid(context, connected),
-        ],
+      child: HairlineFrame(
+        key: const Key('top_bar_device_frame'),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            DeviceAscii(connected: connected),
+            const SizedBox(width: 16),
+            _infoGrid(context, connected),
+          ],
+        ),
       ),
     );
   }
 
-  /// Two-column key:value grid under the art. Labels stay [GuiPalette.fgDim],
-  /// values [GuiPalette.fgStrong]. `FW` is honestly `—`: the protocol does not
-  /// carry a firmware version.
+  /// Two-column key:value grid under the art. Labels stay [GuiPalette.fgDim];
+  /// values are enlarged (≥18px) and coloured by semantic role — MCU cyan,
+  /// PROTO violet, FW orange (`—` recedes to [GuiPalette.fgMute]),
+  /// CAPABILITIES green. `FW` is honestly `—`: the protocol does not carry a
+  /// firmware version.
   Widget _infoGrid(BuildContext context, bool connected) {
     final s = widget.state;
+    final palette = GuiPalette.of(context);
     final proto = connected ? 'v${s.protoMajor}.${s.protoMinor}' : '—';
     final caps = connected
         ? '0x${s.capabilities.toRadixString(16).padLeft(2, '0')}'
         : '—';
+    const fw = '—';
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -374,24 +369,29 @@ class _TopBarState extends State<TopBar> with WindowListener {
               'MCU',
               'HPM53M1',
               valueKey: const Key('top_bar_mcu_value'),
+              color: palette.accent,
             ),
             _infoEntry(
               context,
               'PROTO',
               proto,
               valueKey: const Key('top_bar_proto_value'),
+              color: palette.valuePurple,
+              fontSize: 20,
             ),
             _infoEntry(
               context,
               'FW',
-              '—',
+              fw,
               valueKey: const Key('top_bar_fw_value'),
+              color: fw == '—' ? palette.fgMute : palette.valueOrange,
             ),
             _infoEntry(
               context,
               'CAP',
               caps,
               valueKey: const Key('top_bar_cap_value'),
+              color: palette.valueGreen,
             ),
           ],
         ),
@@ -415,7 +415,10 @@ class _TopBarState extends State<TopBar> with WindowListener {
         Text(
           value,
           key: const Key('top_bar_model_value'),
-          style: scale.sectionTitle.copyWith(color: palette.fgStrong),
+          style: scale.data.copyWith(
+            fontSize: 20,
+            color: palette.fgStrong,
+          ),
         ),
       ],
     );
@@ -426,6 +429,8 @@ class _TopBarState extends State<TopBar> with WindowListener {
     String label,
     String value, {
     required Key valueKey,
+    required Color color,
+    double fontSize = 18,
   }) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
@@ -439,84 +444,7 @@ class _TopBarState extends State<TopBar> with WindowListener {
         Text(
           value,
           key: valueKey,
-          style: scale.label.copyWith(color: palette.fgStrong),
-        ),
-      ],
-    );
-  }
-
-  // ── right: telemetry ─────────────────────────────────────────────────────
-
-  Widget _telemetry(BuildContext context) {
-    final s = widget.state;
-    final connected = s.connected;
-    // Compact 2x2 readout grid: four rows would make the resident bar needlessly
-    // tall next to the block art.
-    return Column(
-      key: const Key('top_bar_telemetry'),
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: <Widget>[
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            _telemetryRow(
-              context,
-              'POLL',
-              connected ? '500 ms' : null,
-              const Key('top_bar_poll_value'),
-            ),
-            const SizedBox(width: 18),
-            _telemetryRow(
-              context,
-              'UPTIME',
-              connected && s.sessionUptime != null
-                  ? formatUptime(s.sessionUptime!)
-                  : null,
-              const Key('top_bar_uptime_value'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            _telemetryRow(context, 'SEQ', null, const Key('top_bar_seq_value')),
-            const SizedBox(width: 18),
-            _telemetryRow(
-              context,
-              '帧',
-              connected ? '${s.attempts}' : null,
-              const Key('top_bar_frames_value'),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _telemetryRow(
-    BuildContext context,
-    String label,
-    String? value,
-    Key key,
-  ) {
-    final scale = GuiTypeScale.of(context);
-    final palette = GuiPalette.of(context);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Text(label, style: guiLabelStyle(palette, scale)),
-        const SizedBox(width: 10),
-        StaleGate(
-          key: key,
-          freshness: value == null ? Freshness.unknown : Freshness.live,
-          // Telemetry is a monitor value: sample it at 5 Hz. Telemetry is quiet
-          // second-tier text (v3).
-          live: StableDigits(
-            text: value ?? '',
-            style: scale.data.copyWith(fontSize: 13, color: palette.fgDim),
-          ),
+          style: scale.data.copyWith(fontSize: fontSize, color: color),
         ),
       ],
     );

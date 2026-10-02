@@ -23,12 +23,16 @@ enum WindowCaptionButtonKind {
 class WindowCaptionStyle {
   const WindowCaptionStyle({
     required this.background,
+    required this.border,
     required this.color,
     required this.glowShadows,
   });
 
-  /// Button fill; transparent at rest.
+  /// Button fill; a raised surface at rest, brightened on hover.
   final Color background;
+
+  /// 1px outline; dim at rest, brightened same-hue on hover.
+  final Color border;
 
   /// Glyph stroke color.
   final Color color;
@@ -182,10 +186,14 @@ class WindowCaptionButton extends StatefulWidget {
   /// Tap callback, injected so the button can be tested without a window.
   final VoidCallback? onPressed;
 
-  /// Resolves the fill, glyph color and glow layers for [kind] and [hovered].
+  /// Resolves the fill, border, glyph color and glow layers for [kind] and
+  /// [hovered].
   ///
   /// Centralized (and public) so tests assert the hover styling directly
-  /// instead of relying on pointer hit-testing.
+  /// instead of relying on pointer hit-testing. At rest every button carries a
+  /// [GuiPalette.bgRaise] fill and a dim [GuiPalette.lineDim] outline, matching
+  /// the TNO button vocabulary; hover brightens the border same-hue (cyan for
+  /// the window keys, [GuiPalette.stFault] for close) and deepens the fill.
   static WindowCaptionStyle styleFor(
     GuiPalette palette,
     WindowCaptionButtonKind kind, {
@@ -194,7 +202,10 @@ class WindowCaptionButton extends StatefulWidget {
     final isClose = kind == WindowCaptionButtonKind.close;
     final background = hovered
         ? (isClose ? palette.stFault : palette.bgHover)
-        : Colors.transparent;
+        : palette.bgRaise;
+    final border = hovered
+        ? (isClose ? palette.stFault : palette.accent)
+        : palette.lineDim;
     final color = (hovered && isClose) ? palette.fgStrong : palette.fg;
     final List<Shadow> glowShadows;
     if (!hovered) {
@@ -207,6 +218,7 @@ class WindowCaptionButton extends StatefulWidget {
     }
     return WindowCaptionStyle(
       background: background,
+      border: border,
       color: color,
       glowShadows: glowShadows,
     );
@@ -239,8 +251,15 @@ class _WindowCaptionButtonState extends State<WindowCaptionButton> {
           child: SizedBox(
             width: 44,
             height: 30,
-            child: ColoredBox(
-              color: style.background,
+            child: Container(
+              key: Key('window_caption_surface_${widget.kind.name}'),
+              decoration: BoxDecoration(
+                color: style.background,
+                border: Border.all(
+                  color: style.border,
+                  width: palette.lineWidth,
+                ),
+              ),
               child: CustomPaint(
                 painter: WindowCaptionGlyphPainter(
                   kind: widget.kind,

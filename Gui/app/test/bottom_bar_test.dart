@@ -47,6 +47,8 @@ void main() {
 
     expect(find.text('未连接'), findsOneWidget);
     for (final key in const <String>[
+      'bottom_bar_poll',
+      'bottom_bar_uptime',
       'bottom_bar_rtt',
       'bottom_bar_crc',
       'bottom_bar_resync',
@@ -214,5 +216,59 @@ void main() {
 
     expect(find.text('READY'), findsNothing);
     expect(find.text('等待数据'), findsOneWidget);
+  });
+
+  testWidgets('遥测并入底栏：POLL 500 ms / UPTIME 会话时长 / SEQ 恒 — / 帧 attempts', (
+    tester,
+  ) async {
+    final state = AppState.test(
+      connected: true,
+      status: makeStatus(),
+      deviceName: 'G6618 Motor Controller',
+      sessionUptime: const Duration(hours: 0, minutes: 14, seconds: 22),
+      attempts: 14288,
+    );
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    expect(_value('bottom_bar_poll', '500 ms'), findsOneWidget);
+    expect(_value('bottom_bar_uptime', '00:14:22'), findsOneWidget);
+    // SEQ 协议未提供：即使已连接也恒为 —，禁止估算。
+    expect(_value('bottom_bar_seq', '—'), findsOneWidget);
+    expect(_value('bottom_bar_frames', '14288'), findsOneWidget);
+  });
+
+  testWidgets('底栏同时承载既有计数组与迁移来的遥测', (tester) async {
+    final state = AppState.test(connected: true, status: makeStatus());
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    for (final key in const <String>[
+      'bottom_bar_poll',
+      'bottom_bar_uptime',
+      'bottom_bar_rtt',
+      'bottom_bar_crc',
+      'bottom_bar_resync',
+      'bottom_bar_retry',
+      'bottom_bar_dirty',
+      'bottom_bar_seq',
+      'bottom_bar_frames',
+    ]) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+    }
+  });
+
+  test('formatUptime renders HH:MM:SS', () {
+    expect(formatUptime(Duration.zero), '00:00:00');
+    expect(
+      formatUptime(const Duration(hours: 2, minutes: 5, seconds: 9)),
+      '02:05:09',
+    );
+    expect(
+      formatUptime(const Duration(hours: 100, minutes: 0, seconds: 1)),
+      '100:00:01',
+    );
   });
 }

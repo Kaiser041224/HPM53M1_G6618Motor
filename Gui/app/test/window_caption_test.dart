@@ -99,24 +99,26 @@ void main() {
   group('WindowCaptionButton.styleFor', () {
     const palette = GuiPalette();
 
-    test('idle is transparent with the fg symbol and no glow', () {
+    test('idle carries a fill and a 1px border, with the fg symbol and no glow', () {
       final style = WindowCaptionButton.styleFor(
         palette,
         WindowCaptionButtonKind.minimize,
         hovered: false,
       );
-      expect(style.background, Colors.transparent);
+      expect(style.background, palette.bgRaise);
+      expect(style.border, palette.lineDim);
       expect(style.color, palette.fg);
       expect(style.glowShadows, isEmpty);
     });
 
-    test('minimize hover uses bgHover with a cyan glow, never red', () {
+    test('minimize hover uses bgHover with a cyan border and glow, never red', () {
       final style = WindowCaptionButton.styleFor(
         palette,
         WindowCaptionButtonKind.minimize,
         hovered: true,
       );
       expect(style.background, palette.bgHover);
+      expect(style.border, palette.accent);
       expect(style.color, palette.fg);
       expect(style.glowShadows, isNotEmpty);
       for (final shadow in style.glowShadows) {
@@ -139,13 +141,14 @@ void main() {
       expect(colors, isNot(contains(const GuiPalette().glowSoft)));
     });
 
-    test('close hover is stFault with a near-white symbol and red glow', () {
+    test('close hover is stFault fill with a red border, near-white symbol and red glow', () {
       final style = WindowCaptionButton.styleFor(
         palette,
         WindowCaptionButtonKind.close,
         hovered: true,
       );
       expect(style.background, palette.stFault);
+      expect(style.border, palette.stFault);
       expect(style.color, palette.fgStrong);
       expect(style.glowShadows, isNotEmpty);
       for (final shadow in style.glowShadows) {
@@ -154,6 +157,21 @@ void main() {
         expect(shadow.color.b, closeTo(palette.stFault.b, 0.001));
       }
     });
+  });
+
+  testWidgets('caption button paints a 1px border and an interior fill', (
+    tester,
+  ) async {
+    await _pump(tester, const WindowCaptionBar());
+
+    final container = tester.widget<Container>(
+      find.byKey(const Key('window_caption_surface_minimize')),
+    );
+    final deco = container.decoration! as BoxDecoration;
+    expect(deco.color, const GuiPalette().bgRaise);
+    final border = deco.border! as Border;
+    expect(border.top.width, 1);
+    expect(border.top.color, const GuiPalette().lineDim);
   });
 
   testWidgets('close gains its fault-hover style under a real pointer', (

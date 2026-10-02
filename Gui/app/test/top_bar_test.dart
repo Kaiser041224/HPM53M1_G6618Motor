@@ -4,7 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
+import 'package:g6618_gui/widgets/device_ascii.dart';
 import 'package:g6618_gui/widgets/gui_button.dart';
+import 'package:g6618_gui/widgets/hairline_frame.dart';
 
 /// Pumps [TopBar] on the Gui theme at a wide surface so the resident connection
 /// block, the device identity and the telemetry column all fit. Window-chrome
@@ -54,7 +56,7 @@ void main() {
     expect(find.widgetWithText(GuiButton, '断开'), findsOneWidget);
   });
 
-  testWidgets('顶栏三区常驻：连接块 / 设备信息 / 遥测', (WidgetTester tester) async {
+  testWidgets('顶栏常驻：连接块 / 设备信息 / 窗口键', (WidgetTester tester) async {
     final state = AppState.test();
     addTearDown(state.dispose);
 
@@ -62,7 +64,28 @@ void main() {
 
     expect(find.byKey(const Key('top_bar_connection_block')), findsOneWidget);
     expect(find.byKey(const Key('top_bar_device_info')), findsOneWidget);
-    expect(find.byKey(const Key('top_bar_telemetry')), findsOneWidget);
+    expect(find.byKey(const Key('window_caption_minimize')), findsOneWidget);
+  });
+
+  testWidgets('顶栏不再承载遥测：POLL/UPTIME/SEQ/帧 已移至底栏', (
+    WidgetTester tester,
+  ) async {
+    final state = AppState.test(
+      connected: true,
+      deviceName: 'G6618 Motor Controller',
+      protoMajor: 1,
+      capabilities: 0x03,
+      sessionUptime: const Duration(seconds: 30),
+      attempts: 14288,
+    );
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    expect(find.byKey(const Key('top_bar_telemetry')), findsNothing);
+    for (final label in const <String>['POLL', 'UPTIME', 'SEQ', '帧']) {
+      expect(find.text(label), findsNothing, reason: label);
+    }
   });
 
   testWidgets('顶栏无展开交互：不再有连接选项卡与二级细目', (WidgetTester tester) async {
@@ -85,9 +108,7 @@ void main() {
     }
   });
 
-  testWidgets('超宽：三区同排（连接块在左 / 设备信息居中 / 遥测在右）', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('超宽：连接块在左 / 设备信息居中 / 窗口键在右', (WidgetTester tester) async {
     final state = AppState.test();
     addTearDown(state.dispose);
 
@@ -99,14 +120,13 @@ void main() {
     final info = tester.getTopLeft(
       find.byKey(const Key('top_bar_device_info')),
     );
-    final telemetry = tester.getTopLeft(
-      find.byKey(const Key('top_bar_telemetry')),
+    final caption = tester.getTopLeft(
+      find.byKey(const Key('window_caption_minimize')),
     );
     expect(connection.dx, lessThan(info.dx));
-    expect(info.dx, lessThan(telemetry.dx));
-    // All three share the same row on an ultra-wide window.
+    expect(info.dx, lessThan(caption.dx));
+    // The connection block and the identity share the first row.
     expect((connection.dy - info.dy).abs(), lessThan(4));
-    expect((info.dy - telemetry.dy).abs(), lessThan(4));
   });
 
   testWidgets('链路分段：TCP 可用，USB / UART 禁用并标 M2', (WidgetTester tester) async {
@@ -211,77 +231,83 @@ void main() {
     expect(find.textContaining('FW v'), findsNothing);
   });
 
-  testWidgets('未连接：UPTIME / SEQ / 帧 均诚实显示 —', (WidgetTester tester) async {
-    final state = AppState.test();
-    addTearDown(state.dispose);
-
-    await _pump(tester, state);
-
-    for (final entry in const <(Key, String)>[
-      (Key('top_bar_poll_value'), 'POLL'),
-      (Key('top_bar_uptime_value'), 'UPTIME'),
-      (Key('top_bar_seq_value'), 'SEQ'),
-      (Key('top_bar_frames_value'), '帧'),
-    ]) {
-      expect(
-        find.descendant(of: find.byKey(entry.$1), matching: find.text('—')),
-        findsOneWidget,
-        reason: '${entry.$2} 应显示 —',
-      );
-    }
-  });
-
-  testWidgets('已连接：UPTIME 为会话时长 HH:MM:SS，帧为 attempts', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('设备参数区：艺术字 + 栅格整块由青框包裹', (WidgetTester tester) async {
     final state = AppState.test(
       connected: true,
       deviceName: 'G6618 Motor Controller',
       protoMajor: 1,
       capabilities: 0x03,
-      sessionUptime: const Duration(hours: 0, minutes: 14, seconds: 22),
-      attempts: 14288,
     );
     addTearDown(state.dispose);
 
     await _pump(tester, state);
 
+    final frame = tester.widget<HairlineFrame>(
+      find.byKey(const Key('top_bar_device_frame')),
+    );
+    expect(frame.variant, HairlineVariant.main);
+    final padding = frame.padding as EdgeInsets;
+    expect(padding.left, inInclusiveRange(8, 12));
+    expect(padding.right, inInclusiveRange(8, 12));
+    expect(padding.top, inInclusiveRange(8, 12));
+    expect(padding.bottom, inInclusiveRange(8, 12));
+    // 艺术字与信息栅格都在同一框内。
     expect(
       find.descendant(
-        of: find.byKey(const Key('top_bar_uptime_value')),
-        matching: find.text('00:14:22'),
+        of: find.byKey(const Key('top_bar_device_frame')),
+        matching: find.byType(DeviceAscii),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
-        of: find.byKey(const Key('top_bar_frames_value')),
-        matching: find.text('14288'),
+        of: find.byKey(const Key('top_bar_device_frame')),
+        matching: find.byKey(const Key('top_bar_model_value')),
       ),
       findsOneWidget,
     );
   });
 
-  testWidgets('SEQ 协议未提供：即使已连接也显示 —，禁止估算', (WidgetTester tester) async {
+  testWidgets('设备参数区：字号增大且按语义着色', (WidgetTester tester) async {
     final state = AppState.test(
       connected: true,
       deviceName: 'G6618 Motor Controller',
       protoMajor: 1,
+      protoMinor: 0,
       capabilities: 0x03,
-      sessionUptime: const Duration(seconds: 5),
-      attempts: 12,
     );
     addTearDown(state.dispose);
 
     await _pump(tester, state);
 
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('top_bar_seq_value')),
-        matching: find.text('—'),
-      ),
-      findsOneWidget,
-    );
+    const palette = GuiPalette();
+    Text value(String key) => tester.widget<Text>(find.byKey(Key(key)));
+
+    final model = value('top_bar_model_value');
+    expect(model.style!.fontSize, greaterThanOrEqualTo(20));
+    expect(model.style!.color, palette.fgStrong);
+
+    final proto = value('top_bar_proto_value');
+    expect(proto.style!.fontSize, greaterThanOrEqualTo(20));
+    expect(proto.style!.color, palette.valuePurple);
+
+    final mcu = value('top_bar_mcu_value');
+    expect(mcu.style!.fontSize, greaterThanOrEqualTo(18));
+    expect(mcu.style!.color, palette.accent);
+
+    final cap = value('top_bar_cap_value');
+    expect(cap.style!.fontSize, greaterThanOrEqualTo(18));
+    expect(cap.style!.color, palette.valueGreen);
+
+    // FW 协议未提供：主值恒为 —，退为 fgMute（不是橙）。
+    final fw = value('top_bar_fw_value');
+    expect(fw.data, '—');
+    expect(fw.style!.color, palette.fgMute);
+
+    // 标签 ≥11px，青灰 fgDim。
+    final label = tester.widget<Text>(find.text('MCU'));
+    expect(label.style!.fontSize, greaterThanOrEqualTo(11));
+    expect(label.style!.color, palette.fgDim);
   });
 
   group('window chrome', () {
@@ -360,17 +386,5 @@ void main() {
 
       expect(toggles, 1);
     });
-  });
-
-  test('formatUptime renders HH:MM:SS', () {
-    expect(formatUptime(Duration.zero), '00:00:00');
-    expect(
-      formatUptime(const Duration(hours: 2, minutes: 5, seconds: 9)),
-      '02:05:09',
-    );
-    expect(
-      formatUptime(const Duration(hours: 100, minutes: 0, seconds: 1)),
-      '100:00:01',
-    );
   });
 }

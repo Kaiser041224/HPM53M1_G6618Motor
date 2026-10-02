@@ -35,14 +35,23 @@ int _bitCount(int mask) {
   return count;
 }
 
+/// Formats a session duration as `HH:MM:SS` (hours may exceed two digits).
+String formatUptime(Duration d) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${two(d.inHours)}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)}';
+}
+
 /// Persistent bottom strip: link verdict, transport counters and telemetry.
 ///
 /// Left: a [StatusBadge] (color + icon + text, design-system §6 rule 1) naming
 /// the link verdict — `READY`, `DEGRADED` or `未连接` — with a plain-language
-/// explanation of any degradation. Right: the link counters and telemetry.
-/// Values the protocol does not provide (SEQ) stay `—`; every value that is
-/// unknown or aged out also degrades to `—`, never a fabricated `0`
-/// (design-system §6 rule 2).
+/// explanation of any degradation. Right: the link counters and the telemetry
+/// migrated down from the top bar (POLL / UPTIME / SEQ / 帧) merged with the
+/// existing RTT / CRC / RESYNC / RETRY / DIRTY strip. When the strip is narrow
+/// the badge outranks the counters, which in turn outrank the frame / SEQ tail,
+/// so the tail drops first instead of overflowing. Values the protocol does not
+/// provide (SEQ) stay `—`; every value that is unknown or aged out also
+/// degrades to `—`, never a fabricated `0` (design-system §6 rule 2).
 class BottomBar extends StatelessWidget {
   const BottomBar({super.key, required this.state});
 
@@ -66,17 +75,28 @@ class BottomBar extends StatelessWidget {
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: <Widget>[
-          // 用 Expanded 而非 Flexible + Spacer：后者两者都是 flex:1，
-          // 会互相争夺同一份弹性空间，状态区仍会被挤爆。
-          Expanded(child: _status(context)),
-          const SizedBox(width: 16),
-          _telemetry(context),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // The verdict badge outranks every counter, and the counters outrank
+          // the tail SEQ / 帧 telemetry migrated down from the top bar. Reserve
+          // a floor for the badge, then hand the remainder to the counter strip,
+          // which drops its least-important trailing segments when tight.
+          final budget = constraints.maxWidth - _badgeReserve;
+          return Row(
+            children: <Widget>[
+              Expanded(child: _status(context)),
+              const SizedBox(width: 16),
+              _telemetry(context, budget),
+            ],
+          );
+        },
       ),
     );
   }
+
+  /// Horizontal room reserved for the verdict badge + its detail before any
+  /// counter may claim space (design-system §4.4 priority).
+  static const double _badgeReserve = 260;
 
   // ── left: verdict ────────────────────────────────────────────────────────
 
@@ -156,7 +176,7 @@ class BottomBar extends StatelessWidget {
 
   // ── right: counters ──────────────────────────────────────────────────────
 
-  Widget _telemetry(BuildContext context) {
+  Widget _telemetry(BuildContext context, double maxWidth) {
     final n = state.connected;
     final rttLive = state.freshnessOf(AppState.keyRtt) == Freshness.live;
     final rtt = (n && rttLive && state.rttMs != null)
@@ -171,7 +191,17 @@ class BottomBar extends StatelessWidget {
     final retryLive = state.freshnessOf(AppState.keyRetry) == Freshness.live;
     final framesLive = state.freshnessOf(AppState.keyFrames) == Freshness.live;
 
+    // POLL / UPTIME / SEQ / 帧 migrated here from the top bar; the order keeps
+    // the counters first and the frame/SEQ tail last so the tail drops first
+    // when the strip runs out of room.
+    final poll = n ? '500 ms' : '—';
+    final uptime = (n && state.sessionUptime != null)
+        ? formatUptime(state.sessionUptime!)
+        : '—';
+
     final segments = <(String, String, String)>[
+      ('bottom_bar_poll', 'POLL', poll),
+      ('bottom_bar_uptime', 'UPTIME', uptime),
       ('bottom_bar_rtt', 'RTT', rtt),
       ('bottom_bar_crc', 'CRC', n && crcLive ? '${state.crcErrors}' : '—'),
       (
@@ -189,14 +219,56 @@ class BottomBar extends StatelessWidget {
       ('bottom_bar_frames', '帧', n && framesLive ? '${state.attempts}' : '—'),
     ];
 
+    final visible = _fitSegments(context, segments, maxWidth);
     final children = <Widget>[];
-    for (var i = 0; i < segments.length; i++) {
+    for (var i = 0; i < visible.length; i++) {
       if (i > 0) children.add(_separator(context));
       children.add(
-        _segment(context, segments[i].$1, segments[i].$2, segments[i].$3),
+        _segment(context, visible[i].$1, visible[i].$2, visible[i].$3),
       );
     }
     return Row(mainAxisSize: MainAxisSize.min, children: children);
+  }
+
+  /// Keeps the leading segments that fit in [maxWidth], dropping the trailing
+  /// (least important) ones so the strip degrades instead of overflowing.
+  List<(String, String, String)> _fitSegments(
+    BuildContext context,
+    List<(String, String, String)> all,
+    double maxWidth,
+  ) {
+    final scale = GuiTypeScale.of(context);
+    final palette = GuiPalette.of(context);
+    final labelStyle = guiLabelStyle(palette, scale);
+    final valueStyle = scale.data.copyWith(
+      fontSize: 12,
+      color: palette.fgStrong,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    const gap = 6.0;
+    const separator = 24.0; // 8px padding either side + the 8px pipe glyph.
+    var used = 0.0;
+    final out = <(String, String, String)>[];
+    for (final segment in all) {
+      final width =
+          _measure(segment.$2, labelStyle) +
+          gap +
+          _measure(segment.$3, valueStyle) +
+          (out.isEmpty ? 0.0 : separator);
+      if (out.isNotEmpty && used + width > maxWidth) break;
+      used += width;
+      out.add(segment);
+    }
+    return out;
+  }
+
+  /// Lays [text] out with [style] and returns its width, for the counter fit.
+  double _measure(String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return painter.width;
   }
 
   Widget _separator(BuildContext context) => Padding(
