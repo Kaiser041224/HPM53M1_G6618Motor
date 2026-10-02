@@ -7,14 +7,13 @@ import '../widgets/encoder_schematic.dart';
 import '../widgets/glow_value.dart';
 import '../widgets/gui_button.dart';
 import '../widgets/gui_text_field.dart';
-import '../widgets/hairline_frame.dart';
 import '../widgets/param_controls.dart' show faultText;
-import '../widgets/section_title.dart';
 import '../widgets/stable_digits.dart';
 import '../widgets/stale_gate.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/vfd_bar_painter.dart';
 import 'label_style.dart';
+import 'panel_title.dart';
 import 'toast_overlay.dart';
 
 /// The 编码器 (encoder) zone: a thin-line schematic beside the two encoder
@@ -80,115 +79,105 @@ class EncoderZone extends StatelessWidget {
         ? '—'
         : reduction.toStringAsFixed(2);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        SectionTitle(
-          title: '编码器',
-          en: 'ENCODERS',
-          hue: TitleHue.green,
-          trailing: Text('KTH7823 ×2 · 转子 / 出轴', style: scale.label),
-        ),
-        const SizedBox(height: 14),
-        HairlineFrame(
-          key: const Key('encoder_frame'),
-          padding: const EdgeInsets.all(14),
-          // **上下排布**（动画在上、读数在下），读数区再由两列左右分列。
-          //
-          // 并排时读数区只分到约 40% 宽（合并页左栏里约 280px），
-          // 「标签 + 中文注记 + 数值 + 状态徽标」这一行必然被截断。
-          // 改为上下后读数区拿到整幅宽度，再由两列承载转子 / 出轴。
-          // 动画本身也不需要横向铺满，故居中并限宽。
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxWidth: _schematicMaxWidth,
-                  ),
-                  child: EncoderSchematic(
-                    key: const Key('encoder_schematic'),
-                    rotorDeg: rotorFreshness == Freshness.live
-                        ? state.status?.encRotorDeg
-                        : null,
-                    outputDeg: outputFreshness == Freshness.live
-                        ? state.status?.encOutputDeg
-                        : null,
-                    ratioLabel: ratioLabel,
-                    // v1.1：指针（含辉光）与减速比数值用洋红强调。
-                    pointerColor: palette.valueMagenta,
-                    ratioValueColor: palette.valueMagenta,
-                  ),
-                ),
+    return PanelBox(
+      frameKey: const Key('encoder_frame'),
+      title: '编码器',
+      en: 'ENCODERS',
+      hue: TitleHue.green,
+      trailing: Text('KTH7823 ×2 · 转子 / 出轴', style: scale.label),
+      contentPadding: const EdgeInsets.all(14),
+      // **上下排布**（动画在上、读数在下），读数区再由两列左右分列。
+      //
+      // 并排时读数区只分到约 40% 宽（合并页左栏里约 280px），
+      // 「标签 + 中文注记 + 数值 + 状态徽标」这一行必然被截断。
+      // 改为上下后读数区拿到整幅宽度，再由两列承载转子 / 出轴。
+      // 动画本身也不需要横向铺满，故居中并限宽。
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: _schematicMaxWidth),
+              child: EncoderSchematic(
+                key: const Key('encoder_schematic'),
+                rotorDeg: rotorFreshness == Freshness.live
+                    ? state.status?.encRotorDeg
+                    : null,
+                outputDeg: outputFreshness == Freshness.live
+                    ? state.status?.encOutputDeg
+                    : null,
+                ratioLabel: ratioLabel,
+                // v1.1：指针（含辉光）与减速比数值用洋红强调。
+                pointerColor: palette.valueMagenta,
+                ratioValueColor: palette.valueMagenta,
               ),
-              const SizedBox(height: 16),
-              _reductionRow(context, ratioLabel),
-              const SizedBox(height: 12),
-              _resolutionRow(context),
-              const SizedBox(height: 16),
-              _divider(context),
-              const SizedBox(height: 16),
-              // 下部：左右两栏 + 中央竖分割线；角度 / 转速两行跨栏同行对齐。
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Expanded(
-                      child: _encoderColumn(
-                        context,
-                        columnKey: const Key('encoder_column_rotor'),
-                        headerKey: const Key('encoder_header_rotor'),
-                        title: '转子编码器',
-                        freshness: rotorFreshness,
-                        angleRow: _angleRow(
-                          context,
-                          key: const Key('encoder_row_rotor'),
-                          value: state.status?.encRotorDeg,
-                          freshness: rotorFreshness,
-                        ),
-                        rpmRow: _rpmRow(
-                          context,
-                          key: const Key('encoder_rpm_rotor'),
-                          note: '角差分 EST',
-                          value: state.rpmRotor,
-                          freshness: rotorFreshness,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: _columnGap),
-                    _verticalDivider(context),
-                    const SizedBox(width: _columnGap),
-                    Expanded(
-                      child: _encoderColumn(
-                        context,
-                        columnKey: const Key('encoder_column_output'),
-                        headerKey: const Key('encoder_header_output'),
-                        title: '出轴编码器',
-                        freshness: outputFreshness,
-                        angleRow: _angleRow(
-                          context,
-                          key: const Key('encoder_row_output'),
-                          value: state.status?.encOutputDeg,
-                          freshness: outputFreshness,
-                        ),
-                        rpmRow: _rpmRow(
-                          context,
-                          key: const Key('encoder_rpm_output'),
-                          note: '磁编 · 角差分 EST',
-                          value: state.rpmOutput,
-                          freshness: outputFreshness,
-                        ),
-                        footer: _zeroSetRow(context),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 16),
+          _reductionRow(context, ratioLabel),
+          const SizedBox(height: 12),
+          _resolutionRow(context),
+          const SizedBox(height: 16),
+          _divider(context),
+          const SizedBox(height: 16),
+          // 下部：左右两栏 + 中央竖分割线；角度 / 转速两行跨栏同行对齐。
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Expanded(
+                  child: _encoderColumn(
+                    context,
+                    columnKey: const Key('encoder_column_rotor'),
+                    headerKey: const Key('encoder_header_rotor'),
+                    title: '转子编码器',
+                    freshness: rotorFreshness,
+                    angleRow: _angleRow(
+                      context,
+                      key: const Key('encoder_row_rotor'),
+                      value: state.status?.encRotorDeg,
+                      freshness: rotorFreshness,
+                    ),
+                    rpmRow: _rpmRow(
+                      context,
+                      key: const Key('encoder_rpm_rotor'),
+                      note: '角差分 EST',
+                      value: state.rpmRotor,
+                      freshness: rotorFreshness,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: _columnGap),
+                _verticalDivider(context),
+                const SizedBox(width: _columnGap),
+                Expanded(
+                  child: _encoderColumn(
+                    context,
+                    columnKey: const Key('encoder_column_output'),
+                    headerKey: const Key('encoder_header_output'),
+                    title: '出轴编码器',
+                    freshness: outputFreshness,
+                    angleRow: _angleRow(
+                      context,
+                      key: const Key('encoder_row_output'),
+                      value: state.status?.encOutputDeg,
+                      freshness: outputFreshness,
+                    ),
+                    rpmRow: _rpmRow(
+                      context,
+                      key: const Key('encoder_rpm_output'),
+                      note: '磁编 · 角差分 EST',
+                      value: state.rpmOutput,
+                      freshness: outputFreshness,
+                    ),
+                    footer: _zeroSetRow(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -240,10 +229,7 @@ class EncoderZone extends StatelessWidget {
           angleRow,
           const SizedBox(height: 8),
           rpmRow,
-          if (footer != null) ...<Widget>[
-            const SizedBox(height: 12),
-            footer,
-          ],
+          if (footer != null) ...<Widget>[const SizedBox(height: 12), footer],
         ],
       ),
     );

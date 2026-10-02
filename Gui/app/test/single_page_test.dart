@@ -14,6 +14,7 @@ import 'package:g6618_gui/ui/single_page.dart';
 import 'package:g6618_gui/ui/start_adjust_zone.dart';
 import 'package:g6618_gui/ui/status_zone.dart';
 import 'package:g6618_gui/ui/top_bar.dart';
+import 'package:g6618_gui/widgets/crt_backdrop.dart';
 import 'package:g6618_gui/widgets/trend_chart.dart';
 
 /// The nav shell's information architecture: sidebar L1 only, each page lays
@@ -29,7 +30,10 @@ Future<void> _pump(WidgetTester tester, AppState state) async {
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
-    MaterialApp(theme: buildGuiTheme(), home: SinglePage(state: state)),
+    MaterialApp(
+      theme: buildGuiTheme(),
+      home: SinglePage(state: state),
+    ),
   );
 }
 
@@ -84,7 +88,9 @@ void main() {
     }
   });
 
-  testWidgets('默认落在监视；监视页直铺 StatusZone → EncoderZone（无 L2 选项卡）', (tester) async {
+  testWidgets('默认落在监视；监视页直铺 StatusZone → EncoderZone（无 L2 选项卡）', (
+    tester,
+  ) async {
     final state = AppState.test(status: _status(), metas: const []);
     addTearDown(state.dispose);
 
@@ -168,9 +174,7 @@ void main() {
     expect(find.text('故障构成与指令'), findsOneWidget);
   });
 
-  testWidgets('合并页右栏四段自上而下：故障 → 启动/调整 → PID 参数（三环）→ 保护门限', (
-    tester,
-  ) async {
+  testWidgets('合并页右栏四段自上而下：故障 → 启动/调整 → PID 参数（三环）→ 保护门限', (tester) async {
     final state = AppState.test(status: _status(), metas: const []);
     addTearDown(state.dispose);
 
@@ -314,7 +318,10 @@ void main() {
     final state = AppState.test(status: _status(), metas: const []);
     addTearDown(state.dispose);
     await tester.pumpWidget(
-      MaterialApp(theme: buildGuiTheme(), home: SinglePage(state: state)),
+      MaterialApp(
+        theme: buildGuiTheme(),
+        home: SinglePage(state: state),
+      ),
     );
     await tester.pump(const Duration(milliseconds: 400));
 
@@ -350,5 +357,76 @@ void main() {
     expect(find.byType(BottomBar), findsOneWidget);
     expect(find.text('DEVICE ID PENDING'), findsOneWidget);
     expect(find.text('未连接'), findsOneWidget);
+  });
+
+  testWidgets('侧边导航键：未选中微隆起、选中内凹并勾青线（老式按键立体）', (tester) async {
+    final state = AppState.test(status: _status(), metas: const []);
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    const palette = GuiPalette();
+
+    // 选中项（默认 nav_monitor）：内凹 bevel（顶暗底亮）+ accent 勾线。
+    final selectedFace =
+        tester
+                .widget<Container>(
+                  find.byKey(const Key('nav_face_nav_monitor')),
+                )
+                .decoration!
+            as BoxDecoration;
+    final selectedOutline = (selectedFace.border! as Border).top.color;
+    expect(selectedOutline, palette.accent, reason: '选中键应勾青色 accent 线');
+
+    final selectedBevel =
+        tester
+                .widget<Container>(
+                  find.byKey(const Key('nav_bevel_nav_monitor')),
+                )
+                .decoration!
+            as BoxDecoration;
+    final selectedEdges = selectedBevel.border! as Border;
+    expect(
+      selectedEdges.top.color.computeLuminance(),
+      lessThan(selectedEdges.bottom.color.computeLuminance()),
+      reason: '选中 / 按下态：顶暗底亮（内凹 invert bevel）',
+    );
+
+    // 未选中项（nav_scope）：微隆起 bevel（顶亮底暗）+ lineDim 勾线。
+    final idleFace =
+        tester
+                .widget<Container>(find.byKey(const Key('nav_face_nav_scope')))
+                .decoration!
+            as BoxDecoration;
+    final idleOutline = (idleFace.border! as Border).top.color;
+    expect(idleOutline, palette.lineDim, reason: '未选中键退到 lineDim 勾线');
+
+    final idleBevel =
+        tester
+                .widget<Container>(find.byKey(const Key('nav_bevel_nav_scope')))
+                .decoration!
+            as BoxDecoration;
+    final idleEdges = idleBevel.border! as Border;
+    expect(
+      idleEdges.top.color.computeLuminance(),
+      greaterThan(idleEdges.bottom.color.computeLuminance()),
+      reason: '默认态：顶亮底暗（微隆起 bevel）',
+    );
+  });
+
+  testWidgets('内容区 CRT 背景挂底层：无论切换到哪一页都在内容之下', (tester) async {
+    final state = AppState.test(status: _status(), metas: const []);
+    addTearDown(state.dispose);
+
+    await _pump(tester, state);
+
+    final stack = tester.widget<Stack>(find.byKey(const Key('content_stack')));
+    expect(stack.children.first, isA<CrtBackdrop>(), reason: 'CRT 背景必须是底层');
+    expect(find.byKey(const Key('crt_backdrop')), findsOneWidget);
+
+    // 切页后 CRT 背景仍常驻（在页面栈之外，不随页面 Offstage）。
+    await tester.tap(find.byKey(const Key('nav_scope')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('crt_backdrop')), findsOneWidget);
   });
 }

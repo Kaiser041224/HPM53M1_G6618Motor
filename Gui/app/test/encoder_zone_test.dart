@@ -7,6 +7,7 @@ import 'package:g6618_gui/bridge/frb/api.dart' show FrbError;
 import 'package:g6618_gui/state/app_state.dart';
 import 'package:g6618_gui/theme/gui_theme.dart';
 import 'package:g6618_gui/ui/encoder_zone.dart';
+import 'package:g6618_gui/ui/panel_title.dart';
 import 'package:g6618_gui/widgets/encoder_schematic.dart';
 import 'package:g6618_gui/widgets/hairline_frame.dart';
 import 'package:g6618_gui/widgets/status_badge.dart';
@@ -91,6 +92,35 @@ void main() {
         find.byKey(const Key('encoder_frame')),
       );
       expect(frame.variant, HairlineVariant.main);
+    });
+
+    testWidgets('「编码器」标题并入面板外框（PanelBox 一体化，非游离）', (tester) async {
+      final state = AppState.test(status: makeStatus(), metas: const []);
+      addTearDown(state.dispose);
+
+      await _pump(tester, EncoderZone(state: state));
+
+      final frame = find.byKey(const Key('encoder_frame'));
+      // 标题条与示意图 / 两栏数据被同一外框包裹。
+      expect(
+        find.descendant(of: frame, matching: find.text('编码器')),
+        findsOneWidget,
+        reason: '标题须在 encoder_frame 内',
+      );
+      expect(
+        find.descendant(of: frame, matching: find.text('ENCODERS')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: frame, matching: find.byType(PanelTitle)),
+        findsOneWidget,
+        reason: '标题条走 PanelTitle（渐变 + 青框）',
+      );
+      expect(
+        find.descendant(of: frame, matching: find.byType(EncoderSchematic)),
+        findsOneWidget,
+        reason: '示意图与标题同框',
+      );
     });
 
     testWidgets('两栏标题「转子编码器」「出轴编码器」，角度各 1 位小数 °', (tester) async {

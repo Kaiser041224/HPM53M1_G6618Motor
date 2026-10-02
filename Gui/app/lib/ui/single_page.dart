@@ -4,6 +4,7 @@ import '../state/app_state.dart';
 import '../theme/gui_glow.dart';
 import '../theme/gui_palette.dart';
 import '../theme/gui_type.dart';
+import '../widgets/crt_backdrop.dart';
 import '../widgets/hairline_frame.dart';
 import 'bottom_bar.dart';
 import 'control_zone.dart';
@@ -110,7 +111,15 @@ class _SinglePageState extends State<SinglePage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 _Sidebar(activeIndex: _navIndex, onSelect: _selectNav),
-                Expanded(child: _content()),
+                Expanded(
+                  // CRT 纹理挂在内容区底层：扫描线 + ~12Hz 动态噪点在页面内容
+                  // 之下（Stack 首个孩子先绘制 = 更靠后）。
+                  child: Stack(
+                    key: const Key('content_stack'),
+                    fit: StackFit.expand,
+                    children: <Widget>[const CrtBackdrop(), _content()],
+                  ),
+                ),
               ],
             ),
           ),
@@ -296,12 +305,41 @@ class _SidebarItem extends StatefulWidget {
 class _SidebarItemState extends State<_SidebarItem> {
   bool _hovered = false;
 
+  /// 键面高光色 —— 隆起态的顶边 / 内凹态的底边。
+  Color _bevelHighlight(GuiPalette palette) =>
+      palette.fgStrong.withValues(alpha: 0.10);
+
+  /// 键面暗边色 —— 隆起态的底边 / 内凹态的顶边，兼作内阴影。
+  Color _bevelShadow(GuiPalette palette) =>
+      palette.bgVoid.withValues(alpha: 0.55);
+
   @override
   Widget build(BuildContext context) {
     final palette = GuiPalette.of(context);
     final scale = GuiTypeScale.of(context);
     final active = widget.active;
-    final highlighted = active || _hovered;
+    // 老式 CD 机按键：未选微隆起（顶亮底暗），选中 / 按下内凹（顶暗底亮）。
+    final bevelTop = active ? _bevelShadow(palette) : _bevelHighlight(palette);
+    final bevelBottom = active
+        ? _bevelHighlight(palette)
+        : _bevelShadow(palette);
+    final faceGradient = active
+        ? LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[palette.bgPanel, palette.bgHover],
+          )
+        : _hovered
+        ? LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[palette.bgHover, palette.bgRaise],
+          )
+        : LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[palette.bgRaise, palette.bgPanel],
+          );
     final textColor = active ? palette.fgStrong : palette.fgDim;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -311,15 +349,14 @@ class _SidebarItemState extends State<_SidebarItem> {
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
         child: Container(
+          key: Key('nav_face_${widget.item.key}'),
           margin: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
           decoration: BoxDecoration(
-            color: active
-                ? palette.bgHover
-                : (_hovered ? palette.bgRaise : palette.bgPanel),
+            gradient: faceGradient,
+            // 勾线：选中 = accent 1.5px；未选中 = lineDim 1px。
             border: Border.all(
-              color: highlighted ? palette.lineHi : Colors.transparent,
-              width: HairlineFrame.brightWidth,
+              color: active ? palette.accent : palette.lineDim,
+              width: active ? HairlineFrame.brightWidth : palette.lineWidth,
             ),
             boxShadow: _hovered && !active
                 ? <BoxShadow>[
@@ -330,32 +367,44 @@ class _SidebarItemState extends State<_SidebarItem> {
                   ]
                 : const <BoxShadow>[],
           ),
-          child: Row(
-            children: <Widget>[
-              Icon(widget.item.icon, size: 16, color: textColor),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      widget.item.zh,
-                      style: scale.body.copyWith(
-                        fontSize: 12,
-                        color: textColor,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.item.latin,
-                      style: scale.label.copyWith(
-                        color: active ? palette.fgStrong : palette.fgMute,
-                      ),
-                    ),
-                  ],
-                ),
+          child: Container(
+            key: Key('nav_bevel_${widget.item.key}'),
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: bevelTop),
+                bottom: BorderSide(color: bevelBottom),
               ),
-            ],
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                Icon(widget.item.icon, size: 16, color: textColor),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        widget.item.zh,
+                        style: scale.body.copyWith(
+                          fontSize: 12,
+                          color: textColor,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.item.latin,
+                        style: scale.label.copyWith(
+                          color: active ? palette.fgStrong : palette.fgMute,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
