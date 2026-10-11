@@ -10,9 +10,13 @@
  * 零点：软件方案（app_param 键值存储，存 flash 参数区，掉电保持），
  *       不消耗编码器 MTP（Z 寄存器寿命仅 1000 次写）。
  *
- * 实时性：read_raw 为阻塞短操作（实测 ~7µs），无打印/动态分配；
- *         设备对象在 init 时解析并缓存，热路径无注册表查表；
- *         每实例单所有者，不可在多上下文并发调用。
+ * 实时性：
+ *   - 启动/自检期：read_raw 为阻塞短操作（两帧 ~7µs），仅调度器前后的初始化阶段使用；
+ *   - 运行期（app_encoder_sync_start 之后）：转子 SPI3 由硬件同步采样接管——
+ *     PWM1 CMP10（与相电流 ADC 同一触发点）→ TRGM DMA_REQ0 → HDMA 写 SPI3 CMD 启动单帧，
+ *     角度与电流同拍采样；ADC0 PMT 完成中断（FOC 快车道）内 app_encoder_sync_sample()
+ *     只取 RX 字 + 发布快照（无启动开销、正常无忙等）。
+ *   - 单一所有者：同步采样启用后，运行期读 API 只返回快照，绝不触碰 SPI3。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -21,11 +25,12 @@
 #include "app_encoder.h"
 
 #include "algo_encoder_snapshot.h"
-#include "app_gptmr.h"
 #include "app_param.h"
+#include "app_ramfunc.h"
 #include "intf_clock.h"
 #include "intf_encoder.h"
 #include "intf_spi.h"
+#include "intf_trgm.h"
 
 #include <string.h>
 
@@ -33,6 +38,16 @@
 
 /** 机械角单步跳变上限 [deg]（25kHz 采样；5° ≈ 20000 rpm，远超实际转速） */
 #define APP_ENCODER_JUMP_LIMIT_DEG (5.0f)
+
+/* 同步采样触发：与相电流 ADC 共用 PWM1 CMP10（app_adc.h APP_ADC_TRIGGER_CMP_INDEX），
+ * 经 TRGM DMA 请求 0 驱动 HDMA 启动 SPI3 单帧 —— 角度与电流同一时刻采样。 */
+#define APP_ENCODER_SYNC_TRGM_SRC  INTF_TRGM_SRC_PWM1_CH10REF
+#define APP_ENCODER_SYNC_TRGM_DST  INTF_TRGM_DST_DMA_REQ0
+#define APP_ENCODER_SYNC_SPI_TRIG  INTF_SPI_TRIG_DMA_REQ0
+/* 取帧时帧仍在传输的最长等待 [µs]：16bit@5MHz = 3.2µs + cs2sclk + csht(12 半 SCLK = 1.2µs)
+ * ≈ 4.5µs 以上。正常 ISR 在 ADC 转换（~4µs）之后进入，帧已结束、不等待；仅 ISR 迟到一个
+ * 周期（下一帧正在传输）时才等待，8µs 保证该情形能取到完整的新帧而非判失败。 */
+#define APP_ENCODER_SYNC_WAIT_US   (8U)
 
 /**
  * @brief 编码器持久化参数（app_param 键 APP_PARAM_KEY_ENCODER 的数据布局）
@@ -43,9 +58,13 @@ typedef struct {
 } encoder_param_t;
 
 /* 板级映射：转子 -> SPI3，出轴 -> SPI1（SoC 实例号） */
-static algo_encoder_snapshot_t s_rotor_snap; /**< 转子一致快照（唯一写者 = 采样 ISR） */
+static algo_encoder_snapshot_t s_rotor_snap; /**< 转子一致快照（唯一写者 = ADC0 PMT ISR 同步采样） */
 static int32_t s_rotor_jump_limit;           /**< 单步跳变上限 [count]（init 时按分辨率算） */
 static volatile bool s_rotor_sampler_claimed; /**< 运行期 SPI3 所有权已移交采样器 */
+static volatile bool s_rotor_sync_armed;      /**< 硬件同步采样已启用（ISR 门控，最后发布） */
+static uint32_t s_rotor_sync_wait_cycles;     /**< 取帧最长等待 [cycle]（start 时换算） */
+/** 同步取帧函数（start 时缓存到 RAM，热路径免读 flash 中的设备对象） */
+static int (*s_rotor_sync_fetch)(uint16_t* raw, uint32_t wait_cycles);
 static const uint8_t s_encoder_bus[APP_ENCODER_COUNT] = {3U, 1U};
 
 /* init 时解析的设备对象（热路径直接调用，不再查表） */
@@ -116,6 +135,8 @@ int app_encoder_init(void) {
         algo_encoder_snapshot_ctor(&s_rotor_snap, &snap_cfg);
     }
     s_rotor_sampler_claimed = false;
+    s_rotor_sync_armed = false;
+    s_rotor_sync_fetch = NULL;
 
     /* 加载软件零点（flash 参数区；无有效记录时为 0） */
     if (app_param_init() == 0) {
@@ -145,30 +166,36 @@ volatile uint32_t g_encoder_isr_cycles_max __attribute__((section(".noncacheable
 volatile uint32_t g_encoder_sample_count __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_encoder_read_fail_count __attribute__((section(".noncacheable.bss")));
 
-/**
- * @brief GPTMR1 CH3 中断回调：采样转子（唯一物理 SPI3 运行期读点）
- */
-static void app_encoder_sample_rotor_isr(void) { (void)app_encoder_sample_rotor(); }
+int app_encoder_sync_start(void) {
+    const intf_encoder_t* dev = s_encoder_dev[APP_ENCODER_ROTOR];
 
-int app_encoder_sampler_start(void) {
-    int rc;
-
-    if (s_encoder_dev[APP_ENCODER_ROTOR] == NULL) {
+    if (s_rotor_sync_armed) {
+        return 0; /* 幂等 */
+    }
+    if ((dev == NULL) || (dev->sync_arm == NULL) || (dev->sync_fetch == NULL)) {
         return -1;
     }
+    s_rotor_sync_wait_cycles = (intf_clock_get_cpu_freq() / 1000000U) * APP_ENCODER_SYNC_WAIT_US;
+
+    /* 先 arm（TX FIFO 预填 + DMA 就绪），再接通触发路由：首个触发即为完整帧 */
     app_encoder_sampler_claim();
-    rc = app_gptmr_register_callback(APP_GPTMR_CH_3, app_encoder_sample_rotor_isr);
-    if (rc != 0) {
+    if (dev->sync_arm((uint8_t)APP_ENCODER_SYNC_SPI_TRIG) != 0) {
         app_encoder_sampler_release_claim();
         return -1;
     }
-    rc = app_gptmr_start(APP_GPTMR_CH_3);
-    if (rc != 0) {
+    if (intf_trgm_connect(APP_ENCODER_SYNC_TRGM_SRC, APP_ENCODER_SYNC_TRGM_DST) != 0) {
+        if (dev->sync_disarm != NULL) {
+            dev->sync_disarm();
+        }
         app_encoder_sampler_release_claim();
         return -1;
     }
+    s_rotor_sync_fetch = dev->sync_fetch;
+    s_rotor_sync_armed = true;
     return 0;
 }
+
+bool app_encoder_sync_active(void) { return s_rotor_sync_armed; }
 
 int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw) {
     if ((id >= APP_ENCODER_COUNT) || (raw == NULL)) {
@@ -190,39 +217,12 @@ int app_encoder_read_raw(app_encoder_id_t id, uint16_t* raw) {
     return s_encoder_dev[id]->read_raw(raw);
 }
 
-int app_encoder_sample_rotor_at(uint32_t now_cycles) {
-    algo_encoder_input_t in = {
-        .raw = 0U,
-        .ok = false,
-        .timestamp_cycles = now_cycles,
-    };
-    uint32_t t0 = intf_clock_get_cycle();
-    uint32_t cycles;
-    int rc;
-
-    if (s_encoder_dev[APP_ENCODER_ROTOR] == NULL) {
-        return -1;
-    }
-    /* 唯一物理 SPI3 读点（运行期）：设备读失败按无效样本处理 */
-    if (s_encoder_dev[APP_ENCODER_ROTOR]->read_raw(&in.raw) == 0) {
-        in.ok = true;
-    } else {
-        g_encoder_read_fail_count++;
-    }
-    rc = algo_encoder_snapshot_push(&s_rotor_snap, &in);
-
-    cycles = intf_clock_get_cycle() - t0;
-    g_encoder_isr_cycles = cycles;
-    if (cycles > g_encoder_isr_cycles_max) {
-        g_encoder_isr_cycles_max = cycles;
-    }
-    g_encoder_sample_count++;
-
-    return (rc == ALGO_ENC_PUSH_ACCEPTED) ? 0 : ((rc == ALGO_ENC_PUSH_HELD) ? 1 : -1);
-}
-
-int app_encoder_sample_rotor(void) { return app_encoder_sample_rotor_at(intf_clock_get_cycle()); }
-
+/**
+ * @brief 快照样本 → 平台快照（含按器件分辨率换算的机械角）
+ * @param sample 算法层样本
+ * @param out 平台快照输出
+ */
+APP_ATTR_RAMFUNC
 static void app_encoder_fill_snapshot(const algo_encoder_sample_t* sample,
                                       app_encoder_rotor_snapshot_t* out) {
     out->raw = sample->raw;
@@ -236,6 +236,48 @@ static void app_encoder_fill_snapshot(const algo_encoder_sample_t* sample,
     out->read_failed = sample->read_failed;
 }
 
+APP_ATTR_RAMFUNC
+int app_encoder_sync_sample(uint32_t now_cycles, app_encoder_rotor_snapshot_t* out) {
+    algo_encoder_input_t in = {
+        .raw = 0U,
+        .ok = false,
+        .timestamp_cycles = now_cycles,
+    };
+    uint32_t t0;
+    uint32_t cycles;
+    int rc;
+
+    if (!s_rotor_sync_armed) {
+        algo_encoder_sample_t sample = s_rotor_snap.sample;
+
+        app_encoder_fill_snapshot(&sample, out);
+        out->valid = false;
+        return -1;
+    }
+
+    t0 = intf_clock_get_cycle();
+    /* 唯一运行期 SPI3 读点：取硬件触发帧（正常已完成，无等待） */
+    if (s_rotor_sync_fetch(&in.raw, s_rotor_sync_wait_cycles) == 0) {
+        in.ok = true;
+    } else {
+        g_encoder_read_fail_count++;
+    }
+    rc = algo_encoder_snapshot_push(&s_rotor_snap, &in);
+
+    /* 写者即读者（同一 ISR 上下文）：发布值直接取用，age = 0 */
+    app_encoder_fill_snapshot(&s_rotor_snap.sample, out);
+    out->age_cycles = 0U;
+
+    cycles = intf_clock_get_cycle() - t0;
+    g_encoder_isr_cycles = cycles;
+    if (cycles > g_encoder_isr_cycles_max) {
+        g_encoder_isr_cycles_max = cycles;
+    }
+    g_encoder_sample_count++;
+
+    return (rc == ALGO_ENC_PUSH_ACCEPTED) ? 0 : ((rc == ALGO_ENC_PUSH_HELD) ? 1 : -1);
+}
+
 int app_encoder_get_rotor_snapshot(app_encoder_rotor_snapshot_t* out) {
     algo_encoder_sample_t sample;
     bool coherent;
@@ -243,27 +285,11 @@ int app_encoder_get_rotor_snapshot(app_encoder_rotor_snapshot_t* out) {
     if (out == NULL) {
         return -1;
     }
-    /* 主循环读者允许 8 次有界重试；更高优先级 ISR 读者用 read_rotor_isr */
+    /* 任务上下文读者：8 次有界重试（写者 = ADC0 ISR 同步采样，可在读期间发布） */
     coherent = algo_encoder_snapshot_read(&s_rotor_snap, intf_clock_get_cycle(), &sample, 8U);
     app_encoder_fill_snapshot(&sample, out);
     if (!coherent) {
         out->valid = false; /* 未取到一致快照：消费方不得使用 */
-    }
-    return 0;
-}
-
-int app_encoder_read_rotor_isr(app_encoder_rotor_snapshot_t* out) {
-    algo_encoder_sample_t sample;
-    bool coherent;
-
-    if (out == NULL) {
-        return -1;
-    }
-    /* ISR：最多 1 次重试，取不到也返回当前值（不阻塞） */
-    coherent = algo_encoder_snapshot_read(&s_rotor_snap, intf_clock_get_cycle(), &sample, 1U);
-    app_encoder_fill_snapshot(&sample, out);
-    if (!coherent) {
-        out->valid = false;
     }
     return 0;
 }

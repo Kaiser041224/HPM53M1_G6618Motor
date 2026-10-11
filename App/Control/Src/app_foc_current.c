@@ -16,6 +16,7 @@
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
 #include "app_protect_policy.h"
+#include "app_ramfunc.h"
 #include "app_software_params.h"
 #include "foc_current.h"
 #include "foc_math.h"
@@ -66,6 +67,7 @@ app_foc_current_snapshot_t g_foc_current_snapshot
  * @param software 软件参数
  * @return 有效占空比上限（>0.5）
  */
+APP_ATTR_RAMFUNC
 static float app_foc_effective_duty_max(const app_software_params_t* software) {
     float d = software->control.limits.duty_max;
 
@@ -135,13 +137,16 @@ int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s
     return 0;
 }
 
+APP_ATTR_RAMFUNC
 void app_foc_current_vtest_stop(void) {
     s_vtest_active = false;
     s_vtest_left_s = 0.0f;
 }
 
+APP_ATTR_RAMFUNC
 bool app_foc_current_vtest_active(void) { return s_vtest_active; }
 
+APP_ATTR_RAMFUNC /* ADC0 ISR（vtest 独占拍） */
 int app_foc_current_vtest_step_fresh(float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
                                      float dt_s) {
     const app_software_params_t* software = app_software_params_current();
@@ -261,6 +266,7 @@ void app_foc_trace_reset(void) {
 /**
  * @brief 捕获单拍样本（trace 用）
  */
+APP_ATTR_RAMFUNC
 static void app_foc_trace_capture(void) {
     if (!s_trace_armed) {
         return;
@@ -278,10 +284,12 @@ static void app_foc_trace_capture(void) {
     }
 }
 
+APP_ATTR_RAMFUNC
 bool app_foc_current_is_tripped(void) { return s_tripped; }
 
 bool app_foc_current_is_ready(void) { return s_ready; }
 
+APP_ATTR_RAMFUNC
 void app_foc_current_zero_vector(void) {
     (void)app_3phase_inverter_set_duty_abc(0.5f, 0.5f, 0.5f);
     g_foc_current_snapshot.duty_u = 0.5f;
@@ -301,6 +309,7 @@ volatile uint32_t g_foc_protect_counts[APP_FOC_PROT_COUNT]
 /**
  * @brief 记录一次保护路径并注明原因
  */
+APP_ATTR_RAMFUNC
 void app_foc_current_protect_reason(uint8_t reason) {
     if (reason < (uint8_t)APP_FOC_PROT_COUNT) {
         g_foc_protect_counts[reason]++;
@@ -310,6 +319,7 @@ void app_foc_current_protect_reason(uint8_t reason) {
 /**
  * @brief 保护式零矢量：输出零矢量 + 标记数据不可信 + 故障计数
  */
+APP_ATTR_RAMFUNC
 void app_foc_current_protect(void) {
     app_foc_current_zero_vector();
     g_foc_current_snapshot.valid = false;
@@ -329,6 +339,7 @@ float app_foc_current_get_v_scale(void) {
  * @brief 电流环（显式输入版本：供 ADC 完成回调使用，输入为本拍新鲜采样）
  * @note 与 app_foc_current_run 的区别：不读模拟量缓存，电流/母线由调用方给出
  */
+APP_ATTR_RAMFUNC /* 25kHz 电流环主体（ADC0 PMT ISR） */
 int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
                               float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
                               float duty_abc_out[3], bool* saturated_out) {

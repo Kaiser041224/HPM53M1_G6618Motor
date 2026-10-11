@@ -18,6 +18,18 @@ void test_foc_math(void) {
     CHECK_NEAR(foc_wrap_2pi(-0.5f), FOC_TWO_PI_F - 0.5f, 1e-5f);
     CHECK_NEAR(foc_wrap_2pi(FOC_TWO_PI_F * 3.5f), FOC_PI_F, 1e-4f);
     CHECK_NEAR(foc_wrap_2pi(1234.5f), 1234.5f - 196.0f * FOC_TWO_PI_F, 1e-3f);
+    /* 负大角度（整数 floor 的 k-- 分支）：-1234.5 = -197·2π + r */
+    CHECK_NEAR(foc_wrap_2pi(-1234.5f), -1234.5f + 197.0f * FOC_TWO_PI_F, 1e-3f);
+    CHECK(foc_wrap_2pi(-1e-3f) > 0.0f);
+    CHECK(foc_wrap_2pi(-1e-3f) < FOC_TWO_PI_F);
+    /* 契约：非有限输入返回 NaN（整数 floor 实现不得对 NaN/Inf/|y|≥2^31 做 UB 转换） */
+    CHECK(!foc_finite(foc_wrap_2pi(NAN)));
+    CHECK(!foc_finite(foc_wrap_2pi(INFINITY)));
+    CHECK(!foc_finite(foc_wrap_2pi(-INFINITY)));
+    {
+        float big = foc_wrap_2pi(1.0e12f); /* 超出精度范围：结果须有限且在 [0, 2π) */
+        CHECK(foc_finite(big) && (big >= 0.0f) && (big < FOC_TWO_PI_F));
+    }
 
     /* wrap_pm_pi：±π 归到 +π；π 邻域；2π×2.25 → π/2；大角度（θe 量级） */
     CHECK_NEAR(foc_wrap_pm_pi(FOC_PI_F), FOC_PI_F, 1e-5f);

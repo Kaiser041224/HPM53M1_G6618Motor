@@ -11,6 +11,7 @@
 
 #include "algo_filter.h"
 #include "app_hardware_params.h"
+#include "app_ramfunc.h"
 #include "intf_clock.h"
 
 #include <math.h>
@@ -96,6 +97,7 @@ static float ntc_resistance_from_volts(float volts) {
  * @param raw ADC 原始码
  * @return 物理量（电流 [A] / 电压 [V] / 阻值 [Ω]）
  */
+APP_ATTR_RAMFUNC /* FOC ISR 电流换算路径 */
 static float channel_to_physical(adc_channel_t ch, uint16_t raw) {
     float volts = app_adc_code_to_volts(raw);
 
@@ -191,6 +193,7 @@ void app_analog_signal_process(void) {
     }
 }
 
+APP_ATTR_RAMFUNC
 float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw) {
     if (ch >= ADC_CH_COUNT) {
         return NAN;
@@ -212,6 +215,7 @@ bool app_analog_signal_read_all(app_analog_values_t* values) {
     return true;
 }
 
+APP_ATTR_RAMFUNC
 float app_analog_signal_read(adc_channel_t ch) {
     if ((ch >= ADC_CH_COUNT) || !s_valid) {
         return NAN;

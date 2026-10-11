@@ -11,7 +11,7 @@
 
 #include "intf_encoder.h"
 #include "intf_spi.h"
-#include "app_gptmr.h"
+#include "intf_trgm.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -22,14 +22,50 @@ int g_mock_enc_read_reg_count[2];
 int g_mock_enc_read_fail[2];
 uint16_t g_mock_enc_raw[2];
 uint32_t g_mock_cycle;
+int g_mock_enc_sync_arm_count[2];
+int g_mock_enc_sync_fetch_count[2];
+int g_mock_enc_sync_fetch_fail[2];
+uint8_t g_mock_enc_sync_trig[2];
+int g_mock_trgm_connect_count;
+intf_trgm_src_t g_mock_trgm_src;
+intf_trgm_dst_t g_mock_trgm_dst;
 
 void mock_reset(void) {
     memset(g_mock_enc_read_count, 0, sizeof(g_mock_enc_read_count));
     memset(g_mock_enc_read_reg_count, 0, sizeof(g_mock_enc_read_reg_count));
     memset(g_mock_enc_read_fail, 0, sizeof(g_mock_enc_read_fail));
     memset(g_mock_enc_raw, 0, sizeof(g_mock_enc_raw));
+    memset(g_mock_enc_sync_arm_count, 0, sizeof(g_mock_enc_sync_arm_count));
+    memset(g_mock_enc_sync_fetch_count, 0, sizeof(g_mock_enc_sync_fetch_count));
+    memset(g_mock_enc_sync_fetch_fail, 0, sizeof(g_mock_enc_sync_fetch_fail));
+    memset(g_mock_enc_sync_trig, 0, sizeof(g_mock_enc_sync_trig));
+    g_mock_trgm_connect_count = 0;
+    g_mock_trgm_src = (intf_trgm_src_t)0;
+    g_mock_trgm_dst = (intf_trgm_dst_t)0;
     g_mock_cycle = 0U;
 }
+
+/* ---- 同步采样替身（硬件触发帧：arm 一次，每拍 fetch 一次） ---- */
+static int mock_sync_arm(uint8_t id, uint8_t trig) {
+    g_mock_enc_sync_arm_count[id]++;
+    g_mock_enc_sync_trig[id] = trig;
+    return 0;
+}
+static int mock_sync_fetch(uint8_t id, uint16_t *raw, uint32_t wait_cycles) {
+    (void)wait_cycles;
+    g_mock_enc_sync_fetch_count[id]++;
+    if (g_mock_enc_sync_fetch_fail[id]) {
+        return -1;
+    }
+    *raw = g_mock_enc_raw[id];
+    return 0;
+}
+static int enc0_sync_arm(uint8_t trig) { return mock_sync_arm(0U, trig); }
+static int enc0_sync_fetch(uint16_t *raw, uint32_t w) { return mock_sync_fetch(0U, raw, w); }
+static void enc0_sync_disarm(void) {}
+static int enc1_sync_arm(uint8_t trig) { return mock_sync_arm(1U, trig); }
+static int enc1_sync_fetch(uint16_t *raw, uint32_t w) { return mock_sync_fetch(1U, raw, w); }
+static void enc1_sync_disarm(void) {}
 
 /* ---- 编码器替身：两个实例各自函数 ---- */
 static int enc0_init(const intf_encoder_cfg_t *cfg) { (void)cfg; return 0; }
@@ -72,6 +108,7 @@ static const intf_encoder_t s_enc0 = {
     .read_reg = enc0_read_reg, .write_reg = enc0_write_reg, .set_zero = enc0_set_zero,
     .set_direction = enc0_set_direction, .get_info = enc0_get_info,
     .get_error_count = enc0_get_error_count,
+    .sync_arm = enc0_sync_arm, .sync_fetch = enc0_sync_fetch, .sync_disarm = enc0_sync_disarm,
 };
 static const intf_encoder_t s_enc1 = {
     .instance_id = 1U,
@@ -79,6 +116,7 @@ static const intf_encoder_t s_enc1 = {
     .read_reg = enc1_read_reg, .write_reg = enc1_write_reg, .set_zero = enc1_set_zero,
     .set_direction = enc1_set_direction, .get_info = enc1_get_info,
     .get_error_count = enc1_get_error_count,
+    .sync_arm = enc1_sync_arm, .sync_fetch = enc1_sync_fetch, .sync_disarm = enc1_sync_disarm,
 };
 
 const intf_encoder_t *intf_encoder_get(intf_encoder_id_t id) {
@@ -117,9 +155,12 @@ int app_param_store(uint32_t key, const void *buf, size_t len) {
 /* ---- 时钟桩 ---- */
 uint32_t intf_clock_get_cycle(void) { return g_mock_cycle; }
 
-/* ---- GPTMR 桩（app_encoder_sampler_start 引用） ---- */
-int app_gptmr_register_callback(app_gptmr_ch_t ch, app_gptmr_callback_t cb) {
-    (void)ch; (void)cb;
+uint32_t intf_clock_get_cpu_freq(void) { return 480000000U; }
+
+/* ---- TRGM 桩（app_encoder_sync_start 路由硬件触发） ---- */
+int intf_trgm_connect(intf_trgm_src_t src, intf_trgm_dst_t dst) {
+    g_mock_trgm_connect_count++;
+    g_mock_trgm_src = src;
+    g_mock_trgm_dst = dst;
     return 0;
 }
-int app_gptmr_start(app_gptmr_ch_t ch) { (void)ch; return 0; }

@@ -7,8 +7,11 @@
  *   APP_ENCODER_ROTOR  -> SPI3（PA10-13），转子 1:1
  *   APP_ENCODER_OUTPUT -> SPI1（PA26-29），出轴 49:50（游标）
  *
- * 实时性：read_raw 为阻塞短操作（标称 ~5µs），无打印/动态分配；
- *         每实例单所有者，不可在多上下文并发调用。
+ * 实时性：
+ *   - 初始化/自检期：read_raw 为阻塞短操作（两帧 ~7µs），无打印/动态分配；
+ *   - 运行期：转子由硬件同步采样（PWM1 CMP10 → TRGM → HDMA 启动 SPI3 单帧，
+ *     与相电流同拍），ADC0 PMT 完成中断内 app_encoder_sync_sample() 取帧 + 发布快照；
+ *   - 每实例单所有者，不可在多上下文并发调用。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -63,8 +66,8 @@ typedef struct {
 } app_encoder_rotor_snapshot_t;
 
 /**
- * @brief 声明转子 SPI3 的运行期所有权归采样器 ISR（此后运行期读走快照）。
- *        应在启动 GPTMR 采样器之前调用；启动初始化/自检阶段不调用。
+ * @brief 声明转子 SPI3 的运行期所有权归同步采样器（此后运行期读走快照）。
+ *        由 app_encoder_sync_start 内部调用；启动初始化/自检阶段不调用。
  */
 void app_encoder_sampler_claim(void);
 
@@ -79,23 +82,26 @@ void app_encoder_sampler_release_claim(void);
 bool app_encoder_sampler_active(void);
 
 /**
- * @brief 启动 GPTMR1 CH3 @12.5kHz 转子采样器（声明所有权 + 注册回调 + 启动）。
- * @return 0 = 成功；-1 = 编码器未初始化/通道配置失败
- * @note PLIC：GPTMR 优先级 3 > ADC0=2，采样 ISR 可抢占 25kHz FOC ISR。
+ * @brief 启动转子硬件同步采样（声明所有权 + 设备 arm + TRGM 路由 PWM1 CH10REF → DMA_REQ0）。
+ * @return 0 = 成功（幂等）；-1 = 编码器未初始化/驱动不支持/触发配置失败（所有权已回滚）
+ * @note 前置：ADC 采样链（PWM1 CMP10 + 计数器）已启动，且 ADC0 PMT 钩子已注册
+ *       （每拍须有消费者排空 RX / 补满 TX FIFO）。
  */
-int app_encoder_sampler_start(void);
+int app_encoder_sync_start(void);
 
 /**
- * @brief 转子编码器采样一次（在采样器 ISR 内调用）：SPI 读 + 快照策略。
- * @param now_cycles 本拍时刻 [cycle]（用于样本时间戳）
- * @return 0 = 接受；1 = 跳变保持；-1 = 读失败/连续失败
+ * @brief 硬件同步采样是否已启用
  */
-int app_encoder_sample_rotor_at(uint32_t now_cycles);
+bool app_encoder_sync_active(void);
 
 /**
- * @brief 记录当前时刻的转子采样（兼容包装，内部取 intf_clock_get_cycle）
+ * @brief 同步采样一次（ADC0 PMT 完成中断内，每拍调用一次）：取硬件触发帧 + 快照策略 + 发布。
+ * @param now_cycles 本拍时刻 [cycle]（样本时间戳；同拍常量偏移不影响速度 dt）
+ * @param out 输出本拍快照（age_cycles = 0）
+ * @return 0 = 接受；1 = 跳变保持（发布值不变）；-1 = 读失败/连续失败/未启用（out->valid 视策略）
+ * @note 有界：正常无等待（帧在 ISR 入口前已完成），最坏等待 APP_ENCODER_SYNC_WAIT_US。
  */
-int app_encoder_sample_rotor(void);
+int app_encoder_sync_sample(uint32_t now_cycles, app_encoder_rotor_snapshot_t* out);
 
 /**
  * @brief 读取转子一致快照（无 I/O、有界重试，绝不长时间自旋）
@@ -103,14 +109,6 @@ int app_encoder_sample_rotor(void);
  * @return 0 = 参数合法（快照是否有效看 out->valid）；-1 = 参数错误
  */
 int app_encoder_get_rotor_snapshot(app_encoder_rotor_snapshot_t* out);
-
-/**
- * @brief 读取转子一致快照（ISR 版本：最多 1 次重试，绝不长时间自旋）
- * @param out 输出快照
- * @return 0 = 参数合法；-1 = 参数错误
- * @note 供优先级高于采样写者的 ISR（如 ADC0 FOC）使用。
- */
-int app_encoder_read_rotor_isr(app_encoder_rotor_snapshot_t* out);
 
 /**
  * @brief 转子编码器"角度跳变（坏帧）"计数
@@ -132,9 +130,9 @@ int app_encoder_get_rotor_rad(float* rad, bool* valid, uint32_t* seq);
  * @param raw 输出原始值（未加软件零点）
  * @param valid 输出缓存有效性
  * @param seq 输出采样序号（每次接受 +1；可为 NULL）。
- *            消费方用 seq 判新样本（12.5kHz 采样可被 25kHz 环复用）。
+ *            消费方用 seq 判新样本。
  * @return 0 = 成功；-1 = 参数错误
- * @note 运行期 SPI3 由采样器 ISR 独占（app_encoder_sampler_claim）；消费方只读快照。
+ * @note 运行期 SPI3 由同步采样独占（app_encoder_sync_start）；消费方只读快照。
  */
 int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid, uint32_t* seq);
 
@@ -220,11 +218,11 @@ uint32_t app_encoder_get_sclk_hz(app_encoder_id_t id);
 
 /*
  * 采样器观测（.noncacheable.bss；Ozone/RTT 直读）：
- *   - isr_cycles：GPTMR 采样 ISR 单拍耗时 [cycle]（含 SPI 读 + 快照发布）
+ *   - isr_cycles：app_encoder_sync_sample 单拍耗时 [cycle]（取帧 + 快照发布）
  *   - isr_cycles_max：历史最大
- *   - sample_count：采样次数
- *   - read_fail_count：设备读失败次数（含 SPI 超时）
- * PLIC 优先级：GPTMR=3 > ADC0=2（见 drv_gptmr.c / drv_adc.c），采样 ISR 可抢占 FOC ISR。
+ *   - sample_count：采样次数（应 = 25000/s）
+ *   - read_fail_count：取帧失败次数（无触发帧 / 等待超时）
+ * 驱动层另有 g_spi_trig_stale_drop / g_spi_trig_busy_timeout / g_spi_trig_wait_max（drv_spi.c）。
  */
 extern volatile uint32_t g_encoder_isr_cycles;
 extern volatile uint32_t g_encoder_isr_cycles_max;

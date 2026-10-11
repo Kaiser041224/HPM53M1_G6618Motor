@@ -52,9 +52,9 @@ LAST_BUILD_LOG := $(BUILD_DIR)/last_build.log
 
 # Optimization level (separate Debug/Release)
 # Usage: make build OPT_LEVEL_DBG=-Og OPT_LEVEL_REL=-Ofast
-# Debug:  -O0 (default, best debugging experience)
+# Debug:  -Og (default: debuggable + FOC ISR real-time budget; -O0 too slow for 25kHz loop)
 # Release: -O3 (default, maximum speed)
-OPT_LEVEL_DBG ?= -O0
+OPT_LEVEL_DBG ?= -Og
 OPT_LEVEL_REL ?= -O3
 
 # Extra app-level preprocessor defines (e.g. -DAPP_BENCH_DEBUG_MODE=1 for

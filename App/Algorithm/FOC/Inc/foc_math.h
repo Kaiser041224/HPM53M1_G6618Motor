@@ -47,12 +47,35 @@ _Static_assert(sizeof(float) == 4, "foc_math requires IEEE-754 binary32 float");
  * @brief IEEE-754 有限值判断（位操作，-ffast-math 下仍有效）
  * @param x 待判断值
  * @return true = 有限值
+ * @note 用联合体取位（C17 §6.5.2.3 脚注 95 允许），不用 memcpy：SDK 全局 -fno-builtin
+ *       使 memcpy 变成真实 flash 函数调用（O3 反汇编实测每拍 7+ 次）。
  */
 FOC_ATTR_RAMFUNC
 static inline bool foc_finite(float x) {
-    uint32_t bits;
-    memcpy(&bits, &x, sizeof(bits));
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    union {
+        float f;
+        uint32_t u;
+    } pun = {.f = x};
+
+    return (pun.u & 0x7F800000u) != 0x7F800000u;
+}
+
+/**
+ * @brief 单精度平方根（RISC-V 硬件 fsqrt.s；宿主机回退 sqrtf）
+ * @param x 输入（调用方保证 ≥ 0；负值/NaN 结果为 NaN，由 foc_finite 防线拦截）
+ * @return √x
+ * @note SDK 全局 -fno-builtin + -Og 下 sqrtf/__builtin_sqrtf 均编译为 flash 库调用。
+ */
+FOC_ATTR_RAMFUNC
+static inline float foc_sqrtf(float x) {
+#if defined(__riscv) && defined(__riscv_flen) && (__riscv_flen >= 32)
+    float r;
+
+    __asm__("fsqrt.s %0, %1" : "=f"(r) : "f"(x));
+    return r;
+#else
+    return sqrtf(x);
+#endif
 }
 
 /**
@@ -65,7 +88,29 @@ static inline bool foc_finite(float x) {
 FOC_ATTR_RAMFUNC
 static inline float foc_wrap_2pi(float x) {
     float y = x * (1.0f / FOC_TWO_PI_F);
-    y -= floorf(y);
+    int32_t k;
+
+    /* 整数 floor（fcvt 指令）：-fno-builtin 下 floorf 为 flash 库函数调用。
+     * float→int 转换仅对 |y| < 2^31 有定义，越界/非有限先行拦截：
+     *   - Inf/NaN → NaN（位运算判定 + 位模式构造，-ffast-math 下仍成立）；
+     *   - |y| ≥ 2^23 的有限 float 本身即整数（小数部分为 0）→ 结果 0。 */
+    if (!foc_finite(y)) {
+        union {
+            uint32_t u;
+            float f;
+        } nan_pun = {.u = 0x7FC00000u};
+
+        return nan_pun.f;
+    }
+    if ((y >= 8388608.0f) || (y <= -8388608.0f)) {
+        return 0.0f;
+    }
+    k = (int32_t)y;
+
+    if ((float)k > y) {
+        k--;
+    }
+    y -= (float)k;
     return y * FOC_TWO_PI_F;
 }
 

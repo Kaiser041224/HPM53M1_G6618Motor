@@ -25,7 +25,7 @@
 #define APP_GPTMR_CH1_FREQ 25000U
 #define APP_GPTMR_CH2_FREQ 10000U
 /* 编码器采样：25kHz 的一半，供 25kHz FOC 复用（用时间戳算 dt） */
-#define APP_GPTMR_CH3_FREQ 12500U
+#define APP_GPTMR_CH3_FREQ 12500U /* 预留通道（原转子采样器频率，现无使用者） */
 
 extern void hpm_gptmr_driver_register(void);
 
@@ -70,7 +70,7 @@ void app_gptmr_init(void) {
     };
     (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_2), &cfg_ch2);
 
-    /* CH3: 编码器采样 12.5kHz（回调由 app_encoder_sampler_start 注册） */
+    /* CH3: 预留（原 12.5kHz 编码器采样器；转子已改为 ADC 同拍硬件同步采样） */
     intf_gptmr_cfg_t cfg_ch3 = {
         .mode = INTF_GPTMR_MODE_TIMER,
         .frequency_hz = APP_GPTMR_CH3_FREQ,

@@ -64,6 +64,8 @@ typedef enum {
     INTF_TRGM_DST_GPTMR3_SYNCI,          /**< → GPTMR3 counter sync input */
     INTF_TRGM_DST_ADC0_STRGI,            /**< → ADC0 序列转换触发输入 */
     INTF_TRGM_DST_ADC1_STRGI,            /**< → ADC1 序列转换触发输入 */
+    INTF_TRGM_DST_DMA_REQ0,              /**< → 触发矩阵 DMA 请求 0（DMAMUX 源 MOT_0） */
+    INTF_TRGM_DST_DMA_REQ1,              /**< → 触发矩阵 DMA 请求 1（DMAMUX 源 MOT_1） */
 } intf_trgm_dst_t;
 
 /* ============================================================================

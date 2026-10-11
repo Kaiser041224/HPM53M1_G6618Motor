@@ -11,6 +11,7 @@
  */
 
 #include "app_fault.h"
+#include "app_ramfunc.h"
 
 #include "algo_rms.h"
 #include "app_analog_signal.h"
@@ -432,6 +433,7 @@ int app_fault_clear(void) {
     return ok ? 0 : -1;
 }
 
+APP_ATTR_RAMFUNC /* FOC ISR 门控 */
 app_fault_state_t app_fault_get_state(void) { return s_fault_ctx.state; }
 
 uint32_t app_fault_get_codes(void) { return s_fault_ctx.active; }

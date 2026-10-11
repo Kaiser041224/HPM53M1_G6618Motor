@@ -446,11 +446,14 @@ static void hrpwm_set_pair_output_invert(
     ch_cfg.cmp_start_index = map->cmp_start_index;
     ch_cfg.cmp_end_index = map->cmp_start_index + 1U;
 
-    ch_cfg.invert_output = channel->invert_high_side ^ invert_window;
-    pwm_config_output_channel(base, map->pwm_index, &ch_cfg);
-
-    ch_cfg.invert_output = channel->invert_low_side ^ invert_window;
-    pwm_config_output_channel(base, map->pwm_index + 1U, &ch_cfg);
+    /* 直写 CHCFG（与 SDK pwm_config_output_channel 位域完全一致）：该 SDK static inline
+     * 在 -Og 下不内联，成为 flash 函数调用（25kHz × 3 相 × 2 次）。 */
+    base->CHCFG[map->pwm_index] = PWM_CHCFG_CMPSELBEG_SET(ch_cfg.cmp_start_index)
+                                | PWM_CHCFG_CMPSELEND_SET(ch_cfg.cmp_end_index)
+                                | PWM_CHCFG_OUTPOL_SET(channel->invert_high_side ^ invert_window);
+    base->CHCFG[map->pwm_index + 1U] = PWM_CHCFG_CMPSELBEG_SET(ch_cfg.cmp_start_index)
+                                     | PWM_CHCFG_CMPSELEND_SET(ch_cfg.cmp_end_index)
+                                     | PWM_CHCFG_OUTPOL_SET(channel->invert_low_side ^ invert_window);
 }
 
 /**
@@ -459,6 +462,7 @@ static void hrpwm_set_pair_output_invert(
  * @param pwm_index 物理通道索引
  * @return true = 是当前移相目标
  */
+ATTR_RAMFUNC /* set_duty 每次调用（25kHz × 3 相）：放 ILM */
 static bool hrpwm_phase_targets_channel(uint8_t inst, uint8_t pwm_index) {
     hrpwm_phase_state_t* phase;
 
@@ -513,6 +517,7 @@ static bool hrpwm_phase_is_running(uint8_t inst) {
  * @param pwm_index 物理通道索引
  * @return true = 是当前移相参考
  */
+ATTR_RAMFUNC
 static bool hrpwm_phase_refs_channel(uint8_t inst, uint8_t pwm_index) {
     hrpwm_phase_state_t* phase;
 

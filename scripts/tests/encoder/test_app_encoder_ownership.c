@@ -7,7 +7,7 @@
  *   1) 采样器 claim 前，read_raw 走物理设备
  *   2) 采样器 claim 后，运行期 read_raw 只读快照、不触发设备读
  *   3) 坏帧不污染已发布 raw、序号不推进
- *   4) 快照携带时间戳与性别
+ *   4) 快照携带时间戳与序号
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -41,10 +41,10 @@ void test_app_encoder_ownership(void) {
     CHECK(raw == 1000U);
     CHECK(g_mock_enc_read_count[APP_ENCODER_ROTOR] == reads_before + 1);
 
-    /* 2) 声明采样器所有权：此后运行期读只走快照 */
-    app_encoder_sampler_claim();
+    /* 2) 同步采样器启动（声明所有权）：此后运行期读只走快照 */
+    CHECK(app_encoder_sync_start() == 0);
     g_mock_cycle = 1000U;
-    CHECK(app_encoder_sample_rotor_at(g_mock_cycle) == 0);
+    CHECK(app_encoder_sync_sample(g_mock_cycle, &snap) == 0);
 
     reads_after = g_mock_enc_read_count[APP_ENCODER_ROTOR];
     CHECK(app_encoder_read_raw(APP_ENCODER_ROTOR, &raw) == 0);
@@ -60,7 +60,7 @@ void test_app_encoder_ownership(void) {
     /* 3) 坏帧：发布值保持、序号保持 */
     g_mock_enc_raw[APP_ENCODER_ROTOR] = 30000U;
     g_mock_cycle = 2000U;
-    (void)app_encoder_sample_rotor_at(g_mock_cycle);
+    (void)app_encoder_sync_sample(g_mock_cycle, &snap);
     CHECK(app_encoder_get_rotor_snapshot(&snap) == 0);
     CHECK(snap.raw == 1000U);
     CHECK(snap.seq == 1U);

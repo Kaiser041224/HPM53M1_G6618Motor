@@ -9,6 +9,7 @@
 
 #include "app_hardware_params.h"
 
+#include "app_ramfunc.h"
 #include "params_generated.h"
 
 #include <stdbool.h>
@@ -35,6 +36,7 @@ void app_hardware_params_init(void) {
     s_hardware_params_initialized = true;
 }
 
+APP_ATTR_RAMFUNC /* FOC ISR 读取（电流换算） */
 const app_hardware_params_t* app_hardware_params_current(void) {
     if (!s_hardware_params_initialized) {
         app_hardware_params_init();

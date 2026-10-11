@@ -9,6 +9,7 @@
 
 #include "app_software_params.h"
 
+#include "app_ramfunc.h"
 #include "params_generated.h"
 
 #include <stdbool.h>
@@ -36,6 +37,7 @@ void app_software_params_init(void) {
     s_software_params_initialized = true;
 }
 
+APP_ATTR_RAMFUNC /* FOC ISR 读取（电流环增益/限幅） */
 const app_software_params_t* app_software_params_current(void) {
     if (!s_software_params_initialized) {
         app_software_params_init();

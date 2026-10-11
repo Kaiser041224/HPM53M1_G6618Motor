@@ -14,6 +14,15 @@
 #include "hpm_pcfg_drv.h"
 #include "hpm_csr_drv.h"
 
+#ifndef ATTR_RAMFUNC
+#define ATTR_RAMFUNC __attribute__((section(".fast")))
+#endif
+
+/* CPU 频率缓存：intf_clock_init() 完成后锁定（之后时钟树不再改变）。
+ * 热路径（25kHz ISR、SPI 期限换算）原先每次走 clock_get_frequency 时钟树查询
+ * （flash 内多级函数 + 寄存器读 + 除法），缓存后为一次 RAM 读。 */
+static uint32_t s_cpu_freq_hz;
+
 void intf_clock_init(void)
 {
     uint32_t cpu0_freq = clock_get_frequency(clock_cpu0);
@@ -70,6 +79,8 @@ void intf_clock_init(void)
     clock_update_core_clock();
 
     clock_set_source_divider(clock_mchtmr0, clk_src_osc24m, 1);
+
+    s_cpu_freq_hz = clock_get_frequency(clock_cpu0);
 }
 
 /*
@@ -86,9 +97,12 @@ static inline uint64_t drv_clock_mcycle(void)
     return hpm_csr_get_core_mcycle();
 }
 
+ATTR_RAMFUNC
 uint32_t intf_clock_get_cpu_freq(void)
 {
-    return clock_get_frequency(clock_cpu0);
+    uint32_t hz = s_cpu_freq_hz;
+
+    return (hz != 0U) ? hz : clock_get_frequency(clock_cpu0); /* init 前回退实时查询 */
 }
 
 uint32_t intf_clock_get_ahb_freq(void)
@@ -101,6 +115,7 @@ uint32_t intf_clock_get_mot0_freq(void)
     return clock_get_frequency(clock_mot0);
 }
 
+ATTR_RAMFUNC
 uint32_t intf_clock_get_cycle(void)
 {
     uint32_t value;

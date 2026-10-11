@@ -11,6 +11,9 @@
  *   - 写寄存器：帧1 = 10 + ADR[5:0] + WRD[7:0]；帧间等待 ≥20ms（MTP 烧写）；
  *     帧2 为确认帧（高 8 位 = 新写入值）
  *   - 两帧间隔（Tpause>150ns）由 SPI 硬件 csht 保证（见 drv_spi）
+ *   - 同步采样（sync_*）：MOSI 恒为 000 时每帧 MISO 即输出当前角度 A[15:0]
+ *     （手册 §5.4 图：同一 CS 周期内输出），故硬件触发每帧 = 一个角度样本；
+ *     arm 前先发一帧读角度命令冲掉可能残留的寄存器响应（重叠结构 §5.1）
  *   - 本驱动不含任何 hpm_* 头文件，只依赖 intf_spi / intf_encoder / intf_clock
  *
  * 注意：寄存器写操作烧写 MTP（寿命 1000 次），只能用于一次性配置；
@@ -27,6 +30,9 @@
 #include "intf_clock.h"
 
 #define KTH7823_INSTANCE_COUNT (2U)        /* 双编码器设计 */
+
+/* 热路径段属性：映射到链接脚本 .fast（ILM）；本驱动不含 hpm_* 头文件 */
+#define KTH7823_ATTR_RAMFUNC __attribute__((section(".fast")))
 #define KTH7823_SCLK_MAX_HZ    (10000000U) /* TSCK ≥ 100ns */
 /* 单帧超时：0 = 不等待（帧在 25kHz ADC 中断内读取，任何毫秒级阻塞都会饿死主循环；
  * 失败样本由 app_encoder 的采样保持 + 错误计数消化） */
@@ -50,8 +56,11 @@
  */
 typedef struct {
     const intf_spi_t *spi;      /**< 总线设备对象（init 时解析并缓存） */
+    /** 同步采样取帧函数（arm 时缓存到 RAM，热路径免读 flash 中的设备对象） */
+    int (*sync_fetch)(uint32_t *rx_word, uint32_t wait_cycles);
     uint32_t error_count;       /**< 通信错误累计 */
     bool initialized;           /**< 是否已初始化 */
+    bool sync_armed;            /**< 同步采样已启用（寄存器读写禁用） */
 } kth7823_ctx_t;
 
 static kth7823_ctx_t s_kth7823_ctx[KTH7823_INSTANCE_COUNT];
@@ -152,8 +161,8 @@ static int kth7823_read_raw_impl(uint8_t id, uint16_t *raw)
     }
 
     ctx = &s_kth7823_ctx[id];
-    if (!ctx->initialized) {
-        return -1;
+    if (!ctx->initialized || ctx->sync_armed) {
+        return -1; /* 同步采样已接管总线 */
     }
 
     /* 帧1：读角度命令（响应随帧2 返回，帧1 响应为上一条命令的残留，丢弃） */
@@ -166,6 +175,85 @@ static int kth7823_read_raw_impl(uint8_t id, uint16_t *raw)
     }
 
     return 0;
+}
+
+/**
+ * @brief 启用硬件同步采样（每次触发自动读一帧角度）
+ * @param id 实例号
+ * @param trig 触发源（intf_spi_trig_src_t 取值）
+ * @return 0 = 成功；-1 = 未初始化/总线不支持/启动失败
+ */
+static int kth7823_sync_arm_impl(uint8_t id, uint8_t trig)
+{
+    kth7823_ctx_t *ctx;
+    uint16_t response;
+    intf_spi_trig_cfg_t cfg;
+
+    if (id >= KTH7823_INSTANCE_COUNT) {
+        return -1;
+    }
+    ctx = &s_kth7823_ctx[id];
+    if (!ctx->initialized || (ctx->spi->trig_arm == NULL) || (ctx->spi->trig_fetch == NULL)) {
+        return -1;
+    }
+    if (ctx->sync_armed) {
+        return 0;
+    }
+    /* 冲掉可能残留的寄存器响应：此后每帧均为角度响应 */
+    if (kth7823_frame(ctx, KTH7823_CMD_READ_ANGLE, &response) != 0) {
+        return -1;
+    }
+    cfg.src = (intf_spi_trig_src_t)trig;
+    cfg.tx_word = KTH7823_CMD_READ_ANGLE; /* MOSI 保持低（手册 §5.4 建议） */
+    if (ctx->spi->trig_arm(&cfg) != 0) {
+        return -1;
+    }
+    ctx->sync_fetch = ctx->spi->trig_fetch;
+    ctx->sync_armed = true;
+    return 0;
+}
+
+/**
+ * @brief 取最近一次同步采样角度（中断上下文，有界）
+ * @param id 实例号
+ * @param raw 原始角度输出
+ * @param wait_cycles 帧未完成时的最长等待 [cycle]
+ * @return 0 = 成功；-1 = 无新样本/超时/未 arm
+ */
+KTH7823_ATTR_RAMFUNC
+static int kth7823_sync_fetch_impl(uint8_t id, uint16_t *raw, uint32_t wait_cycles)
+{
+    kth7823_ctx_t *ctx = &s_kth7823_ctx[id];
+    uint32_t word;
+
+    if (!ctx->sync_armed) {
+        return -1;
+    }
+    if (ctx->sync_fetch(&word, wait_cycles) != 0) {
+        ctx->error_count++;
+        return -1;
+    }
+    *raw = (uint16_t)word;
+    return 0;
+}
+
+/**
+ * @brief 关闭硬件同步采样
+ * @param id 实例号
+ */
+static void kth7823_sync_disarm_impl(uint8_t id)
+{
+    kth7823_ctx_t *ctx;
+
+    if (id >= KTH7823_INSTANCE_COUNT) {
+        return;
+    }
+    ctx = &s_kth7823_ctx[id];
+    if (ctx->sync_armed && (ctx->spi->trig_disarm != NULL)) {
+        ctx->spi->trig_disarm();
+    }
+    ctx->sync_armed = false;
+    ctx->sync_fetch = NULL;
 }
 
 /**
@@ -185,7 +273,7 @@ static int kth7823_read_reg_impl(uint8_t id, uint8_t addr, uint8_t *val)
     }
 
     ctx = &s_kth7823_ctx[id];
-    if (!ctx->initialized) {
+    if (!ctx->initialized || ctx->sync_armed) {
         return -1;
     }
 
@@ -218,7 +306,7 @@ static int kth7823_write_reg_impl(uint8_t id, uint8_t addr, uint8_t val)
     }
 
     ctx = &s_kth7823_ctx[id];
-    if (!ctx->initialized) {
+    if (!ctx->initialized || ctx->sync_armed) {
         return -1;
     }
 
@@ -363,6 +451,28 @@ static int enc0_get_info(intf_encoder_info_t *info) { return kth7823_get_info_im
 static uint32_t enc0_get_error_count(void) { return kth7823_get_error_count_impl(0U); }
 
 /**
+ * @brief 编码器实例 0 启用同步采样
+ * @param trig 触发源
+ * @return 0 = 成功；-1 = 失败
+ */
+static int enc0_sync_arm(uint8_t trig) { return kth7823_sync_arm_impl(0U, trig); }
+
+/**
+ * @brief 编码器实例 0 取同步采样
+ * @param raw 原始角度输出
+ * @param wait_cycles 最长等待 [cycle]
+ * @return 0 = 成功；-1 = 失败
+ */
+KTH7823_ATTR_RAMFUNC
+static int enc0_sync_fetch(uint16_t *raw, uint32_t wait_cycles)
+{ return kth7823_sync_fetch_impl(0U, raw, wait_cycles); }
+
+/**
+ * @brief 编码器实例 0 关闭同步采样
+ */
+static void enc0_sync_disarm(void) { kth7823_sync_disarm_impl(0U); }
+
+/**
  * @brief 编码器实例 1 初始化包装
  * @param cfg 编码器配置
  * @return 0 = 成功；-1 = 失败
@@ -424,6 +534,28 @@ static int enc1_get_info(intf_encoder_info_t *info) { return kth7823_get_info_im
  */
 static uint32_t enc1_get_error_count(void) { return kth7823_get_error_count_impl(1U); }
 
+/**
+ * @brief 编码器实例 1 启用同步采样
+ * @param trig 触发源
+ * @return 0 = 成功；-1 = 失败
+ */
+static int enc1_sync_arm(uint8_t trig) { return kth7823_sync_arm_impl(1U, trig); }
+
+/**
+ * @brief 编码器实例 1 取同步采样
+ * @param raw 原始角度输出
+ * @param wait_cycles 最长等待 [cycle]
+ * @return 0 = 成功；-1 = 失败
+ */
+KTH7823_ATTR_RAMFUNC
+static int enc1_sync_fetch(uint16_t *raw, uint32_t wait_cycles)
+{ return kth7823_sync_fetch_impl(1U, raw, wait_cycles); }
+
+/**
+ * @brief 编码器实例 1 关闭同步采样
+ */
+static void enc1_sync_disarm(void) { kth7823_sync_disarm_impl(1U); }
+
 static const intf_encoder_t s_enc0_dev = {
     .instance_id = 0U,
     .init = enc0_init,
@@ -435,6 +567,9 @@ static const intf_encoder_t s_enc0_dev = {
     .set_direction = enc0_set_direction,
     .get_info = enc0_get_info,
     .get_error_count = enc0_get_error_count,
+    .sync_arm = enc0_sync_arm,
+    .sync_fetch = enc0_sync_fetch,
+    .sync_disarm = enc0_sync_disarm,
 };
 
 static const intf_encoder_t s_enc1_dev = {
@@ -448,6 +583,9 @@ static const intf_encoder_t s_enc1_dev = {
     .set_direction = enc1_set_direction,
     .get_info = enc1_get_info,
     .get_error_count = enc1_get_error_count,
+    .sync_arm = enc1_sync_arm,
+    .sync_fetch = enc1_sync_fetch,
+    .sync_disarm = enc1_sync_disarm,
 };
 
 /* ============================================================================

@@ -11,6 +11,7 @@
 
 #include "app_hardware_params.h"
 #include "app_hrpwm.h"
+#include "app_ramfunc.h"
 #include "intf_gptmr.h"
 #include "intf_hrpwm.h"
 #include "intf_trgm.h"
@@ -151,6 +152,7 @@ static void adc_slow_adapter(intf_adc_ch_t ch, void* user) {
  * @param count 转换值个数
  * @param user_data 用户上下文（未使用）
  */
+APP_ATTR_RAMFUNC /* ADC0 PMT ISR 内调用（25kHz） */
 static void adc_current_pmt_cb(
     intf_adc_ch_t trig_ch, const uint16_t* values, uint8_t count, void* user_data) {
     (void)trig_ch;
@@ -279,6 +281,7 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
 
 const app_adc_cfg_t* app_adc_get_config(void) { return &s_adc_cfg; }
 
+APP_ATTR_RAMFUNC
 bool app_adc_get_raw(adc_channel_t ch, uint16_t* raw) {
     if ((ch >= ADC_CH_COUNT) || (raw == NULL) || !s_initialized) {
         return false;
@@ -298,6 +301,7 @@ bool app_adc_is_valid(void) {
     return s_initialized && ((s_valid_mask & APP_ADC_PMT_MASK) == APP_ADC_PMT_MASK);
 }
 
+APP_ATTR_RAMFUNC
 float app_adc_code_to_volts(uint16_t code) {
     return ((float)code * (INTF_ADC_DEFAULT_VREF_MV / 1000.0f)) / (float)s_full_scale_code;
 }

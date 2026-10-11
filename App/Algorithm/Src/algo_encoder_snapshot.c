@@ -14,11 +14,22 @@
 
 #define ALGO_ENC_WRAP_HALF (32768)
 
+/* 热路径段属性：push 在 25kHz ADC0 ISR 内执行 → 放 ILM（与 algo_pid / foc_math 同约定） */
+#ifndef ALGO_ENABLE_ILM
+# define ALGO_ENABLE_ILM 1
+#endif
+#if ALGO_ENABLE_ILM
+# define ALGO_ENC_ATTR_RAMFUNC __attribute__((section(".fast")))
+#else
+# define ALGO_ENC_ATTR_RAMFUNC
+#endif
+
 /**
  * @brief 发布 payload（写者）：代际变奇 → 写 → 变偶
  * @param self 对象
  * @param sample 待发布样本
  */
+ALGO_ENC_ATTR_RAMFUNC
 static void algo_encoder_publish(algo_encoder_snapshot_t* self,
                                  const algo_encoder_sample_t* sample) {
     self->generation++;
@@ -53,6 +64,7 @@ void algo_encoder_snapshot_ctor(algo_encoder_snapshot_t* self,
     }
 }
 
+ALGO_ENC_ATTR_RAMFUNC
 int algo_encoder_snapshot_push(algo_encoder_snapshot_t* self, const algo_encoder_input_t* in) {
     algo_encoder_sample_t sample;
     bool jumped = false;

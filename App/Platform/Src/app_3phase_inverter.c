@@ -23,11 +23,13 @@
 #include "app_gpio.h"
 #include "app_hardware_params.h"
 #include "app_hrpwm.h"
+#include "app_ramfunc.h"
 #include "intf_clock.h"
 
 #include <stddef.h>
 
 /* 相 → PWM 配对映射（板级，与 pinmux 一致） */
+APP_ATTR_FAST_RAM_INIT
 static const hrpwm_pair_t s_phase_pair[APP_3PHASE_COUNT] = {
     HRPWM_PAIR_C, /* U: PWM1 ch4/5（PA20/21） */
     HRPWM_PAIR_D, /* V: PWM1 ch6/7（PA22/23） */
@@ -45,6 +47,7 @@ static float s_duty[APP_3PHASE_COUNT];
  * @param duty 原始占空比
  * @return 限制后的占空比
  */
+APP_ATTR_RAMFUNC
 static float inverter_clamp_duty(float duty) {
     if (duty != duty) {                  /* NaN（异常计算）→ 零电压矢量，避免输出危险矢量 */
         return APP_3PHASE_INVERTER_DUTY_ZERO;
@@ -111,6 +114,7 @@ void app_3phase_inverter_disable(void) {
     s_enabled = false;
 }
 
+APP_ATTR_RAMFUNC /* 25kHz FOC ISR 输出点 */
 int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w) {
     const float duty_in[APP_3PHASE_COUNT] = {duty_u, duty_v, duty_w};
 
@@ -154,6 +158,7 @@ int app_3phase_inverter_release(app_3phase_id_t phase) {
     return 0;
 }
 
+APP_ATTR_RAMFUNC /* ISR 紧急关桥路径 */
 void app_3phase_inverter_emergency_stop(void) {
     /* 先归零电压矢量，再强制关断，避免再次使能时输出残留静态矢量 */
     (void)app_3phase_inverter_set_duty_abc(

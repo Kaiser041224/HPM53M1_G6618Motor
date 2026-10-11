@@ -51,7 +51,7 @@ int app_debug_encoder_passive_selftest(void);
 
 /* ---- 运行期健康自检（不触碰 SPI3；评估采样器快照流 100ms） ---- */
 #define APP_ENC_HEALTH_TICKS (100U)         /**< 窗口 tick 数（1kHz → 100ms） */
-#define APP_ENC_HEALTH_EXPECTED_SEQ (1250U) /**< 12.5kHz×100ms 名义样本数 */
+#define APP_ENC_HEALTH_EXPECTED_SEQ (2500U) /**< 25kHz×100ms 名义样本数（与电流同拍同步采样） */
 
 extern volatile uint32_t g_enc_runtime_active;   /**< 1 = 进行中 */
 extern volatile uint32_t g_enc_runtime_ok;        /**< 1 = 窗口结束且通过 */

@@ -7,6 +7,7 @@
  *   - app_init()           ：一次性串行初始化（调度器后由 app_io 任务执行，此时 ISR 可用）
  *   - app_fast_step_hook() ：FOC 硬实时快车道（25kHz，ADC PMT 完成中断内）
  *                            mcycle 计时包装 → app_foc_isr_step
+ *                            （编码器同步采样 + 角度链 + 电流环；整条链在 ILM）
  *                            硬约束：无 RTOS API、无 printf、无动态分配、无等待
  *   - app_io_step()        ：RTOS 后台 IO（1ms）——模拟量/故障/状态机编排 + 通讯轮询
  *   - app_diag_step()      ：RTOS 后台诊断（1s）——回报（LED / 统计），不改控制状态
@@ -41,6 +42,7 @@
 #include "app_gptmr.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
+#include "app_ramfunc.h"
 #include "app_software_params.h"
 #include "app_terminal.h"
 #include "app_usb.h"
@@ -124,15 +126,10 @@ void app_init(void) {
     /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴） */
     app_debug_encoder_init();
 
-    /* 7b. GPTMR 外设 + 12.5kHz 转子采样器（GPTMR1 CH3，PLIC prio 3 > ADC0）。
-     *     此后 SPI3 归采样 ISR 独占，运行期读 API 只返回一致快照。 */
+    /* 7b. GPTMR 外设（GPTMR1 通道组保留初始化；CH3 原 12.5kHz 转子采样器已移除）。
+     *     转子运行期采样改为与电流同拍的硬件同步采样（见 13d）；
+     *     此处 SPI3 仍为阻塞模式，供上面的自检/寄存器读使用。 */
     app_gptmr_init();
-    {
-        int sampler_rc = app_encoder_sampler_start();
-
-        app_debug_printf("[ENC] sampler: %s (GPTMR1 CH3 @12.5kHz)\r\n",
-                         (sampler_rc == 0) ? "OK" : "FAILED");
-    }
 
     /* 8. Flash 自检（XPI NOR：属性 + 末尾扇区破坏性读写测试） */
     app_debug_flash_init();
@@ -178,6 +175,20 @@ void app_init(void) {
 
     /* 13c. 快车道钩子：覆盖 app_foc_init 内的直注册，注入 mcycle 计时包装 */
     app_adc_register_current_hook(app_fast_step_hook);
+
+    /* 13d. 转子硬件同步采样：PWM1 CMP10（与相电流 ADC 同一触发点）→ TRGM DMA_REQ0
+     *      → HDMA 写 SPI3 CMD 启动单帧；ADC0 PMT ISR 内取帧。必须在钩子注册之后：
+     *      每拍须有消费者排空 RX / 补满 TX FIFO。此后 SPI3 归同步采样独占。 */
+    {
+        uint16_t ref_raw = 0U;
+        int ref_rc = app_encoder_read_raw(APP_ENCODER_ROTOR, &ref_raw); /* 两帧阻塞读（基准） */
+        int sync_rc = app_encoder_sync_start();
+
+        app_debug_printf("[ENC] sync: %s (PWM1 CMP10 -> TRGM DMA0 -> HDMA -> SPI3 CMD, 25kHz) | "
+                         "ref(2-frame)=%s0x%04X\r\n",
+                         (sync_rc == 0) ? "OK" : "FAILED", (ref_rc == 0) ? "" : "ERR ",
+                         (unsigned)ref_raw);
+    }
 }
 
 /**
@@ -187,6 +198,7 @@ void app_init(void) {
  * 仅做 mcycle 计时包装 + 耗时统计；控制语义全在 app_foc_isr_step（foc-v1 原样）。
  * 超预算（> 1 个节拍周期）记 late，供 [ENC]/[ISR] 统计。
  */
+APP_ATTR_RAMFUNC
 static void app_fast_step_hook(void) {
     static uint32_t s_budget_cycles;
     uint32_t start_cycle;

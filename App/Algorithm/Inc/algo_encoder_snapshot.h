@@ -7,7 +7,7 @@
  *   - 单一写者（采样中断）：push() 接受/拒绝样本，仅在接受时更新 raw/seq/timestamp
  *   - 多读者（更高中断优先级 ISR / 主循环 / 调试）：read() 有界重试，绝不自旋
  *   - 坏帧（跳变）不污染已发布 raw；连续失败/跳变达 fail_limit → valid=false
- *   - 消费方用 is_new() 判复用（12.5kHz 样本可被 25kHz 环复用两次），
+ *   - 消费方用 is_new() 判新样本（跳变保持/丢样时 seq 不推进 → 复用上拍角度），
  *     用 is_fresh() + age_cycles 判时效，dt 由 timestamp_cycles 差值得到
  *
  * 线程/中断假设：
@@ -120,7 +120,7 @@ bool algo_encoder_snapshot_read(algo_encoder_snapshot_t* self, uint32_t now_cycl
                                 algo_encoder_sample_t* out, uint8_t max_retries);
 
 /**
- * @brief 本快照是否为相对 last_seq 的新样本（12.5kHz→25kHz 复用检测）
+ * @brief 本快照是否为相对 last_seq 的新样本（复用检测）
  * @param snap 快照
  * @param last_seq 消费方上次处理的序号
  * @return true = 新样本

@@ -9,6 +9,7 @@
 
 #include "foc_modulation.h"
 
+FOC_ATTR_RAMFUNC /* 25kHz ISR 每拍调用 */
 float foc_modulation_vmax(float duty_max, float v_bus_v) {
     if (!foc_finite(duty_max) || !foc_finite(v_bus_v)) {
         return 0.0f;

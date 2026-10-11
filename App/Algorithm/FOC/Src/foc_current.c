@@ -55,8 +55,9 @@ static void foc_current_reset(foc_current_t* self) {
 }
 
 /**
- * @brief 更新增益
+ * @brief 更新增益（25kHz ISR 每拍热更新 → ILM）
  */
+FOC_ATTR_RAMFUNC
 static void foc_current_set_gains(foc_current_t* self, float kp, float ki) {
     if (self == NULL) {
         return;
@@ -71,8 +72,9 @@ static void foc_current_set_gains(foc_current_t* self, float kp, float ki) {
 }
 
 /**
- * @brief 运行中开关解耦前馈
+ * @brief 运行中开关解耦前馈（25kHz ISR 每拍调用 → ILM）
  */
+FOC_ATTR_RAMFUNC
 static void foc_current_set_decoupling(foc_current_t* self, uint8_t enable) {
     if (self == NULL) {
         return;
@@ -110,7 +112,7 @@ static int foc_current_step(foc_current_t* self, const foc_current_in_t* in,
     {
         float imag2 = id_ref * id_ref + iq_ref * iq_ref;
         if (imag2 > imax * imax) {
-            float imag = sqrtf(imag2);
+            float imag = foc_sqrtf(imag2); /* 硬件 fsqrt.s（-fno-builtin 下 sqrtf 为库调用） */
             if (imag > 0.0f) {
                 float k = imax / imag;
                 id_ref *= k;
@@ -139,7 +141,7 @@ static int foc_current_step(foc_current_t* self, const foc_current_in_t* in,
     vmax = (foc_finite(in->v_max) && (in->v_max > 0.0f)) ? in->v_max : 0.0f;
     mag2 = vd * vd + vq * vq;
     if (mag2 > vmax * vmax) {
-        mag = sqrtf(mag2);
+        mag = foc_sqrtf(mag2);
         if (mag > 0.0f) {
             float k = vmax / mag;
             vd *= k;

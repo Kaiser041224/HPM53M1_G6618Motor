@@ -17,6 +17,7 @@
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
 #include "app_protect_policy.h"
+#include "app_ramfunc.h"
 #include "app_software_params.h"
 #include "foc_angle.h"
 #include "foc_math.h"
@@ -27,9 +28,9 @@
 /* 限速滞环：超限切断，回落至 85% 才恢复（ωe 噪声/回摆不再造成转矩断续） */
 #define APP_FOC_SPEED_LIMIT_RESTORE (0.85f)
 
-/* 编码器采样器节拍与新鲜度（12.5kHz → 80µs）；25kHz FOC 最多复用 2 拍。
- * 新鲜度上限 = 采样周期 + 40µs 余量 = 120µs：绝不允许多拍陈旧角进换相。 */
-#define APP_FOC_ENC_PERIOD_US   (80U)
+/* 编码器同步采样节拍与新鲜度：与电流同拍（25kHz → 40µs，同一 PWM1 CMP10 触发）。
+ * 新鲜度上限 = 采样周期 + 40µs 余量 = 80µs：最多容忍一拍丢样复用保持角。 */
+#define APP_FOC_ENC_PERIOD_US   (40U)
 #define APP_FOC_ENC_MARGIN_US   (40U)
 #define APP_FOC_ENC_MAX_AGE_US  (APP_FOC_ENC_PERIOD_US + APP_FOC_ENC_MARGIN_US)
 /* 连续失败/跳变阈值：达到即判换相角不可信（与 algo fail_limit 默认一致） */
@@ -65,6 +66,12 @@ static uint32_t s_isr_last_cycle; /**< ADC ISR 上一拍时刻 [cycle]（vtest �
 static bool s_isr_dt_valid;       /**< ADC ISR dt 基准已建立 */
 static uint8_t s_enc_degraded_streak; /**< 编码器时序类不可用连续拍数（streak 确认） */
 static uint8_t s_overrun_streak;      /**< ISR 超预算连续拍数（streak 确认） */
+
+/* ISR 用时钟换算常量（app_foc_init 预计算：时钟树在调度器前已定型，热路径免查询/免除法） */
+static uint32_t s_cycles_per_us;      /**< CPU cycle / µs */
+static float s_sec_per_cycle;         /**< 1 / CPU 频率 [s/cycle] */
+static uint32_t s_enc_max_age_cycles; /**< 编码器样本新鲜度上限 [cycle] */
+static uint32_t s_isr_budget_cycles;  /**< ISR 单拍预算 [cycle] */
 
 /** 外部（Debug）紧急停机请求邮箱（Control 持有指针；ISR 只读，绝不阻塞） */
 static volatile uint32_t* s_estop_request;
@@ -125,7 +132,14 @@ static int app_foc_angle_init(void) {
 }
 
 void app_foc_init(void) {
+    uint32_t cpu_hz = intf_clock_get_cpu_freq();
+
     foc_math_init(); /* sincos 查表（用 libm 一次） */
+
+    s_cycles_per_us = (cpu_hz / 1000000U != 0U) ? (cpu_hz / 1000000U) : 1U;
+    s_sec_per_cycle = (cpu_hz != 0U) ? (1.0f / (float)cpu_hz) : 0.0f;
+    s_enc_max_age_cycles = s_cycles_per_us * APP_FOC_ENC_MAX_AGE_US;
+    s_isr_budget_cycles = s_cycles_per_us * APP_FOC_ISR_BUDGET_US;
 
     s_state = APP_FOC_STATE_OFF;
     s_angle_src = APP_FOC_ANGLE_ENCODER;
@@ -154,8 +168,7 @@ void app_foc_register_estop_request(volatile uint32_t* req) {
  */
 static bool app_foc_read_rotor_rad(float* theta_m_rad) {
     app_encoder_rotor_snapshot_t enc;
-    uint32_t cpu = intf_clock_get_cpu_freq();
-    uint32_t max_age = (uint32_t)(((uint64_t)cpu / 1000000U) * APP_FOC_ENC_MAX_AGE_US);
+    uint32_t max_age = s_enc_max_age_cycles; /* app_foc_init 预计算 */
 
     /* 主循环观测：读快照（8 次有界重试），仅在新样本/未陈旧时刷新角度 */
     if ((app_encoder_get_rotor_snapshot(&enc) != 0) || !enc.valid) {
@@ -298,14 +311,16 @@ static void app_foc_isr_emergency(void) {
 }
 
 /**
- * @brief FOC 快速路径（ADC0 PMT 完成中断内调用）：编码器快照 + 角度链 + 电流环
- * @note 固定 25kHz（与采样同频）；编码器样本来自 12.5kHz 采样器（GPTMR1 CH3），
- *       seq 未变则复用上拍角度、不重复 step，速度 dt 用样本时间戳差；
+ * @brief FOC 快速路径（ADC0 PMT 完成中断内调用）：编码器同步采样 + 角度链 + 电流环
+ * @note 固定 25kHz。PWM1 CMP10 同一触发点同时启动三相电流 ADC（PMT）与转子 SPI 帧（HDMA 写
+ *       SPI3 CMD），本 ISR 入口时两者均已完成：电流从 PMT 结果取，角度从 SPI RX FIFO 取，
+ *       无启动开销、正常无忙等。编码器采样每拍执行（含 OFF 态），保证主循环快照新鲜。
  *       所有退出路径（正常/故障/无效输入）在单一出口统一计时与预算检查。
  */
 FOC_ATTR_RAMFUNC
 void app_foc_isr_step(void) {
     uint32_t t_isr = intf_clock_get_cycle();
+    app_encoder_rotor_snapshot_t enc;
     float theta_e = 0.0f;
     float omega_e = 0.0f;
     float frame_dt_s = 0.0f;
@@ -318,24 +333,22 @@ void app_foc_isr_step(void) {
     bool fault = false;
     bool degraded = false;
 
+    /* 0) 编码器同步采样（唯一运行期 SPI3 读点；每拍执行，与 FOC 状态无关） */
+    (void)app_encoder_sync_sample(t_isr, &enc);
+
     if (!s_initialized || s_isr_disabled) {
         return; /* 已停用：无输出，无需计时 */
     }
 
     /* ADC ISR 实测间隔 [s]：vtest 时长按此推进（与编码器样本 dt 无关） */
-    {
-        uint32_t now = intf_clock_get_cycle();
-        uint32_t cpu = intf_clock_get_cpu_freq();
-
-        if (s_isr_dt_valid && (cpu != 0U)) {
-            isr_dt_s = (float)(now - s_isr_last_cycle) / (float)cpu;
-            if (!(isr_dt_s > 0.0f) || (isr_dt_s > 5.0e-3f)) {
-                isr_dt_s = 0.0f; /* 异常/首拍：vtest 退回标称周期 */
-            }
+    if (s_isr_dt_valid) {
+        isr_dt_s = (float)(t_isr - s_isr_last_cycle) * s_sec_per_cycle;
+        if (!(isr_dt_s > 0.0f) || (isr_dt_s > 5.0e-3f)) {
+            isr_dt_s = 0.0f; /* 异常/首拍：vtest 退回标称周期 */
         }
-        s_isr_last_cycle = now;
-        s_isr_dt_valid = true;
     }
+    s_isr_last_cycle = t_isr;
+    s_isr_dt_valid = true;
 
     /* ISR 内即时故障门控：故障模块 FAULT / 外部 estop / 已锁存抑制 → 关桥并锁存 */
     if (s_isr_inhibited || ((s_estop_request != NULL) && (*s_estop_request != 0U))
@@ -352,29 +365,25 @@ void app_foc_isr_step(void) {
         goto isr_exit; /* 桥已关断：零矢量由关闭路径保证 */
     }
 
-    /* 角度：强制角（辨识/开环）或编码器一致快照（12.5kHz 采样，25kHz 复用） */
+    /* 角度：强制角（辨识/开环）或本拍同步采样（与电流同一触发点） */
     if (s_angle_src == APP_FOC_ANGLE_FORCED) {
         theta_e = foc_wrap_2pi(s_forced_theta);
     } else {
-        app_encoder_rotor_snapshot_t enc;
-        uint32_t cpu = intf_clock_get_cpu_freq();
-        uint32_t max_age = (uint32_t)(((uint64_t)cpu / 1000000U) * APP_FOC_ENC_MAX_AGE_US);
         bool is_new;
 
-        (void)app_encoder_read_rotor_isr(&enc); /* 有界读：绝不自旋 */
         g_foc_enc_age_cycles = enc.age_cycles;
-        g_foc_enc_age_us =
-            (cpu != 0U) ? (uint32_t)(((uint64_t)enc.age_cycles * 1000000U) / cpu) : 0U;
+        g_foc_enc_age_us = enc.age_cycles / s_cycles_per_us; /* 32 位硬件除法（非 __udivdi3） */
         g_foc_enc_seq = enc.seq;
 
+        /* age 守卫：同 ISR 采样时恒为 0（防御性保留——采样点若移出本 ISR 即生效） */
         if (enc.valid && (enc.consecutive_fail < APP_FOC_ENC_FAIL_TRIP)
-            && ((max_age == 0U) || (enc.age_cycles <= max_age))) {
+            && (enc.age_cycles <= s_enc_max_age_cycles)) {
             s_enc_degraded_streak = 0U;
             is_new = !s_rotor_seq_primed || (enc.seq != s_rotor_seq_last);
             if (is_new) {
                 if (s_enc_ts_valid) {
-                    /* 速度 dt 用样本时间戳差（不是 FOC 周期）：25kHz 复用时 dt 正确 */
-                    frame_dt_s = (float)(enc.timestamp_cycles - s_enc_ts_last) / (float)cpu;
+                    /* 速度 dt 用样本时间戳差（跳变保持/丢样后仍正确） */
+                    frame_dt_s = (float)(enc.timestamp_cycles - s_enc_ts_last) * s_sec_per_cycle;
                 }
                 s_enc_ts_last = enc.timestamp_cycles;
                 s_enc_ts_valid = true;
@@ -386,7 +395,7 @@ void app_foc_isr_step(void) {
                 s_omega_held = omega_e;
                 s_theta_held_valid = true;
             } else if (s_theta_held_valid) {
-                theta_e = s_theta_held; /* 复用：不重复 step 角度链 */
+                theta_e = s_theta_held; /* 跳变保持拍：复用上拍角度，不重复 step */
                 omega_e = s_omega_held;
             } else {
                 fault = true; /* 尚无可用角度 */
@@ -468,16 +477,15 @@ void app_foc_isr_step(void) {
     }
 
 isr_exit:
-    /* 单一出口：统一计时 + 预算检查（含 OFF / 故障 / 抑制路径） */
+    /* 单一出口：统一计时 + 预算检查（含 OFF / 故障 / 抑制路径；含编码器取帧） */
     {
         uint32_t cycles = intf_clock_get_cycle() - t_isr;
-        uint32_t mhz = intf_clock_get_cpu_freq() / 1000000U;
 
         g_foc_isr_cycles = cycles;
         if (cycles > g_foc_isr_cycles_max) {
             g_foc_isr_cycles_max = cycles;
         }
-        if ((mhz > 0U) && ((cycles / mhz) > APP_FOC_ISR_BUDGET_US)) {
+        if (cycles > s_isr_budget_cycles) {
             g_foc_isr_overruns++;
             /* 孤立尖峰（冷 cache/总线尾延迟）不瞬杀：连续 32 拍超限才判快路径
              * 失控（真触发风暴 = 每拍超限，streak 快速打满）。 */

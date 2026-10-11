@@ -22,6 +22,7 @@
 
 #include "app_debug_rtt.h"
 #include "app_encoder.h"
+#include "app_ramfunc.h"
 #include "intf_clock.h"
 
 #define ENC_REG_RD     (0x09U)
@@ -66,6 +67,7 @@ static uint32_t s_cpu_mhz;
  * @param cycles 待换算的周期数
  * @return 对应微秒数
  */
+APP_ATTR_RAMFUNC
 static inline uint32_t cycles_to_us(uint32_t cycles) {
     if (s_cpu_mhz == 0U) {
         s_cpu_mhz = intf_clock_get_cpu_freq() / 1000000U;
@@ -282,7 +284,7 @@ void app_debug_encoder_sample(void) {
     uint16_t raw;
     bool valid;
 
-    /* 转子：采样在 GPTMR 12.5kHz 采样 ISR（SPI3 独占）；此处只读一致快照 */
+    /* 转子：采样在 ADC0 PMT ISR（25kHz 硬件同步，SPI3 独占）；此处只读一致快照 */
     if ((app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
         uint16_t zero = 0U;
 
@@ -296,7 +298,8 @@ void app_debug_encoder_sample(void) {
     s_loop_count++;
 }
 
-/* 主循环节拍迟到反馈（迟到周期数） */
+/* 快车道超预算反馈（迟到周期数；ADC0 ISR 内调用 → ILM） */
+APP_ATTR_RAMFUNC
 void app_debug_encoder_note_loop_late(uint32_t late_cycles) {
     uint32_t late_us = cycles_to_us(late_cycles);
 
@@ -346,6 +349,22 @@ void app_debug_encoder_print_stats(void) {
         (unsigned)avg_output, (unsigned)cycles_to_us(s_read_cycles_max[APP_ENCODER_OUTPUT]),
         (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
         (unsigned)app_encoder_get_error_count(APP_ENCODER_OUTPUT));
+
+    /* 同步采样（ADC0 ISR 内取帧）：rate 应 = 25000；fail 正常 0；isr max = 单拍取帧+发布耗时 */
+    {
+        static uint32_t s_prev_sample_count;
+        static uint32_t s_prev_fail_count;
+        uint32_t sample_now = g_encoder_sample_count;
+        uint32_t fail_now = g_encoder_read_fail_count;
+
+        app_debug_printf(
+            "[ENC] sync=%s rate=%u Hz fail=%u | fetch last/max=%u/%u cycles\r\n",
+            app_encoder_sync_active() ? "on" : "OFF", (unsigned)(sample_now - s_prev_sample_count),
+            (unsigned)(fail_now - s_prev_fail_count), (unsigned)g_encoder_isr_cycles,
+            (unsigned)g_encoder_isr_cycles_max);
+        s_prev_sample_count = sample_now;
+        s_prev_fail_count = fail_now;
+    }
 
     /* 清零窗口 */
     for (uint8_t i = 0U; i < (uint8_t)APP_ENCODER_COUNT; i++) {
