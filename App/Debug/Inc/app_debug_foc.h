@@ -31,9 +31,11 @@ typedef enum {
     APP_DEBUG_FOC_CMD_DISABLE,    /**< 关闭 FOC（先清零目标给定） */
     APP_DEBUG_FOC_CMD_CLEAR_FAULT,/**< 清除故障锁存（app_fault_clear） */
     APP_DEBUG_FOC_CMD_VTEST,      /**< 开环电压诊断（arg0 = 电压 x1000，arg1 = θe x10000 [rad]） */
-    APP_DEBUG_FOC_CMD_CAL_ENCODER,/**< 启动电气标定（app_motor_identify_start） */
-    APP_DEBUG_FOC_CMD_CAL_ABORT,  /**< 中止电气标定（app_motor_identify_abort） */
+    APP_DEBUG_FOC_CMD_CAL_ENCODER,/**< 启动电角度自校准（app_motor_identify_start；须 READY/RUN） */
+    APP_DEBUG_FOC_CMD_CAL_ABORT,  /**< 中止电角度自校准（app_motor_identify_abort） */
     APP_DEBUG_FOC_CMD_PASSIVE_SELFTEST, /**< 被动自检（不使能桥；app_debug_encoder_passive_selftest） */
+    APP_DEBUG_FOC_CMD_CAL_APPLY,  /**< 应用最近一次成功校准结果（RAM；app_motor_identify_apply） */
+    APP_DEBUG_FOC_CMD_CAL_SAVE,   /**< 零点/方向写入 flash（须 FOC OFF；app_motor_identify_save） */
 } app_debug_foc_cmd_t;
 
 /**

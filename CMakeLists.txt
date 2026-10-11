@@ -154,7 +154,8 @@ sdk_app_src(Interface/intf_default.c)
 
 # ============================================================================
 # Algorithm Library (pure C, hardware independent)
-#   M1 裁剪：id_encoder.c（辨识专用）不编译；algo_trig.c（V/F 专用）不编译。
+#   M1 裁剪：algo_trig.c（V/F 专用）不编译。
+#   id_encoder.c：电角度自校准算法（1kHz 任务上下文，不进 ISR）。
 # ============================================================================
 
 sdk_app_src(App/Algorithm/Src/algo_ffd.c)
@@ -169,6 +170,7 @@ sdk_app_src(App/Algorithm/FOC/Src/foc_math.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_angle.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_current.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_modulation.c)
+sdk_app_src(App/Algorithm/FOC/Src/id_encoder.c)
 
 # ============================================================================
 # Platform Layer
@@ -191,13 +193,14 @@ sdk_app_src(App/Platform/Src/app_rtos.c)
 
 # ============================================================================
 # Control Layer
-#   M1 裁剪：app_motor_identify.c 不编译（调用点空桩见 spec §4）。
+#   app_motor_identify.c：电角度自校准（隔离模块；经 app_foc 校准端口借用电流环）。
 # ============================================================================
 
 sdk_app_src(App/Control/Src/app_fault.c)
 sdk_app_src(App/Control/Src/app_motor_params.c)
 sdk_app_src(App/Control/Src/app_foc_current.c)
 sdk_app_src(App/Control/Src/app_foc.c)
+sdk_app_src(App/Control/Src/app_motor_identify.c)
 
 # ============================================================================
 # Comm Layer

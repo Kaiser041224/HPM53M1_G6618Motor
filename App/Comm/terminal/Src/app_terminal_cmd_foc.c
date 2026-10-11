@@ -57,6 +57,15 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
                (unsigned)g_foc_protect_counts[APP_FOC_PROT_READ],
                (unsigned)g_foc_protect_counts[APP_FOC_PROT_VBUS],
                (unsigned)g_foc_protect_counts[APP_FOC_PROT_TRIP]);
+    {
+        float enc_offset;
+        float enc_dir;
+
+        app_foc_get_encoder_offset(&enc_offset, &enc_dir);
+        csh_printf(csh, "     enc: offset=%.4f rad (%.1f deg) dir=%+.0f  (cal encoder show)\r\n",
+                   (double)enc_offset, (double)(enc_offset * APP_TERMINAL_FOC_DEG_PER_RAD),
+                   (double)enc_dir);
+    }
     if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
         csh_printf(csh, "     hint: run 'foc off' then 'foc on' to recover\r\n");
     }

@@ -276,16 +276,20 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
             float expected_travel =
                 (FOC_TWO_PI_F * self->_cfg.sweep_turns / p) * ((steps - 1.0f) / steps);
 
-            self->_offset_rad = foc_wrap_2pi(-atan2f(self->_s_sum, self->_c_sum));
-            self->_offset_fwd_rad = self->_offset_rad;
+            /* 零点 = 正/反向样本合并的圆均值：摩擦/负载角使转子沿运动方向滞后，
+             * 正扫零点偏 −lag、反扫偏 +lag，合并后对称抵消（单向结果仅作诊断）。 */
+            float s_all = self->_s_sum + self->_s_sum_rev;
+            float c_all = self->_c_sum + self->_c_sum_rev;
+            uint32_t n_all = self->_acc_n + self->_acc_n_rev;
+
+            self->_offset_fwd_rad = foc_wrap_2pi(-atan2f(self->_s_sum, self->_c_sum));
             self->_offset_rev_rad =
                 (self->_acc_n_rev > 0U)
                     ? foc_wrap_2pi(-atan2f(self->_s_sum_rev, self->_c_sum_rev))
-                    : self->_offset_rad;
+                    : self->_offset_fwd_rad;
+            self->_offset_rad = foc_wrap_2pi(-atan2f(s_all, c_all));
             self->_hyst_rad = foc_wrap_pm_pi(self->_offset_fwd_rad - self->_offset_rev_rad);
-            self->_quality =
-                sqrtf(self->_s_sum * self->_s_sum + self->_c_sum * self->_c_sum)
-                / (float)self->_acc_n;
+            self->_quality = sqrtf(s_all * s_all + c_all * c_all) / (float)n_all;
             self->_mech_ratio_err =
                 (expected_travel > 0.0f)
                     ? ((fabsf(self->_mech_travel) - expected_travel) / expected_travel)

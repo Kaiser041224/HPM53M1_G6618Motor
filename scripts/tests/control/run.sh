@@ -22,6 +22,8 @@ BASE_FLAGS=(-std=c17 -Wall -Wextra -Werror)
 shopt -s nullglob
 APP_SRC=(
     "$ROOT/App/Control/Src/app_foc_current.c"
+    "$ROOT/App/Control/Src/app_foc.c"
+    "$ROOT/App/Algorithm/FOC/Src/foc_angle.c"
     "$ROOT/App/Algorithm/FOC/Src/foc_math.c"
     "$ROOT/App/Algorithm/FOC/Src/foc_current.c"
     "$ROOT/App/Algorithm/FOC/Src/foc_modulation.c"

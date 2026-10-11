@@ -41,6 +41,7 @@
 #include "app_gpio.h"
 #include "app_gptmr.h"
 #include "app_hardware_params.h"
+#include "app_motor_identify.h"
 #include "app_motor_params.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
@@ -167,6 +168,20 @@ void app_init(void) {
         app_debug_printf("[ADC] zero calibration: FAILED (default 1.65V in use)\r\n");
     }
 
+    /* 12b. 电角度零点上电恢复（flash "FENC" 记录 → 电机运行参数；须在 app_foc_init 前）。
+     *      参数存储已由 7. 编码器初始化（app_param_init）就绪。 */
+    {
+        int restore_rc = app_motor_identify_restore();
+        const app_motor_params_t* motor = app_motor_params_current();
+
+        app_debug_printf("[FOC] encoder offset: %s offset=%.4f rad dir=%+.0f\r\n",
+                         (restore_rc == 0)   ? "restored(flash)"
+                         : (restore_rc > 0) ? "default(yaml)"
+                                            : "REJECTED(flash record mismatch, yaml in use)",
+                         (double)motor->encoder.electrical_offset_rad,
+                         (double)motor->encoder.direction);
+    }
+
     /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
     app_foc_init();
 
@@ -244,6 +259,9 @@ void app_io_step(void) {
 
     /* FOC 状态机 / 给定编排（控制环在 ISR，见 app_foc_isr_step） */
     app_foc_run_once();
+
+    /* 电角度自校准（隔离模块；空闲时为空操作；进行中经校准端口借用电流环） */
+    app_motor_identify_run_once();
 
     /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */
     app_debug_foc_tick();

@@ -14,6 +14,7 @@
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
+#include "app_motor_identify.h"
 #include "intf_clock.h"
 
 /** Ozone 结构（.noncacheable.bss：启动清零 + 调试器直读，不受 D-Cache 影响） */
@@ -57,8 +58,17 @@ static int32_t app_debug_foc_dispatch(uint32_t cmd) {
         return (int32_t)app_foc_current_vtest_start(volts, theta, 1.0f);
     }
     case APP_DEBUG_FOC_CMD_CAL_ENCODER:
+        /* 电角度自校准（推进在 app_io 任务；结果见 cal_* 状态域，不自动生效） */
+        g_app_debug_foc.iq_target_a = 0.0f;
+        g_app_debug_foc.id_target_a = 0.0f;
+        return (int32_t)app_motor_identify_start();
     case APP_DEBUG_FOC_CMD_CAL_ABORT:
-        return -1; /* M1 裁剪：辨识不参与构建 */
+        app_motor_identify_abort();
+        return 0;
+    case APP_DEBUG_FOC_CMD_CAL_APPLY:
+        return (int32_t)app_motor_identify_apply();
+    case APP_DEBUG_FOC_CMD_CAL_SAVE:
+        return (int32_t)app_motor_identify_save(); /* 须 FOC OFF */
     case APP_DEBUG_FOC_CMD_PASSIVE_SELFTEST:
         /* 运行期健康自检：只评估采样器快照流（不触碰 SPI3），100ms 后出结果 */
         if (app_debug_encoder_health_active()) {
@@ -117,15 +127,20 @@ static void app_debug_foc_refresh(void) {
     g_app_debug_foc.selftest_jump_delta = g_enc_runtime_jump_delta;
     g_app_debug_foc.selftest_age_max_us = g_enc_runtime_age_max_us;
 
-    /* 辨识结果域：M1 裁剪（辨识不构建），恒 0（重新接入后由 get_result 回填） */
-    g_app_debug_foc.cal_active = 0U;
-    g_app_debug_foc.cal_done = 0U;
-    g_app_debug_foc.cal_failed = 0U;
-    g_app_debug_foc.cal_fail_reason = 0U;
-    g_app_debug_foc.cal_progress = 0.0f;
-    g_app_debug_foc.cal_offset_rad = 0.0f;
-    g_app_debug_foc.cal_direction = 0.0f;
-    g_app_debug_foc.cal_quality = 0.0f;
+    /* 电角度自校准结果域（app_motor_identify） */
+    {
+        app_motor_identify_result_t cal;
+
+        app_motor_identify_get_result(&cal);
+        g_app_debug_foc.cal_active = cal.active ? 1U : 0U;
+        g_app_debug_foc.cal_done = cal.done ? 1U : 0U;
+        g_app_debug_foc.cal_failed = cal.failed ? 1U : 0U;
+        g_app_debug_foc.cal_fail_reason = (uint32_t)cal.fail_reason;
+        g_app_debug_foc.cal_progress = cal.progress;
+        g_app_debug_foc.cal_offset_rad = cal.offset_rad;
+        g_app_debug_foc.cal_direction = cal.direction;
+        g_app_debug_foc.cal_quality = cal.quality;
+    }
 
     g_app_debug_foc.i_d_a = snap.i_d_a;
     g_app_debug_foc.i_q_a = snap.i_q_a;
@@ -194,7 +209,7 @@ void app_debug_foc_tick(void) {
         }
     }
 
-    /* 3) 电气标定推进：M1 裁剪（辨识不构建）。 */
+    /* 3) 电角度自校准：推进在 app_io_step（app_motor_identify_run_once），此处只读结果域。 */
 
     /* 3b) 运行期健康自检推进（不触碰 SPI3；100ms 窗口） */
     app_debug_encoder_health_tick();

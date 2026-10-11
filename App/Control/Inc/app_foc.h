@@ -63,12 +63,6 @@ extern volatile uint32_t g_foc_enc_seq;
 extern volatile uint32_t g_foc_fault_request;
 
 /**
- * @brief 本拍实测调用间隔 [s]
- * @return 实测间隔；首拍/异常时为标称值（1/pwm_freq）
- */
-float app_foc_get_last_dt_s(void);
-
-/**
  * @brief 初始化（上电状态 OFF）
  */
 void app_foc_init(void);
@@ -155,31 +149,69 @@ bool app_foc_is_active(void);
  */
 void app_foc_get_snapshot(app_foc_current_snapshot_t* out);
 
-/**
- * @brief 进入辨识模式（READY/RUN → CALIB）
- * @return 0 = 成功；-1 = 状态不允许
- */
-int app_foc_enter_calib(void);
+/* ============================================================================
+ * 校准端口（Calibration Port）
+ *
+ * 供隔离的校准模块（app_motor_identify）在 1kHz 任务上下文借用电流环：
+ *   begin → set_excitation（强制角激励）/ use_trial_offset + set_current（试用零点验证）→ end
+ * 约束：
+ *   - 仅 CALIB 状态生效；FOC 不感知校准算法，ISR 无新增代码（复用 CALIB 角源/给定）；
+ *   - 运行零点由镜像持续记录（仅 apply / enable 更新），end 时据此恢复（试用零点永不残留）；
+ *   - 校准结果生效只经 app_foc_apply_encoder_offset（由调用方显式发起）。
+ * ============================================================================ */
 
 /**
- * @brief 退出辨识模式（CALIB → READY；恢复编码器角源；给定归零）
+ * @brief 开始校准（READY/RUN → CALIB；强制角 0、给定清零、PI 积分清零）
+ * @return 0 = 成功；-1 = 状态不允许（非 READY/RUN 或 vtest 进行中）
  */
-void app_foc_exit_calib(void);
+int app_foc_calib_begin(void);
 
 /**
- * @brief 辨识模式每拍更新激励（app_motor_identify 调用）
+ * @brief 结束校准（CALIB → READY；恢复运行零点与编码器角源、给定清零）；非 CALIB 时无操作
+ */
+void app_foc_calib_end(void);
+
+/**
+ * @brief 强制角激励（CALIB；切换为强制角源）
  * @param theta_e_rad 强制电角度 [rad]
  * @param i_d_ref d 轴电流给定 [A]
  * @param i_q_ref q 轴电流给定 [A]
+ * @return 0 = 成功；-1 = 非 CALIB / 参数非有限
  */
-void app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref);
+int app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref);
 
 /**
- * @brief 应用辨识出的电角度零点/方向（更新运行期角度链；不写参数）
+ * @brief 试用零点（CALIB；切换为编码器角源并临时使用给定零点/方向，end 时作废）
+ * @param offset_rad 试用电角度零点 [rad]
+ * @param direction 试用方向（+1.0 / −1.0）
+ * @return 0 = 成功；-1 = 非 CALIB / 参数非法
+ */
+int app_foc_calib_use_trial_offset(float offset_rad, float direction);
+
+/**
+ * @brief 设置 d/q 电流给定（CALIB；不改变角源）
+ * @param i_d_ref d 轴电流给定 [A]
+ * @param i_q_ref q 轴电流给定 [A]
+ * @return 0 = 成功；-1 = 非 CALIB / 参数非有限
+ */
+int app_foc_calib_set_current(float i_d_ref, float i_q_ref);
+
+/**
+ * @brief 应用电角度零点/方向到运行期角度链（不写参数；CALIB 中拒绝）
  * @param offset_rad 电角度零点 [rad]
  * @param direction 方向（+1.0 / −1.0）
+ * @return 0 = 成功；-1 = CALIB 中 / 参数非法
+ * @note app_foc_enable 会从电机参数重建角度链：持久生效须同时写电机参数
+ *       （app_motor_identify_apply 已一并处理）。
  */
-void app_foc_apply_encoder_offset(float offset_rad, float direction);
+int app_foc_apply_encoder_offset(float offset_rad, float direction);
+
+/**
+ * @brief 读取运行期角度链当前生效的零点/方向（不含 CALIB 试用值）
+ * @param offset_rad 输出零点 [rad]（可为 NULL）
+ * @param direction 输出方向（可为 NULL）
+ */
+void app_foc_get_encoder_offset(float* offset_rad, float* direction);
 
 /**
  * @brief 是否处于 FAULT 门控

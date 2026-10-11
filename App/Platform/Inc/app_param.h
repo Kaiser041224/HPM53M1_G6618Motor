@@ -32,6 +32,7 @@ extern "C" {
  * 参数键登记（各模块在此登记，避免冲突）
  * ============================================================================ */
 #define APP_PARAM_KEY_ENCODER (0x454E4344U) /* "ENCD"：编码器零点等 */
+#define APP_PARAM_KEY_FOC_ENCODER (0x46454E43U) /* "FENC"：FOC 电角度零点/方向（app_motor_identify） */
 
 /* 单条记录最大数据长度（128 - 头 12 - CRC 4） */
 #define APP_PARAM_DATA_MAX (112U)

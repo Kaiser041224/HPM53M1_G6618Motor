@@ -13,10 +13,12 @@ int g_checks = 0;
 int g_fails = 0;
 
 void test_foc_current_integration(void);
+void test_foc_calib_port(void);
 
 int main(void) {
     printf("Control host tests\n");
     test_foc_current_integration();
+    test_foc_calib_port();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");

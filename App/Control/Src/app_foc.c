@@ -73,6 +73,10 @@ static float s_sec_per_cycle;         /**< 1 / CPU 频率 [s/cycle] */
 static uint32_t s_enc_max_age_cycles; /**< 编码器样本新鲜度上限 [cycle] */
 static uint32_t s_isr_budget_cycles;  /**< ISR 单拍预算 [cycle] */
 
+/* 运行期角度链零点镜像（不含 CALIB 试用值）与校准期间的备份 */
+static float s_angle_offset_rad;      /**< 当前生效电角度零点 [rad] */
+static float s_angle_direction;       /**< 当前生效方向（±1） */
+
 /** 外部（Debug）紧急停机请求邮箱（Control 持有指针；ISR 只读，绝不阻塞） */
 static volatile uint32_t* s_estop_request;
 
@@ -124,6 +128,8 @@ static int app_foc_angle_init(void) {
     cfg.pole_pairs = motor->pole_pairs;
     cfg.direction = motor->encoder.direction;
     cfg.offset_rad = motor->encoder.electrical_offset_rad;
+    s_angle_offset_rad = cfg.offset_rad;
+    s_angle_direction = cfg.direction;
     cfg.speed_lpf_hz = APP_FOC_SPEED_LPF_HZ;
     cfg.sample_time_s = 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
 
@@ -206,7 +212,7 @@ static void app_foc_run_body(void) {
             || (g_foc_fault_request != 0U))) {
         app_foc_current_zero_vector();
         app_3phase_inverter_emergency_stop(); /* 幂等：ISR 侧可能已执行 */
-        s_state = APP_FAULT_STATE_FAULT;
+        s_state = APP_FOC_STATE_FAULT; /* 原误用 APP_FAULT_STATE_FAULT（=3=CALIB） */
         return;
     }
     /* 快速过流跳闸（电流环内置）：零矢量已由保护路径输出，此处关桥并锁存 FAULT */
@@ -249,8 +255,8 @@ static void app_foc_run_body(void) {
     /* 开环电压诊断（vtest）：在 ADC0 ISR 内以本拍新鲜电流/母线 + 真实 dt 执行
      * （单一实时输出所有者：主循环不再直接写桥）。此处仅保留状态编排。 */
 
-    /* 辨识模式：M1 裁剪（spec §1），app_motor_identify 不参与构建。
-     * CALIB 状态/接口保留；重新接入辨识时在此恢复 app_motor_identify_fast_step()。 */
+    /* 校准（CALIB）：由隔离的 app_motor_identify 经校准端口在 1kHz 任务中驱动；
+     * 本函数不感知校准算法（无调用点）。 */
 
     /* 角度/电流环已迁至 app_foc_isr_step（ADC 完成回调，固定 25kHz）；
      * 此处只做状态机、限幅与激励编排。ωe 取 ISR 侧快照用于限速判据。 */
@@ -285,13 +291,6 @@ static void app_foc_run_body(void) {
         && ((s_i_d_ref != 0.0f) || (s_i_q_ref_cmd != 0.0f))) {
         s_state = APP_FOC_STATE_RUN;
     }
-}
-
-float app_foc_get_last_dt_s(void) {
-    if ((s_dt_s > 0.0f) && (s_dt_s <= 5.0e-3f)) {
-        return s_dt_s;
-    }
-    return 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
 }
 
 /**
@@ -632,7 +631,8 @@ void app_foc_disable(void) {
     app_3phase_inverter_disable();
     app_foc_current_reset();
 
-    /* 3) 电气标定中止：M1 裁剪（辨识不构建），无中止对象。 */
+    /* 3) 进行中的电角度自校准：不在此反向依赖校准模块；其每拍守卫检测到
+     *    状态 ≠ CALIB 即以 STATE 失败退出（≤1ms）。 */
 }
 
 int app_foc_set_iq_ref(float i_q_a) {
@@ -706,11 +706,31 @@ bool app_foc_is_active(void) { return (s_state != APP_FOC_STATE_OFF); }
 
 void app_foc_get_snapshot(app_foc_current_snapshot_t* out) { app_foc_current_get_snapshot(out); }
 
-int app_foc_enter_calib(void) {
-    uint32_t st;
+/**
+ * @brief 角度链历史复位（零点/角源切换后：下一拍重新建立序号/时间戳/保持角基准）
+ * @note 调用方须持有临界区
+ */
+static void app_foc_angle_history_reset(void) {
+    s_rotor_seq_primed = false;
+    s_enc_ts_valid = false;
+    s_theta_held_valid = false;
+    s_enc_degraded_streak = 0U;
+}
 
-    st = intf_sys_irq_save();
-    if ((s_state != APP_FOC_STATE_READY) && (s_state != APP_FOC_STATE_RUN)) {
+/**
+ * @brief 方向值是否合法（仅 ±1）
+ * @param direction 方向
+ * @return true = 合法
+ */
+static bool app_foc_direction_valid(float direction) {
+    return (direction == 1.0f) || (direction == -1.0f);
+}
+
+int app_foc_calib_begin(void) {
+    uint32_t st = intf_sys_irq_save();
+
+    if (((s_state != APP_FOC_STATE_READY) && (s_state != APP_FOC_STATE_RUN))
+        || app_foc_current_vtest_active()) { /* vtest 独占输出中：同一临界区内判定 */
         intf_sys_irq_restore(st);
         return -1;
     }
@@ -725,40 +745,104 @@ int app_foc_enter_calib(void) {
     return 0;
 }
 
-void app_foc_exit_calib(void) {
+void app_foc_calib_end(void) {
     uint32_t st = intf_sys_irq_save();
 
     if (s_state == APP_FOC_STATE_CALIB) {
-        s_angle_src = APP_FOC_ANGLE_ENCODER;
         s_i_d_ref = 0.0f;
         s_i_q_ref_cmd = 0.0f;
         s_i_q_ref = 0.0f;
-        s_angle.reset(&s_angle);
+        /* 试用零点作废：恢复运行零点（set_offset 同时清除 ωe 差分历史） */
+        s_angle.set_offset(&s_angle, s_angle_offset_rad, s_angle_direction);
+        s_angle_src = APP_FOC_ANGLE_ENCODER;
+        app_foc_angle_history_reset();
+        app_foc_current_reset();
         s_state = APP_FOC_STATE_READY;
     }
     intf_sys_irq_restore(st);
 }
 
-void app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref) {
+int app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref) {
     uint32_t st;
+    int rc = -1;
 
     if (!foc_finite(theta_e_rad) || !foc_finite(i_d_ref) || !foc_finite(i_q_ref)) {
-        return;
+        return -1;
     }
     st = intf_sys_irq_save();
     if (s_state == APP_FOC_STATE_CALIB) {
+        s_angle_src = APP_FOC_ANGLE_FORCED;
         s_forced_theta = theta_e_rad;
         s_i_d_ref = i_d_ref;
         s_i_q_ref = i_q_ref;
+        rc = 0;
     }
     intf_sys_irq_restore(st);
+    return rc;
 }
 
-void app_foc_apply_encoder_offset(float offset_rad, float direction) {
-    uint32_t st = intf_sys_irq_save();
+int app_foc_calib_use_trial_offset(float offset_rad, float direction) {
+    uint32_t st;
+    int rc = -1;
 
-    s_angle.set_offset(&s_angle, offset_rad, direction);
+    if (!foc_finite(offset_rad) || !app_foc_direction_valid(direction)) {
+        return -1;
+    }
+    st = intf_sys_irq_save();
+    if (s_state == APP_FOC_STATE_CALIB) {
+        s_angle.set_offset(&s_angle, offset_rad, direction); /* 运行镜像不变（end 恢复） */
+        s_angle_src = APP_FOC_ANGLE_ENCODER;
+        app_foc_angle_history_reset();
+        app_foc_current_reset(); /* 角源切换：清 PI 积分，避免强制角阶段积分量带入 */
+        rc = 0;
+    }
     intf_sys_irq_restore(st);
+    return rc;
+}
+
+int app_foc_calib_set_current(float i_d_ref, float i_q_ref) {
+    uint32_t st;
+    int rc = -1;
+
+    if (!foc_finite(i_d_ref) || !foc_finite(i_q_ref)) {
+        return -1;
+    }
+    st = intf_sys_irq_save();
+    if (s_state == APP_FOC_STATE_CALIB) {
+        s_i_d_ref = i_d_ref;
+        s_i_q_ref = i_q_ref;
+        rc = 0;
+    }
+    intf_sys_irq_restore(st);
+    return rc;
+}
+
+int app_foc_apply_encoder_offset(float offset_rad, float direction) {
+    uint32_t st;
+    int rc = -1;
+
+    if (!foc_finite(offset_rad) || !app_foc_direction_valid(direction)) {
+        return -1;
+    }
+    st = intf_sys_irq_save();
+    if (s_state != APP_FOC_STATE_CALIB) {
+        s_angle.set_offset(&s_angle, offset_rad, direction);
+        s_angle_offset_rad = offset_rad;
+        s_angle_direction = direction;
+        app_foc_angle_history_reset();
+        rc = 0;
+    }
+    intf_sys_irq_restore(st);
+    return rc;
+}
+
+void app_foc_get_encoder_offset(float* offset_rad, float* direction) {
+    if (offset_rad != NULL) {
+        *offset_rad = s_angle_offset_rad;
+    }
+    if (direction != NULL) {
+        *direction = s_angle_direction;
+    }
 }
 
 bool app_foc_fault_gate(void) { return (s_state == APP_FOC_STATE_FAULT); }

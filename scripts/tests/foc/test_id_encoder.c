@@ -37,6 +37,37 @@ static bool run_identify(id_encoder_t* id, float offset_true, float dir_true, fl
     return false;
 }
 
+/**
+ * @brief 带滞后的仿真辨识：扫描段转子沿运动方向滞后 lag_rad（摩擦/负载角）
+ * @return true = 在上限步数内结束
+ */
+static bool run_identify_lag(id_encoder_t* id, float offset_true, float lag_rad, float ts,
+                             id_encoder_out_t* out) {
+    id_encoder_in_t in;
+
+    out->theta_e_cmd = 0.0f;
+    out->phase = ID_ENCODER_PHASE_LOCK_IN;
+    for (int n = 0; n < 300000; n++) {
+        float applied = out->theta_e_cmd;
+
+        if (out->phase == ID_ENCODER_PHASE_SWEEP_FWD) {
+            applied -= lag_rad; /* 正扫：落后于指令 */
+        } else if (out->phase == ID_ENCODER_PHASE_SWEEP_REV) {
+            applied += lag_rad; /* 反扫：同样落后（方向相反） */
+        }
+        in.theta_m_raw_rad = foc_wrap_2pi(sim_rotor_rad(applied, offset_true, 1.0f, 10.0f));
+        in.i_d_a = 2.0f;
+        in.i_q_a = 0.0f;
+        in.v_bus_v = 24.0f;
+        in.dt_s = ts;
+        id->step(id, &in, out);
+        if (out->done || out->failed) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void test_id_encoder(void) {
     id_encoder_t id;
     id_encoder_cfg_t cfg = {
@@ -71,6 +102,37 @@ void test_id_encoder(void) {
     CHECK_NEAR(out.offset_rad, offset_true, 0.02f);
     CHECK(out.quality > 0.95f);
     CHECK_NEAR(out.mech_ratio_err, 0.0f, 0.05f);
+
+    /* 对称滞后（摩擦）：正/反向零点各偏 ±lag，合并后抵消 → 结果应等于真值 */
+    {
+        id_encoder_t id_lag;
+        id_encoder_out_t out_lag;
+        const float lag = 0.15f; /* ≈8.6° 电角 */
+
+        id_encoder_ctor(&id_lag);
+        CHECK(id_lag.init(&id_lag, &cfg) == 0);
+        id_lag.reset(&id_lag);
+        out_lag = (id_encoder_out_t){0};
+        CHECK(run_identify_lag(&id_lag, offset_true, lag, ts, &out_lag));
+        CHECK(out_lag.done);
+        CHECK_NEAR(out_lag.offset_fwd_rad, offset_true - lag, 0.02f);
+        CHECK_NEAR(out_lag.offset_rev_rad, offset_true + lag, 0.02f);
+        CHECK_NEAR(out_lag.offset_rad, offset_true, 0.02f); /* 正反合计：滞后抵消 */
+    }
+
+    /* 1kHz 驱动（任务上下文 1ms 步长）：流程同样完成且结果正确 */
+    {
+        id_encoder_t id_1k;
+        id_encoder_out_t out_1k;
+
+        id_encoder_ctor(&id_1k);
+        CHECK(id_1k.init(&id_1k, &cfg) == 0);
+        id_1k.reset(&id_1k);
+        out_1k = (id_encoder_out_t){0};
+        CHECK(run_identify(&id_1k, offset_true, 1.0f, 1.0e-3f, &out_1k));
+        CHECK(out_1k.done);
+        CHECK_NEAR(out_1k.offset_rad, offset_true, 0.02f);
+    }
 
     /* 反方向 */
     {
