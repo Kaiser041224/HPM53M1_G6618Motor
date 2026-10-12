@@ -42,6 +42,7 @@
 #include "app_gptmr.h"
 #include "app_hardware_params.h"
 #include "app_motor_identify.h"
+#include "app_current_identify.h"
 #include "app_motor_params.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
@@ -183,6 +184,11 @@ void app_init(void) {
     }
 
     /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
+    {
+        int rc = app_current_identify_restore();
+        app_debug_printf("[FOC] current tuning: %s\r\n",
+                         rc == 0 ? "restored(flash)" : rc > 0 ? "default(yaml)" : "REJECTED(flash)");
+    }
     app_foc_init();
 
     /* 13b. FOC 调试观测/命令（Ozone 结构；io 任务有界处理请求） */
@@ -262,6 +268,7 @@ void app_io_step(void) {
 
     /* 电角度自校准（隔离模块；空闲时为空操作；进行中经校准端口借用电流环） */
     app_motor_identify_run_once();
+    app_current_identify_run_once();
 
     /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */
     app_debug_foc_tick();

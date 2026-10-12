@@ -34,6 +34,7 @@ void mock_params_reset(void) {
 
     s_sw.control.current_loop.kp = 0.3f;
     s_sw.control.current_loop.ki = 100.0f;
+    s_sw.control.current_loop.bandwidth_rad_s = 1256.63706f;
     s_sw.control.current_loop.decoupling_en = 0U;
     s_sw.control.limits.i_q_max_a = 10.0f;
     s_sw.control.limits.duty_max = 0.885f;
@@ -54,10 +55,13 @@ void mock_set_current_gains(float kp, float ki) {
 }
 
 void mock_set_i_trip(float a) { s_sw.control.limits.i_trip_a = a; }
+void mock_set_pwm_hz(uint32_t hz) { s_hw.inverter.pwm_freq_hz = hz; }
 
 const app_hardware_params_t* app_hardware_params_current(void) { return &s_hw; }
 const app_software_params_t* app_software_params_current(void) { return &s_sw; }
 const app_motor_params_t* app_motor_params_current(void) { return &s_motor; }
+app_motor_params_t* app_motor_params_mutable(void) { return &s_motor; }
+app_software_params_t* app_software_params_mutable(void) { return &s_sw; }
 
 int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w) {
     g_mock_duty[0] = duty_u;

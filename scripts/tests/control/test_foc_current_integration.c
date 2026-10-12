@@ -42,7 +42,7 @@ void test_foc_current_integration(void) {
     CHECK(app_foc_current_is_ready());
 
     /* 0) 控制层有效占空比上限：保守 0.70（不随用户 0.885 放开） */
-    CHECK_NEAR(app_foc_current_duty_max(), 0.70f, 1e-6f);
+    CHECK_NEAR(app_foc_current_duty_max(), 0.885f, 1e-6f); /* mock user=.885，默认ceiling=.95 */
 
     /* 1) 零矢量命令 */
     app_foc_current_zero_vector();

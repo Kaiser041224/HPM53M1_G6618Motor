@@ -33,6 +33,7 @@ extern "C" {
  * ============================================================================ */
 #define APP_PARAM_KEY_ENCODER (0x454E4344U) /* "ENCD"：编码器零点等 */
 #define APP_PARAM_KEY_FOC_ENCODER (0x46454E43U) /* "FENC"：FOC 电角度零点/方向（app_motor_identify） */
+#define APP_PARAM_KEY_FOC_CURRENT (0x46435552U) /* "FCUR"：等效Rs/Ld及PI */
 
 /* 单条记录最大数据长度（128 - 头 12 - CRC 4） */
 #define APP_PARAM_DATA_MAX (112U)

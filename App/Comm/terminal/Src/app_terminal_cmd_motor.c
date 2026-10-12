@@ -32,6 +32,7 @@
 #include "app_analog_signal.h"
 #include "app_foc.h"
 #include "app_motor_identify.h"
+#include "app_current_identify.h"
 #include "app_motor_params.h"
 #include "foc_math.h"
 
@@ -336,14 +337,173 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
 /**
  * @brief 命令 cal：电流零点标定（current）/ 电角度自校准（encoder），job 驱动，不阻塞控制环。
  */
+/** @brief Rs/Ld与PI结果显示，不进入实时控制路径 */
+static void cal_rl_emit(const app_current_identify_result_t* result) {
+    app_terminal_cmd_emit("phase zero: U=%.4f V=%.4f W=%.4f sum=%.4fA theta=%.4frad\r\n",
+        (double)result->zero_phase_a[0],(double)result->zero_phase_a[1],(double)result->zero_phase_a[2],
+        (double)(result->zero_phase_a[0]+result->zero_phase_a[1]+result->zero_phase_a[2]),
+        (double)result->excitation_theta_rad);
+    app_terminal_cmd_emit("phase driven: U=%.4f V=%.4f W=%.4f sum=%.4fA\r\n",
+        (double)result->driven_phase_a[0],(double)result->driven_phase_a[1],(double)result->driven_phase_a[2],
+        (double)(result->driven_phase_a[0]+result->driven_phase_a[1]+result->driven_phase_a[2]));
+    static const char* const detail_names[] = {
+        "none", "state", "timeout", "snapshot", "movement", "capture-invalid",
+        "q-current", "d-ripple", "d-tracking", "port"
+    };
+    unsigned detail = (unsigned)result->detail;
+    app_terminal_cmd_emit("diagnostic: stage=%u detail=%s platform=%u theta_delta=%.4frad\r\n",
+        (unsigned)result->failure_stage,
+        detail < sizeof(detail_names)/sizeof(detail_names[0]) ? detail_names[detail] : "unknown",
+        (unsigned)result->platform_index, (double)result->theta_delta_rad);
+    app_terminal_cmd_emit("capture: n=%u invalid=%u id_ref=%.3f mean=%.3f ripple=%.3fA iq_peak=%.3fA vd=%.4fV\r\n",
+        (unsigned)result->capture_count, (unsigned)result->capture_invalid_count,
+        (double)result->capture_ref_a, (double)result->capture_mean_a,
+        (double)result->capture_ripple_a, (double)result->capture_q_peak_a,
+        (double)result->capture_voltage_v);
+    app_terminal_cmd_emit("steady iq_mean=%.4fA (peak is diagnostic, not acceptance criterion)\r\n",
+                          (double)result->capture_q_mean_a);
+    app_terminal_cmd_emit("zero-PWM baseline: id=%.4fA iq=%.4fA; excitation iq_delta=%.4fA (not subtracted)\r\n",
+        (double)result->zero_d_mean_a,(double)result->zero_q_mean_a,
+        (double)(result->capture_q_mean_a-result->zero_q_mean_a));
+    app_terminal_cmd_emit("PI baseline: mean=%.4fA noise_rms=%.4fA (raw blocks, not filtered step)\r\n",
+        (double)result->pi_baseline_a,(double)result->pi_baseline_rms_a);
+    app_terminal_cmd_emit("Ld fit status=%d rejected=%.2fuH residual=%.4fA (diagnostic only)\r\n",
+        result->ld_fit_status,(double)(result->ld_rejected_h*1e6f),
+        (double)result->ld_rejected_residual_a);
+    app_terminal_cmd_emit("Ld pulse: half4=%.2fuH half8=%.2fuH (128 samples x64..128 blocks; segment integral)\r\n",
+                           (double)(result->ld_half4_h*1e6f), (double)(result->ld_half8_h*1e6f));
+    app_terminal_cmd_emit("robustness: Rs half-window drift=%.4fA Ld extra_batches=%u\r\n",
+        (double)result->rs_window_drift_a,(unsigned)result->ld_extra_batches);
+    app_terminal_cmd_emit("PI trial: bw=%.0fHz Kp=%.5f Ki=%.3f passed=%u rise=%.3fms overshoot=%.1f%% error=%.4fA ripple=%.4fA\r\n",
+        (double)result->trial_bandwidth_hz, (double)result->trial_kp, (double)result->trial_ki,
+        (unsigned)result->trial_step.passed, (double)(result->trial_step.rise_s*1000),
+        (double)(result->trial_step.overshoot*100), (double)result->trial_step.error_a,
+        (double)result->trial_step.ripple_a);
+    app_terminal_cmd_emit("rl: state=%u active=%u done=%u reason=%d t=%ums\r\n",
+        (unsigned)result->state, (unsigned)result->active, (unsigned)result->done,
+        result->reason, (unsigned)result->elapsed_ms);
+    app_terminal_cmd_emit("Rs_eff=%.5f ohm Ld=%.2f uH (Lq assumed equal) Kp=%.5f Ki=%.3f bw=%.0f Hz\r\n",
+        (double)result->rs_ohm, (double)(result->ld_h*1e6f), (double)result->kp,
+        (double)result->ki, (double)result->bandwidth_hz);
+    app_terminal_cmd_emit("fit R=%.4fV L=%.4fA repeat=%.1f%% rise=%.3fms overshoot=%.1f%% error=%.4fA ripple=%.4fA\r\n",
+        (double)result->rs_residual_v, (double)result->ld_residual_a,
+        (double)(result->ld_repeat_error*100), (double)(result->step.rise_s*1000),
+        (double)(result->step.overshoot*100), (double)result->step.error_a,
+        (double)result->step.ripple_a);
+}
+/** @brief 显示job取消回调 */
+static void cal_rl_abort(void) {
+    app_current_identify_abort();
+    app_terminal_cmd_emit("\r\n");
+    app_terminal_refresh();
+}
+static uint32_t s_cal_rl_beat_ms;
+/** @brief 仅显示层阶段名，不更改校准状态机 */
+static const char* cal_rl_stage_name(app_current_identify_state_t state) {
+    switch (state) {
+    case APP_CURRENT_IDENTIFY_ZERO_SETTLE:
+    case APP_CURRENT_IDENTIFY_ZERO_CAPTURE: return "ZERO";
+    case APP_CURRENT_IDENTIFY_SETTLE:
+    case APP_CURRENT_IDENTIFY_RS: return "Rs";
+    case APP_CURRENT_IDENTIFY_LD_SETTLE:
+    case APP_CURRENT_IDENTIFY_LD: return "Ld";
+    case APP_CURRENT_IDENTIFY_PI_SETTLE:
+    case APP_CURRENT_IDENTIFY_PI: return "PI";
+    default: return "IDLE";
+    }
+}
+/** @brief 显示job只消费状态，算法由app_io调度 */
+static void cal_rl_tick(uint32_t now_ms) {
+    app_current_identify_result_t result;
+    app_current_identify_get_result(&result);
+    if (result.active) {
+        if (now_ms-s_cal_rl_beat_ms >= 200) {
+            s_cal_rl_beat_ms = now_ms;
+            /* 时间估计仅用于UI；未完成时最多99%，绝不代替算法完成标志。 */
+            uint32_t pct=result.elapsed_ms/160U;
+            if (pct>99U) pct=99U;
+            char bar[21];
+            for (unsigned i=0;i<20;++i) bar[i]=i<pct/5U ? '#' : '-';
+            bar[20]='\0';
+            app_terminal_cmd_emit("\rcal rl [%s] ~%2u%%  %-4s  %5.1fs   ",bar,
+                                  (unsigned)pct,cal_rl_stage_name(result.state),
+                                  (double)result.elapsed_ms/1000.0);
+        }
+        return;
+    }
+    if (result.done) {
+        app_terminal_cmd_emit("\rcal rl [####################] 100%%  DONE  %5.1fs   \r\n",
+                              (double)result.elapsed_ms/1000.0);
+        app_terminal_cmd_emit("    Rs_eff=%.5f ohm  Ld=%.2f uH  half-period diff=%.1f%%\r\n",
+            (double)result.rs_ohm,(double)(result.ld_h*1e6f),(double)(result.ld_repeat_error*100));
+        app_terminal_cmd_emit("    PI: Kp=%.5f Ki=%.3f bw=%.0fHz  step=%s\r\n",
+            (double)result.kp,(double)result.ki,(double)result.bandwidth_hz,
+            result.step.passed ? "PASS" : "NOT PASSED");
+        app_terminal_cmd_emit("    rise=%.3fms overshoot=%.1f%% error=%.4fA ripple=%.4fA baseline_rms=%.4fA\r\n",
+            (double)(result.step.rise_s*1000),(double)(result.step.overshoot*100),
+            (double)result.step.error_a,(double)result.step.ripple_a,(double)result.pi_baseline_rms_a);
+    } else {
+        app_terminal_cmd_emit("\r\nFAIL: cal rl stage=%s reason=%d detail=%u t=%.1fs\r\n",
+            cal_rl_stage_name(result.failure_stage),result.reason,(unsigned)result.detail,
+            (double)result.elapsed_ms/1000.0);
+    }
+    app_terminal_cmd_emit("    full diagnostics: cal rl show\r\n");
+    if (result.done && !result.step.passed)
+        app_terminal_cmd_emit("WARN: model PI calculated; step diagnostic NOT passed. Dynamic stability NOT verified.\r\n");
+    app_terminal_cmd_emit(result.done ? "OK: model tuning complete (NOT applied): foc off -> cal rl apply -> cal rl save\r\n"
+                                     : "FAIL: running parameters unchanged\r\n");
+    app_terminal_job_abort();
+}
+static app_terminal_job_t s_cal_rl_job = {
+    .name = "cal rl", .tick = cal_rl_tick, .abort = cal_rl_abort, .active = false
+};
+/** @brief 正式辨识命令入口 */
+static int cmd_cal_rl(chry_shell_t* csh, const char* sub) {
+    if (!sub) {
+        if (app_current_identify_is_active()) return -1;
+        if (app_terminal_job_start(&s_cal_rl_job)) return -1;
+        if (app_current_identify_start()) {
+            app_terminal_job_abort();
+            csh_printf(csh, "ERR: require FOC READY; apply encoder calibration first\r\n");
+            return -1;
+        }
+        s_cal_rl_beat_ms = 0;
+        csh_printf(csh, "Rs/Ld + PI tuning started; any key cancels\r\n");
+        return 0;
+    }
+    if (!strcmp(sub, "show")) {
+        app_current_identify_result_t result;
+        app_current_identify_get_result(&result); cal_rl_emit(&result); return 0;
+    }
+    int rc;
+    if (!strcmp(sub, "apply")) {
+        app_current_identify_result_t result;
+        app_current_identify_get_result(&result);
+        if (result.done && !result.step.passed)
+            csh_printf(csh, "WARN: applying model gains with failed step diagnostic; stability NOT verified\r\n");
+        rc = app_current_identify_apply();
+    }
+    else if (!strcmp(sub, "save")) rc = app_current_identify_save();
+    else return app_terminal_cmd_usage(csh, "cal rl [show|apply|save]");
+    if (!strcmp(sub,"apply") && rc) {
+        csh_printf(csh,"apply: %s\r\n",rc==-1 ? "FOC not OFF (stop may still be pending)"
+            : rc==-2 ? "no completed RAM result; run 'cal rl show' (reset loses unsaved result)"
+            : rc==-4 ? "PWM frequency/pole pairs changed; recalibrate"
+                     : "calibration still active");
+    } else csh_printf(csh, "%s: %s (save requires OFF and applied result)\r\n", sub, rc ? "FAIL" : "OK");
+    return rc;
+}
 static int cmd_cal(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+
+    if ((argc >= 2) && !strcmp(argv[1], "rl"))
+        return cmd_cal_rl(csh, argc >= 3 ? argv[2] : NULL);
 
     if ((argc >= 2) && (strcmp(argv[1], "encoder") == 0)) {
         return cmd_cal_encoder(csh, (argc >= 3) ? argv[2] : NULL);
     }
     if ((argc < 2) || (strcmp(argv[1], "current") != 0)) {
-        return app_terminal_cmd_usage(csh, "cal current | cal encoder [apply|save|show]");
+        return app_terminal_cmd_usage(csh, "cal current | cal encoder [apply|save|show] | cal rl [apply|save|show]");
     }
     if (!app_terminal_cmd_require_motor_stopped(csh)) {
         return -1;

@@ -84,7 +84,7 @@ typedef struct {
 
     volatile uint32_t estop_ack;     /**< = g_foc_fault_request（ISR 紧急停机请求回读） */
     volatile uint32_t isr_inhibited; /**< ISR 输出抑制锁存（故障后为 1，disable 清除） */
-    volatile float    duty_max_eff;  /**< 控制层实际生效占空比上限（= min(user, 保守 0.70)） */
+    volatile float    duty_max_eff;  /**< 实际上限min(user, runtime ceiling)，默认0.95 */
 
     /* 运行期健康自检（不触碰 SPI3；PASSIVE_SELFTEST 命令启动，100ms 出结果） */
     volatile uint32_t selftest_active;      /**< 1 = 进行中 */

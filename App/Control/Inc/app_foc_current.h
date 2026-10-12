@@ -12,10 +12,25 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "id_rl.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define APP_FOC_IDENTIFY_SAMPLES (128U)
+/** @brief 校准同步捕获；仅由FOC校准端口在临界区调用 */
+int app_foc_current_identify_arm(float voltage, bool voltage_mode);
+/** @brief 临时增益；仅由FOC校准端口在临界区调用 */
+int app_foc_current_identify_pi(float kp, float ki);
+/** @brief CALIB内部有限恒压租约 */
+int app_foc_current_identify_voltage(float voltage, uint32_t cycles);
+/** @brief 校准内部交替激励 */
+int app_foc_current_identify_pulse(float amplitude, uint16_t half_period);
+/** @brief 内部上限设置，调用方须保证OFF */
+int app_foc_current_set_duty_ceiling(float ceiling);
+/** @brief 返回冻结缓冲，count达到128才允许任务读取 */
+const id_rl_sample_t* app_foc_current_identify_data(uint16_t* count);
 
 /**
  * @brief 电流环快照（Terminal / Ozone 观测）
@@ -33,6 +48,8 @@ typedef struct {
     bool  saturated;              /**< PI 圆形电压限幅触发（不含调制限幅） */
     bool  tripped;                /**< 快速过流跳闸（需 app_foc_disable() 清除） */
     bool  valid;                  /**< 本拍数据可信（false = 保护路径：零矢量/输入无效） */
+    float voltage_max_v, voltage_utilization; /**< 电压圆上限及瞬时利用率 */
+    uint32_t saturated_count; /**< 当前init周期内PI饱和拍累计，可与run_count作差 */
     uint32_t run_count;           /**< 健康拍计数（valid=true 时递增） */
     uint32_t fault_count;         /**< 保护路径计数（零矢量/无效输入） */
 } app_foc_current_snapshot_t;
@@ -98,9 +115,9 @@ void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out);
 float app_foc_current_get_v_scale(void);
 
 /**
- * @brief 控制层实际生效占空比上限（= min(user duty_max, 保守 0.70)）。
+ * @brief 控制层实际生效占空比上限（min(user duty_max, runtime ceiling)，默认0.95）。
  * @return 有效占空比上限（>0.5）
- * @note 0.70 为四槽 PMT 采样时序余量的初步保守值，须示波确认后可放宽；
+ * @note 0.95已完成空载速度试验，采样精度仍须示波确认；
  *       对 PI 圆限幅 / 调制 / vtest 一致生效，不修改用户 config。
  */
 float app_foc_current_duty_max(void);

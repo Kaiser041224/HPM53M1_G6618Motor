@@ -8,9 +8,11 @@
  */
 
 #include "app_foc_current.h"
+#include "app_foc.h"
 
 #include "app_3phase_inverter.h"
 #include "intf_clock.h"
+#include "intf_sys.h"
 
 #include "app_analog_signal.h"
 #include "app_hardware_params.h"
@@ -26,15 +28,77 @@
 
 #define APP_FOC_V_BUS_MIN_V (9.0f) /**< 最低母线电压 [V]（低于则拒绝输出，零矢量） */
 
-/* 控制层有效占空比上限（保守，不修改用户 config 的 duty_max=0.885）。
- * 目的：为四槽 PMT 低侧采样窗口留时序余量；0.70 为初步值，须示波确认后调整。
+/* 控制层有效占空比上限（与用户配置取较小值）。
+ * 0.95为24V空载速度试验选定，采样精度仍须示波验证。
  * 对 PI 圆限幅（v_max）、调制（foc_modulation）与 vtest 一致生效。 */
-#define APP_FOC_DUTY_MAX_CONSERVATIVE (0.70f)
-
-/** 实际生效占空比上限（Ozone/调试可读；= min(user duty_max, 保守值)） */
+#define APP_FOC_DUTY_MAX_DEFAULT (0.95f)
+static float s_duty_ceiling = APP_FOC_DUTY_MAX_DEFAULT;
+/** 实际上限（Ozone/调试器直读），受用户配置及运行时ceiling共同约束 */
 volatile float g_foc_duty_max_effective __attribute__((section(".noncacheable.bss")));
 
+int app_foc_current_set_duty_ceiling(float ceiling) {
+    if (!foc_finite(ceiling) || ceiling<0.70f || ceiling>0.98f) return -1;
+    s_duty_ceiling=ceiling;
+    float requested=app_software_params_current()->control.limits.duty_max;
+    g_foc_duty_max_effective=foc_finite(requested) && requested>0.5f
+                               ? fminf(requested,ceiling) : fminf(APP_FOC_DUTY_MAX_DEFAULT,ceiling);
+    return 0;
+}
+
 static foc_current_t s_current;
+static bool s_ready;
+static id_rl_sample_t s_identify_samples[APP_FOC_IDENTIFY_SAMPLES];
+static volatile uint16_t s_identify_count;
+static bool s_identify_capture_active;
+static bool s_identify_voltage_mode;
+static float s_identify_voltage;
+static float s_identify_previous_voltage;
+static bool s_identify_trial_active;
+static float s_identify_kp, s_identify_ki;
+static uint32_t s_identify_voltage_cycles;
+static float s_identify_bias_voltage;
+static uint16_t s_identify_half_period;
+static float s_identify_amplitude;
+
+int app_foc_current_identify_voltage(float voltage, uint32_t cycles) {
+    if (!s_ready || !foc_finite(voltage) || (voltage >= 0 && cycles == 0)) return -1;
+    s_identify_bias_voltage = voltage;
+    s_identify_voltage_cycles = voltage >= 0 ? cycles : 0;
+    s_current.reset(&s_current);
+    return 0;
+}
+
+int app_foc_current_identify_arm(float voltage, bool voltage_mode) {
+    if (!s_ready || s_identify_capture_active || !foc_finite(voltage)) return -1;
+    s_identify_count = 0;
+    s_identify_half_period = 0;
+    s_identify_previous_voltage = g_foc_current_snapshot.v_d_v;
+    s_identify_voltage = voltage;
+    s_identify_voltage_mode = voltage_mode;
+    if (voltage_mode) s_current.reset(&s_current);
+    s_identify_capture_active = true;
+    return 0;
+}
+int app_foc_current_identify_pulse(float amplitude, uint16_t half_period) {
+    if (!foc_finite(amplitude) || amplitude<=0 || half_period<4 || half_period>16
+        || !s_identify_voltage_cycles) return -1;
+    int rc=app_foc_current_identify_arm(s_identify_bias_voltage,true);
+    if (rc) return rc;
+    s_identify_half_period=half_period;
+    s_identify_amplitude=amplitude;
+    return 0;
+}
+int app_foc_current_identify_pi(float kp, float ki) {
+    if (!s_ready || !foc_finite(kp) || !foc_finite(ki) || kp <= 0 || ki <= 0) return -1;
+    s_current.reset(&s_current);
+    s_identify_kp = kp; s_identify_ki = ki;
+    s_identify_trial_active = true;
+    return 0;
+}
+const id_rl_sample_t* app_foc_current_identify_data(uint16_t* count) {
+    *count = s_identify_count;
+    return s_identify_samples;
+}
 /** 电流慢平均系数（25kHz → ~32Hz 一阶低通） */
 #define APP_FOC_CURRENT_AVG_ALPHA (0.002f)
 
@@ -42,7 +106,6 @@ static foc_current_t s_current;
 static float s_i_d_avg;
 static float s_i_q_avg;
 
-static bool s_ready;
 static uint8_t s_trip_count; /**< 连续超限拍数 */
 static bool s_tripped;       /**< 跳闸锁存（reset 清除） */
 
@@ -72,10 +135,10 @@ static float app_foc_effective_duty_max(const app_software_params_t* software) {
     float d = software->control.limits.duty_max;
 
     if (!foc_finite(d) || (d <= 0.5f)) {
-        d = APP_FOC_DUTY_MAX_CONSERVATIVE;
+        d = APP_FOC_DUTY_MAX_DEFAULT;
     }
-    if (d > APP_FOC_DUTY_MAX_CONSERVATIVE) {
-        d = APP_FOC_DUTY_MAX_CONSERVATIVE;
+    if (d > s_duty_ceiling) {
+        d = s_duty_ceiling;
     }
     g_foc_duty_max_effective = d;
     return d;
@@ -104,6 +167,12 @@ void app_foc_current_init(void) {
 }
 
 void app_foc_current_reset(void) {
+    s_identify_voltage_cycles = 0;
+    s_identify_half_period = 0;
+    s_identify_capture_active = false;
+    s_identify_voltage_mode = false;
+    s_identify_trial_active = false;
+    s_identify_count = 0;
     if (s_ready) {
         s_current.reset(&s_current);
     }
@@ -117,6 +186,7 @@ void app_foc_current_reset(void) {
 }
 
 int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s) {
+    if (app_foc_stop_pending() || app_foc_get_state()==APP_FOC_STATE_CALIB) return -1;
     if (!s_ready || !foc_finite(volts) || !foc_finite(theta_e_rad) || !foc_finite(duration_s)) {
         return -1;
     }
@@ -321,6 +391,14 @@ void app_foc_current_protect_reason(uint8_t reason) {
  */
 APP_ATTR_RAMFUNC
 void app_foc_current_protect(void) {
+    if (s_identify_capture_active) {
+        /* 失败拍破坏等间隔采样契约：冻结为无效结果，禁止后续好帧拼接。 */
+        s_identify_capture_active=false;
+        s_identify_voltage_mode=false;
+        s_identify_voltage_cycles=0;
+        s_identify_samples[0].valid=false;
+        s_identify_count=APP_FOC_IDENTIFY_SAMPLES;
+    }
     app_foc_current_zero_vector();
     g_foc_current_snapshot.valid = false;
     g_foc_current_snapshot.fault_count++;
@@ -371,12 +449,19 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     /* 增益/前馈热更新（live 参数） */
     s_current.set_gains(&s_current, software->control.current_loop.kp,
                         software->control.current_loop.ki);
+    if (s_identify_trial_active)
+        s_current.set_gains(&s_current, s_identify_kp, s_identify_ki);
     s_current.set_decoupling(&s_current, software->control.current_loop.decoupling_en);
 
     /* Clarke → Park（同一 θ 的 sincos 复用于反 Park） */
     foc_clarke(i_u_a, i_v_a, i_w_a, &i_alpha, &i_beta);
     foc_sincos(theta_e_rad, &s, &c);
     foc_park_sc(i_alpha, i_beta, s, c, &in.i_d_a, &in.i_q_a);
+
+    if (!foc_finite(in.i_d_a) || !foc_finite(in.i_q_a)) {
+        app_foc_current_protect();
+        return -1;
+    }
 
     /* 快速软件过流保护：|i_dq| 连续 2 拍超限 → 保护性停机（防止失控/母线跌落）。
      * 阈值 control.limits.i_trip_a（峰值口径，0 = 关闭）。 */
@@ -414,10 +499,26 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     in.i_max = software->control.limits.i_q_max_a;
     in.omega_e_rad_s = omega_e_rad_s;
 
-    if (s_current.step(&s_current, &in, &out) != 0) {
+    bool identify_open = s_identify_voltage_cycles > 0
+                         || (s_identify_capture_active && s_identify_voltage_mode);
+    if (!identify_open
+        && s_current.step(&s_current, &in, &out) != 0) {
         app_foc_current_protect_reason(APP_FOC_PROT_PI);
         app_foc_current_protect();
         return -1;
+    }
+    if (identify_open) {
+        out.i_d_ref_lim = i_d_ref;
+        out.i_q_ref_lim = i_q_ref;
+        out.v_d = s_identify_capture_active && s_identify_voltage_mode
+                      ? s_identify_voltage : s_identify_bias_voltage;
+        if (s_identify_capture_active && s_identify_half_period)
+            out.v_d=s_identify_bias_voltage
+                + ((s_identify_count/s_identify_half_period)%2U ? -s_identify_amplitude
+                                                               : s_identify_amplitude);
+        out.v_q = 0;
+        out.saturated = fabsf(out.v_d) > in.v_max;
+        if (out.saturated) out.v_d = copysignf(in.v_max, out.v_d);
     }
     g_foc_cyc_pi = intf_clock_get_cycle() - t_pi;
 
@@ -478,10 +579,33 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     g_foc_current_snapshot.v_bus_v = v_bus;
     g_foc_current_snapshot.v_scale = v_scale;
     g_foc_current_snapshot.saturated = out.saturated;
+    g_foc_current_snapshot.voltage_max_v=in.v_max;
+    g_foc_current_snapshot.voltage_utilization=
+        foc_sqrtf(out.v_d*out.v_d+out.v_q*out.v_q)/in.v_max;
+    if (g_foc_current_snapshot.valid && out.saturated)
+        g_foc_current_snapshot.saturated_count++;
     if (g_foc_current_snapshot.valid) {
         g_foc_current_snapshot.run_count++;
     }
     app_foc_trace_capture();
+    if (s_identify_voltage_cycles) --s_identify_voltage_cycles;
+    if (s_identify_capture_active) {
+        uint16_t index = s_identify_count;
+        s_identify_samples[index] = (id_rl_sample_t){
+            .i_d_a = in.i_d_a, .i_q_a = in.i_q_a,
+            .i_u_a=i_u_a, .i_v_a=i_v_a, .i_w_a=i_w_a,
+            .v_d_previous_v = s_identify_previous_voltage,
+            .valid = g_foc_current_snapshot.valid && !out.saturated && v_scale >= 0.999f};
+        /* 用本拍实际下发duty与母线重建下一拍配对电压，去除公共零序。 */
+        float applied_alpha = v_bus * (2.0f*duty[0]-duty[1]-duty[2]) / 3.0f;
+        float applied_beta = v_bus * (duty[1]-duty[2]) / FOC_SQRT3_F;
+        s_identify_previous_voltage = applied_alpha*c + applied_beta*s;
+        if (index + 1U == APP_FOC_IDENTIFY_SAMPLES) {
+            s_identify_capture_active = false;
+            s_identify_voltage_mode = false;
+        }
+        s_identify_count = index + 1U; /* 数据先写，计数最后发布 */
+    }
     return 0;
 }
 
@@ -501,6 +625,8 @@ int app_foc_current_run(float theta_e_rad, float omega_e_rad_s, float i_d_ref, f
 
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t* out) {
     if (out != NULL) {
+        uint32_t state=intf_sys_irq_save();
         *out = g_foc_current_snapshot;
+        intf_sys_irq_restore(state);
     }
 }

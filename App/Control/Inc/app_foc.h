@@ -102,6 +102,12 @@ int app_foc_enable(void);
  * @brief 关闭（任意 → OFF）：零矢量 + 关桥
  */
 void app_foc_disable(void);
+/** @brief 用户关闭：100个1ms任务拍缓降+20拍零给定，非阻塞 */
+int app_foc_request_stop(void);
+/** @brief 正常关闭尚未完成，期间拒绝新给定/校准 */
+bool app_foc_stop_pending(void);
+/** @brief OFF时设置占空比上限[0.70,0.98]，RAM；重启默认0.95；高值采样精度未验证 */
+int app_foc_set_duty_ceiling(float ceiling);
 
 /**
  * @brief 设置转矩给定（限幅 ±i_q_max）
@@ -165,6 +171,14 @@ void app_foc_get_snapshot(app_foc_current_snapshot_t* out);
  * @return 0 = 成功；-1 = 状态不允许（非 READY/RUN 或 vtest 进行中）
  */
 int app_foc_calib_begin(void);
+/** @brief CALIB专用同步捕获，可选有限d轴电压脉冲 */
+int app_foc_calib_capture(float voltage, bool voltage_mode);
+/** @brief CALIB专用临时PI，不修改正式软件参数 */
+int app_foc_calib_trial_pi(float kp, float ki);
+/** @brief 有限恒压租约；voltage<0退出恒压，周期数由ADC拍数计数 */
+int app_foc_calib_voltage(float voltage, uint32_t cycles);
+/** @brief 恒压偏置周围同步交替激励，half_period单位ADC拍 */
+int app_foc_calib_pulse(float amplitude, uint16_t half_period);
 
 /**
  * @brief 结束校准（CALIB → READY；恢复运行零点与编码器角源、给定清零）；非 CALIB 时无操作

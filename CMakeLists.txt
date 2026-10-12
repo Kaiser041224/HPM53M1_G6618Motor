@@ -171,6 +171,8 @@ sdk_app_src(App/Algorithm/FOC/Src/foc_angle.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_current.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_modulation.c)
 sdk_app_src(App/Algorithm/FOC/Src/id_encoder.c)
+sdk_app_src(App/Algorithm/FOC/Src/id_rl.c)
+sdk_app_src(App/Algorithm/FOC/Src/id_rl_pulse.c)
 
 # ============================================================================
 # Platform Layer
@@ -201,6 +203,7 @@ sdk_app_src(App/Control/Src/app_motor_params.c)
 sdk_app_src(App/Control/Src/app_foc_current.c)
 sdk_app_src(App/Control/Src/app_foc.c)
 sdk_app_src(App/Control/Src/app_motor_identify.c)
+sdk_app_src(App/Control/Src/app_current_identify.c)
 
 # ============================================================================
 # Comm Layer

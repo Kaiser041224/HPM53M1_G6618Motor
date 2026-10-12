@@ -46,6 +46,9 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     csh_printf(csh, "     v_d=%.3f V  v_q=%.3f V  vbus=%.2f V  sat=%u scale=%.3f\r\n",
                (double)snap.v_d_v, (double)snap.v_q_v, (double)snap.v_bus_v,
                (unsigned)snap.saturated, (double)snap.v_scale);
+    csh_printf(csh,"     voltage: duty_cap=%.3f vmax=%.3fV use=%.1f%% sat_count=%u/%u (cumulative)\r\n",
+        (double)app_foc_current_duty_max(),(double)snap.voltage_max_v,
+        (double)(snap.voltage_utilization*100),(unsigned)snap.saturated_count,(unsigned)snap.run_count);
     csh_printf(csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u  dt=%u us\r\n",
                (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w,
                (unsigned)snap.valid, (unsigned)snap.run_count, (unsigned)snap.fault_count,
@@ -134,6 +137,19 @@ static int cmd_foc(int argc, char** argv) {
         app_terminal_cmd_foc_status(csh);
         return 0;
     }
+    if (strcmp(sub,"dutycap")==0) {
+        float ceiling;
+        if (argc<3) {
+            csh_printf(csh,"dutycap effective=%.3f; use foc dutycap <0.70..0.98> while OFF\r\n",
+                       (double)app_foc_current_duty_max()); return 0;
+        }
+        if (app_terminal_cmd_parse_float(argv[2],&ceiling)
+            || app_foc_set_duty_ceiling(ceiling)) {
+            csh_printf(csh,"ERR: require OFF and dutycap in [0.70,0.98]\r\n"); return -1;
+        }
+        csh_printf(csh,"OK: RAM dutycap=%.3f (reboot restores 0.95); ADC window must be verified\r\n",
+                   (double)ceiling); return 0;
+    }
 
     if (strcmp(sub, "on") == 0) {
         if (!app_terminal_cmd_require_no_fault(csh)) {
@@ -163,7 +179,11 @@ static int cmd_foc(int argc, char** argv) {
     }
 
     if (strcmp(sub, "off") == 0) {
-        app_foc_disable();
+        if (app_foc_request_stop()) {
+            csh_printf(csh,"ERR: calibration/vtest owns output; cancel it before normal stop\r\n");
+            return -1;
+        }
+        if (app_foc_stop_pending()) csh_printf(csh,"foc: stopping asynchronously (~120ms); wait for state=OFF\r\n");
         app_terminal_cmd_foc_status(csh);
         return 0;
     }
