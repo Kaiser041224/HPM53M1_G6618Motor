@@ -40,6 +40,8 @@
 #include "app_foc.h"
 #include "app_gpio.h"
 #include "app_gptmr.h"
+#include "app_motion_timer.h"
+#include "app_motion.h"
 #include "app_hardware_params.h"
 #include "app_motor_identify.h"
 #include "app_current_identify.h"
@@ -210,6 +212,17 @@ void app_init(void) {
                          (sync_rc == 0) ? "OK" : "FAILED", (ref_rc == 0) ? "" : "ERR ",
                          (unsigned)ref_raw);
     }
+    /* 14. 游标也由PWM25kHz触发、ADC取帧；GPTMR只编排外环，上电未武装。 */
+    {
+        int rc=app_motion_timer_init();
+        app_motion_init();
+        int output_rc=app_encoder_output_start();
+        app_debug_printf("[ENC] vernier sync: %s\r\n",output_rc==0?"started":"FAILED");
+        if(output_rc==0) app_motion_timer_bind_velocity(app_motion_step);
+        if (rc==0) rc=app_motion_timer_start();
+        app_debug_printf("[MOTION] timer observation: %s (position=5kHz velocity=10kHz)\r\n",
+                         rc==0 ? "started" : "FAILED");
+    }
 }
 
 /**
@@ -254,7 +267,7 @@ void app_io_step(void) {
     /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：单次处理有界（≤200µs 约束不变）。
      * 顺序：观测刷新 → 模拟量换算 → 故障 RMS → 状态机编排 → 通讯轮询。 */
 
-    /* 转子观测变量刷新（缓存读，零 SPI 成本；出轴采样已裁，spec §3） */
+    /* 双编码器观测变量刷新（只读ADC缓存，零SPI成本） */
     app_debug_encoder_sample();
 
     /* 模拟量：ADC 缓存 → 物理量换算 + 滤波（FOC 的 v_bus 亦取自本模块缓存） */
@@ -290,6 +303,26 @@ void app_diag_step(void) {
     app_gpio_toggle(PIN_LED_STATUS);
     app_debug_encoder_print_stats();
     app_isr_stats_print();
+    app_motion_timer_snapshot_t motion_timer;
+    app_motion_timer_take_window(&motion_timer);
+    app_debug_printf("[MOTION] pos n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu | "
+                     "vel n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu age=%lu valid=%u [cycles]\r\n",
+        (unsigned long)motion_timer.position.count,
+        (unsigned long)motion_timer.position.window_count,
+        (unsigned long)motion_timer.position.period_min_cycles,
+        (unsigned long)motion_timer.position.period_max_cycles,
+        (unsigned long)motion_timer.position.execution_max_cycles,
+        (unsigned long)motion_timer.position.window_late_count,
+        (unsigned long)motion_timer.position.late_count,
+        (unsigned long)motion_timer.velocity.count,
+        (unsigned long)motion_timer.velocity.window_count,
+        (unsigned long)motion_timer.velocity.period_min_cycles,
+        (unsigned long)motion_timer.velocity.period_max_cycles,
+        (unsigned long)motion_timer.velocity.execution_max_cycles,
+        (unsigned long)motion_timer.velocity.window_late_count,
+        (unsigned long)motion_timer.velocity.late_count,
+        (unsigned long)motion_timer.velocity.feedback_age_cycles,
+        (unsigned)motion_timer.velocity.feedback_valid);
 }
 
 /**

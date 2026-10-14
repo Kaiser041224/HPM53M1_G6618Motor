@@ -192,6 +192,7 @@ static uint32_t gptmr_calc_delta(uint32_t first, uint32_t next)
  * @brief 实例定时中断派发：清标志并触发对应通道回调
  * @param inst 实例号
  */
+ATTR_RAMFUNC
 static void gptmr_isr_dispatch_instance(uint8_t inst)
 {
     GPTMR_Type *base = s_gptmr_bases[inst];
@@ -297,17 +298,16 @@ static int gptmr_drv_init(intf_gptmr_ch_t ch, const intf_gptmr_cfg_t *cfg)
         break;
 
     case INTF_GPTMR_MODE_TIMER:
-        if (cfg->callback == NULL) {
-            return -1;
-        }
         hardware_cfg.mode = gptmr_work_mode_no_capture;
         hardware_cfg.enable_cmp_output = false;
         if (gptmr_channel_config(base, lch, &hardware_cfg, false) != status_success) {
             return -1;
         }
         gptmr_channel_reset_count(base, lch);
-        gptmr_enable_irq(base, GPTMR_CH_RLD_IRQ_MASK(lch));
-        intc_m_enable_irq_with_priority(s_gptmr_irq_nums[inst], 3);
+        if (cfg->callback != NULL) {
+            gptmr_enable_irq(base, GPTMR_CH_RLD_IRQ_MASK(lch));
+            intc_m_enable_irq_with_priority(s_gptmr_irq_nums[inst], inst == 1U ? 2U : 3U);
+        }
         break;
 
     case INTF_GPTMR_MODE_PWM_TIMER:
@@ -325,7 +325,7 @@ static int gptmr_drv_init(intf_gptmr_ch_t ch, const intf_gptmr_cfg_t *cfg)
         s_gptmr_state[ch].invert_output = cfg->invert_output;
         gptmr_apply_duty(ch, cfg->duty);
         gptmr_enable_irq(base, GPTMR_CH_RLD_IRQ_MASK(lch));
-        intc_m_enable_irq_with_priority(s_gptmr_irq_nums[inst], 3);
+        intc_m_enable_irq_with_priority(s_gptmr_irq_nums[inst], inst == 1U ? 2U : 3U);
         break;
 
     case INTF_GPTMR_MODE_CAPTURE:

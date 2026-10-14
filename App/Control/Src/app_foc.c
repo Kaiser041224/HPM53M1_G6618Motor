@@ -30,11 +30,11 @@
 
 /* 编码器同步采样节拍与新鲜度：与电流同拍（25kHz → 40µs，同一 PWM1 CMP10 触发）。
  * 新鲜度上限 = 采样周期 + 40µs 余量 = 80µs：最多容忍一拍丢样复用保持角。 */
-#define APP_FOC_ENC_PERIOD_US   (40U)
-#define APP_FOC_ENC_MARGIN_US   (40U)
-#define APP_FOC_ENC_MAX_AGE_US  (APP_FOC_ENC_PERIOD_US + APP_FOC_ENC_MARGIN_US)
+#define APP_FOC_ENC_PERIOD_US  (40U)
+#define APP_FOC_ENC_MARGIN_US  (40U)
+#define APP_FOC_ENC_MAX_AGE_US (APP_FOC_ENC_PERIOD_US + APP_FOC_ENC_MARGIN_US)
 /* 连续失败/跳变阈值：达到即判换相角不可信（与 algo fail_limit 默认一致） */
-#define APP_FOC_ENC_FAIL_TRIP   (3U)
+#define APP_FOC_ENC_FAIL_TRIP (3U)
 /* 时序类编码器故障确认（坏帧拒绝发布 → age 越限到 2 采样周期，单拍不判死） */
 #define APP_FOC_ENC_DEG_TRIP_STREAK (32U) /**< 连续 32 拍（25kHz ≈ 1.3ms）不可用才停机 */
 #define APP_FOC_OVR_TRIP_STREAK     (32U) /**< 连续 32 拍超预算才停用快路径（真失控/风暴） */
@@ -44,28 +44,41 @@ static foc_angle_t s_angle;
 static app_foc_angle_source_t s_angle_src;
 static float s_forced_theta;
 static float s_i_d_ref;
-static float s_i_q_ref_cmd; /**< 操作员 q 轴给定 [A]（未限速） */
-static float s_i_q_ref;     /**< 生效 q 轴给定 [A]（含转矩模式限速） */
-static uint32_t s_rotor_seq_last; /**< 上一接受样本序号（复用检测） */
-static bool s_rotor_seq_primed;   /**< 序号基准已建立 */
-static uint32_t s_enc_ts_last;    /**< 上一接受样本时间戳 [cycle]（速度 dt 基准） */
-static bool s_enc_ts_valid;       /**< 时间戳基准已建立 */
-static float s_theta_held;        /**< 复用样本时的电角度 [rad] */
-static float s_omega_held;        /**< 复用样本时的 ωe [rad/s] */
-static bool s_theta_held_valid;   /**< θe/ωe 保持值已建立 */
-static bool s_angle_ready;        /**< 角度链初始化成功 */
-static bool s_initialized;        /**< app_foc_init 已执行 */
-static uint32_t s_last_cycle;     /**< 主循环上一拍时刻 [cycle]（实测 dt 用） */
-static bool s_dt_valid;           /**< 主循环 dt 基准已建立 */
-static float s_dt_s;              /**< 主循环实测间隔 [s]（0 = 首拍/异常） */
-static bool s_speed_limited;      /**< 限速滞环状态（避免阈值附近转矩断续） */
-static volatile bool s_isr_disabled;  /**< ISR 快路径超预算后停用（防止饿死主循环） */
+static float s_i_q_ref_cmd;               /**< 操作员 q 轴给定 [A]（未限速） */
+static app_foc_current_source_t s_current_source;
+static app_foc_current_request_t s_current_request;
+static uint32_t s_current_epoch;
+static uint32_t s_current_request_cycle;
+static bool s_current_request_expired;    /**< 过期锁存，直到新请求/权限撤销，防时间回绕复活 */
+static app_foc_execution_t s_execution;
+
+/** @brief 调用方已持有临界区，撤销旧正常请求 */
+static void app_foc_revoke_current(void) {
+    ++s_current_epoch;
+    s_current_request = (app_foc_current_request_t){0};
+    s_current_request_expired = false;
+}
+static float s_i_q_ref;                  /**< 生效 q 轴给定 [A]（含转矩模式限速） */
+static uint32_t s_rotor_seq_last;        /**< 上一接受样本序号（复用检测） */
+static bool s_rotor_seq_primed;          /**< 序号基准已建立 */
+static uint32_t s_enc_ts_last;           /**< 上一接受样本时间戳 [cycle]（速度 dt 基准） */
+static bool s_enc_ts_valid;              /**< 时间戳基准已建立 */
+static float s_theta_held;               /**< 复用样本时的电角度 [rad] */
+static float s_omega_held;               /**< 复用样本时的 ωe [rad/s] */
+static bool s_theta_held_valid;          /**< θe/ωe 保持值已建立 */
+static bool s_angle_ready;               /**< 角度链初始化成功 */
+static bool s_initialized;               /**< app_foc_init 已执行 */
+static uint32_t s_last_cycle;            /**< 主循环上一拍时刻 [cycle]（实测 dt 用） */
+static bool s_dt_valid;                  /**< 主循环 dt 基准已建立 */
+static float s_dt_s;                     /**< 主循环实测间隔 [s]（0 = 首拍/异常） */
+static bool s_speed_limited;             /**< 限速滞环状态（避免阈值附近转矩断续） */
+static volatile bool s_isr_disabled;     /**< ISR 快路径超预算后停用（防止饿死主循环） */
 static volatile bool s_emergency_active; /**< ISR 紧急关桥已执行（避免重复开销） */
-static volatile bool s_isr_inhibited; /**< ISR 输出抑制（故障锁存；仅 enable 清除） */
-static uint32_t s_isr_last_cycle; /**< ADC ISR 上一拍时刻 [cycle]（vtest 真实 dt） */
-static bool s_isr_dt_valid;       /**< ADC ISR dt 基准已建立 */
-static uint8_t s_enc_degraded_streak; /**< 编码器时序类不可用连续拍数（streak 确认） */
-static uint8_t s_overrun_streak;      /**< ISR 超预算连续拍数（streak 确认） */
+static volatile bool s_isr_inhibited;    /**< ISR 输出抑制（故障锁存；仅 enable 清除） */
+static uint32_t s_isr_last_cycle;        /**< ADC ISR 上一拍时刻 [cycle]（vtest 真实 dt） */
+static bool s_isr_dt_valid;              /**< ADC ISR dt 基准已建立 */
+static uint8_t s_enc_degraded_streak;    /**< 编码器时序类不可用连续拍数（streak 确认） */
+static uint8_t s_overrun_streak;         /**< ISR 超预算连续拍数（streak 确认） */
 static bool s_stop_pending;
 static uint16_t s_stop_ticks;
 static float s_stop_initial_id, s_stop_initial_iq;
@@ -77,8 +90,8 @@ static uint32_t s_enc_max_age_cycles; /**< 编码器样本新鲜度上限 [cycle
 static uint32_t s_isr_budget_cycles;  /**< ISR 单拍预算 [cycle] */
 
 /* 运行期角度链零点镜像（不含 CALIB 试用值）与校准期间的备份 */
-static float s_angle_offset_rad;      /**< 当前生效电角度零点 [rad] */
-static float s_angle_direction;       /**< 当前生效方向（±1） */
+static float s_angle_offset_rad; /**< 当前生效电角度零点 [rad] */
+static float s_angle_direction;  /**< 当前生效方向（±1） */
 
 /** 外部（Debug）紧急停机请求邮箱（Control 持有指针；ISR 只读，绝不阻塞） */
 static volatile uint32_t* s_estop_request;
@@ -151,6 +164,9 @@ void app_foc_init(void) {
     s_isr_budget_cycles = s_cycles_per_us * APP_FOC_ISR_BUDGET_US;
 
     s_state = APP_FOC_STATE_OFF;
+    s_current_source = APP_FOC_CURRENT_SOURCE_DIRECT;
+    app_foc_revoke_current();
+    s_execution = (app_foc_execution_t){0};
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     s_forced_theta = 0.0f;
     s_i_d_ref = 0.0f;
@@ -211,11 +227,10 @@ static void app_foc_run_body(void) {
         return;
     }
     if (APP_PROTECT_ACTION_EN && (s_state != APP_FOC_STATE_OFF)
-        && ((app_fault_get_state() == APP_FAULT_STATE_FAULT)
-            || (g_foc_fault_request != 0U))) {
+        && ((app_fault_get_state() == APP_FAULT_STATE_FAULT) || (g_foc_fault_request != 0U))) {
         app_foc_current_zero_vector();
         app_3phase_inverter_emergency_stop(); /* 幂等：ISR 侧可能已执行 */
-        s_state = APP_FOC_STATE_FAULT; /* 原误用 APP_FAULT_STATE_FAULT（=3=CALIB） */
+        s_state = APP_FOC_STATE_FAULT;        /* 原误用 APP_FAULT_STATE_FAULT（=3=CALIB） */
         return;
     }
     /* 快速过流跳闸（电流环内置）：零矢量已由保护路径输出，此处关桥并锁存 FAULT */
@@ -242,8 +257,9 @@ static void app_foc_run_body(void) {
 
                 foc_clarke(values.i_u_a, values.i_v_a, values.i_w_a, &i_alpha, &i_beta);
                 foc_sincos(theta_off, &s, &c);
-                foc_park_sc(i_alpha, i_beta, s, c, &g_foc_current_snapshot.i_d_a,
-                            &g_foc_current_snapshot.i_q_a);
+                foc_park_sc(
+                    i_alpha, i_beta, s, c, &g_foc_current_snapshot.i_d_a,
+                    &g_foc_current_snapshot.i_q_a);
                 g_foc_current_snapshot.v_bus_v = values.v_bus_v;
             }
         }
@@ -273,7 +289,8 @@ static void app_foc_run_body(void) {
     if (s_state != APP_FOC_STATE_CALIB) {
         float speed_max = app_software_params_current()->control.limits.speed_max_rad_s;
 
-        s_i_q_ref = s_i_q_ref_cmd;
+        if (s_current_source == APP_FOC_CURRENT_SOURCE_DIRECT || s_stop_pending)
+            s_i_q_ref = s_i_q_ref_cmd;
         if (foc_finite(speed_max) && (speed_max > 0.0f)) {
             if (s_speed_limited) {
                 if (fabsf(omega_e) < (speed_max * APP_FOC_SPEED_LIMIT_RESTORE)) {
@@ -290,8 +307,7 @@ static void app_foc_run_body(void) {
         }
     }
 
-    if ((s_state == APP_FOC_STATE_READY)
-        && ((s_i_d_ref != 0.0f) || (s_i_q_ref_cmd != 0.0f))) {
+    if ((s_state == APP_FOC_STATE_READY) && ((s_i_d_ref != 0.0f) || (s_i_q_ref_cmd != 0.0f))) {
         s_state = APP_FOC_STATE_RUN;
     }
 }
@@ -303,9 +319,9 @@ FOC_ATTR_RAMFUNC
 static void app_foc_isr_emergency(void) {
     if (!s_emergency_active) {
         s_emergency_active = true;
-        s_isr_inhibited = true; /* 锁存：后续拍不再输出 */
+        s_isr_inhibited = true;               /* 锁存：后续拍不再输出 */
         if (s_estop_request != NULL) {
-            *s_estop_request = 1U; /* 回写外部请求位（Debug 可观测；需显式清零） */
+            *s_estop_request = 1U;            /* 回写外部请求位（Debug 可观测；需显式清零） */
         }
         app_3phase_inverter_emergency_stop(); /* 关桥 + 强制低 + 关 12V；幂等 */
     }
@@ -334,6 +350,8 @@ void app_foc_isr_step(void) {
     uint16_t raw;
     bool fault = false;
     bool degraded = false;
+    bool executed = false;
+    bool request_expired = false;
 
     /* 0) 编码器同步采样（唯一运行期 SPI3 读点；每拍执行，与 FOC 状态无关） */
     (void)app_encoder_sync_sample(t_isr, &enc);
@@ -400,7 +418,7 @@ void app_foc_isr_step(void) {
                 theta_e = s_theta_held; /* 跳变保持拍：复用上拍角度，不重复 step */
                 omega_e = s_omega_held;
             } else {
-                fault = true; /* 尚无可用角度 */
+                fault = true;           /* 尚无可用角度 */
             }
         } else if (s_theta_held_valid) {
             /* 时序/质量类不可用（坏帧丢样、超龄、连续失败）：复用保持角继续出矢量
@@ -413,7 +431,7 @@ void app_foc_isr_step(void) {
                 app_foc_current_protect_reason(APP_FOC_PROT_ENC); /* 判定事件：计数一次 */
             }
             if (APP_PROTECT_ACTION_EN && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
-                fault = true; /* 动作开：确认真失效 → 停机 */
+                fault = true;                                     /* 动作开：确认真失效 → 停机 */
             }
         } else {
             /* 尚无可用角度（冷启动首拍/坏帧窗口）：本拍零矢量等待，不停机 */
@@ -463,14 +481,27 @@ void app_foc_isr_step(void) {
             app_foc_isr_emergency(); /* M1：只判断不动作（本拍零矢量回退，不停机） */
         }
     } else if (degraded) {
-        app_foc_current_protect(); /* 本拍零矢量（无角度）；下拍重试，不停机 */
+        app_foc_current_protect();   /* 本拍零矢量（无角度）；下拍重试，不停机 */
     } else {
+        if (s_current_source == APP_FOC_CURRENT_SOURCE_MOTION && s_state != APP_FOC_STATE_CALIB
+            && !s_stop_pending && !app_foc_current_vtest_active()) {
+            if (s_current_request.valid
+                && (uint32_t)(t_isr - s_current_request_cycle) > s_cycles_per_us * 500U)
+                s_current_request_expired = true;
+            request_expired = s_current_request_expired;
+            s_i_d_ref =
+                s_current_request.valid && !request_expired ? s_current_request.id_ref_a : 0.0f;
+            s_i_q_ref = s_current_request.valid && !request_expired && !s_speed_limited
+                          ? s_current_request.iq_ref_a
+                          : 0.0f;
+        }
         if (app_foc_current_vtest_active()) {
             /* vtest 独占执行（ADC ISR，本拍新鲜采样 + ADC 实测 dt） */
             (void)app_foc_current_vtest_step_fresh(i_u, i_v, i_w, v_bus, isr_dt_s);
         } else {
-            (void)app_foc_current_run_fresh(theta_e, omega_e, s_i_d_ref, s_i_q_ref, i_u, i_v, i_w,
-                                            v_bus, NULL, NULL);
+            executed = app_foc_current_run_fresh(
+                           theta_e, omega_e, s_i_d_ref, s_i_q_ref, i_u, i_v, i_w, v_bus, NULL, NULL)
+                    == 0;
         }
         /* 过流跳闸（电流环或 vtest 内置）→ M1：只判断不动作 */
         if (APP_PROTECT_ACTION_EN && app_foc_current_is_tripped()) {
@@ -479,6 +510,36 @@ void app_foc_isr_step(void) {
     }
 
 isr_exit:
+    s_execution.sample_sequence++;
+    s_execution.timestamp_cycles = t_isr;
+    s_execution.epoch = s_current_epoch;
+    s_execution.normal_owner = (s_state == APP_FOC_STATE_READY || s_state == APP_FOC_STATE_RUN)
+                            && !s_stop_pending && !app_foc_current_vtest_active()
+                            && !s_isr_inhibited;
+    s_execution.request_expired = request_expired;
+    s_execution.request_sequence =
+        s_current_source == APP_FOC_CURRENT_SOURCE_MOTION ? s_current_request.sequence : 0;
+    s_execution.requested_id_a =
+        s_current_source == APP_FOC_CURRENT_SOURCE_MOTION ? s_current_request.id_ref_a : s_i_d_ref;
+    s_execution.requested_iq_a = s_current_source == APP_FOC_CURRENT_SOURCE_MOTION
+                                   ? s_current_request.iq_ref_a
+                                   : s_i_q_ref_cmd;
+    s_execution.valid =
+        executed && !fault && !degraded && s_execution.normal_owner && g_foc_current_snapshot.valid;
+    s_execution.accepted_id_a = s_execution.valid ? g_foc_current_snapshot.i_d_ref_a : 0;
+    s_execution.accepted_iq_a = s_execution.valid ? g_foc_current_snapshot.i_q_ref_a : 0;
+    s_execution.measured_id_a = g_foc_current_snapshot.i_d_a;
+    s_execution.measured_iq_a = g_foc_current_snapshot.i_q_a;
+    s_execution.current_limited = s_execution.valid
+                               && (s_execution.accepted_id_a != s_execution.requested_id_a
+                                   || s_execution.accepted_iq_a != s_execution.requested_iq_a);
+    s_execution.voltage_saturated = s_execution.valid && g_foc_current_snapshot.saturated;
+    if (!s_execution.valid)
+        s_execution.invalid_count++;
+    if (s_execution.current_limited)
+        s_execution.limited_count++;
+    if (s_execution.voltage_saturated)
+        s_execution.saturated_count++;
     /* 单一出口：统一计时 + 预算检查（含 OFF / 故障 / 抑制路径；含编码器取帧） */
     {
         uint32_t cycles = intf_clock_get_cycle() - t_isr;
@@ -509,15 +570,15 @@ void app_foc_run_once(void) {
     g_foc_loop_dt_us = (uint32_t)(s_dt_s * 1000000.0f);
     if (s_stop_pending) {
         if (s_state != APP_FOC_STATE_READY && s_state != APP_FOC_STATE_RUN) {
-            s_stop_pending=false;
+            s_stop_pending = false;
         } else if (++s_stop_ticks >= 120) {
             app_foc_disable();
         } else {
-            float scale=s_stop_ticks<100 ? 1.0f-(float)s_stop_ticks/100.0f : 0;
-            uint32_t st=intf_sys_irq_save();
-            s_i_d_ref=s_stop_initial_id*scale;
-            s_i_q_ref_cmd=s_stop_initial_iq*scale;
-            s_i_q_ref=s_i_q_ref_cmd;
+            float scale = s_stop_ticks < 100 ? 1.0f - (float)s_stop_ticks / 100.0f : 0;
+            uint32_t st = intf_sys_irq_save();
+            s_i_d_ref = s_stop_initial_id * scale;
+            s_i_q_ref_cmd = s_stop_initial_iq * scale;
+            s_i_q_ref = s_i_q_ref_cmd;
             intf_sys_irq_restore(st);
         }
     }
@@ -526,7 +587,8 @@ void app_foc_run_once(void) {
 }
 
 int app_foc_enable(void) {
-    if (s_stop_pending) return -1;
+    if (s_stop_pending)
+        return -1;
     const app_motor_params_t* motor = app_motor_params_current();
     const app_software_params_t* software = app_software_params_current();
     uint16_t raw;
@@ -542,7 +604,7 @@ int app_foc_enable(void) {
         return -1; /* 需先 app_foc_disable() 回 OFF */
     }
     if (s_state != APP_FOC_STATE_OFF) {
-        return 0; /* 已使能：幂等 */
+        return 0;  /* 已使能：幂等 */
     }
     if (APP_PROTECT_ACTION_EN && (app_fault_get_state() != APP_FAULT_STATE_NORMAL)) {
         return -2; /* 故障模块非 NORMAL（M1：动作全关时不拦截） */
@@ -590,7 +652,7 @@ int app_foc_enable(void) {
         uint32_t st = intf_sys_irq_save();
 
         if (s_estop_request != NULL) {
-            *s_estop_request = 0U; /* 清除外部锁存，允许本次使能 */
+            *s_estop_request = 0U;  /* 清除外部锁存，允许本次使能 */
         }
         s_rotor_seq_primed = false; /* 重新建立采样序号基准 */
         s_enc_ts_valid = false;     /* 首拍不注入 dt 尖峰 */
@@ -609,13 +671,14 @@ int app_foc_enable(void) {
         s_i_q_ref_cmd = 0.0f;
         s_i_q_ref = 0.0f;
         s_state = APP_FOC_STATE_READY;
+        app_foc_revoke_current();
         intf_sys_irq_restore(st);
     }
     return 0;
 }
 
 void app_foc_disable(void) {
-    s_stop_pending=false;
+    s_stop_pending = false;
     uint32_t st;
 
     /* 1) 临界区内先把状态置 OFF 并清零给定：ISR 下一拍立即停止输出。
@@ -628,6 +691,7 @@ void app_foc_disable(void) {
     s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_state = APP_FOC_STATE_OFF;
+    app_foc_revoke_current();
     s_isr_inhibited = false;
     s_emergency_active = false;
     s_isr_disabled = false;
@@ -658,7 +722,7 @@ int app_foc_set_iq_ref(float i_q_a) {
     float limit;
     uint32_t st;
 
-    if (s_stop_pending || !foc_finite(i_q_a)) {
+    if (s_stop_pending || s_current_source != APP_FOC_CURRENT_SOURCE_DIRECT || !foc_finite(i_q_a)) {
         return -1;
     }
     limit = app_software_params_current()->control.limits.i_q_max_a;
@@ -680,40 +744,102 @@ int app_foc_set_iq_ref(float i_q_a) {
     return 0;
 }
 
+FOC_ATTR_RAMFUNC
 bool app_foc_stop_pending(void) { return s_stop_pending; }
+int app_foc_set_current_source(app_foc_current_source_t source) {
+    uint32_t st = intf_sys_irq_save();
+    if ((source != APP_FOC_CURRENT_SOURCE_DIRECT && source != APP_FOC_CURRENT_SOURCE_MOTION)
+        || s_stop_pending || app_foc_current_vtest_active()
+        || (source == APP_FOC_CURRENT_SOURCE_MOTION && s_angle_src != APP_FOC_ANGLE_ENCODER)
+        || (s_current_request.valid
+            && (s_current_request.id_ref_a != 0 || s_current_request.iq_ref_a != 0))
+        || (s_state != APP_FOC_STATE_OFF
+            && (s_state != APP_FOC_STATE_READY || s_i_d_ref != 0 || s_i_q_ref_cmd != 0
+                || s_i_q_ref != 0))) {
+        intf_sys_irq_restore(st);
+        return -1;
+    }
+    s_current_source = source;
+    app_foc_revoke_current();
+    intf_sys_irq_restore(st);
+    return 0;
+}
+FOC_ATTR_RAMFUNC
+app_foc_current_source_t app_foc_get_current_source(void) { return s_current_source; }
+FOC_ATTR_RAMFUNC
+uint32_t app_foc_current_epoch(void) {
+    uint32_t st = intf_sys_irq_save();
+    uint32_t epoch = s_current_epoch;
+    intf_sys_irq_restore(st);
+    return epoch;
+}
+FOC_ATTR_RAMFUNC
+int app_foc_submit_current(const app_foc_current_request_t* request) {
+    if (request == NULL || !request->valid || !foc_finite(request->id_ref_a)
+        || !foc_finite(request->iq_ref_a))
+        return -1;
+    uint32_t st = intf_sys_irq_save();
+    if (s_current_source != APP_FOC_CURRENT_SOURCE_MOTION || s_stop_pending || s_isr_inhibited
+        || app_foc_current_vtest_active()
+        || (s_state != APP_FOC_STATE_READY && s_state != APP_FOC_STATE_RUN)
+        || request->epoch != s_current_epoch) {
+        intf_sys_irq_restore(st);
+        return -1;
+    }
+    s_current_request = *request;
+    s_current_request_cycle = intf_clock_get_cycle();
+    s_current_request_expired = false;
+    if (s_state == APP_FOC_STATE_READY && (request->id_ref_a != 0 || request->iq_ref_a != 0))
+        s_state = APP_FOC_STATE_RUN;
+    intf_sys_irq_restore(st);
+    return 0;
+}
+FOC_ATTR_RAMFUNC
+void app_foc_get_execution(app_foc_execution_t* out) {
+    if (out != NULL) {
+        uint32_t st = intf_sys_irq_save();
+        *out = s_execution;
+        intf_sys_irq_restore(st);
+    }
+}
 int app_foc_set_duty_ceiling(float ceiling) {
-    uint32_t st=intf_sys_irq_save();
-    int rc=s_state==APP_FOC_STATE_OFF ? app_foc_current_set_duty_ceiling(ceiling) : -1;
+    uint32_t st = intf_sys_irq_save();
+    int rc = s_state == APP_FOC_STATE_OFF ? app_foc_current_set_duty_ceiling(ceiling) : -1;
     intf_sys_irq_restore(st);
     return rc;
 }
 int app_foc_request_stop(void) {
-    uint32_t st=intf_sys_irq_save();
-    if (s_state==APP_FOC_STATE_FAULT) {
+    uint32_t st = intf_sys_irq_save();
+    if (s_state == APP_FOC_STATE_FAULT) {
         intf_sys_irq_restore(st);
         app_foc_disable(); /* 保留原foc off清故障锁存路径；故障态无正常缓降 */
         return 0;
     }
-    if (s_stop_pending || s_state==APP_FOC_STATE_OFF) {
-        intf_sys_irq_restore(st); return 0;
+    if (s_stop_pending || s_state == APP_FOC_STATE_OFF) {
+        intf_sys_irq_restore(st);
+        return 0;
     }
-    if (s_state!=APP_FOC_STATE_READY && s_state!=APP_FOC_STATE_RUN) {
-        intf_sys_irq_restore(st); return -1;
+    if (s_state != APP_FOC_STATE_READY && s_state != APP_FOC_STATE_RUN) {
+        intf_sys_irq_restore(st);
+        return -1;
     }
     if (app_foc_current_vtest_active()) {
-        intf_sys_irq_restore(st); return -1;
+        intf_sys_irq_restore(st);
+        return -1;
     }
-    s_stop_initial_id=s_i_d_ref;
-    s_stop_initial_iq=s_i_q_ref;
-    s_stop_ticks=0;
-    s_stop_pending=true;
-    intf_sys_irq_restore(st); return 0;
+    s_stop_initial_id = s_i_d_ref;
+    s_stop_initial_iq = s_i_q_ref;
+    s_stop_ticks = 0;
+    s_stop_pending = true;
+    app_foc_revoke_current();
+    intf_sys_irq_restore(st);
+    return 0;
 }
 
 int app_foc_set_id_ref(float i_d_a) {
     uint32_t st;
 
-    if (s_stop_pending || !foc_finite(i_d_a)) {
+    if (s_stop_pending || s_current_source != APP_FOC_CURRENT_SOURCE_DIRECT || !foc_finite(i_d_a)) {
         return -1;
     }
     st = intf_sys_irq_save();
@@ -736,6 +862,10 @@ int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad) {
         return -1;
     }
     st = intf_sys_irq_save();
+    if (s_current_source == APP_FOC_CURRENT_SOURCE_MOTION && s_state != APP_FOC_STATE_CALIB) {
+        intf_sys_irq_restore(st);
+        return -1;
+    }
     if ((s_state != APP_FOC_STATE_READY) && (s_state != APP_FOC_STATE_RUN)
         && (s_state != APP_FOC_STATE_CALIB)) {
         intf_sys_irq_restore(st);
@@ -749,6 +879,7 @@ int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad) {
 
 float app_foc_get_iq_ref(void) { return s_i_q_ref_cmd; }
 
+FOC_ATTR_RAMFUNC
 app_foc_state_t app_foc_get_state(void) { return s_state; }
 
 bool app_foc_is_active(void) { return (s_state != APP_FOC_STATE_OFF); }
@@ -783,21 +914,22 @@ int app_foc_calib_begin(void) {
         intf_sys_irq_restore(st);
         return -1;
     }
-    app_foc_current_reset(); /* 临界区内：与 ISR 电流环互斥（仅清零积分器） */
+    app_foc_current_reset();                 /* 临界区内：与 ISR 电流环互斥（仅清零积分器） */
     s_angle_src = APP_FOC_ANGLE_FORCED;
     s_forced_theta = 0.0f;
     s_i_d_ref = 0.0f;
     s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_state = APP_FOC_STATE_CALIB;
+    app_foc_revoke_current();
     intf_sys_irq_restore(st);
     return 0;
 }
 
 int app_foc_calib_capture(float voltage, bool voltage_mode) {
     uint32_t st = intf_sys_irq_save();
-    int rc = s_state == APP_FOC_STATE_CALIB
-                 ? app_foc_current_identify_arm(voltage, voltage_mode) : -1;
+    int rc =
+        s_state == APP_FOC_STATE_CALIB ? app_foc_current_identify_arm(voltage, voltage_mode) : -1;
     intf_sys_irq_restore(st);
     return rc;
 }
@@ -810,15 +942,15 @@ int app_foc_calib_trial_pi(float kp, float ki) {
 }
 int app_foc_calib_voltage(float voltage, uint32_t cycles) {
     uint32_t st = intf_sys_irq_save();
-    int rc = s_state == APP_FOC_STATE_CALIB
-                 ? app_foc_current_identify_voltage(voltage, cycles) : -1;
+    int rc =
+        s_state == APP_FOC_STATE_CALIB ? app_foc_current_identify_voltage(voltage, cycles) : -1;
     intf_sys_irq_restore(st);
     return rc;
 }
 int app_foc_calib_pulse(float amplitude, uint16_t half_period) {
-    uint32_t st=intf_sys_irq_save();
-    int rc=s_state==APP_FOC_STATE_CALIB
-        ? app_foc_current_identify_pulse(amplitude,half_period) : -1;
+    uint32_t st = intf_sys_irq_save();
+    int rc = s_state == APP_FOC_STATE_CALIB ? app_foc_current_identify_pulse(amplitude, half_period)
+                                            : -1;
     intf_sys_irq_restore(st);
     return rc;
 }
@@ -836,6 +968,7 @@ void app_foc_calib_end(void) {
         app_foc_angle_history_reset();
         app_foc_current_reset();
         s_state = APP_FOC_STATE_READY;
+        app_foc_revoke_current();
     }
     intf_sys_irq_restore(st);
 }

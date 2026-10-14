@@ -11,6 +11,8 @@
 
 #include "app_terminal_cmd.h"
 
+#include "app_foc.h"
+#include "app_motion.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
 #include "app_terminal.h"
@@ -36,38 +38,43 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     app_foc_current_snapshot_t snap;
 
     app_foc_get_snapshot(&snap);
-    csh_printf(csh, "foc: state=%s  theta=%.1f deg  omega=%.1f rad/s\r\n",
-               app_terminal_cmd_foc_state_name(app_foc_get_state()),
-               (double)(snap.theta_e_rad * APP_TERMINAL_FOC_DEG_PER_RAD),
-               (double)snap.omega_e_rad_s);
-    csh_printf(csh, "     i_d=%.3f/%.3f/%.3f A  i_q=%.3f/%.3f/%.3f A  (ref/avg/now)\r\n",
-               (double)snap.i_d_ref_a, (double)snap.i_d_avg_a, (double)snap.i_d_a,
-               (double)snap.i_q_ref_a, (double)snap.i_q_avg_a, (double)snap.i_q_a);
-    csh_printf(csh, "     v_d=%.3f V  v_q=%.3f V  vbus=%.2f V  sat=%u scale=%.3f\r\n",
-               (double)snap.v_d_v, (double)snap.v_q_v, (double)snap.v_bus_v,
-               (unsigned)snap.saturated, (double)snap.v_scale);
-    csh_printf(csh,"     voltage: duty_cap=%.3f vmax=%.3fV use=%.1f%% sat_count=%u/%u (cumulative)\r\n",
-        (double)app_foc_current_duty_max(),(double)snap.voltage_max_v,
-        (double)(snap.voltage_utilization*100),(unsigned)snap.saturated_count,(unsigned)snap.run_count);
-    csh_printf(csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u  dt=%u us\r\n",
-               (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w,
-               (unsigned)snap.valid, (unsigned)snap.run_count, (unsigned)snap.fault_count,
-               (unsigned)snap.tripped, (unsigned)g_foc_loop_dt_us);
+    csh_printf(
+        csh, "foc: state=%s  theta=%.1f deg  omega=%.1f rad/s\r\n",
+        app_terminal_cmd_foc_state_name(app_foc_get_state()),
+        (double)(snap.theta_e_rad * APP_TERMINAL_FOC_DEG_PER_RAD), (double)snap.omega_e_rad_s);
+    csh_printf(
+        csh, "     i_d=%.3f/%.3f/%.3f A  i_q=%.3f/%.3f/%.3f A  (ref/avg/now)\r\n",
+        (double)snap.i_d_ref_a, (double)snap.i_d_avg_a, (double)snap.i_d_a, (double)snap.i_q_ref_a,
+        (double)snap.i_q_avg_a, (double)snap.i_q_a);
+    csh_printf(
+        csh, "     v_d=%.3f V  v_q=%.3f V  vbus=%.2f V  sat=%u scale=%.3f\r\n", (double)snap.v_d_v,
+        (double)snap.v_q_v, (double)snap.v_bus_v, (unsigned)snap.saturated, (double)snap.v_scale);
+    csh_printf(
+        csh, "     voltage: duty_cap=%.3f vmax=%.3fV use=%.1f%% sat_count=%u/%u (cumulative)\r\n",
+        (double)app_foc_current_duty_max(), (double)snap.voltage_max_v,
+        (double)(snap.voltage_utilization * 100), (unsigned)snap.saturated_count,
+        (unsigned)snap.run_count);
+    csh_printf(
+        csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u  dt=%u us\r\n",
+        (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w, (unsigned)snap.valid,
+        (unsigned)snap.run_count, (unsigned)snap.fault_count, (unsigned)snap.tripped,
+        (unsigned)g_foc_loop_dt_us);
     /* M1 保护动作全关：判断计数（只增不动作），复测定位触发源用 */
-    csh_printf(csh, "     judge: ovr=%u penc=%u pread=%u pvb=%u ptrip=%u\r\n",
-               (unsigned)g_foc_isr_overruns,
-               (unsigned)g_foc_protect_counts[APP_FOC_PROT_ENC],
-               (unsigned)g_foc_protect_counts[APP_FOC_PROT_READ],
-               (unsigned)g_foc_protect_counts[APP_FOC_PROT_VBUS],
-               (unsigned)g_foc_protect_counts[APP_FOC_PROT_TRIP]);
+    csh_printf(
+        csh, "     judge: ovr=%u penc=%u pread=%u pvb=%u ptrip=%u\r\n",
+        (unsigned)g_foc_isr_overruns, (unsigned)g_foc_protect_counts[APP_FOC_PROT_ENC],
+        (unsigned)g_foc_protect_counts[APP_FOC_PROT_READ],
+        (unsigned)g_foc_protect_counts[APP_FOC_PROT_VBUS],
+        (unsigned)g_foc_protect_counts[APP_FOC_PROT_TRIP]);
     {
         float enc_offset;
         float enc_dir;
 
         app_foc_get_encoder_offset(&enc_offset, &enc_dir);
-        csh_printf(csh, "     enc: offset=%.4f rad (%.1f deg) dir=%+.0f  (cal encoder show)\r\n",
-                   (double)enc_offset, (double)(enc_offset * APP_TERMINAL_FOC_DEG_PER_RAD),
-                   (double)enc_dir);
+        csh_printf(
+            csh, "     enc: offset=%.4f rad (%.1f deg) dir=%+.0f  (cal encoder show)\r\n",
+            (double)enc_offset, (double)(enc_offset * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)enc_dir);
     }
     if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
         csh_printf(csh, "     hint: run 'foc off' then 'foc on' to recover\r\n");
@@ -99,9 +106,9 @@ static void foc_trace_tick(uint32_t now_ms) {
     for (uint8_t i = 0U; (i < 8U) && (s_trace_sent < n); i++) {
         const app_foc_trace_sample_t* s = &data[s_trace_sent];
 
-        app_terminal_cmd_emit("%u,%.3f,%.3f,%.3f,%.3f,%.2f\r\n", (unsigned)s_trace_sent,
-                              (double)s->i_d_a, (double)s->i_q_a, (double)s->v_d_v,
-                              (double)s->v_q_v, (double)s->theta_e_rad);
+        app_terminal_cmd_emit(
+            "%u,%.3f,%.3f,%.3f,%.3f,%.2f\r\n", (unsigned)s_trace_sent, (double)s->i_d_a,
+            (double)s->i_q_a, (double)s->v_d_v, (double)s->v_q_v, (double)s->theta_e_rad);
         s_trace_sent++;
     }
     if (s_trace_sent >= n) {
@@ -137,18 +144,22 @@ static int cmd_foc(int argc, char** argv) {
         app_terminal_cmd_foc_status(csh);
         return 0;
     }
-    if (strcmp(sub,"dutycap")==0) {
+    if (strcmp(sub, "dutycap") == 0) {
         float ceiling;
-        if (argc<3) {
-            csh_printf(csh,"dutycap effective=%.3f; use foc dutycap <0.70..0.98> while OFF\r\n",
-                       (double)app_foc_current_duty_max()); return 0;
+        if (argc < 3) {
+            csh_printf(
+                csh, "dutycap effective=%.3f; use foc dutycap <0.70..0.98> while OFF\r\n",
+                (double)app_foc_current_duty_max());
+            return 0;
         }
-        if (app_terminal_cmd_parse_float(argv[2],&ceiling)
-            || app_foc_set_duty_ceiling(ceiling)) {
-            csh_printf(csh,"ERR: require OFF and dutycap in [0.70,0.98]\r\n"); return -1;
+        if (app_terminal_cmd_parse_float(argv[2], &ceiling) || app_foc_set_duty_ceiling(ceiling)) {
+            csh_printf(csh, "ERR: require OFF and dutycap in [0.70,0.98]\r\n");
+            return -1;
         }
-        csh_printf(csh,"OK: RAM dutycap=%.3f (reboot restores 0.95); ADC window must be verified\r\n",
-                   (double)ceiling); return 0;
+        csh_printf(
+            csh, "OK: RAM dutycap=%.3f (reboot restores 0.95); ADC window must be verified\r\n",
+            (double)ceiling);
+        return 0;
     }
 
     if (strcmp(sub, "on") == 0) {
@@ -165,11 +176,16 @@ static int cmd_foc(int argc, char** argv) {
                 if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
                     csh_printf(csh, "ERR: FOC latched in FAULT, run 'foc off' first\r\n");
                 } else {
-                    static const char* const why[] = {"?", "?", "fault state", "adc invalid",
-                                                      "encoder invalid", "params invalid"};
+                    static const char* const why[] = {"?",
+                                                      "?",
+                                                      "fault state",
+                                                      "adc invalid",
+                                                      "encoder invalid",
+                                                      "params invalid"};
 
-                    csh_printf(csh, "ERR: foc enable rejected (%s)\r\n",
-                               ((rc <= -2) && (rc >= -5)) ? why[-rc] : "unknown");
+                    csh_printf(
+                        csh, "ERR: foc enable rejected (%s)\r\n",
+                        ((rc <= -2) && (rc >= -5)) ? why[-rc] : "unknown");
                 }
                 return -1;
             }
@@ -180,10 +196,11 @@ static int cmd_foc(int argc, char** argv) {
 
     if (strcmp(sub, "off") == 0) {
         if (app_foc_request_stop()) {
-            csh_printf(csh,"ERR: calibration/vtest owns output; cancel it before normal stop\r\n");
+            csh_printf(csh, "ERR: calibration/vtest owns output; cancel it before normal stop\r\n");
             return -1;
         }
-        if (app_foc_stop_pending()) csh_printf(csh,"foc: stopping asynchronously (~120ms); wait for state=OFF\r\n");
+        if (app_foc_stop_pending())
+            csh_printf(csh, "foc: stopping asynchronously (~120ms); wait for state=OFF\r\n");
         app_terminal_cmd_foc_status(csh);
         return 0;
     }
@@ -218,11 +235,12 @@ static int cmd_foc(int argc, char** argv) {
             csh_printf(csh, "ERR: vtest start failed\r\n");
             return -1;
         }
-        csh_printf(csh,
-                   "vtest: v=%.3f V theta=%.1f deg 1.5s (expect |i|~%.2f A; check sign/mapping; "
-                   "'foc vtest off' stops)\r\n",
-                   (double)volts, (double)deg,
-                   (double)(volts / ((motor->rs_ohm > 0.0f) ? motor->rs_ohm : 1.0f)));
+        csh_printf(
+            csh,
+            "vtest: v=%.3f V theta=%.1f deg 1.5s (expect |i|~%.2f A; check sign/mapping; "
+            "'foc vtest off' stops)\r\n",
+            (double)volts, (double)deg,
+            (double)(volts / ((motor->rs_ohm > 0.0f) ? motor->rs_ohm : 1.0f)));
         return 0;
     }
 
@@ -242,19 +260,20 @@ static int cmd_foc(int argc, char** argv) {
             /* 恢复值取编译期默认（config 下 yaml），避免硬编码漂移 */
             const app_software_params_t* defaults = app_software_params_default();
 
-            software->control.limits.i_trip_a =
-                on ? 0.0f : defaults->control.limits.i_trip_a;
+            software->control.limits.i_trip_a = on ? 0.0f : defaults->control.limits.i_trip_a;
             software->control.limits.speed_max_rad_s =
                 on ? 0.0f : defaults->control.limits.speed_max_rad_s;
             software->fault.shutdown_en = on ? 0U : defaults->fault.shutdown_en;
         }
-        csh_printf(csh, "bench=%u: i_trip_a=%.1f A  speed_max=%.0f rad/s  fault.shutdown_en=%u\r\n",
-                   (unsigned)on, (double)software->control.limits.i_trip_a,
-                   (double)software->control.limits.speed_max_rad_s,
-                   (unsigned)software->fault.shutdown_en);
+        csh_printf(
+            csh, "bench=%u: i_trip_a=%.1f A  speed_max=%.0f rad/s  fault.shutdown_en=%u\r\n",
+            (unsigned)on, (double)software->control.limits.i_trip_a,
+            (double)software->control.limits.speed_max_rad_s,
+            (unsigned)software->fault.shutdown_en);
         if (on != 0U) {
-            csh_printf(csh, "WARN: auto-stop protections OFF (incl. bus OV/UV) "
-                            "(use current-limited supply)\r\n");
+            csh_printf(
+                csh, "WARN: auto-stop protections OFF (incl. bus OV/UV) "
+                     "(use current-limited supply)\r\n");
         }
         return 0;
     }
@@ -276,8 +295,8 @@ static int cmd_foc(int argc, char** argv) {
             csh_printf(csh, "FAIL: job start\r\n");
             return -1;
         }
-        csh_printf(csh, "trace: capturing %u samples @25kHz (~5ms)...\r\n",
-                   (unsigned)APP_FOC_TRACE_MAX);
+        csh_printf(
+            csh, "trace: capturing %u samples @25kHz (~5ms)...\r\n", (unsigned)APP_FOC_TRACE_MAX);
         return 0;
     }
 
@@ -286,3 +305,60 @@ static int cmd_foc(int argc, char** argv) {
 }
 
 CSH_CMD_EXPORT_ALIAS(cmd_foc, foc, );
+
+/** @brief motion模型转矩/轴端速度与静止安装标定 */
+static int cmd_motion(int argc, char** argv) {
+    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    const char* sub = argc > 1 ? argv[1] : "show";
+    int rc = -1;
+    float value, ki;
+    if (strcmp(sub, "show") == 0) {
+        app_motion_snapshot_t state;
+        app_motion_get_snapshot(&state);
+        csh_printf(csh, "phase trial done=%u (apply required)\r\n", state.calibration_done);
+        csh_printf(
+            csh, "reject: sample=%lu duplicate=%lu vernier=%lu timing=%lu\r\n",
+            (unsigned long)state.sample_failure_count, (unsigned long)state.duplicate_count,
+            (unsigned long)state.vernier_failure_count, (unsigned long)state.timing_failure_count);
+        csh_printf(
+            csh,
+            "motion: cal=%u zero=%u valid=%u active=%u calibrating=%u samples=%lu reason=%u\r\n"
+            "shaft=%.6frad speed=%.6frad/s phase=%.8fturn torque=%.4fNm iq=%.4fA "
+            "good/bad=%lu/%lu\r\n",
+            state.calibrated, state.zero_valid, state.feedback_valid, state.active,
+            state.calibrating, (unsigned long)state.calibration_samples, (unsigned)state.reason,
+            (double)state.shaft_rad,
+            (double)state.speed_rad_s, (double)state.phase_turns, (double)state.torque_nm,
+            (double)state.iq_a, (unsigned long)state.good_count, (unsigned long)state.bad_count);
+        return 0;
+    }
+    if (strcmp(sub, "cal") == 0)
+        rc = app_motion_calibrate();
+    else if (strcmp(sub, "apply") == 0)
+        rc = app_motion_apply();
+    else if (strcmp(sub, "zero") == 0)
+        rc = app_motion_zero();
+    else if (strcmp(sub, "save") == 0)
+        rc = app_motion_save();
+    else if (strcmp(sub, "off") == 0) {
+        rc = app_motion_stop();
+    } else if (strcmp(sub, "direct") == 0)
+        rc = app_foc_set_current_source(APP_FOC_CURRENT_SOURCE_DIRECT);
+    else if (argc >= 3 && app_terminal_cmd_parse_float(argv[2], &value) == 0) {
+        if (strcmp(sub, "torque") == 0)
+            rc = app_motion_torque(value);
+        else if (strcmp(sub, "speed") == 0)
+            rc = app_motion_speed(value);
+        else if (
+            strcmp(sub, "gains") == 0 && argc >= 4
+            && app_terminal_cmd_parse_float(argv[3], &ki) == 0)
+            rc = app_motion_gains(value, ki);
+    }
+    csh_printf(
+        csh,
+        "%s: motion rc=%d; show|cal (OFF stationary)|apply|zero|save|gains kp ki (OFF)|"
+        "torque Nm|speed rad/s|off|direct (OFF)\r\n",
+        rc == 0 ? "accepted" : "ERR", rc);
+    return rc;
+}
+CSH_CMD_EXPORT_ALIAS(cmd_motion, motion, );

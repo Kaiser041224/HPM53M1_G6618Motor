@@ -20,6 +20,7 @@
 #include "intf_clock.h"
 #include "intf_sys.h"
 
+#include "foc_math.h"
 #include <string.h>
 
 float g_mock_rotor_rad;      /**< 编码器替身机械角 [rad] */
@@ -82,3 +83,20 @@ app_fault_state_t app_fault_get_state(void) { return APP_FAULT_STATE_NORMAL; }
 uint32_t intf_sys_irq_save(void) { return 0U; }
 void intf_sys_irq_restore(uint32_t state) { (void)state; }
 uint32_t intf_clock_get_cpu_freq(void) { return 480000000U; }
+int g_mock_output_failure;
+bool g_mock_output_timestamp_override;
+uint32_t g_mock_output_timestamp_cycles;
+bool g_mock_output_raw_override;
+uint16_t g_mock_output_raw;
+int app_encoder_output_sample(app_encoder_rotor_snapshot_t* rotor, uint16_t* output) {
+    if (g_mock_output_failure)
+        return -1;
+    mock_fill_rotor(rotor);
+    rotor->seq = ++s_rotor_seq;
+    if (g_mock_output_timestamp_override)
+        rotor->timestamp_cycles = g_mock_output_timestamp_cycles;
+    *output = foc_finite(rotor->rad) ? (uint16_t)(.98f * rotor->rad / 6.283185307f * 65536.0f) : 0U;
+    if (g_mock_output_raw_override)
+        *output = g_mock_output_raw;
+    return 0;
+}

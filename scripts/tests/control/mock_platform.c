@@ -72,6 +72,7 @@ int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w) {
 }
 
 uint32_t intf_clock_get_cycle(void) { return s_cycle; }
+void mock_advance_cycle(uint32_t cycles) { s_cycle+=cycles; }
 
 bool app_analog_signal_read_all(app_analog_values_t* values) {
     if (values == NULL) {

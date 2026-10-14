@@ -156,6 +156,8 @@ int app_param_store(uint32_t key, const void *buf, size_t len) {
 uint32_t intf_clock_get_cycle(void) { return g_mock_cycle; }
 
 uint32_t intf_clock_get_cpu_freq(void) { return 480000000U; }
+uint32_t intf_sys_irq_save(void) { return 0U; }
+void intf_sys_irq_restore(uint32_t state) { (void)state; }
 
 /* ---- TRGM 桩（app_encoder_sync_start 路由硬件触发） ---- */
 int intf_trgm_connect(intf_trgm_src_t src, intf_trgm_dst_t dst) {

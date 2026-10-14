@@ -132,6 +132,7 @@ int algo_encoder_snapshot_push(algo_encoder_snapshot_t* self, const algo_encoder
     return ALGO_ENC_PUSH_ACCEPTED;
 }
 
+ALGO_ENC_ATTR_RAMFUNC
 bool algo_encoder_snapshot_read(algo_encoder_snapshot_t* self, uint32_t now_cycles,
                                 algo_encoder_sample_t* out, uint8_t max_retries) {
     if ((self == NULL) || (out == NULL)) {

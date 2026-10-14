@@ -35,6 +35,48 @@ typedef enum {
     APP_FOC_STATE_FAULT,   /**< 故障门控（零矢量 + 关桥） */
 } app_foc_state_t;
 
+/** @brief 正常电流请求生产者；校准/停止不属于正常请求 */
+typedef enum {
+    APP_FOC_CURRENT_SOURCE_DIRECT = 0,
+    APP_FOC_CURRENT_SOURCE_MOTION,
+} app_foc_current_source_t;
+/** @brief 完整电流请求，epoch必须与当前权限一致 */
+typedef struct {
+    float id_ref_a;
+    float iq_ref_a;
+    uint32_t sequence;
+    uint32_t epoch;
+    bool valid;
+} app_foc_current_request_t;
+/** @brief ADC执行反馈；accepted为给定，不是实测电流 */
+typedef struct {
+    uint32_t sample_sequence;
+    uint32_t timestamp_cycles;
+    uint32_t request_sequence;
+    uint32_t epoch;
+    uint32_t invalid_count;
+    uint32_t limited_count;
+    uint32_t saturated_count;
+    float requested_id_a, requested_iq_a;
+    float accepted_id_a, accepted_iq_a;
+    float measured_id_a, measured_iq_a;
+    bool valid;
+    bool normal_owner;
+    bool current_limited;
+    bool voltage_saturated;
+    bool request_expired; /**< MOTION请求超过500us，零给定回退，不关桥 */
+} app_foc_execution_t;
+/** @brief OFF或零给定READY切换生产者，撤销旧请求；0成功 */
+int app_foc_set_current_source(app_foc_current_source_t source);
+/** @brief 当前正常请求生产者；供诊断互斥，不代表输出权限已授予 */
+app_foc_current_source_t app_foc_get_current_source(void);
+/** @brief 读取当前权限代次 */
+uint32_t app_foc_current_epoch(void);
+/** @brief MOTION生产者原子提交id/iq，错误返回-1，不改变现有请求 */
+int app_foc_submit_current(const app_foc_current_request_t* request);
+/** @brief 短临界区复制执行反馈（累计计数，可差分） */
+void app_foc_get_execution(app_foc_execution_t* out);
+
 /**
  * @brief 角度来源
  */

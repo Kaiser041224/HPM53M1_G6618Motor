@@ -150,9 +150,9 @@ void app_debug_encoder_init(void) {
         }
         g_enc_energized_ok = 0U;
         g_enc_energized_not_run = 1U;
-        app_debug_printf("[ENC] selftest: passive=%s spi=%u Hz | energized=not_run\r\n",
-                         (g_enc_passive_ok != 0U) ? "OK" : "FAIL",
-                         (unsigned)g_enc_passive_spi_hz);
+        app_debug_printf(
+            "[ENC] selftest: passive=%s spi=%u Hz | energized=not_run\r\n",
+            (g_enc_passive_ok != 0U) ? "OK" : "FAIL", (unsigned)g_enc_passive_spi_hz);
     }
 }
 
@@ -204,7 +204,7 @@ void app_debug_encoder_health_start(void) {
     app_encoder_rotor_snapshot_t snap;
 
     if (g_enc_runtime_active != 0U) {
-        return; /* 已在运行 */
+        return;                                  /* 已在运行 */
     }
     (void)app_encoder_get_rotor_snapshot(&snap);
 
@@ -270,16 +270,16 @@ void app_debug_encoder_health_tick(void) {
     g_enc_runtime_age_max_us =
         (cpu != 0U) ? (uint32_t)(((uint64_t)s_health_age_max_cycles * 1000000U) / cpu) : 0U;
 
-    g_enc_runtime_ok = ((seq_delta >= ((APP_ENC_HEALTH_EXPECTED_SEQ * 8U) / 10U))
-                        && (valid_pct >= 99U) && (fail_delta == 0U) && (jump_delta == 0U)
-                        && (err_delta == 0U))
-                           ? 1U
-                           : 0U;
+    g_enc_runtime_ok =
+        ((seq_delta >= ((APP_ENC_HEALTH_EXPECTED_SEQ * 8U) / 10U)) && (valid_pct >= 99U)
+         && (fail_delta == 0U) && (jump_delta == 0U) && (err_delta == 0U))
+            ? 1U
+            : 0U;
     g_enc_runtime_progress = 100U;
     g_enc_runtime_active = 0U;
 }
 
-/* 刷新转子观测变量（缓存读，零 SPI 成本；出轴采样已按 M1 裁剪移除，spec §3）。 */
+/* 刷新双编码器观测（缓存读，零SPI成本；output为游标磁铁角度，不是实际轴端角度）。 */
 void app_debug_encoder_sample(void) {
     uint16_t raw;
     bool valid;
@@ -295,6 +295,13 @@ void app_debug_encoder_sample(void) {
     }
     s_read_cycles_sum[APP_ENCODER_ROTOR] += 0U;
     s_read_count[APP_ENCODER_ROTOR]++;
+    if (app_encoder_get_output_raw(&raw) == 0) {
+        uint16_t zero = 0U;
+        g_enc_output_raw = raw;
+        if (app_encoder_get_zero(APP_ENCODER_OUTPUT, &zero) == 0)
+            g_enc_output_deg = (float)(uint16_t)(raw - zero) * (360.0f / 65536.0f);
+        s_read_count[APP_ENCODER_OUTPUT]++;
+    }
     s_loop_count++;
 }
 
@@ -364,6 +371,24 @@ void app_debug_encoder_print_stats(void) {
             (unsigned)g_encoder_isr_cycles_max);
         s_prev_sample_count = sample_now;
         s_prev_fail_count = fail_now;
+    }
+    /* 游标同样每ADC拍取帧；外环消费频率不影响这三个生产者计数。 */
+    {
+        static uint32_t s_previous_output_count;
+        static uint32_t s_previous_output_fail_count;
+        static uint32_t s_previous_pair_count;
+        app_encoder_pair_stats_t pair_stats;
+        app_encoder_get_pair_stats(&pair_stats);
+        uint32_t output_count = pair_stats.output_sample_count;
+        uint32_t output_fail_count = pair_stats.output_fail_count;
+        uint32_t pair_count = pair_stats.valid_pair_count;
+        app_debug_printf("[ENC] pair: output rate=%u fail=%u valid=%u [per report]\r\n",
+                         (unsigned)(output_count - s_previous_output_count),
+                         (unsigned)(output_fail_count - s_previous_output_fail_count),
+                         (unsigned)(pair_count - s_previous_pair_count));
+        s_previous_output_count = output_count;
+        s_previous_output_fail_count = output_fail_count;
+        s_previous_pair_count = pair_count;
     }
 
     /* 清零窗口 */

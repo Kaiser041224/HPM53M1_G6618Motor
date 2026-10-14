@@ -19,12 +19,12 @@ uint32_t intf_sys_get_reset_status(void)
     return ppor_reset_get_status(HPM_PPOR);
 }
 
-uint32_t intf_sys_irq_save(void)
+ATTR_RAMFUNC uint32_t intf_sys_irq_save(void)
 {
     return disable_global_irq(CSR_MSTATUS_MIE_MASK);
 }
 
-void intf_sys_irq_restore(uint32_t state)
+ATTR_RAMFUNC void intf_sys_irq_restore(uint32_t state)
 {
     restore_global_irq(state);
 }

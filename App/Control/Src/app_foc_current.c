@@ -186,7 +186,8 @@ void app_foc_current_reset(void) {
 }
 
 int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s) {
-    if (app_foc_stop_pending() || app_foc_get_state()==APP_FOC_STATE_CALIB) return -1;
+    if (app_foc_stop_pending() || app_foc_get_state()==APP_FOC_STATE_CALIB
+        || app_foc_get_current_source()==APP_FOC_CURRENT_SOURCE_MOTION) return -1;
     if (!s_ready || !foc_finite(volts) || !foc_finite(theta_e_rad) || !foc_finite(duration_s)) {
         return -1;
     }

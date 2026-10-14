@@ -17,12 +17,14 @@ int g_fails = 0;
 void test_algo_encoder_snapshot(void);
 void test_app_encoder_ownership(void);
 void test_app_encoder_sync(void);
+void test_output_cache(void);
 
 int main(void) {
     printf("Encoder/app host tests\n");
     test_algo_encoder_snapshot();
     test_app_encoder_ownership();
     test_app_encoder_sync();
+    test_output_cache();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");

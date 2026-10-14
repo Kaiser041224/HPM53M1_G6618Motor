@@ -54,7 +54,7 @@ void test_app_encoder_sync(void) {
     CHECK(g_mock_trgm_src == INTF_TRGM_SRC_PWM1_CH10REF);
     CHECK(g_mock_trgm_dst == INTF_TRGM_DST_DMA_REQ0);
     CHECK(g_mock_enc_sync_arm_count[APP_ENCODER_ROTOR] == 1);
-    CHECK(g_mock_enc_sync_trig[APP_ENCODER_ROTOR] == 0U); /* DMA_REQ0 */
+    CHECK(g_mock_enc_sync_trig[APP_ENCODER_ROTOR] == 0U);      /* DMA_REQ0 */
     CHECK(g_mock_enc_sync_arm_count[APP_ENCODER_OUTPUT] == 0); /* 出轴不参与 */
 
     /* 3) 每拍 fetch → 发布 */
@@ -114,4 +114,74 @@ void test_app_encoder_sync(void) {
     /* 重复 start：幂等（不重复 arm） */
     CHECK(app_encoder_sync_start() == 0);
     CHECK(g_mock_enc_sync_arm_count[APP_ENCODER_ROTOR] == 1);
+}
+
+void test_output_cache(void) {
+    extern uint32_t g_mock_cycle;
+    uint16_t raw = 123;
+    CHECK(app_encoder_get_output_raw(&raw) != 0);
+    CHECK(app_encoder_output_start() == 0);
+    CHECK(g_mock_trgm_src == INTF_TRGM_SRC_PWM1_CH10REF);
+    CHECK(g_mock_trgm_dst == INTF_TRGM_DST_DMA_REQ1);
+    CHECK(app_encoder_read_raw(APP_ENCODER_OUTPUT, &raw) != 0);
+    g_mock_enc_raw[APP_ENCODER_ROTOR] = 2010;
+    app_encoder_rotor_snapshot_t rotor;
+    CHECK(app_encoder_sync_sample(0, &rotor) == 0);
+    g_mock_enc_raw[APP_ENCODER_OUTPUT] = 16384;
+    CHECK(app_encoder_sync_sample(0, &rotor) == 0);
+    CHECK(app_encoder_output_sample(&rotor, &raw) == 0);
+    int reads = g_mock_enc_read_count[APP_ENCODER_OUTPUT];
+    int fetches = g_mock_enc_sync_fetch_count[APP_ENCODER_OUTPUT];
+    CHECK(app_encoder_get_output_raw(&raw) == 0);
+    CHECK(raw == 16384);
+    CHECK(g_mock_enc_read_count[APP_ENCODER_OUTPUT] == reads);
+    CHECK(g_mock_enc_sync_fetch_count[APP_ENCODER_OUTPUT] == fetches);
+    CHECK(app_encoder_output_sample(&rotor, &raw) == 0);
+    CHECK(g_mock_enc_sync_fetch_count[APP_ENCODER_OUTPUT] == fetches);
+    /* 未进入ADC发布前，不得把新的设备原码拼进旧快照。 */
+    uint32_t pair_sequence = rotor.seq;
+    g_mock_enc_raw[APP_ENCODER_ROTOR] = 2020;
+    g_mock_enc_raw[APP_ENCODER_OUTPUT] = 20000;
+    CHECK(app_encoder_output_sample(&rotor, &raw) == 0);
+    CHECK(rotor.raw == 2010 && raw == 16384 && rotor.seq == pair_sequence);
+    CHECK(app_encoder_sync_sample(1000, &rotor) == 0);
+    g_mock_cycle = 1000;
+    CHECK(app_encoder_output_sample(&rotor, &raw) == 0);
+    CHECK(rotor.raw == 2020 && raw == 20000);
+    CHECK(rotor.timestamp_cycles == 1000);
+    CHECK(g_mock_enc_sync_fetch_count[APP_ENCODER_OUTPUT] == fetches + 1);
+    g_mock_enc_sync_fetch_fail[APP_ENCODER_ROTOR] = 1;
+    g_mock_enc_raw[APP_ENCODER_OUTPUT] = 32768;
+    (void)app_encoder_sync_sample(20000, &rotor);
+    CHECK(app_encoder_output_sample(&rotor, &raw) != 0);
+    CHECK(app_encoder_get_output_raw(&raw) == 0);
+    CHECK(raw == 32768); /* 原码观测独立于双编码器配对有效性 */
+    g_mock_enc_sync_fetch_fail[APP_ENCODER_ROTOR] = 0;
+    /* SPI1失败只使配对无效，不拒绝SPI3电流路径；旧缓存供诊断，不能供控制。 */
+    g_mock_enc_sync_fetch_fail[APP_ENCODER_OUTPUT] = 1;
+    CHECK(app_encoder_sync_sample(30000, &rotor) == 0);
+    CHECK(rotor.valid);
+    CHECK(app_encoder_output_sample(&rotor, &raw) != 0);
+    CHECK(app_encoder_get_output_raw(&raw) == 0 && raw == 32768);
+    CHECK(g_encoder_output_read_fail_count > 0);
+    g_mock_enc_sync_fetch_fail[APP_ENCODER_OUTPUT] = 0;
+    CHECK(app_encoder_sync_sample(40000, &rotor) == 0);
+    g_mock_cycle = 40000;
+    CHECK(app_encoder_output_sample(&rotor, &raw) == 0);
+    CHECK(rotor.age_cycles == 0);
+    CHECK(g_encoder_output_sample_count > 0);
+    CHECK(g_encoder_pair_valid_count > 0);
+    app_encoder_pair_stats_t stats;
+    app_encoder_get_pair_stats(&stats);
+    CHECK(stats.output_sample_count==g_encoder_output_sample_count);
+    CHECK(stats.output_fail_count==g_encoder_output_read_fail_count);
+    CHECK(stats.valid_pair_count==g_encoder_pair_valid_count);
+    g_mock_cycle = 40000 + 19201; /* 超过一个25kHz周期，拒绝陈旧快照 */
+    CHECK(app_encoder_output_sample(&rotor, &raw) != 0);
+    /* 32bit mcycle回绕只改变数值，不影响配对年龄计算。 */
+    CHECK(app_encoder_sync_sample(UINT32_MAX-100U, &rotor)==0);
+    g_mock_cycle=99U;
+    CHECK(app_encoder_output_sample(&rotor,&raw)==0);
+    CHECK(rotor.age_cycles==200U);
+    g_mock_cycle = 0;
 }
