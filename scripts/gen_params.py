@@ -49,6 +49,7 @@ SCHEMA = {
         ("inertia_kgm2", "inertia_kgm2", "f32", 0.0, None),
         ("torque_rated_nm", "torque_rated_nm", "f32", 0.0, None),
         ("torque_peak_10s_nm", "torque_peak_10s_nm", "f32", 0.0, None),
+        ("reducer_ratio", "reducer_ratio", "f32", 0.0, None),
         ("encoder.resolution_bits", "encoder.resolution_bits", "u8", 1, 32),
         ("encoder.rotor_ring_teeth", "encoder.rotor_ring_teeth", "u8", 1, 255),
         ("encoder.rotor_pinion_teeth", "encoder.rotor_pinion_teeth", "u8", 1, 255),
@@ -96,10 +97,18 @@ SCHEMA = {
         ("control.current_loop.decoupling_en", "control.current_loop.decoupling_en", "u8", 0, 1),
         ("control.speed_loop.kp", "control.speed_loop.kp", "f32", None, None),
         ("control.speed_loop.ki", "control.speed_loop.ki", "f32", None, None),
+        ("control.speed_loop.friction_feedforward_nm",
+         "control.speed_loop.friction_feedforward_nm", "f32", 0.0, 100.0),
+        ("control.speed_loop.velocity_lpf_coeff",
+         "control.speed_loop.velocity_lpf_coeff", "f32", 0.0, 1.0),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
         ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.501, 1.0),
         ("control.limits.i_trip_a", "control.limits.i_trip_a", "f32", 0.0, None),
         ("control.limits.speed_max_rad_s", "control.limits.speed_max_rad_s", "f32", 0.0, None),
+        ("control.limits.motion_iq_max_a", "control.limits.motion_iq_max_a", "f32", 0.0, None),
+        ("control.limits.motion_speed_limit_rad_s",
+         "control.limits.motion_speed_limit_rad_s", "f32", 0.0, None),
+        ("params_generation", "params_generation", "u32", 0, None),
     ],
 }
 
@@ -150,6 +159,17 @@ APPLY_REBOOT = {
     "software.fault.slow_debounce",
     "software.fault.adc_stall_ms",
     "software.fault.enc_err_delta",
+    # 电机：转矩换算（init 期缓存）
+    "motor.reducer_ratio",
+    # 软件：运动控制（app_motion init 期缓存；在线改走 motion gains / param save）
+    "software.control.speed_loop.kp",
+    "software.control.speed_loop.ki",
+    "software.control.speed_loop.friction_feedforward_nm",
+    "software.control.speed_loop.velocity_lpf_coeff",
+    "software.control.limits.motion_iq_max_a",
+    "software.control.limits.motion_speed_limit_rad_s",
+    # 持久化代次（boot 期比对；不属运行参数）
+    "software.params_generation",
 }
 
 META_DOMAIN_ENUMS = {

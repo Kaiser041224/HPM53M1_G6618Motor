@@ -7,6 +7,8 @@
 # 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
 # ============================================================================
 
+params_generation: 7         # 测试夹具值
+
 can:
   baudrate: 1000000          # CAN 波特率 [bps]
   node_id_default: 1         # 占位：DIP 解码未实现时的回退节点号（与 CAN ID 的派生关系待协议定稿）
@@ -14,6 +16,7 @@ can:
   tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
 
 fault:
+  shutdown_en: 1
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）
@@ -32,10 +35,14 @@ control:
     bandwidth_rad_s: 3141.6  # 目标带宽 [rad/s]（自整定用）
     decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
   speed_loop:
-    kp: 0.0                  # 速度环 PID（目标带宽 50Hz；V2）
-    ki: 0.0
+    kp: 1.5                  # [Nm/(rad/s)]（测试夹具值）
+    ki: 20.0                 # [Nm/rad]（测试夹具值）
+    friction_feedforward_nm: 0.5   # [Nm]（测试夹具值）
+    velocity_lpf_coeff: 0.05       # 测速一阶滤波系数（测试夹具值）
   limits:
     i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3
     i_trip_a: 10.0                     # 快速过流跳闸 [A]（0 = 关闭）
     speed_max_rad_s: 2500.0            # 转矩模式限速 [rad/s 电角]（0 = 关闭）
     duty_max: 0.885                    # 调制上限（有效域 (0.5, 1.0]；0.885 = 三电阻采样窗口约束，ADC spec §4）
+    motion_iq_max_a: 2.0               # [A]（测试夹具值）
+    motion_speed_limit_rad_s: 10.0     # [rad/s]（测试夹具值）

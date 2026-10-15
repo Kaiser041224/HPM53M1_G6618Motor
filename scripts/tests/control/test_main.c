@@ -22,10 +22,16 @@ void test_voltage_limit(void);
 void test_foc_request(void);
 void test_motion_timer(void);
 void test_motion_math(void);
+void test_motion_speed_anti_windup(void);
 void test_motion(void);
 void test_motion_sample_time(void);
 void test_motion_restore_validation(void);
 void test_motion_wrap_direction(void);
+void test_motion_hold(void);
+void test_motion_anti_windup(void);
+void test_motion_cmd_status(void);
+void test_motion_friction_feedforward(void);
+void test_motion_params(void);
 
 int main(void) {
     printf("Control host tests\n");
@@ -39,10 +45,16 @@ int main(void) {
     test_foc_request();
     test_motion_timer();
     test_motion_math();
+    test_motion_speed_anti_windup();
     test_motion();
     test_motion_sample_time();
     test_motion_restore_validation();
     test_motion_wrap_direction();
+    test_motion_hold();
+    test_motion_anti_windup();
+    test_motion_cmd_status();
+    test_motion_friction_feedforward();
+    test_motion_params();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");

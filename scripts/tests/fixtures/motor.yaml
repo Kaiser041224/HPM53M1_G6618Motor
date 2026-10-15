@@ -23,6 +23,7 @@ rpm_max: 3300              # 最高转速 [rpm]
 inertia_kgm2: 2.3e-5       # 转动惯量 [kg·m²]
 torque_rated_nm: 1.16      # 额定转矩 [N·m]（手册值；与 Kt×I 差异待校核）
 torque_peak_10s_nm: 2.8    # 峰值转矩 10s [N·m]（手册值；与 Kt×I 差异待校核）
+reducer_ratio: 25.0        # 减速比（测试夹具值）
 
 encoder:
   model: "KTH7823"              # 仅文档

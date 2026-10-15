@@ -39,7 +39,9 @@ float algo_motion_speed(
         pi->integral = 0;
         return 0;
     }
-    if ((raw > -limit && raw < limit) || (raw > 0 && error < 0) || (raw < 0 && error > 0)) {
+    /* 条件积分：非饱和（|raw|<limit）或误差反向（回退）才积分；外部饱和仅允许回退 */
+    bool unwind = (raw > 0 && error < 0) || (raw < 0 && error > 0);
+    if (unwind || (!pi->saturated && raw > -limit && raw < limit)) {
         float integral = pi->integral + ki * error * dt;
         if (!foc_finite(integral)) {
             pi->integral = 0;

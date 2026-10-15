@@ -40,8 +40,16 @@ void mock_params_reset(void) {
     s_sw.control.limits.duty_max = 0.885f;
     s_sw.control.limits.i_trip_a = 10.0f;
     s_sw.control.limits.speed_max_rad_s = 0.0f;
+    s_sw.control.limits.motion_iq_max_a = 1.0f;
+    s_sw.control.limits.motion_speed_limit_rad_s = 0.0f;
+    s_sw.control.speed_loop.kp = 0.0f;
+    s_sw.control.speed_loop.ki = 0.0f;
+    s_sw.control.speed_loop.friction_feedforward_nm = 0.0f;
+    s_sw.control.speed_loop.velocity_lpf_coeff = 0.03f;
+    s_sw.params_generation = 1U;
 
     s_motor.pole_pairs = 10U;
+    s_motor.reducer_ratio = 50.0f;
     s_motor.rs_ohm = 0.158f;
     s_motor.ls_h = 118.5e-6f;
     s_motor.flux_linkage_wb = 0.01f;
@@ -72,7 +80,7 @@ int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w) {
 }
 
 uint32_t intf_clock_get_cycle(void) { return s_cycle; }
-void mock_advance_cycle(uint32_t cycles) { s_cycle+=cycles; }
+void mock_advance_cycle(uint32_t cycles) { s_cycle += cycles; }
 
 bool app_analog_signal_read_all(app_analog_values_t* values) {
     if (values == NULL) {

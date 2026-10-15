@@ -34,41 +34,45 @@ typedef struct {
  * @brief 故障保护阈值
  */
 typedef struct {
-    uint8_t shutdown_en;    /**< 1=故障触发停机；0=台架模式：过流/健康类仅告警（母线 OV/UV 仍停机） */
-    float oc_trip_a;        /**< 过流阈值 [A] */
-    float vbus_ov_v;        /**< 母线过压 [V] */
-    float vbus_uv_v;        /**< 母线欠压 [V] */
+    uint8_t shutdown_en; /**< 1=故障触发停机；0=台架模式：过流/健康类仅告警（母线 OV/UV 仍停机） */
+    float oc_trip_a;     /**< 过流阈值 [A] */
+    float vbus_ov_v;     /**< 母线过压 [V] */
+    float vbus_uv_v;     /**< 母线欠压 [V] */
     uint16_t slow_debounce; /**< L2/L3 去抖次数（1kHz） */
     uint16_t adc_stall_ms;  /**< PMT 帧停滞超时 [ms] */
     uint8_t enc_err_delta;  /**< 编码器错误增量阈值 */
 } app_software_fault_t;
 
 /**
- * @brief PID 参数
+ * @brief 速度环参数（app_motion init 期消费；motion gains 在线改并可 param save 持久化）
  */
 typedef struct {
-    float kp; /**< 比例增益 */
-    float ki; /**< 积分增益 */
-} app_software_pid_t;
+    float kp;                      /**< 比例增益 [Nm/(rad/s)]（轴端；0 = 禁用速度模式） */
+    float ki;                      /**< 积分增益 [Nm/rad]（轴端） */
+    float friction_feedforward_nm; /**< 库仑摩擦前馈 [Nm]（按目标符号叠加） */
+    float velocity_lpf_coeff;      /**< 测速一阶滤波系数（有效域 (0,1]） */
+} app_software_speed_loop_t;
 
 /**
  * @brief 控制限幅参数（FOC 电流环消费）
  */
 typedef struct {
-    float i_q_max_a; /**< 电流限幅 [A]（峰值口径 = 相电流峰值） */
-    float duty_max;  /**< 调制上限（有效域 (0.5, 1.0]；FOC 电流环消费） */
-    float i_trip_a;  /**< 快速过流跳闸 [A]（峰值口径；0 = 关闭） */
-    float speed_max_rad_s; /**< 转矩模式限速 [rad/s 电角]（0 = 关闭） */
+    float i_q_max_a;                /**< 电流限幅 [A]（峰值口径 = 相电流峰值） */
+    float duty_max;                 /**< 调制上限（有效域 (0.5, 1.0]；FOC 电流环消费） */
+    float i_trip_a;                 /**< 快速过流跳闸 [A]（峰值口径；0 = 关闭） */
+    float speed_max_rad_s;          /**< 转矩模式限速 [rad/s 电角]（0 = 关闭） */
+    float motion_iq_max_a;          /**< motion 命令电流硬限制 [A]（力矩命令与速度PI输出上限） */
+    float motion_speed_limit_rad_s; /**< 轴端速度命令限 [rad/s]（0 = 不限） */
 } app_software_limits_t;
 
 /**
  * @brief 电流环参数
  */
 typedef struct {
-    float   kp;              /**< 比例增益 [V/A] */
-    float   ki;              /**< 积分增益 [V/(A·s)] */
-    float   bandwidth_rad_s; /**< 目标带宽 [rad/s]（自整定用） */
-    uint8_t decoupling_en;   /**< 解耦前馈（0/1） */
+    float kp;              /**< 比例增益 [V/A] */
+    float ki;              /**< 积分增益 [V/(A·s)] */
+    float bandwidth_rad_s; /**< 目标带宽 [rad/s]（自整定用） */
+    uint8_t decoupling_en; /**< 解耦前馈（0/1） */
 } app_software_current_loop_t;
 
 /**
@@ -76,8 +80,8 @@ typedef struct {
  */
 typedef struct {
     app_software_current_loop_t current_loop; /**< 电流环 */
-    app_software_pid_t          speed_loop;   /**< 速度环（V2） */
-    app_software_limits_t       limits;       /**< 控制限幅 */
+    app_software_speed_loop_t speed_loop;     /**< 速度环 */
+    app_software_limits_t limits;             /**< 控制限幅 */
 } app_software_control_t;
 
 /**
@@ -87,13 +91,18 @@ typedef struct {
     app_software_can_t can;         /**< CAN 通信 */
     app_software_fault_t fault;     /**< 故障保护 */
     app_software_control_t control; /**< 控制环 */
+    uint32_t params_generation;     /**< flash 记忆清除控制：bump → 烧录后忽略 flash 值用出厂值 */
 } app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */
 const app_software_params_t* app_software_params_default(void);
 
-/** @brief 加载参数：工厂默认 +（将来）flash 覆盖（整定/自校准结果） */
-void app_software_params_load(app_software_params_t* out);
+/** @brief 加载参数：工厂默认 + flash 记忆覆盖（代次/长度不符时仅出厂值）
+ * @return 0 = flash 记录已叠加；-1 = 使用出厂值 */
+int app_software_params_load(app_software_params_t* out);
+
+/** @brief 持久化当前参数到 flash（"SPRM"；停机窗口由调用方保证）；0成功 */
+int app_software_params_store(void);
 
 /** @brief 初始化运行期单例（boot 时调用一次；幂等） */
 void app_software_params_init(void);

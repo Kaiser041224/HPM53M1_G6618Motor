@@ -26,30 +26,31 @@ typedef struct {
     uint8_t rotor_ring_teeth;    /**< 转子轴外齿圈齿数（两路小齿轮共用） */
     uint8_t rotor_pinion_teeth;  /**< 转子编码器小齿轮齿数 */
     uint8_t output_pinion_teeth; /**< 出轴编码器小齿轮齿数 */
-    float   rotor_ratio;         /**< 转子编码器转角 / 转子转角 */
-    float   output_ratio;        /**< 出轴编码器转角 / 转子转角 */
-    float   electrical_offset_rad; /**< 电角度零点 [rad]（cal encoder 写入） */
-    float   direction;             /**< 编码器方向（+1.0 / −1.0） */
+    float rotor_ratio;           /**< 转子编码器转角 / 转子转角 */
+    float output_ratio;          /**< 出轴编码器转角 / 转子转角 */
+    float electrical_offset_rad; /**< 电角度零点 [rad]（cal encoder 写入） */
+    float direction;             /**< 编码器方向（+1.0 / −1.0） */
 } app_motor_encoder_t;
 
 /**
  * @brief 电机机械/电磁参数（工厂默认）
  */
 typedef struct {
-    uint8_t  pole_pairs;         /**< 极对数 */
-    float    rs_ohm;             /**< 相电阻 [Ω] */
-    float    ls_h;               /**< 相电感 [H] */
-    float    ke_vs_per_rad;      /**< 反电动势系数 [V·s/rad]（机械角·线电压 RMS 口径） */
-    float    flux_linkage_wb;    /**< 磁链 [Wb]（电角度·相电压峰值口径；FOC 用） */
-    float    kt_nm_per_a;        /**< 转矩系数 [N·m/A] */
-    float    i_rated_a;          /**< 额定电流 [A]（RMS，105°C） */
-    float    i_peak_10s_a;       /**< 峰值电流 10s [A]（峰值） */
-    float    i_peak_2s_a;        /**< 峰值电流 2s [A]（峰值） */
-    float    vbus_nom_v;         /**< 母线额定电压 [V] */
+    uint8_t pole_pairs;          /**< 极对数 */
+    float rs_ohm;                /**< 相电阻 [Ω] */
+    float ls_h;                  /**< 相电感 [H] */
+    float ke_vs_per_rad;         /**< 反电动势系数 [V·s/rad]（机械角·线电压 RMS 口径） */
+    float flux_linkage_wb;       /**< 磁链 [Wb]（电角度·相电压峰值口径；FOC 用） */
+    float kt_nm_per_a;           /**< 转矩系数 [N·m/A] */
+    float i_rated_a;             /**< 额定电流 [A]（RMS，105°C） */
+    float i_peak_10s_a;          /**< 峰值电流 10s [A]（峰值） */
+    float i_peak_2s_a;           /**< 峰值电流 2s [A]（峰值） */
+    float vbus_nom_v;            /**< 母线额定电压 [V] */
     uint16_t rpm_max;            /**< 最高转速 [rpm] */
-    float    inertia_kgm2;       /**< 转动惯量 [kg·m²] */
-    float    torque_rated_nm;    /**< 额定转矩 [N·m] */
-    float    torque_peak_10s_nm; /**< 峰值转矩 10s [N·m] */
+    float inertia_kgm2;          /**< 转动惯量 [kg·m²] */
+    float torque_rated_nm;       /**< 额定转矩 [N·m] */
+    float torque_peak_10s_nm;    /**< 峰值转矩 10s [N·m] */
+    float reducer_ratio;         /**< 减速比（出轴/转子）；转矩换算 τ_out = Kt·iq·reducer_ratio */
     app_motor_encoder_t encoder; /**< 编码器齿系与电角度标定 */
 } app_motor_params_t;
 
@@ -57,13 +58,19 @@ typedef struct {
  * @brief  工厂默认参数（只读，指向生成常量）
  * @return 指向工厂常量结构体的只读指针
  */
-const app_motor_params_t *app_motor_params_default(void);
+const app_motor_params_t* app_motor_params_default(void);
 
 /**
- * @brief 加载参数：工厂默认 +（将来）flash 覆盖（在线辨识结果）
+ * @brief 加载参数：工厂默认 + flash 记忆覆盖（代次/长度不符时仅出厂值）
  * @param out 输出参数结构体（不可为 NULL）
  */
-void app_motor_params_load(app_motor_params_t *out);
+int app_motor_params_load(app_motor_params_t* out);
+
+/**
+ * @brief 持久化当前参数到 flash（"MPRM"；停机窗口由调用方保证）
+ * @return 0 = 成功；-1 = 失败
+ */
+int app_motor_params_store(void);
 
 /**
  * @brief 初始化运行期单例（boot 时调用一次；幂等）。
@@ -74,13 +81,13 @@ void app_motor_params_init(void);
  * @brief 运行期参数单例（只读；消费者统一经此读取）。
  * @return 单例指针（未初始化时自动初始化）
  */
-const app_motor_params_t *app_motor_params_current(void);
+const app_motor_params_t* app_motor_params_current(void);
 
 /**
  * @brief 运行期参数单例（可写；仅 Shell param 命令等调试路径使用）。
  * @return 单例指针
  */
-app_motor_params_t *app_motor_params_mutable(void);
+app_motor_params_t* app_motor_params_mutable(void);
 
 #ifdef __cplusplus
 }

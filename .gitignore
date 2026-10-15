@@ -24,3 +24,6 @@ __pycache__/
 # AI assistant scratch state
 .sisyphus/
 .mimocode/
+
+# superpowers 执行台账（scratch）
+.superpowers/

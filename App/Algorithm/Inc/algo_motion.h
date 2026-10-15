@@ -6,11 +6,13 @@
  */
 #ifndef ALGO_MOTION_H
 #define ALGO_MOTION_H
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 typedef struct {
     float integral;
+    bool saturated; /**< 外部执行限幅（FOC限流/电压饱和/请求过期）；饱和时仅误差反向允许积分 */
 } algo_motion_pi_t;
 /** @brief 49/50游标；rotor/vernier在[0,1)，phase在[0,1/50)，残差>0.25圈拒绝 */
 int algo_motion_vernier(float rotor, float vernier, float phase, float* shaft_rad);

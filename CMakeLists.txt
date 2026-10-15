@@ -185,6 +185,7 @@ sdk_app_src(App/Platform/Src/app_usb.c)
 sdk_app_src(App/Platform/Src/app_encoder.c)
 sdk_app_src(App/Platform/Src/app_3phase_inverter.c)
 sdk_app_src(App/Platform/Src/app_param.c)
+sdk_app_src(App/Platform/Src/app_param_record.c)
 sdk_app_src(App/Platform/Src/app_hrpwm.c)
 sdk_app_src(App/Platform/Src/app_gptmr.c)
 sdk_app_src(App/Platform/Src/app_motion_timer.c)
@@ -250,4 +251,4 @@ sdk_app_src(App/main.c)
 
 # ============================================================================
 
-generate_ide_projects()
+# generate_ide_projects()

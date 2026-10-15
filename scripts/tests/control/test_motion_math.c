@@ -38,3 +38,20 @@ void test_motion_math(void) {
         CHECK_NEAR(q, turns[i] * 6.283185307f / 50, 1e-5f);
     }
 }
+
+/** @brief 速度PI条件积分：外部限幅冻结积分，误差反向仍允许回退 */
+void test_motion_speed_anti_windup(void) {
+    algo_motion_pi_t pi = {0};
+    pi.saturated = true;
+    float out = algo_motion_speed(&pi, 1, 0, 0, 10, .0001f, 10);
+    CHECK_NEAR(pi.integral, 0, 1e-9f); /* 饱和且误差持续：不积分 */
+    CHECK_NEAR(out, 0, 1e-6f);         /* kp=0 时输出=积分 */
+    pi.integral = 1;
+    out = algo_motion_speed(&pi, -1, 0, 0, 10, .0001f, 10);
+    CHECK(pi.integral < 1);            /* 误差反向=回退方向：仍允许积分 */
+    CHECK(out < 1);
+    pi.saturated = false;
+    float before = pi.integral;
+    (void)algo_motion_speed(&pi, 1, 0, 0, 10, .0001f, 10);
+    CHECK(pi.integral > before);       /* 非饱和恢复条件积分 */
+}

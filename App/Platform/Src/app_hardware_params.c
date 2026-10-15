@@ -28,7 +28,7 @@ void app_hardware_params_load(app_hardware_params_t* out) {
         return;
     }
     *out = g_hardware_params_factory;
-    /* TODO(v2): flash 覆盖 —— app_param_is_ready() → app_param_load(APP_PARAM_KEY_HARDWARE, ...) */
+    /* 硬件域不持久化（决策）：板级硬事实 + 安全阈值，仅 YAML 出厂值，防在线改写覆盖 */
 }
 
 void app_hardware_params_init(void) {
@@ -37,7 +37,8 @@ void app_hardware_params_init(void) {
 }
 
 APP_ATTR_RAMFUNC /* FOC ISR 读取（电流换算） */
-const app_hardware_params_t* app_hardware_params_current(void) {
+    const app_hardware_params_t*
+    app_hardware_params_current(void) {
     if (!s_hardware_params_initialized) {
         app_hardware_params_init();
     }

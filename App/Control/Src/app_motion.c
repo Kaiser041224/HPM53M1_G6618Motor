@@ -11,6 +11,7 @@
 #include "app_motor_params.h"
 #include "app_param.h"
 #include "app_ramfunc.h"
+#include "app_software_params.h"
 #include "foc_math.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
@@ -20,16 +21,24 @@ volatile float g_motion_shaft_angle_deg __attribute__((section(".noncacheable.bs
 volatile uint32_t g_motion_shaft_angle_valid __attribute__((section(".noncacheable.bss")));
 static algo_motion_pi_t s_velocity_pi;
 static float s_target, s_velocity_kp, s_velocity_ki;
+static float
+    s_velocity_friction_feedforward;     /**< 库仑摩擦前馈[Nm]，按目标符号叠加，跳过静摩擦死区 */
+static float s_velocity_lpf_coeff;       /**< 测速一阶滤波系数（参数 init 期消费） */
+static float s_motion_iq_max_a;          /**< motion 命令电流硬限制[A]（力矩命令与PI输出上限） */
+static float s_motion_speed_limit_rad_s; /**< 轴端速度命令限[rad/s]（0=不限） */
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_calibration_sum, s_calibration_first;
 static float s_calibration_phase;
 static uint32_t s_previous_cycle, s_previous_sequence, s_epoch, s_request_sequence;
-static uint32_t s_previous_sample_cycle;                /**< 上一个用于测速的配对快照时间 */
+static uint32_t s_previous_sample_cycle; /**< 上一个用于测速的配对快照时间 */
 static float s_seconds_per_cycle;
 static bool s_primed, s_speed_mode;
-static float s_active_direction, s_active_kt;
+static float s_active_direction, s_active_kt, s_active_reducer;
 static float s_calibrated_direction;
+static uint32_t s_hold_samples;          /**< 当前连续坏拍数（active质量类保持窗口） */
+static bool s_velocity_gap;              /**< 保持恢复后首拍跳过跨隙测速差分 */
 static const app_motor_params_t* s_motion_motor_params; /**< init解析，仅读RAM参数对象 */
+#define APP_MOTION_HOLD_MAX_SAMPLES (5U) /**< 保持窗口10kHz×5=500us，与反馈新鲜度界一致 */
 /** @brief 最新有效反馈不超过500us */
 static bool motion_feedback_fresh(void) {
     return s_motion.feedback_valid
@@ -55,10 +64,12 @@ static void motion_clear_output(app_motion_reason_t reason) {
     s_motion.torque_nm = 0;
     s_motion.iq_a = 0;
     s_motion.reason = reason;
+    s_hold_samples = 0;
+    s_velocity_gap = false;
 }
-/** @brief 反馈失效撤销活动状态并提交零请求，不自动恢复 */
+/** @brief 硬撤销：反馈/参数失效终止活动并提交零请求，不自动恢复 */
 APP_ATTR_RAMFUNC
-static void motion_invalid(app_motion_reason_t reason) {
+static void motion_abort(app_motion_reason_t reason) {
     s_motion.feedback_valid = false;
     s_motion.calibrating = false;
     g_motion_shaft_angle_valid = 0;
@@ -69,6 +80,31 @@ static void motion_invalid(app_motion_reason_t reason) {
     }
     motion_clear_output(reason);
 }
+/** @brief 反馈拒绝：active期间质量类坏拍在保持窗口内零力矩容忍，超限/参数类硬撤销 */
+APP_ATTR_RAMFUNC
+static void motion_reject(app_motion_reason_t reason) {
+    bool holdable = reason == APP_MOTION_REASON_SAMPLE || reason == APP_MOTION_REASON_DUPLICATE
+                 || reason == APP_MOTION_REASON_VERNIER || reason == APP_MOTION_REASON_TIMING;
+    if (s_motion.active && holdable) {
+        if (s_hold_samples == 0)
+            s_motion.hold_count++;
+        if (++s_hold_samples <= APP_MOTION_HOLD_MAX_SAMPLES) {
+            /* 有界保持：零力矩、冻结积分（不调用PI）、保留mode/target */
+            s_velocity_gap = true;
+            s_motion.feedback_valid = false;
+            g_motion_shaft_angle_valid = 0;
+            s_motion.bad_count++;
+            s_motion.reason = reason;
+            s_motion.torque_nm = 0;
+            s_motion.iq_a = 0;
+            app_foc_current_request_t request = {0, 0, ++s_request_sequence, s_epoch, true};
+            if (app_foc_submit_current(&request) != 0)
+                motion_clear_output(APP_MOTION_REASON_SUBMIT);
+            return;
+        }
+    }
+    motion_abort(reason);
+}
 void app_motion_init(void) {
     s_motion = (app_motion_snapshot_t){0};
     g_motion_shaft_angle_rad = 0;
@@ -78,13 +114,27 @@ void app_motion_init(void) {
     s_previous_sequence = 0;
     s_previous_cycle = 0;
     s_previous_sample_cycle = 0;
+    s_hold_samples = 0;
+    s_velocity_gap = false;
     s_zero_rad = 0;
     s_calibrated_direction = 0;
     s_motion_motor_params = app_motor_params_current();
     s_seconds_per_cycle = 1.0f / intf_clock_get_cpu_freq();
     s_velocity_pi = (algo_motion_pi_t){0};
-    s_velocity_kp = 0;
-    s_velocity_ki = 0;
+    /* 力矩/速度环参数：YAML 出厂值 + flash 记忆覆盖（init 期消费；motion gains 在线改） */
+    const app_software_params_t* software = app_software_params_current();
+    s_velocity_kp = software->control.speed_loop.kp;
+    s_velocity_ki = software->control.speed_loop.ki;
+    s_velocity_friction_feedforward = software->control.speed_loop.friction_feedforward_nm;
+    s_velocity_lpf_coeff = software->control.speed_loop.velocity_lpf_coeff;
+    if (!foc_finite(s_velocity_lpf_coeff) || s_velocity_lpf_coeff <= 0 || s_velocity_lpf_coeff > 1)
+        s_velocity_lpf_coeff = .03f;
+    s_motion_iq_max_a = software->control.limits.motion_iq_max_a;
+    if (!foc_finite(s_motion_iq_max_a) || s_motion_iq_max_a <= 0)
+        s_motion_iq_max_a = 1.0f;
+    s_motion_speed_limit_rad_s = software->control.limits.motion_speed_limit_rad_s;
+    if (!foc_finite(s_motion_speed_limit_rad_s) || s_motion_speed_limit_rad_s < 0)
+        s_motion_speed_limit_rad_s = 0;
     motion_record_t record;
     if (app_param_load(APP_PARAM_KEY_MOTION, &record, sizeof(record)) == 0 && record.version == 1
         && foc_finite(record.phase) && record.phase >= 0 && record.phase < .02f
@@ -168,61 +218,91 @@ int app_motion_save(void) {
     intf_sys_irq_restore(st);
     return app_param_store(APP_PARAM_KEY_MOTION, &record, sizeof(record));
 }
-int app_motion_gains(float kp, float ki) {
-    if (!foc_finite(kp) || !foc_finite(ki) || kp < 0 || ki < 0 || kp > 100 || ki > 1000)
-        return -1;
+int app_motion_gains(float kp, float ki, float friction_feedforward_nm) {
+    if (!foc_finite(kp) || !foc_finite(ki) || !foc_finite(friction_feedforward_nm) || kp < 0
+        || ki < 0 || friction_feedforward_nm < 0 || kp > 100 || ki > 1000
+        || friction_feedforward_nm > 100)
+        return APP_MOTION_CMD_BAD_PARAM;
     uint32_t st = intf_sys_irq_save();
     if (app_foc_get_state() != APP_FOC_STATE_OFF) {
         intf_sys_irq_restore(st);
-        return -1;
+        return APP_MOTION_CMD_FOC_NOT_READY;
     }
     s_velocity_kp = kp;
     s_velocity_ki = ki;
+    s_velocity_friction_feedforward = friction_feedforward_nm;
+    app_software_params_t* software = app_software_params_mutable();
+    software->control.speed_loop.kp = kp;
+    software->control.speed_loop.ki = ki;
+    software->control.speed_loop.friction_feedforward_nm = friction_feedforward_nm;
     intf_sys_irq_restore(st);
     return 0;
 }
-/** @brief 命令发布，与ISR短临界区互斥 */
+/** @brief 命令发布，与ISR短临界区互斥；返回app_motion_cmd_status_t */
 static int motion_command(float target, bool speed) {
     if (!foc_finite(target))
-        return -1;
+        return APP_MOTION_CMD_BAD_PARAM;
     uint32_t st = intf_sys_irq_save();
-    float kt = app_motor_params_current()->kt_nm_per_a;
-    if (!foc_finite(kt) || kt <= 0 || !s_motion.calibrated || !motion_feedback_fresh()
-        || s_calibrated_direction != app_motor_params_current()->encoder.direction
-        || s_motion.calibrating || (speed && (s_velocity_kp <= 0 || fabsf(target) > .5f))
-        || (!speed && fabsf(target) > 50 * kt)) {
+    float kt = s_motion_motor_params->kt_nm_per_a;
+    float reducer = s_motion_motor_params->reducer_ratio;
+    if (!foc_finite(kt) || kt <= 0 || !foc_finite(reducer) || reducer <= 0) {
         intf_sys_irq_restore(st);
-        return -1;
+        return APP_MOTION_CMD_BAD_PARAM;
     }
-    if (s_motion.active
-        && (s_active_kt != kt
-            || s_active_direction != app_motor_params_current()->encoder.direction)) {
+    if (!s_motion.calibrated || s_motion.calibrating
+        || s_calibrated_direction != s_motion_motor_params->encoder.direction) {
         intf_sys_irq_restore(st);
-        return -1;
+        return APP_MOTION_CMD_NOT_CALIBRATED;
+    }
+    if (!motion_feedback_fresh()) {
+        intf_sys_irq_restore(st);
+        return APP_MOTION_CMD_STALE_FEEDBACK;
+    }
+    /* 速度命令限幅由参数 motion_speed_limit_rad_s 决定（0=不限）；力矩受 motion_iq_max_a 硬限制 */
+    if ((!speed && fabsf(target) > reducer * kt * s_motion_iq_max_a)
+        || (speed && s_motion_speed_limit_rad_s > 0
+            && fabsf(target) > s_motion_speed_limit_rad_s)) {
+        intf_sys_irq_restore(st);
+        return APP_MOTION_CMD_TARGET_LIMIT;
+    }
+    if (speed && s_velocity_kp <= 0) {
+        intf_sys_irq_restore(st);
+        return APP_MOTION_CMD_GAIN_NOT_SET;
     }
     if (app_foc_stop_pending()
         || (app_foc_get_state() != APP_FOC_STATE_READY
             && app_foc_get_state() != APP_FOC_STATE_RUN)) {
         intf_sys_irq_restore(st);
-        return -1;
-    }
-    if (!s_motion.active) {
-        if (app_foc_set_current_source(APP_FOC_CURRENT_SOURCE_MOTION) != 0) {
-            intf_sys_irq_restore(st);
-            return -1;
-        }
-        s_epoch = app_foc_current_epoch();
+        return APP_MOTION_CMD_FOC_NOT_READY;
     }
     if (s_motion.active && s_speed_mode != speed) {
         intf_sys_irq_restore(st);
-        return -1;
+        return APP_MOTION_CMD_MODE_LOCKED;
+    }
+    if (s_motion.active
+        && (s_active_kt != kt || s_active_reducer != reducer
+            || s_active_direction != s_motion_motor_params->encoder.direction)) {
+        intf_sys_irq_restore(st);
+        return APP_MOTION_CMD_BASE_CHANGED;
+    }
+    if (!s_motion.active) {
+        /* 授权仍有效（source/epoch未变）时续用不是切换；失效才需重新申请 */
+        if (app_foc_get_current_source() != APP_FOC_CURRENT_SOURCE_MOTION
+            || app_foc_current_epoch() != s_epoch) {
+            if (app_foc_set_current_source(APP_FOC_CURRENT_SOURCE_MOTION) != 0) {
+                intf_sys_irq_restore(st);
+                return APP_MOTION_CMD_OWNER_DENIED;
+            }
+            s_epoch = app_foc_current_epoch();
+        }
     }
     s_speed_mode = speed;
     s_target = target;
     s_motion.active = true;
     s_motion.reason = APP_MOTION_REASON_NONE;
-    s_active_direction = app_motor_params_current()->encoder.direction;
+    s_active_direction = s_motion_motor_params->encoder.direction;
     s_active_kt = kt;
+    s_active_reducer = reducer;
     intf_sys_irq_restore(st);
     return 0;
 }
@@ -232,7 +312,7 @@ int app_motion_stop(void) {
     uint32_t st = intf_sys_irq_save();
     motion_clear_output(APP_MOTION_REASON_USER_STOP);
     intf_sys_irq_restore(st);
-    return app_foc_request_stop();
+    return app_foc_request_stop() == 0 ? 0 : APP_MOTION_CMD_OWNER_DENIED;
 }
 APP_ATTR_RAMFUNC
 void app_motion_step(void) {
@@ -241,17 +321,17 @@ void app_motion_step(void) {
     uint32_t now = intf_clock_get_cycle();
     if (app_encoder_output_sample(&rotor, &raw) != 0) {
         s_motion.sample_failure_count++;
-        motion_invalid(APP_MOTION_REASON_SAMPLE);
+        motion_reject(APP_MOTION_REASON_SAMPLE);
         return;
     }
     if (rotor.seq == s_previous_sequence) {
         s_motion.duplicate_count++;
-        motion_invalid(APP_MOTION_REASON_DUPLICATE);
+        motion_reject(APP_MOTION_REASON_DUPLICATE);
         return;
     }
     s_previous_sequence = rotor.seq;
     if (!foc_finite(rotor.rad) || rotor.rad < 0 || rotor.rad >= FOC_TWO_PI_F) {
-        motion_invalid(APP_MOTION_REASON_SAMPLE);
+        motion_reject(APP_MOTION_REASON_SAMPLE);
         return;
     }
     float u = rotor.rad / FOC_TWO_PI_F, v = (float)raw / 65536.0f;
@@ -299,28 +379,32 @@ void app_motion_step(void) {
     }
     if (algo_motion_vernier(u, v, s_motion.phase_turns, &angle) != 0) {
         s_motion.vernier_failure_count++;
-        motion_invalid(APP_MOTION_REASON_VERNIER);
+        motion_reject(APP_MOTION_REASON_VERNIER);
         return;
     }
     float direction = s_motion_motor_params->encoder.direction;
     if ((direction != 1 && direction != -1) || direction != s_calibrated_direction) {
-        motion_invalid(APP_MOTION_REASON_PARAMETER);
+        motion_reject(APP_MOTION_REASON_PARAMETER);
         return;
     }
     angle *= direction;
     float dt = (float)(now - s_previous_cycle) * s_seconds_per_cycle;
     float sample_dt =
         (float)(uint32_t)(rotor.timestamp_cycles - s_previous_sample_cycle) * s_seconds_per_cycle;
-    if (s_motion.active && (dt <= 0 || dt > .0002f)) {
+    /* 恢复拍（保持窗口后首拍）允许跨隙dt，之后恢复200us入口纪律 */
+    if (s_motion.active && s_hold_samples == 0 && (dt <= 0 || dt > .0002f)) {
         s_motion.timing_failure_count++;
-        motion_invalid(APP_MOTION_REASON_TIMING);
+        motion_reject(APP_MOTION_REASON_TIMING);
         return;
     }
-    if (s_primed && sample_dt > 0 && sample_dt < .001f) {
+    if (s_velocity_gap) {
+        s_velocity_gap = false; /* 跨保持间隙的差分不进入测速滤波 */
+    } else if (s_primed && sample_dt > 0 && sample_dt < .001f) {
         float velocity = foc_wrap_pm_pi(angle - s_previous_angle) / sample_dt;
-        s_motion.speed_rad_s += .03f * (velocity - s_motion.speed_rad_s);
-    } else
+        s_motion.speed_rad_s += s_velocity_lpf_coeff * (velocity - s_motion.speed_rad_s);
+    } else if (!s_primed) {
         s_motion.speed_rad_s = 0;
+    }
     s_previous_angle = angle;
     s_previous_cycle = now;
     s_previous_sample_cycle = rotor.timestamp_cycles;
@@ -331,6 +415,7 @@ void app_motion_step(void) {
     g_motion_shaft_angle_valid = 1;
     s_motion.feedback_valid = true;
     s_motion.good_count++;
+    s_hold_samples = 0;
     if (!s_motion.active)
         return;
     if (s_epoch != app_foc_current_epoch() || app_foc_stop_pending()
@@ -340,16 +425,41 @@ void app_motion_step(void) {
         return;
     }
     float kt = s_motion_motor_params->kt_nm_per_a;
-    if (!foc_finite(kt) || kt <= 0 || kt != s_active_kt || direction != s_active_direction) {
-        motion_invalid(APP_MOTION_REASON_PARAMETER);
+    float reducer = s_motion_motor_params->reducer_ratio;
+    if (!foc_finite(kt) || kt <= 0 || !foc_finite(reducer) || reducer <= 0 || kt != s_active_kt
+        || reducer != s_active_reducer || direction != s_active_direction) {
+        motion_reject(APP_MOTION_REASON_PARAMETER);
         return;
     }
-    float torque = s_speed_mode ? algo_motion_speed(
-                                      &s_velocity_pi, s_target, s_motion.speed_rad_s, s_velocity_kp,
-                                      s_velocity_ki, dt, 50 * kt)
-                                : s_target;
+    /* FOC执行反馈：仅采信属于本请求的确认执行；限幅/过期/未确认→冻结速度PI积分 */
+    app_foc_execution_t execution;
+    app_foc_get_execution(&execution);
+    bool execution_ours = execution.valid && execution.epoch == s_epoch
+                       && execution.request_sequence == s_request_sequence;
+    s_motion.iq_accepted_a = execution_ours ? execution.accepted_iq_a : 0;
+    s_motion.current_limited = execution_ours && execution.current_limited;
+    s_motion.voltage_saturated = execution_ours && execution.voltage_saturated;
+    s_velocity_pi.saturated = !execution_ours || execution.current_limited
+                           || execution.voltage_saturated || execution.request_expired;
+    float torque_limit = reducer * kt * s_motion_iq_max_a;
+    float torque;
+    if (s_speed_mode) {
+        torque = algo_motion_speed(
+            &s_velocity_pi, s_target, s_motion.speed_rad_s, s_velocity_kp, s_velocity_ki, dt,
+            torque_limit);
+        /* 摩擦前馈按目标符号叠加（速度符号在零点抖动会翻转前馈）；再按电流硬限制钳位 */
+        torque += s_velocity_friction_feedforward
+                * (s_target > 0   ? 1.0f
+                   : s_target < 0 ? -1.0f
+                                  : 0.0f);
+        torque = torque > torque_limit  ? torque_limit
+               : torque < -torque_limit ? -torque_limit
+                                        : torque;
+    } else {
+        torque = s_target;
+    }
     s_motion.torque_nm = torque;
-    s_motion.iq_a = torque / (50 * kt);
+    s_motion.iq_a = torque / (reducer * kt);
     app_foc_current_request_t request = {0, s_motion.iq_a, ++s_request_sequence, s_epoch, true};
     if (app_foc_submit_current(&request) != 0)
         motion_clear_output(APP_MOTION_REASON_SUBMIT);

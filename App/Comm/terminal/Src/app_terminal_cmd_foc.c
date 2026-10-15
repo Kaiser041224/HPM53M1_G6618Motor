@@ -306,6 +306,25 @@ static int cmd_foc(int argc, char** argv) {
 
 CSH_CMD_EXPORT_ALIAS(cmd_foc, foc, );
 
+/** @brief motion拒绝码→处置提示 */
+static const char* app_terminal_motion_reason(int rc) {
+    switch (rc) {
+    case APP_MOTION_CMD_BAD_PARAM: return "non-finite value or Kt invalid";
+    case APP_MOTION_CMD_NOT_CALIBRATED: return "not calibrated/calibrating or direction changed";
+    case APP_MOTION_CMD_STALE_FEEDBACK: return "feedback stale; wait 1s and check 'motion show'";
+    case APP_MOTION_CMD_TARGET_LIMIT:
+        return "target over limit (torque<=50Kt Nm; speed has no command limit)";
+    case APP_MOTION_CMD_GAIN_NOT_SET:
+        return "speed gains not set; run 'motion gains kp ki' while OFF";
+    case APP_MOTION_CMD_FOC_NOT_READY:
+        return "foc not READY/RUN; run 'foc on' ('motion off' stops foc)";
+    case APP_MOTION_CMD_BASE_CHANGED:
+        return "Kt/direction changed while active; 'motion off' first";
+    case APP_MOTION_CMD_MODE_LOCKED: return "torque/speed switch while active; 'motion off' first";
+    case APP_MOTION_CMD_OWNER_DENIED: return "calibration/vtest owns output";
+    default: return "unknown";
+    }
+}
 /** @brief motion模型转矩/轴端速度与静止安装标定 */
 static int cmd_motion(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
@@ -324,12 +343,15 @@ static int cmd_motion(int argc, char** argv) {
             csh,
             "motion: cal=%u zero=%u valid=%u active=%u calibrating=%u samples=%lu reason=%u\r\n"
             "shaft=%.6frad speed=%.6frad/s phase=%.8fturn torque=%.4fNm iq=%.4fA "
-            "good/bad=%lu/%lu\r\n",
+            "good/bad=%lu/%lu\r\n"
+            "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n",
             state.calibrated, state.zero_valid, state.feedback_valid, state.active,
             state.calibrating, (unsigned long)state.calibration_samples, (unsigned)state.reason,
-            (double)state.shaft_rad,
-            (double)state.speed_rad_s, (double)state.phase_turns, (double)state.torque_nm,
-            (double)state.iq_a, (unsigned long)state.good_count, (unsigned long)state.bad_count);
+            (double)state.shaft_rad, (double)state.speed_rad_s, (double)state.phase_turns,
+            (double)state.torque_nm, (double)state.iq_a, (unsigned long)state.good_count,
+            (unsigned long)state.bad_count, (double)state.iq_accepted_a,
+            (unsigned long)state.hold_count, (unsigned)state.current_limited,
+            (unsigned)state.voltage_saturated);
         return 0;
     }
     if (strcmp(sub, "cal") == 0)
@@ -351,14 +373,26 @@ static int cmd_motion(int argc, char** argv) {
             rc = app_motion_speed(value);
         else if (
             strcmp(sub, "gains") == 0 && argc >= 4
-            && app_terminal_cmd_parse_float(argv[3], &ki) == 0)
-            rc = app_motion_gains(value, ki);
-    }
+            && app_terminal_cmd_parse_float(argv[3], &ki) == 0) {
+            float friction_feedforward_nm = 0;
+            if (argc >= 5 && app_terminal_cmd_parse_float(argv[4], &friction_feedforward_nm) != 0)
+                return app_terminal_cmd_usage(
+                    csh, "motion gains kp ki [friction_feedforward_nm] (OFF)");
+            rc = app_motion_gains(value, ki, friction_feedforward_nm);
+        } else
+            return app_terminal_cmd_usage(
+                csh, "motion gains kp ki [friction_feedforward_nm] (OFF)");
+    } else
+        return app_terminal_cmd_usage(
+            csh, "motion show|cal (OFF stationary)|apply|zero|save|gains kp ki "
+                 "[friction_feedforward_nm] (OFF)|"
+                 "torque Nm|speed rad/s|off|direct (OFF)");
     csh_printf(
         csh,
-        "%s: motion rc=%d; show|cal (OFF stationary)|apply|zero|save|gains kp ki (OFF)|"
-        "torque Nm|speed rad/s|off|direct (OFF)\r\n",
-        rc == 0 ? "accepted" : "ERR", rc);
+        "%s: motion rc=%d%s%s%s; show|cal (OFF stationary)|apply|zero|save|"
+        "gains kp ki [friction_feedforward_nm] (OFF)|torque Nm|speed rad/s|off|direct (OFF)\r\n",
+        rc == 0 ? "accepted" : "ERR", rc, rc == 0 ? "" : " (",
+        rc == 0 ? "" : app_terminal_motion_reason(rc), rc == 0 ? "" : ")");
     return rc;
 }
 CSH_CMD_EXPORT_ALIAS(cmd_motion, motion, );
