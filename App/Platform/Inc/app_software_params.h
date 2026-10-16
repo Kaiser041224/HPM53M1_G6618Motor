@@ -47,10 +47,12 @@ typedef struct {
  * @brief 速度环参数（app_motion init 期消费；motion gains 在线改并可 param save 持久化）
  */
 typedef struct {
-    float kp;                      /**< 比例增益 [Nm/(rad/s)]（轴端；0 = 禁用速度模式） */
-    float ki;                      /**< 积分增益 [Nm/rad]（轴端） */
-    float friction_feedforward_nm; /**< 库仑摩擦前馈 [Nm]（按目标符号叠加） */
-    float velocity_lpf_coeff;      /**< 测速一阶滤波系数（有效域 (0,1]） */
+    float kp;                            /**< 比例增益 [Nm/(rad/s)]（轴端；0 = 禁用速度模式） */
+    float ki;                            /**< 积分增益 [Nm/rad]（轴端） */
+    float friction_coulomb_nm;           /**< 库仑摩擦前馈 Tc [Nm]（平滑符号叠加） */
+    float friction_viscous_nm_per_rad_s; /**< 粘性摩擦前馈 Kv [Nm/(rad/s)] */
+    float friction_smoothing_rad_s;      /**< 平滑符号速度尺度 [rad/s]（0=硬符号） */
+    float velocity_lpf_coeff;            /**< 测速一阶滤波系数（有效域 (0,1]） */
 } app_software_speed_loop_t;
 
 /**

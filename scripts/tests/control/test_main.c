@@ -32,6 +32,12 @@ void test_motion_anti_windup(void);
 void test_motion_cmd_status(void);
 void test_motion_friction_feedforward(void);
 void test_motion_params(void);
+void test_motion_vernier_fallback(void);
+void test_friction_math(void);
+void test_friction_identify(void);
+void test_friction_identify_failure(void);
+void test_friction_identify_tolerance(void);
+void test_friction_identify_diagnostics(void);
 
 int main(void) {
     printf("Control host tests\n");
@@ -55,6 +61,12 @@ int main(void) {
     test_motion_cmd_status();
     test_motion_friction_feedforward();
     test_motion_params();
+    test_motion_vernier_fallback();
+    test_friction_math();
+    test_friction_identify();
+    test_friction_identify_failure();
+    test_friction_identify_tolerance();
+    test_friction_identify_diagnostics();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");

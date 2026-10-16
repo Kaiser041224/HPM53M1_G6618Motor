@@ -11,7 +11,11 @@
 
 #include "app_terminal_cmd.h"
 
+#include "app_terminal.h"
+#include "app_terminal_job.h"
+
 #include "app_foc.h"
+#include "app_friction_identify.h"
 #include "app_motion.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
@@ -325,13 +329,162 @@ static const char* app_terminal_motion_reason(int rc) {
     default: return "unknown";
     }
 }
+/* ============================================================================
+ * motion friction cal：摩擦辨识 job（200ms 进度条，照 cal encoder 形式）
+ * ============================================================================ */
+
+static uint32_t s_friction_beat_ms;
+
+/** @brief 摩擦辨识失败原因文本 */
+static const char* friction_failure_name(app_friction_identify_failure_t failure) {
+    switch (failure) {
+    case APP_FRICTION_IDENTIFY_FAIL_MOTION: return "motion aborted";
+    case APP_FRICTION_IDENTIFY_FAIL_NOT_SETTLED: return "speed not settled";
+    case APP_FRICTION_IDENTIFY_FAIL_FIT: return "fit rejected";
+    case APP_FRICTION_IDENTIFY_FAIL_RESIDUAL: return "residual over gate";
+    case APP_FRICTION_IDENTIFY_FAIL_ASYMMETRY: return "asymmetry over gate";
+    default: return "none";
+    }
+}
+
+/** @brief friction cal job：进度显示（200ms）与结束打印（结果/质量恒显示） */
+static void friction_cal_tick(uint32_t now_ms) {
+    app_friction_identify_snapshot_t identify;
+
+    app_friction_identify_get_snapshot(&identify);
+    if (app_friction_identify_busy()) {
+        if ((uint32_t)(now_ms - s_friction_beat_ms) >= 200U) {
+            uint32_t pct = (uint32_t)(identify.progress * 100.0f);
+            char bar[21];
+
+            s_friction_beat_ms = now_ms;
+            if (pct > 100U)
+                pct = 100U;
+            for (uint32_t i = 0U; i < 20U; i++)
+                bar[i] = (i < (pct / 5U)) ? '#' : '-';
+            bar[20] = '\0';
+            app_terminal_cmd_emit(
+                "\rmotion friction [%s] %3u%%  %4.1fs  pt=%lu/12   ", bar, (unsigned)pct,
+                (double)identify.elapsed_ms / 1000.0, (unsigned long)identify.point_index);
+        }
+        return;
+    }
+    app_terminal_cmd_emit(
+        "\r\n%s: friction identify (%s) %4.1fs pt=%lu/12 retries=%lu\r\n",
+        identify.result_valid ? "OK" : "FAIL", friction_failure_name(identify.failure),
+        (double)identify.elapsed_ms / 1000.0, (unsigned long)identify.point_index,
+        (unsigned long)identify.command_retries);
+    app_terminal_cmd_emit(
+        "    Tc=%.4fNm Kv=%.4fNm/(rad/s) residual=%.4fNm asym=%.4fNm\r\n",
+        (double)identify.result.coulomb_nm, (double)identify.result.viscous_nm_per_rad_s,
+        (double)identify.residual_rms_nm, (double)identify.asymmetry_nm);
+    app_terminal_cmd_emit(
+        "    motion: reason=%u good=%lu bad=%lu hold=%lu\r\n", (unsigned)identify.motion_reason,
+        (unsigned long)identify.good_count, (unsigned long)identify.bad_count,
+        (unsigned long)identify.hold_count);
+    if (identify.result_valid)
+        app_terminal_cmd_emit(
+            "    next: 'motion friction apply' (RAM) -> 'motion friction save' (flash)\r\n");
+    else
+        app_terminal_cmd_emit(
+            "    fit values kept for inspection (not applicable); retry 'motion friction cal "
+            "[tol_pct]' to loosen gate\r\n");
+    app_terminal_job_abort(); /* 完成/失败：结束 job（触发 abort 回调换行+刷新） */
+}
+
+/** @brief friction cal job 中止回调（用户取消或完成） */
+static void friction_cal_abort(void) {
+    app_friction_identify_abort();
+    app_terminal_cmd_emit("\r\n");
+    app_terminal_refresh();
+}
+
+/** friction cal job（静态生命周期） */
+static app_terminal_job_t s_friction_cal_job = {
+    .name = "motion friction cal",
+    .tick = friction_cal_tick,
+    .abort = friction_cal_abort,
+    .active = false,
+};
+
 /** @brief motion模型转矩/轴端速度与静止安装标定 */
 static int cmd_motion(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
     const char* sub = argc > 1 ? argv[1] : "show";
     int rc = -1;
     float value, ki;
-    if (strcmp(sub, "show") == 0) {
+    if (strcmp(sub, "friction") == 0) {
+        const char* action = argc > 2 ? argv[2] : "show";
+        app_friction_identify_snapshot_t identify;
+        app_friction_identify_get_snapshot(&identify);
+        if (strcmp(action, "show") == 0) {
+            csh_printf(
+                csh,
+                "friction: state=%u failure=%u point=%lu valid=%u\r\n"
+                "result: coulomb=%.4fNm viscous=%.4fNm/(rad/s) smooth=%.3frad/s\r\n"
+                "quality: residual=%.4fNm asymmetry=%.4fNm\r\n",
+                (unsigned)identify.state, (unsigned)identify.failure,
+                (unsigned long)identify.point_index, (unsigned)identify.result_valid,
+                (double)identify.result.coulomb_nm, (double)identify.result.viscous_nm_per_rad_s,
+                (double)identify.result.smoothing_rad_s, (double)identify.residual_rms_nm,
+                (double)identify.asymmetry_nm);
+            return 0;
+        }
+        if (app_friction_identify_busy()) {
+            csh_printf(csh, "ERR: friction identify busy; 'motion off' aborts it\r\n");
+            return -1;
+        }
+        if (strcmp(action, "cal") == 0) {
+            float tolerance = 0;
+            if (argc >= 4 && app_terminal_cmd_parse_float(argv[3], &tolerance) != 0)
+                return app_terminal_cmd_usage(csh, "motion friction cal [tol_pct]");
+            if (tolerance != 0)
+                tolerance /= 100.0f; /* 百分比输入 */
+            if (app_terminal_job_start(&s_friction_cal_job) != 0) {
+                csh_printf(csh, "FAIL: job start\r\n");
+                return -1;
+            }
+            s_friction_beat_ms = 0U;
+            int start_rc = app_friction_identify_start(tolerance);
+            if (start_rc != 0) {
+                app_terminal_job_abort();
+                const char* why = start_rc == -2 ? "motion not calibrated (or calibrating)"
+                                : start_rc == -3 ? "motion still active ('motion off' first)"
+                                : start_rc == -4 ? "foc not READY/RUN ('foc on' first)"
+                                                 : "bad tolerance [5..100] or busy";
+                csh_printf(csh, "ERR: friction cal rejected: %s\r\n", why);
+                return -1;
+            }
+            csh_printf(
+                csh,
+                "friction identify: running (~26s, auto motion off at end; any key aborts)\r\n");
+            return 0;
+        }
+        if (strcmp(action, "apply") == 0) {
+            rc = app_friction_identify_apply();
+            if (rc != 0)
+                csh_printf(
+                    csh, "ERR: friction apply rejected: %s\r\n",
+                    rc == -2 ? "motion driving (stop first)" : "no valid fit (run 'cal' first)");
+            else
+                csh_printf(csh, "accepted: friction result applied (RAM)\r\n");
+            return rc == 0 ? 0 : -1;
+        }
+        if (strcmp(action, "save") == 0) {
+            rc = app_friction_identify_save();
+            if (rc != 0)
+                csh_printf(
+                    csh, "ERR: friction save rejected: need FOC OFF (flash stop window)\r\n");
+            else
+                csh_printf(csh, "accepted: friction params saved (flash)\r\n");
+            return rc;
+        }
+        return app_terminal_cmd_usage(csh, "motion friction show|cal|apply|save");
+        csh_printf(
+            csh, "%s: motion friction %s rc=%d%s%s%s\r\n", rc == 0 ? "accepted" : "ERR", action, rc,
+            rc == 0 ? "" : " (", rc == 0 ? "" : app_terminal_motion_reason(rc), rc == 0 ? "" : ")");
+        return rc;
+    } else if (strcmp(sub, "show") == 0) {
         app_motion_snapshot_t state;
         app_motion_get_snapshot(&state);
         csh_printf(csh, "phase trial done=%u (apply required)\r\n", state.calibration_done);
@@ -354,6 +507,11 @@ static int cmd_motion(int argc, char** argv) {
             (unsigned)state.voltage_saturated);
         return 0;
     }
+    if (app_friction_identify_busy() && strcmp(sub, "off") != 0 && strcmp(sub, "friction") != 0
+        && strcmp(sub, "show") != 0) {
+        csh_printf(csh, "ERR: friction identify busy; 'motion off' aborts it\r\n");
+        return -1;
+    }
     if (strcmp(sub, "cal") == 0)
         rc = app_motion_calibrate();
     else if (strcmp(sub, "apply") == 0)
@@ -374,23 +532,23 @@ static int cmd_motion(int argc, char** argv) {
         else if (
             strcmp(sub, "gains") == 0 && argc >= 4
             && app_terminal_cmd_parse_float(argv[3], &ki) == 0) {
-            float friction_feedforward_nm = 0;
-            if (argc >= 5 && app_terminal_cmd_parse_float(argv[4], &friction_feedforward_nm) != 0)
+            float coulomb_nm = 0, viscous_nm_per_rad_s = 0;
+            if ((argc >= 5 && app_terminal_cmd_parse_float(argv[4], &coulomb_nm) != 0)
+                || (argc >= 6 && app_terminal_cmd_parse_float(argv[5], &viscous_nm_per_rad_s) != 0))
                 return app_terminal_cmd_usage(
-                    csh, "motion gains kp ki [friction_feedforward_nm] (OFF)");
-            rc = app_motion_gains(value, ki, friction_feedforward_nm);
+                    csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)");
+            rc = app_motion_gains(value, ki, coulomb_nm, viscous_nm_per_rad_s);
         } else
-            return app_terminal_cmd_usage(
-                csh, "motion gains kp ki [friction_feedforward_nm] (OFF)");
+            return app_terminal_cmd_usage(csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)");
     } else
         return app_terminal_cmd_usage(
             csh, "motion show|cal (OFF stationary)|apply|zero|save|gains kp ki "
-                 "[friction_feedforward_nm] (OFF)|"
+                 "[coulomb] [viscous] (idle)|friction show|cal|apply|save|"
                  "torque Nm|speed rad/s|off|direct (OFF)");
     csh_printf(
         csh,
         "%s: motion rc=%d%s%s%s; show|cal (OFF stationary)|apply|zero|save|"
-        "gains kp ki [friction_feedforward_nm] (OFF)|torque Nm|speed rad/s|off|direct (OFF)\r\n",
+        "gains kp ki [coulomb] [viscous] (idle)|torque Nm|speed rad/s|off|direct (OFF)\r\n",
         rc == 0 ? "accepted" : "ERR", rc, rc == 0 ? "" : " (",
         rc == 0 ? "" : app_terminal_motion_reason(rc), rc == 0 ? "" : ")");
     return rc;

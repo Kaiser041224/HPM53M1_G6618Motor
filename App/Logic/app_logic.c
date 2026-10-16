@@ -27,6 +27,7 @@
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_current_identify.h"
 #include "app_debug_adc.h"
 #include "app_debug_can.h"
 #include "app_debug_encoder.h"
@@ -38,13 +39,13 @@
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_foc.h"
+#include "app_friction_identify.h"
 #include "app_gpio.h"
 #include "app_gptmr.h"
-#include "app_motion_timer.h"
-#include "app_motion.h"
 #include "app_hardware_params.h"
+#include "app_motion.h"
+#include "app_motion_timer.h"
 #include "app_motor_identify.h"
-#include "app_current_identify.h"
 #include "app_motor_params.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
@@ -92,9 +93,9 @@ void app_init(void) {
         app_hardware_params_init();
         app_software_params_init();
 
-        const app_motor_params_t *motor_params = app_motor_params_current();
-        const app_hardware_params_t *hardware = app_hardware_params_current();
-        const app_software_params_t *software = app_software_params_current();
+        const app_motor_params_t* motor_params = app_motor_params_current();
+        const app_hardware_params_t* hardware = app_hardware_params_current();
+        const app_software_params_t* software = app_software_params_current();
 
         app_debug_printf(
             "params: pp=%u rs=%.4f ls=%g | a/v=%.4f vbus/v=%.4f | oc=%.1f ov=%.1f uv=%.1f | "
@@ -177,19 +178,21 @@ void app_init(void) {
         int restore_rc = app_motor_identify_restore();
         const app_motor_params_t* motor = app_motor_params_current();
 
-        app_debug_printf("[FOC] encoder offset: %s offset=%.4f rad dir=%+.0f\r\n",
-                         (restore_rc == 0)   ? "restored(flash)"
-                         : (restore_rc > 0) ? "default(yaml)"
-                                            : "REJECTED(flash record mismatch, yaml in use)",
-                         (double)motor->encoder.electrical_offset_rad,
-                         (double)motor->encoder.direction);
+        app_debug_printf(
+            "[FOC] encoder offset: %s offset=%.4f rad dir=%+.0f\r\n",
+            (restore_rc == 0)  ? "restored(flash)"
+            : (restore_rc > 0) ? "default(yaml)"
+                               : "REJECTED(flash record mismatch, yaml in use)",
+            (double)motor->encoder.electrical_offset_rad, (double)motor->encoder.direction);
     }
 
     /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
     {
         int rc = app_current_identify_restore();
-        app_debug_printf("[FOC] current tuning: %s\r\n",
-                         rc == 0 ? "restored(flash)" : rc > 0 ? "default(yaml)" : "REJECTED(flash)");
+        app_debug_printf(
+            "[FOC] current tuning: %s\r\n", rc == 0  ? "restored(flash)"
+                                            : rc > 0 ? "default(yaml)"
+                                                     : "REJECTED(flash)");
     }
     app_foc_init();
 
@@ -207,21 +210,25 @@ void app_init(void) {
         int ref_rc = app_encoder_read_raw(APP_ENCODER_ROTOR, &ref_raw); /* 两帧阻塞读（基准） */
         int sync_rc = app_encoder_sync_start();
 
-        app_debug_printf("[ENC] sync: %s (PWM1 CMP10 -> TRGM DMA0 -> HDMA -> SPI3 CMD, 25kHz) | "
-                         "ref(2-frame)=%s0x%04X\r\n",
-                         (sync_rc == 0) ? "OK" : "FAILED", (ref_rc == 0) ? "" : "ERR ",
-                         (unsigned)ref_raw);
+        app_debug_printf(
+            "[ENC] sync: %s (PWM1 CMP10 -> TRGM DMA0 -> HDMA -> SPI3 CMD, 25kHz) | "
+            "ref(2-frame)=%s0x%04X\r\n",
+            (sync_rc == 0) ? "OK" : "FAILED", (ref_rc == 0) ? "" : "ERR ", (unsigned)ref_raw);
     }
     /* 14. 游标也由PWM25kHz触发、ADC取帧；GPTMR只编排外环，上电未武装。 */
     {
-        int rc=app_motion_timer_init();
+        int rc = app_motion_timer_init();
         app_motion_init();
-        int output_rc=app_encoder_output_start();
-        app_debug_printf("[ENC] vernier sync: %s\r\n",output_rc==0?"started":"FAILED");
-        if(output_rc==0) app_motion_timer_bind_velocity(app_motion_step);
-        if (rc==0) rc=app_motion_timer_start();
-        app_debug_printf("[MOTION] timer observation: %s (position=5kHz velocity=10kHz)\r\n",
-                         rc==0 ? "started" : "FAILED");
+        app_friction_identify_init();
+        int output_rc = app_encoder_output_start();
+        app_debug_printf("[ENC] vernier sync: %s\r\n", output_rc == 0 ? "started" : "FAILED");
+        if (output_rc == 0)
+            app_motion_timer_bind_velocity(app_motion_step);
+        if (rc == 0)
+            rc = app_motion_timer_start();
+        app_debug_printf(
+            "[MOTION] timer observation: %s (position=5kHz velocity=10kHz)\r\n",
+            rc == 0 ? "started" : "FAILED");
     }
 }
 
@@ -239,8 +246,8 @@ static void app_fast_step_hook(void) {
     uint32_t elapsed;
 
     if (s_budget_cycles == 0U) {
-        s_budget_cycles = intf_clock_get_cpu_freq()
-                        / app_hardware_params_current()->inverter.pwm_freq_hz;
+        s_budget_cycles =
+            intf_clock_get_cpu_freq() / app_hardware_params_current()->inverter.pwm_freq_hz;
     }
 
     start_cycle = intf_clock_get_cycle();
@@ -281,6 +288,7 @@ void app_io_step(void) {
 
     /* 电角度自校准（隔离模块；空闲时为空操作；进行中经校准端口借用电流环） */
     app_motor_identify_run_once();
+    app_friction_identify_run_once();
     app_current_identify_run_once();
 
     /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */
@@ -305,16 +313,16 @@ void app_diag_step(void) {
     app_isr_stats_print();
     app_motion_timer_snapshot_t motion_timer;
     app_motion_timer_take_window(&motion_timer);
-    app_debug_printf("[MOTION] pos n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu | "
-                     "vel n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu age=%lu valid=%u [cycles]\r\n",
+    app_debug_printf(
+        "[MOTION] pos n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu | "
+        "vel n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu age=%lu valid=%u [cycles]\r\n",
         (unsigned long)motion_timer.position.count,
         (unsigned long)motion_timer.position.window_count,
         (unsigned long)motion_timer.position.period_min_cycles,
         (unsigned long)motion_timer.position.period_max_cycles,
         (unsigned long)motion_timer.position.execution_max_cycles,
         (unsigned long)motion_timer.position.window_late_count,
-        (unsigned long)motion_timer.position.late_count,
-        (unsigned long)motion_timer.velocity.count,
+        (unsigned long)motion_timer.position.late_count, (unsigned long)motion_timer.velocity.count,
         (unsigned long)motion_timer.velocity.window_count,
         (unsigned long)motion_timer.velocity.period_min_cycles,
         (unsigned long)motion_timer.velocity.period_max_cycles,
@@ -379,8 +387,7 @@ void app_isr_stats_print(void) {
     if (div == 0U) {
         div = 1U;
     }
-    budget_cy = (intf_clock_get_cpu_freq()
-                 / app_hardware_params_current()->inverter.pwm_freq_hz);
+    budget_cy = (intf_clock_get_cpu_freq() / app_hardware_params_current()->inverter.pwm_freq_hz);
 
     /* isr 段窗口均值（ADC0 = FOC 快车道中断）与本窗峰值 */
     isr_avg = 0U;

@@ -15,6 +15,10 @@
 #include "params_generated.h"
 
 #include <stdbool.h>
+
+_Static_assert(
+    sizeof(app_software_params_t) + sizeof(app_param_record_header_t) <= APP_PARAM_DATA_MAX,
+    "software params record exceeds app_param slot");
 #include <stddef.h>
 
 /** 运行期参数单例（boot 时 load；Shell param 命令可写） */

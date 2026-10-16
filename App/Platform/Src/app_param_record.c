@@ -23,8 +23,8 @@ int app_param_record_load(uint32_t key, void* payload, size_t payload_size, uint
     if (app_param_load(key, buffer, sizeof(header) + payload_size) != 0)
         return -1;
     memcpy(&header, buffer, sizeof(header));
-    /* 整条有效才叠加：代次或长度不符（旧schema/本次烧录清除）→ 忽略，payload 不改 */
-    if (header.generation != generation || header.payload_size != payload_size)
+    /* 整条有效才叠加：代次不符（旧schema由长度校验拒绝/本次烧录清除）→ 忽略，payload 不改 */
+    if (header.generation != generation)
         return -1;
     memcpy(payload, buffer + sizeof(header), payload_size);
     return 0;
@@ -40,7 +40,6 @@ int app_param_record_store(
     if (!app_param_is_ready())
         return -1;
     header.generation = generation;
-    header.payload_size = (uint32_t)payload_size;
     memcpy(buffer, &header, sizeof(header));
     memcpy(buffer + sizeof(header), payload, payload_size);
     return app_param_store(key, buffer, sizeof(header) + payload_size);

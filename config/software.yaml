@@ -38,9 +38,11 @@ control:
     decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
   speed_loop:
     kp: 50.0                  # [Nm/(rad/s)] 速度环P（轴端；机上整定值2026-10-15；0=禁用速度模式）
-    ki: 750.0                 # [Nm/rad] 速度环I（轴端；同上；motion gains 可在线改）
-    friction_feedforward_nm: 1.0   # [Nm] 库仑摩擦前馈（机上整定值；自整定在后续提交）
-    velocity_lpf_coeff: 0.03       # 测速一阶滤波系数（有效域(0,1]）
+    ki: 1000.0                 # [Nm/rad] 速度环I（轴端；同上；motion gains 可在线改）
+    friction_coulomb_nm: 1.1          # [Nm] 库仑摩擦前馈 Tc（机上整定值；motion friction cal 自整定）
+    friction_viscous_nm_per_rad_s: -0.3 # [Nm/(rad/s)] 粘性摩擦前馈 Kv（可负=Stribeck斜率）
+    friction_smoothing_rad_s: 0.05     # [rad/s] 平滑符号速度尺度（模型常量；0=硬符号）
+    velocity_lpf_coeff: 0.025       # 测速一阶滤波系数（有效域(0,1]）
   limits:
     i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3
     i_trip_a: 0.0                     # 快速过流跳闸 [A]（峰值口径；0 = 关闭；连续 2 拍超限 → 零矢量+关桥+FAULT）

@@ -13,6 +13,10 @@
 #include "app_param_record.h"
 #include "params_generated.h"
 
+_Static_assert(
+    sizeof(app_motor_params_t) + sizeof(app_param_record_header_t) <= APP_PARAM_DATA_MAX,
+    "motor params record exceeds app_param slot");
+
 #include <stdbool.h>
 #include <stddef.h>
 

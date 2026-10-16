@@ -31,14 +31,15 @@ typedef enum {
     APP_MOTION_REASON_CALIBRATION,
 } app_motion_reason_t;
 typedef struct {
-    float shaft_rad;            /**< 已应用机械零点的轴端单圈角[rad] */
-    float speed_rad_s;          /**< 轴端滤波速度[rad/s]，非反馈限速 */
-    float torque_nm;            /**< motion模型转矩请求[Nm]；不是实测轴端转矩 */
-    float iq_a;                 /**< motion电流请求[A]，不是FOC实测电流 */
-    float iq_accepted_a;        /**< FOC最近确认执行的接受iq[A]，诊断非实测 */
-    float phase_turns;          /**< 已应用游标安装相位[turn] */
+    float shaft_rad;                 /**< 已应用机械零点的轴端单圈角[rad] */
+    float speed_rad_s;               /**< 轴端滤波速度[rad/s]，非反馈限速 */
+    float torque_nm;                 /**< motion模型转矩请求[Nm]；不是实测轴端转矩 */
+    float iq_a;                      /**< motion电流请求[A]，不是FOC实测电流 */
+    float iq_accepted_a;             /**< FOC最近确认执行的接受iq[A]，诊断非实测 */
+    float phase_turns;               /**< 已应用游标安装相位[turn] */
     uint32_t good_count, bad_count, calibration_samples;
     uint32_t sample_failure_count, duplicate_count, vernier_failure_count;
+    uint32_t vernier_fallback_count; /**< 游标失配兜底测速样本数（转子角+最近圈号） */
     uint32_t timing_failure_count;
     uint32_t hold_count;        /**< 坏拍有界保持事件累计（active期间质量类坏拍进入保持的次数） */
     app_motion_reason_t reason; /**< 最近拒绝/输出撤销；成功新命令清零 */
@@ -57,12 +58,16 @@ int app_motion_apply(void);
 int app_motion_zero(void);
 /** @brief OFF持久化相位/零点 */
 int app_motion_save(void);
-/** @brief 配置速度增益kp[Nm/(rad/s)]/ki[Nm/rad]与库仑摩擦前馈ff[Nm]，OFF修改，重启默认0 */
-int app_motion_gains(float kp, float ki, float friction_feedforward_nm);
+/** @brief 释放motion输出（零力矩请求并退出驱动）；不改变FOC状态/桥 */
+int app_motion_release_output(void);
+/** @brief 配置速度增益kp/ki与摩擦前馈Tc/Kv（轴端），不驱动时可改，写透参数单例 */
+int app_motion_gains(float kp, float ki, float coulomb_nm, float viscous_nm_per_rad_s);
 /** @brief 轴端模型转矩Nm，电流硬限制1A */
 int app_motion_torque(float torque);
 /** @brief 轴端rad/s目标；命令不限幅，输出受电流硬限制 */
 int app_motion_speed(float speed);
+/** @brief 辨识期挂起/恢复摩擦前馈（速度模式FF置零，PI全权；不改参数） */
+void app_motion_friction_suspend(bool suspend);
 /** @brief 撤销motion输出，随后FOC正常缓降；返回FOC接受状态，0成功 */
 int app_motion_stop(void);
 /** @brief motion命令返回码（0成功；负值为拒绝分类，终端据此给处置提示） */

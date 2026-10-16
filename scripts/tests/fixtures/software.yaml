@@ -37,7 +37,9 @@ control:
   speed_loop:
     kp: 1.5                  # [Nm/(rad/s)]（测试夹具值）
     ki: 20.0                 # [Nm/rad]（测试夹具值）
-    friction_feedforward_nm: 0.5   # [Nm]（测试夹具值）
+    friction_coulomb_nm: 0.5          # [Nm]（测试夹具值）
+    friction_viscous_nm_per_rad_s: 0.1 # [Nm/(rad/s)]（测试夹具值）
+    friction_smoothing_rad_s: 0.02     # [rad/s]（测试夹具值）
     velocity_lpf_coeff: 0.05       # 测速一阶滤波系数（测试夹具值）
   limits:
     i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3

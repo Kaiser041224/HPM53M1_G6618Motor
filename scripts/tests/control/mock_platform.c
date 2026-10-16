@@ -44,7 +44,9 @@ void mock_params_reset(void) {
     s_sw.control.limits.motion_speed_limit_rad_s = 0.0f;
     s_sw.control.speed_loop.kp = 0.0f;
     s_sw.control.speed_loop.ki = 0.0f;
-    s_sw.control.speed_loop.friction_feedforward_nm = 0.0f;
+    s_sw.control.speed_loop.friction_coulomb_nm = 0.0f;
+    s_sw.control.speed_loop.friction_viscous_nm_per_rad_s = 0.0f;
+    s_sw.control.speed_loop.friction_smoothing_rad_s = 0.05f;
     s_sw.control.speed_loop.velocity_lpf_coeff = 0.03f;
     s_sw.params_generation = 1U;
 
@@ -70,6 +72,11 @@ const app_software_params_t* app_software_params_current(void) { return &s_sw; }
 const app_motor_params_t* app_motor_params_current(void) { return &s_motor; }
 app_motor_params_t* app_motor_params_mutable(void) { return &s_motor; }
 app_software_params_t* app_software_params_mutable(void) { return &s_sw; }
+int g_mock_software_params_stores;
+int app_software_params_store(void) {
+    ++g_mock_software_params_stores;
+    return 0;
+}
 
 int app_3phase_inverter_set_duty_abc(float duty_u, float duty_v, float duty_w) {
     g_mock_duty[0] = duty_u;

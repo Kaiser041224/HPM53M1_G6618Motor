@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "app_motion.h"
+#include "algo_friction.h"
 #include "algo_motion.h"
 #include "app_encoder.h"
 #include "app_foc.h"
@@ -21,24 +22,30 @@ volatile float g_motion_shaft_angle_deg __attribute__((section(".noncacheable.bs
 volatile uint32_t g_motion_shaft_angle_valid __attribute__((section(".noncacheable.bss")));
 static algo_motion_pi_t s_velocity_pi;
 static float s_target, s_velocity_kp, s_velocity_ki;
-static float
-    s_velocity_friction_feedforward;     /**< 库仑摩擦前馈[Nm]，按目标符号叠加，跳过静摩擦死区 */
-static float s_velocity_lpf_coeff;       /**< 测速一阶滤波系数（参数 init 期消费） */
-static float s_motion_iq_max_a;          /**< motion 命令电流硬限制[A]（力矩命令与PI输出上限） */
-static float s_motion_speed_limit_rad_s; /**< 轴端速度命令限[rad/s]（0=不限） */
+static algo_friction_params_t s_friction_model; /**< 摩擦前馈模型（Tc/Kv/平滑；init/gains 消费） */
+static bool s_friction_suspended;               /**< 辨识期挂起前馈（速度模式FF置零） */
+static float s_velocity_lpf_coeff;              /**< 测速一阶滤波系数（参数 init 期消费） */
+static float s_motion_iq_max_a;             /**< motion 命令电流硬限制[A]（力矩命令与PI输出上限） */
+static float s_motion_speed_limit_rad_s;    /**< 轴端速度命令限[rad/s]（0=不限） */
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_calibration_sum, s_calibration_first;
 static float s_calibration_phase;
 static uint32_t s_previous_cycle, s_previous_sequence, s_epoch, s_request_sequence;
-static uint32_t s_previous_sample_cycle; /**< 上一个用于测速的配对快照时间 */
+static uint32_t s_previous_sample_cycle;    /**< 上一个用于测速的配对快照时间 */
 static float s_seconds_per_cycle;
 static bool s_primed, s_speed_mode;
 static float s_active_direction, s_active_kt, s_active_reducer;
 static float s_calibrated_direction;
-static uint32_t s_hold_samples;          /**< 当前连续坏拍数（active质量类保持窗口） */
-static bool s_velocity_gap;              /**< 保持恢复后首拍跳过跨隙测速差分 */
+static uint32_t s_hold_samples;             /**< 当前连续坏拍数（active质量类保持窗口） */
+static bool s_velocity_gap;                 /**< 保持恢复后首拍跳过跨隙测速差分 */
+static float s_nearest_turn;                /**< 最近解析的游标整数圈号（兜底测速基准） */
+static bool s_have_nearest;
+static uint32_t s_vernier_fallback_samples; /**< 连续兜底样本数（超限判真失效） */
+#define APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES (5000U) /**< 兜底上限500ms@10kHz */
 static const app_motor_params_t* s_motion_motor_params; /**< init解析，仅读RAM参数对象 */
-#define APP_MOTION_HOLD_MAX_SAMPLES (5U) /**< 保持窗口10kHz×5=500us，与反馈新鲜度界一致 */
+/* 保持窗口10kHz×200=20ms零力矩：游标残差坏拍簇（齿隙/扭振瞬态）可穿过；
+ * 游标每拍独立重解绝对圈号，恢复无累计误差。>窗口判真失败。 */
+#define APP_MOTION_HOLD_MAX_SAMPLES (200U)
 /** @brief 最新有效反馈不超过500us */
 static bool motion_feedback_fresh(void) {
     return s_motion.feedback_valid
@@ -116,6 +123,9 @@ void app_motion_init(void) {
     s_previous_sample_cycle = 0;
     s_hold_samples = 0;
     s_velocity_gap = false;
+    s_have_nearest = false;
+    s_nearest_turn = 0;
+    s_vernier_fallback_samples = 0;
     s_zero_rad = 0;
     s_calibrated_direction = 0;
     s_motion_motor_params = app_motor_params_current();
@@ -125,7 +135,19 @@ void app_motion_init(void) {
     const app_software_params_t* software = app_software_params_current();
     s_velocity_kp = software->control.speed_loop.kp;
     s_velocity_ki = software->control.speed_loop.ki;
-    s_velocity_friction_feedforward = software->control.speed_loop.friction_feedforward_nm;
+    s_friction_model.coulomb_nm = software->control.speed_loop.friction_coulomb_nm;
+    s_friction_model.viscous_nm_per_rad_s =
+        software->control.speed_loop.friction_viscous_nm_per_rad_s;
+    s_friction_model.smoothing_rad_s = software->control.speed_loop.friction_smoothing_rad_s;
+    if (!foc_finite(s_friction_model.coulomb_nm) || s_friction_model.coulomb_nm < 0)
+        s_friction_model.coulomb_nm = 0;
+    /* Kv 允许负值（Stribeck 斜率）；仅非有限/越界回退 0 */
+    if (!foc_finite(s_friction_model.viscous_nm_per_rad_s)
+        || s_friction_model.viscous_nm_per_rad_s < -100
+        || s_friction_model.viscous_nm_per_rad_s > 100)
+        s_friction_model.viscous_nm_per_rad_s = 0;
+    if (!foc_finite(s_friction_model.smoothing_rad_s) || s_friction_model.smoothing_rad_s < 0)
+        s_friction_model.smoothing_rad_s = 0;
     s_velocity_lpf_coeff = software->control.speed_loop.velocity_lpf_coeff;
     if (!foc_finite(s_velocity_lpf_coeff) || s_velocity_lpf_coeff <= 0 || s_velocity_lpf_coeff > 1)
         s_velocity_lpf_coeff = .03f;
@@ -162,6 +184,7 @@ int app_motion_calibrate(void) {
     s_motion.reason = APP_MOTION_REASON_NONE;
     s_calibration_sum = 0;
     s_primed = false;
+    s_have_nearest = false; /* 相位重标定：旧圈号基准失效 */
     intf_sys_irq_restore(st);
     return 0;
 }
@@ -183,6 +206,7 @@ int app_motion_apply(void) {
     s_motion.calibration_done = false;
     s_motion.zero_valid = false;
     s_primed = false;
+    s_have_nearest = false; /* 新相位：旧圈号基准失效 */
     s_motion.feedback_valid = false;
     g_motion_shaft_angle_valid = 0;
     intf_sys_irq_restore(st);
@@ -218,23 +242,35 @@ int app_motion_save(void) {
     intf_sys_irq_restore(st);
     return app_param_store(APP_PARAM_KEY_MOTION, &record, sizeof(record));
 }
-int app_motion_gains(float kp, float ki, float friction_feedforward_nm) {
-    if (!foc_finite(kp) || !foc_finite(ki) || !foc_finite(friction_feedforward_nm) || kp < 0
-        || ki < 0 || friction_feedforward_nm < 0 || kp > 100 || ki > 1000
-        || friction_feedforward_nm > 100)
+int app_motion_release_output(void) {
+    uint32_t st = intf_sys_irq_save();
+    motion_clear_output(APP_MOTION_REASON_NONE);
+    app_foc_current_request_t request = {0, 0, ++s_request_sequence, s_epoch, true};
+    (void)app_foc_submit_current(&request);
+    intf_sys_irq_restore(st);
+    return 0;
+}
+int app_motion_gains(float kp, float ki, float coulomb_nm, float viscous_nm_per_rad_s) {
+    /* Kv 允许负值：Stribeck 拟合斜率（摩擦随速度下降）是合法物理量 */
+    if (!foc_finite(kp) || !foc_finite(ki) || !foc_finite(coulomb_nm)
+        || !foc_finite(viscous_nm_per_rad_s) || kp < 0 || ki < 0 || coulomb_nm < 0
+        || viscous_nm_per_rad_s < -100 || viscous_nm_per_rad_s > 100 || kp > 100 || ki > 1000
+        || coulomb_nm > 100)
         return APP_MOTION_CMD_BAD_PARAM;
     uint32_t st = intf_sys_irq_save();
-    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+    if (s_motion.active) { /* 安全意图：运动驱动中不改环路增益 */
         intf_sys_irq_restore(st);
         return APP_MOTION_CMD_FOC_NOT_READY;
     }
     s_velocity_kp = kp;
     s_velocity_ki = ki;
-    s_velocity_friction_feedforward = friction_feedforward_nm;
+    s_friction_model.coulomb_nm = coulomb_nm;
+    s_friction_model.viscous_nm_per_rad_s = viscous_nm_per_rad_s;
     app_software_params_t* software = app_software_params_mutable();
     software->control.speed_loop.kp = kp;
     software->control.speed_loop.ki = ki;
-    software->control.speed_loop.friction_feedforward_nm = friction_feedforward_nm;
+    software->control.speed_loop.friction_coulomb_nm = coulomb_nm;
+    software->control.speed_loop.friction_viscous_nm_per_rad_s = viscous_nm_per_rad_s;
     intf_sys_irq_restore(st);
     return 0;
 }
@@ -308,6 +344,12 @@ static int motion_command(float target, bool speed) {
 }
 int app_motion_torque(float torque) { return motion_command(torque, false); }
 int app_motion_speed(float speed) { return motion_command(speed, true); }
+void app_motion_friction_suspend(bool suspend) {
+    uint32_t st = intf_sys_irq_save();
+    s_friction_suspended = suspend;
+    intf_sys_irq_restore(st);
+}
+
 int app_motion_stop(void) {
     uint32_t st = intf_sys_irq_save();
     motion_clear_output(APP_MOTION_REASON_USER_STOP);
@@ -377,10 +419,22 @@ void app_motion_step(void) {
         g_motion_shaft_angle_valid = 0;
         return;
     }
-    if (algo_motion_vernier(u, v, s_motion.phase_turns, &angle) != 0) {
+    if (algo_motion_vernier(u, v, s_motion.phase_turns, &angle) == 0) {
+        s_vernier_fallback_samples = 0;
+        s_nearest_turn = angle * (50.0f / FOC_TWO_PI_F) - u;
+        s_have_nearest = true;
+    } else {
+        /* 游标失配（齿隙/扭振瞬态或低力矩松垂）：转子角+最近圈号兜底测速。
+         * 失配偏移≤齿隙（输出轴≤0.15°），对速度环无感；零力矩保持会在松垂区
+         * 自我强化拒帧导致停死，故兜底优先。持续超限才判真失效。 */
         s_motion.vernier_failure_count++;
-        motion_reject(APP_MOTION_REASON_VERNIER);
-        return;
+        if (!s_motion.calibrated || !s_have_nearest
+            || ++s_vernier_fallback_samples > APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES) {
+            motion_reject(APP_MOTION_REASON_VERNIER);
+            return;
+        }
+        s_motion.vernier_fallback_count++;
+        angle = (s_nearest_turn + u) * (FOC_TWO_PI_F / 50.0f);
     }
     float direction = s_motion_motor_params->encoder.direction;
     if ((direction != 1 && direction != -1) || direction != s_calibrated_direction) {
@@ -447,11 +501,9 @@ void app_motion_step(void) {
         torque = algo_motion_speed(
             &s_velocity_pi, s_target, s_motion.speed_rad_s, s_velocity_kp, s_velocity_ki, dt,
             torque_limit);
-        /* 摩擦前馈按目标符号叠加（速度符号在零点抖动会翻转前馈）；再按电流硬限制钳位 */
-        torque += s_velocity_friction_feedforward
-                * (s_target > 0   ? 1.0f
-                   : s_target < 0 ? -1.0f
-                                  : 0.0f);
+        /* 摩擦前馈按目标速度求值（平滑符号防零点抖动）；辨识期挂起；再按电流硬限制钳位 */
+        if (!s_friction_suspended)
+            torque += algo_friction_torque(&s_friction_model, s_target);
         torque = torque > torque_limit  ? torque_limit
                : torque < -torque_limit ? -torque_limit
                                         : torque;

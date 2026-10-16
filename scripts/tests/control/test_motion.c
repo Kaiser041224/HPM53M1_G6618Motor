@@ -104,7 +104,7 @@ void test_motion(void) {
     CHECK(app_motion_save() != 0);
     app_motor_params_mutable()->encoder.direction = 1;
     CHECK(app_motion_speed(.1f) != 0);  /* 增益未配置 */
-    CHECK(app_motion_gains(.05f, .1f, 0) == 0);
+    CHECK(app_motion_gains(.05f, .1f, 0, 0) == 0);
     CHECK(app_foc_enable() == 0);
     app_motion_step();
     CHECK(app_motion_speed(.1f) == 0);
@@ -286,9 +286,26 @@ void test_motion_hold(void) {
     CHECK(snapshot.active && snapshot.feedback_valid);
     CHECK(snapshot.iq_a > 0);
     CHECK_NEAR(snapshot.speed_rad_s, speed_before, 1e-6f);
-    /* 6连坏拍：第6拍撤销 */
+    /* 100连坏拍簇（齿隙瞬态量级）：窗口内保持，仍可恢复 */
     g_mock_output_failure = 1;
-    for (unsigned i = 0; i < 6; ++i) {
+    for (unsigned i = 0; i < 100; ++i) {
+        mock_advance_cycle(48000);
+        app_motion_step();
+        app_foc_isr_step();
+    }
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.active);
+    CHECK(snapshot.hold_count == 2);
+    g_mock_output_failure = 0;
+    mock_advance_cycle(48000);
+    g_mock_rotor_rad += .002f;
+    app_motion_step();
+    app_foc_isr_step();
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.active && snapshot.feedback_valid);
+    /* 201连坏拍：超窗撤销 */
+    g_mock_output_failure = 1;
+    for (unsigned i = 0; i < 201; ++i) {
         mock_advance_cycle(48000);
         app_motion_step();
         app_foc_isr_step();
@@ -297,8 +314,8 @@ void test_motion_hold(void) {
     CHECK(!snapshot.active);
     CHECK(snapshot.reason == APP_MOTION_REASON_SAMPLE);
     CHECK_NEAR(snapshot.iq_a, 0, 1e-6f);
-    CHECK(snapshot.hold_count == 2);
-    CHECK(snapshot.bad_count == bad_before + 8);
+    CHECK(snapshot.hold_count == 3);
+    CHECK(snapshot.bad_count == bad_before + 303);
     /* 参数基准变化：立即撤销，不做保持 */
     g_mock_output_failure = 0;
     mock_advance_cycle(48000);
@@ -314,7 +331,7 @@ void test_motion_hold(void) {
     app_motion_get_snapshot(&snapshot);
     CHECK(!snapshot.active);
     CHECK(snapshot.reason == APP_MOTION_REASON_PARAMETER);
-    CHECK(snapshot.hold_count == 2);
+    CHECK(snapshot.hold_count == 3);
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
@@ -351,7 +368,7 @@ void test_motion_anti_windup(void) {
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
-    CHECK(app_motion_gains(.02f, 10, 0) == 0);
+    CHECK(app_motion_gains(.02f, 10, 0, 0) == 0);
     CHECK(app_foc_enable() == 0);
     CHECK(app_motion_speed(.5f) == 0);
     app_motion_snapshot_t early, late;
@@ -413,14 +430,14 @@ void test_motion_cmd_status(void) {
     app_motion_init();
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_torque(.1f) == APP_MOTION_CMD_NOT_CALIBRATED);
-    CHECK(app_motion_gains(-1, 1, 0) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_gains(-1, 1, 0, 0) == APP_MOTION_CMD_BAD_PARAM);
     CHECK(app_motion_calibrate() == 0);
     for (unsigned i = 0; i < 1000; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
     CHECK(app_motion_speed(.2f) == APP_MOTION_CMD_GAIN_NOT_SET);
-    CHECK(app_motion_gains(.02f, 5, 0) == 0);
+    CHECK(app_motion_gains(.02f, 5, 0, 0) == 0);
     CHECK(app_motion_torque(.1f) == APP_MOTION_CMD_FOC_NOT_READY);
     CHECK(app_foc_enable() == 0);
     CHECK(app_motion_speed(1.0f) == 0); /* 速度命令不设限幅（用户决定） */
@@ -444,8 +461,8 @@ void test_motion_friction_feedforward(void) {
     app_foc_init();
     app_motion_init();
     app_motor_params_mutable()->kt_nm_per_a = .117f;
-    CHECK(app_motion_gains(.02f, 5, -.5f) == APP_MOTION_CMD_BAD_PARAM);
-    CHECK(app_motion_gains(.02f, 5, .5f) == 0);
+    CHECK(app_motion_gains(.02f, 5, -.5f, 0) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_gains(.02f, 5, .5f, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
     for (unsigned i = 0; i < 1000; ++i)
         app_motion_step();
@@ -460,17 +477,21 @@ void test_motion_friction_feedforward(void) {
     app_foc_isr_step();
     app_motion_get_snapshot(&snapshot);
     CHECK_NEAR(snapshot.torque_nm, -.5f, .05f);
-    /* 目标换向：前馈跟随目标符号 */
+    /* 粘性项：τ_ff = Tc·sign + Kv·ω_ref；换向前馈跟随目标符号 */
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    CHECK(app_motion_gains(.02f, 0, .5f, .4f) == 0);
+    CHECK(app_foc_enable() == 0);
     CHECK(app_motion_speed(.3f) == 0);
     mock_advance_cycle(48000);
     app_motion_step();
     app_foc_isr_step();
     app_motion_get_snapshot(&snapshot);
-    CHECK_NEAR(snapshot.torque_nm, .5f, .05f);
+    CHECK_NEAR(snapshot.torque_nm, .5f + .4f * .3f + .02f * .3f, .05f);
     /* 前馈+P超50Kt时按电流硬限制钳位 */
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
-    CHECK(app_motion_gains(.02f, 0, 100) == 0);
+    CHECK(app_motion_gains(.02f, 0, 100, 0) == 0);
     CHECK(app_foc_enable() == 0);
     CHECK(app_motion_speed(.3f) == 0);
     mock_advance_cycle(48000);
@@ -495,7 +516,9 @@ void test_motion_params(void) {
     app_motor_params_mutable()->reducer_ratio = 20;
     app_software_params_mutable()->control.speed_loop.kp = .5f;
     app_software_params_mutable()->control.speed_loop.ki = 1;
-    app_software_params_mutable()->control.speed_loop.friction_feedforward_nm = .25f;
+    app_software_params_mutable()->control.speed_loop.friction_coulomb_nm = .25f;
+    /* 负 Kv（Stribeck 斜率）经 init 必须保留，不得被钳零 */
+    app_software_params_mutable()->control.speed_loop.friction_viscous_nm_per_rad_s = -.1f;
     app_software_params_mutable()->control.speed_loop.velocity_lpf_coeff = 1.0f;
     app_software_params_mutable()->control.limits.motion_iq_max_a = .5f;
     app_software_params_mutable()->control.limits.motion_speed_limit_rad_s = .4f;
@@ -514,7 +537,7 @@ void test_motion_params(void) {
     app_foc_isr_step();
     app_motion_snapshot_t snapshot;
     app_motion_get_snapshot(&snapshot);
-    CHECK_NEAR(snapshot.torque_nm, .4f, .06f);                   /* P=.5*.3=.15 + 前馈.25 */
+    CHECK_NEAR(snapshot.torque_nm, .37f, .005f); /* P=.5*.3=.15 + 库仑.25 + 粘性(-.1)*.3 */
     CHECK(app_motion_speed(.5f) == APP_MOTION_CMD_TARGET_LIMIT); /* 命令限0.4 */
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
@@ -530,10 +553,13 @@ void test_motion_params(void) {
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
     /* motion gains 写透参数单例（param get 可见） */
-    CHECK(app_motion_gains(1, 2, 3) == 0);
+    CHECK(app_motion_gains(1, 2, 3, 4) == 0);
     CHECK(app_software_params_current()->control.speed_loop.kp == 1);
     CHECK(app_software_params_current()->control.speed_loop.ki == 2);
-    CHECK(app_software_params_current()->control.speed_loop.friction_feedforward_nm == 3);
+    CHECK(app_software_params_current()->control.speed_loop.friction_coulomb_nm == 3);
+    CHECK(app_software_params_current()->control.speed_loop.friction_viscous_nm_per_rad_s == 4);
+    CHECK(app_motion_gains(1, 2, 3, -1) == 0); /* 负Kv合法（Stribeck斜率） */
+    CHECK(app_motion_gains(1, 2, 3, -101) == APP_MOTION_CMD_BAD_PARAM);
     /* velocity_lpf_coeff=1：单拍测速无滤波，即达原始速度 (.01/50rad)/40us=5rad/s */
     g_mock_rotor_rad = 0;
     g_mock_output_timestamp_override = true;
@@ -548,4 +574,59 @@ void test_motion_params(void) {
     CHECK_NEAR(snapshot.speed_rad_s, 5.0f, 1e-3f);
     g_mock_output_timestamp_override = false;
     g_mock_rotor_rad = 0;
+}
+
+/** @brief 齿隙游标失配（低力矩松垂）：兜底测速不得撤销输出（爬行停死回归） */
+void test_motion_vernier_fallback(void) {
+    extern float g_mock_rotor_rad;
+    extern bool g_mock_output_raw_override;
+    extern uint16_t g_mock_output_raw;
+    extern void mock_advance_cycle(uint32_t cycles);
+    extern void mock_param_store_reset(void);
+    mock_param_store_reset();
+    mock_params_reset();
+    app_foc_init();
+    app_motion_init();
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+    CHECK(app_motion_gains(2, 50, 0, 0) == 0);
+    CHECK(app_motion_calibrate() == 0); /* 标定用一致原码（默认mock） */
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    app_motion_step();
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_motion_speed(.05f) == 0);
+    /* 齿隙模型：|力矩|<0.3Nm 时游标原码偏移 0.01 圈（残差恒拒） */
+    for (unsigned i = 0; i < 3000; ++i) {
+        app_motion_snapshot_t snapshot;
+        app_motion_get_snapshot(&snapshot);
+        g_mock_output_raw_override = true;
+        uint16_t base = (uint16_t)(fmodf(0.98f * g_mock_rotor_rad / 6.2831853f, 1.0f) * 65536.0f);
+        g_mock_output_raw = (uint16_t)(base + (snapshot.torque_nm < 0.3f ? 655U : 0U));
+        mock_advance_cycle(48000);
+        app_motion_step();
+        app_foc_isr_step();
+    }
+    g_mock_output_raw_override = false;
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    /* 修复前：20ms零力矩保持在松垂区自我强化 → 撤销停死（reason=VERNIER） */
+    CHECK(snapshot.active);
+    CHECK(snapshot.reason == APP_MOTION_REASON_NONE);
+    CHECK(snapshot.vernier_fallback_count > 0); /* 兜底路径被使用 */
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    /* apply 后相位更新：旧圈号基准失效，拒帧不得兜底（须走 reject） */
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    uint32_t fallback_before = snapshot.vernier_fallback_count;
+    g_mock_output_raw_override = true;
+    g_mock_output_raw = 655U; /* 一致原码+偏移 → 残差拒帧 */
+    app_motion_step();
+    g_mock_output_raw_override = false;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.vernier_fallback_count == fallback_before);
+    CHECK(!snapshot.feedback_valid);
 }
