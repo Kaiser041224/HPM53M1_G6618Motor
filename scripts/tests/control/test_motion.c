@@ -630,3 +630,219 @@ void test_motion_vernier_fallback(void) {
     CHECK(snapshot.vernier_fallback_count == fallback_before);
     CHECK(!snapshot.feedback_valid);
 }
+
+/* ===== 位置环（ODrive 级联：5kHz CH0 拍 + 10kHz 速度拍）===== */
+#define POS_TWO_PI (6.283185307179586)
+static double s_pos_plant_rotor_abs_rad; /* 绝对转子角（游标原码单圈建模） */
+
+static void pos_plant_sensor_update(void) {
+    extern float g_mock_rotor_rad;
+    extern bool g_mock_output_raw_override;
+    extern uint16_t g_mock_output_raw;
+    double wrapped = fmod(s_pos_plant_rotor_abs_rad, POS_TWO_PI); /* floor-mod：倒转跨零点为负 */
+    if (wrapped < 0)
+        wrapped += POS_TWO_PI;
+    g_mock_rotor_rad = (float)wrapped;
+    g_mock_output_raw_override = true;
+    double vernier = fmod(0.98 * s_pos_plant_rotor_abs_rad / POS_TWO_PI + 0.007, 1.0);
+    if (vernier < 0)
+        vernier += 1.0;
+    g_mock_output_raw = (uint16_t)(vernier * 65536.0);
+}
+
+/** @brief 摩擦植物（轴端）：coulomb 0.6Nm、viscous 0.2Nm/(rad/s) */
+static void pos_plant_step(float dt_s) {
+    app_motion_snapshot_t motion;
+    app_motion_get_snapshot(&motion);
+    float torque = motion.torque_nm;
+    float speed = 0;
+    if (torque > 0.6f)
+        speed = (torque - 0.6f) / 0.2f;
+    else if (torque < -0.6f)
+        speed = (torque + 0.6f) / 0.2f;
+    s_pos_plant_rotor_abs_rad += (double)speed * 50.0 * dt_s;
+    pos_plant_sensor_update();
+}
+
+static void pos_setup(float speed_limit_rad_s) {
+    extern void mock_param_store_reset(void);
+    extern void mock_params_reset(void);
+    extern bool g_mock_output_timestamp_override;
+    extern uint32_t g_mock_output_timestamp_cycles;
+    mock_param_store_reset();
+    mock_params_reset();
+    app_software_params_mutable()->control.limits.motion_speed_limit_rad_s = speed_limit_rad_s;
+    app_software_params_mutable()->control.limits.motion_iq_max_a =
+        25.0f;         /* mock零值会落到1.0A兜底 */
+    app_foc_init();
+    app_motion_init();
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+    s_pos_plant_rotor_abs_rad = 0;
+    pos_plant_sensor_update();
+    g_mock_output_timestamp_override = true;
+    g_mock_output_timestamp_cycles = 0;
+    CHECK(app_motion_gains(2, 50, 0, 0) == 0);
+    CHECK(app_motion_position_gains(20, 10) == 0);
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    app_motion_step(); /* priming：反馈新鲜后命令才可接受 */
+    CHECK(app_foc_enable() == 0);
+}
+
+/** @brief 仿真 ticks 拍：CH0 位置拍 5kHz（先于速度拍，驱动分发序 CH0→CH1）+ CH1 速度拍 10kHz */
+static void pos_run_ticks(unsigned ticks) {
+    extern void mock_advance_cycle(uint32_t cycles);
+    extern uint32_t g_mock_output_timestamp_cycles;
+    for (unsigned i = 0; i < ticks; ++i) {
+        pos_plant_step(1e-4f);
+        mock_advance_cycle(48000);
+        g_mock_output_timestamp_cycles += 48000U;
+        if (i % 2 == 0)
+            app_motion_position_step();
+        app_motion_step();
+    }
+}
+
+static void pos_teardown(void) {
+    extern bool g_mock_output_raw_override, g_mock_output_timestamp_override;
+    g_mock_output_raw_override = false;
+    g_mock_output_timestamp_override = false;
+}
+
+/** @brief 位置命令分类：GAIN_NOT_SET / TARGET_LIMIT / MODE_LOCKED / 目标更新 */
+void test_motion_position_command(void) {
+    extern void mock_param_store_reset(void);
+    extern void mock_params_reset(void);
+    mock_param_store_reset();
+    mock_params_reset();
+    app_software_params_mutable()->control.limits.motion_speed_limit_rad_s = 1.0f;
+    app_foc_init();
+    app_motion_init();
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+    CHECK(app_motion_gains(2, 50, 0, 0) == 0);
+    CHECK(app_motion_position_gains(0, 10) == 0); /* 0=禁用位置模式 */
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    app_motion_step();
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_motion_position(0.1f, 0, 0) == APP_MOTION_CMD_GAIN_NOT_SET);
+    CHECK(app_motion_position_gains(20, 10) == 0);
+    /* 位置级联内环=速度PI：kp=0（速度增益未配）时位置命令同样拒绝 */
+    CHECK(app_motion_gains(0, 0, 0, 0) == 0);
+    CHECK(app_motion_position(0.1f, 0, 0) == APP_MOTION_CMD_GAIN_NOT_SET);
+    CHECK(app_motion_gains(2, 50, 0, 0) == 0);
+    CHECK(app_motion_position(NAN, 0, 0) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_position(0.1f, NAN, 0) == APP_MOTION_CMD_BAD_PARAM); /* vel_ff NaN 不入滤波 */
+    CHECK(
+        app_motion_position(0.1f, 0, NAN) == APP_MOTION_CMD_BAD_PARAM); /* torque_ff NaN 不入FOC */
+    CHECK(app_motion_position(-0.1f, 0, 0) == APP_MOTION_CMD_TARGET_LIMIT);   /* 单圈绝对值范围 */
+    CHECK(app_motion_position(6.5f, 0, 0) == APP_MOTION_CMD_TARGET_LIMIT);
+    CHECK(app_motion_position(0.1f, 2.0f, 0) == APP_MOTION_CMD_TARGET_LIMIT); /* vel_ff>限速 */
+    CHECK(
+        app_motion_position(0.1f, 0, 1e6f) == APP_MOTION_CMD_TARGET_LIMIT); /* torque_ff 超 Kt 限 */
+    CHECK(app_motion_position(0.1f, 0, 0) == 0);
+    CHECK(app_motion_position(0.2f, 0, 0) == 0);       /* 活动中同模式=目标更新 */
+    CHECK(app_motion_position(POS_TWO_PI, 0, 0) == 0); /* 360°=0°（合法，归零） */
+    CHECK(app_motion_speed(0.1f) == APP_MOTION_CMD_MODE_LOCKED);
+    CHECK(app_motion_torque(0.1f) == APP_MOTION_CMD_MODE_LOCKED);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 位置增益：范围校验 / idle-only / 参数单例写透 */
+void test_motion_position_gains(void) {
+    extern void mock_param_store_reset(void);
+    extern void mock_params_reset(void);
+    mock_param_store_reset();
+    mock_params_reset();
+    app_foc_init();
+    app_motion_init();
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+    CHECK(app_motion_position_gains(-1, 10) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_position_gains(100.1f, 10) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_position_gains(20, -1) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_position_gains(20, 100.1f) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_position_gains(NAN, 10) == APP_MOTION_CMD_BAD_PARAM);
+    CHECK(app_motion_position_gains(20, 0) == 0); /* bw=0=直通（算法语义） */
+    CHECK(app_motion_position_gains(25, 15) == 0);
+    CHECK_NEAR(app_software_params_current()->control.position_loop.pos_gain, 25, 1e-6f);
+    CHECK_NEAR(
+        app_software_params_current()->control.position_loop.input_filter_bandwidth, 15, 1e-6f);
+    CHECK(app_motion_gains(2, 50, 0, 0) == 0);
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    app_motion_step();
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_motion_position(0.1f, 0, 0) == 0);
+    CHECK(app_motion_position_gains(10, 5) == APP_MOTION_CMD_FOC_NOT_READY); /* 活动中禁改 */
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 2:1 拍交织级联收敛（CH0 位置 → CH1 速度 → 植物） */
+void test_motion_position_cascade(void) {
+    pos_setup(0);
+    CHECK(app_motion_gains(2, 50, 0.6f, 0.2f) == 0); /* 摩擦FF=植物：保持精度来源 */
+    CHECK(app_motion_position(0.5f, 0, 0) == 0);
+    pos_run_ticks(6000);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.active);
+    CHECK(snapshot.mode == APP_MOTION_MODE_POSITION);
+    CHECK_NEAR(snapshot.shaft_rad, 0.5f, 0.02f);
+    CHECK_NEAR(snapshot.vel_cmd_rad_s, 0, 0.5f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 单圈绝对值模式：跨零点最短路径（±180°）与绝对角收敛 */
+void test_motion_position_circular(void) {
+    pos_setup(0);
+    CHECK(app_motion_gains(2, 50, 0.6f, 0.2f) == 0);
+    float target = 350.0f * (float)POS_TWO_PI / 360.0f; /* 6.1086 rad */
+    CHECK(app_motion_position(target, 0, 0) == 0);
+    pos_run_ticks(200);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    /* 短路径钉：vel_cmd 为负（倒着跨零点走-10°）；+340°长路径必为正——符号即判据 */
+    CHECK(snapshot.vel_cmd_rad_s < 0);
+    pos_run_ticks(8000);
+    app_motion_get_snapshot(&snapshot);
+    float error = snapshot.shaft_rad - target;
+    if (error > 3.1416f)
+        error -= (float)POS_TWO_PI;
+    if (error < -3.1416f)
+        error += (float)POS_TWO_PI;
+    CHECK_NEAR(error, 0, 0.02f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    CHECK(app_motion_zero() == 0);
+    pos_teardown();
+}
+
+/** @brief 前馈语义：vel_ff 进滤波器（不重复加 vel_cmd）；torque_ff 力矩叠加 */
+void test_motion_position_ff(void) {
+    pos_setup(0);
+    CHECK(app_motion_position(0, 0.3f, 0.6f) == 0);
+    pos_run_ticks(6000);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    /* input_vel=0.3 失配静态：pos_sp 静差=2*vin/bw=0.06（实测0.0589）；
+     * vel_ff 不得重复加到 vel_cmd（双计稳态漂到0.0739，容差0.005可区分） */
+    CHECK_NEAR(snapshot.shaft_rad, 0.06f, 0.005f);
+    CHECK_NEAR(snapshot.vel_cmd_rad_s, 0, 0.05f);
+    /* torque_ff=0.6 平衡植物库仑摩擦 → 稳态力矩 ≈ 0.6 */
+    CHECK_NEAR(snapshot.torque_nm, 0.6f, 0.1f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}

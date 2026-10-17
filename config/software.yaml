@@ -43,6 +43,9 @@ control:
     friction_viscous_nm_per_rad_s: -0.3 # [Nm/(rad/s)] 粘性摩擦前馈 Kv（可负=Stribeck斜率）
     friction_smoothing_rad_s: 0.05     # [rad/s] 平滑符号速度尺度（模型常量；0=硬符号）
     velocity_lpf_coeff: 0.025       # 测速一阶滤波系数（有效域(0,1]）
+  position_loop:
+    pos_gain: 50.0                    # [1/s] 位置环P（ODrive默认；vel_cmd=vel_ff+pos_gain*pos_err）
+    input_filter_bandwidth: 10.0      # [rad/s] 输入二阶滤波带宽（ODrive默认；建议≈命令发送频率）
   limits:
     i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3
     i_trip_a: 0.0                     # 快速过流跳闸 [A]（峰值口径；0 = 关闭；连续 2 拍超限 → 零矢量+关桥+FAULT）

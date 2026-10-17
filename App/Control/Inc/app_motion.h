@@ -17,6 +17,12 @@ extern volatile float g_motion_shaft_angle_rad;
 extern volatile float g_motion_shaft_angle_deg;
 /** @brief 最近一次反馈有效=1；无效时角度保持最后有效值 */
 extern volatile uint32_t g_motion_shaft_angle_valid;
+/** @brief 运动控制模式（ODrive control_mode 映射：力矩/速度/位置级联） */
+typedef enum {
+    APP_MOTION_MODE_TORQUE = 0,
+    APP_MOTION_MODE_SPEED = 1,
+    APP_MOTION_MODE_POSITION = 2,
+} app_motion_mode_t;
 /** @brief 最近一次拒绝/输出撤销原因，不自动恢复 */
 typedef enum {
     APP_MOTION_REASON_NONE = 0,
@@ -31,12 +37,15 @@ typedef enum {
     APP_MOTION_REASON_CALIBRATION,
 } app_motion_reason_t;
 typedef struct {
-    float shaft_rad;                 /**< 已应用机械零点的轴端单圈角[rad] */
-    float speed_rad_s;               /**< 轴端滤波速度[rad/s]，非反馈限速 */
-    float torque_nm;                 /**< motion模型转矩请求[Nm]；不是实测轴端转矩 */
-    float iq_a;                      /**< motion电流请求[A]，不是FOC实测电流 */
-    float iq_accepted_a;             /**< FOC最近确认执行的接受iq[A]，诊断非实测 */
-    float phase_turns;               /**< 已应用游标安装相位[turn] */
+    app_motion_mode_t mode; /**< 当前控制模式 */
+    float shaft_rad;        /**< 已应用机械零点的轴端单圈角[rad] */
+    float speed_rad_s;      /**< 轴端滤波速度[rad/s]，非反馈限速 */
+    float torque_nm;        /**< motion模型转矩请求[Nm]；不是实测轴端转矩 */
+    float iq_a;             /**< motion电流请求[A]，不是FOC实测电流 */
+    float iq_accepted_a;    /**< FOC最近确认执行的接受iq[A]，诊断非实测 */
+    float pos_setpoint_rad; /**< 位置滤波后设定[rad]，显示取模单圈（ODrive pos_setpoint） */
+    float vel_cmd_rad_s;    /**< 位置环输出速度命令[rad/s]（5kHz拍写，速度拍读） */
+    float phase_turns;      /**< 已应用游标安装相位[turn] */
     uint32_t good_count, bad_count, calibration_samples;
     uint32_t sample_failure_count, duplicate_count, vernier_failure_count;
     uint32_t vernier_fallback_count; /**< 游标失配兜底测速样本数（转子角+最近圈号） */
@@ -66,6 +75,14 @@ int app_motion_gains(float kp, float ki, float coulomb_nm, float viscous_nm_per_
 int app_motion_torque(float torque);
 /** @brief 轴端rad/s目标；命令不限幅，输出受电流硬限制 */
 int app_motion_speed(float speed);
+/** @brief 位置目标rad（可多圈）+速度前馈+力矩前馈（ODrive
+ * input_pos/vel/torque）；活动同模式=目标更新 */
+int app_motion_position(float position_rad, float vel_ff_rad_s, float torque_ff_nm);
+/** @brief 位置环增益pos_gain[1/s]与输入滤波带宽[rad/s]（0=禁用/直通）；不驱动时可改，写透参数单例
+ */
+int app_motion_position_gains(float pos_gain, float filter_bandwidth_rad_s);
+/** @brief 5kHz位置拍入口（CH0）：滤波+位置P；角度/速度取自10kHz估计器，零SPI */
+void app_motion_position_step(void);
 /** @brief 辨识期挂起/恢复摩擦前馈（速度模式FF置零，PI全权；不改参数） */
 void app_motion_friction_suspend(bool suspend);
 /** @brief 撤销motion输出，随后FOC正常缓降；返回FOC接受状态，0成功 */
@@ -80,7 +97,7 @@ typedef enum {
     APP_MOTION_CMD_GAIN_NOT_SET = -5,   /**< 速度模式未配置增益 */
     APP_MOTION_CMD_FOC_NOT_READY = -6,  /**< FOC非READY/RUN（off/stopping/CALIB） */
     APP_MOTION_CMD_BASE_CHANGED = -7,   /**< 活动中Kt/方向基准被改 */
-    APP_MOTION_CMD_MODE_LOCKED = -8,    /**< 活动中不得切换力矩/速度 */
+    APP_MOTION_CMD_MODE_LOCKED = -8,    /**< 活动中不得切换力矩/速度/位置 */
     APP_MOTION_CMD_OWNER_DENIED = -9,   /**< 生产者授权被拒（校准/vtest占用） */
 } app_motion_cmd_status_t;
 /** @brief 观测一致副本 */

@@ -52,3 +52,39 @@ float algo_motion_speed(
     float output = kp * error + pi->integral;
     return output > limit ? limit : output < -limit ? -limit : output;
 }
+
+FOC_ATTR_RAMFUNC
+void algo_motion_pos_filter_step(
+    algo_motion_pos_filter_t* f, float input_pos, float input_vel, float bandwidth_rad_s,
+    float dt) {
+    if (!f || !foc_finite(input_pos) || !foc_finite(input_vel) || !foc_finite(bandwidth_rad_s)
+        || !foc_finite(dt) || dt <= 0)
+        return;
+    if (bandwidth_rad_s <= 0) { /* 直通：滤波关闭 */
+        f->pos_setpoint_rad = input_pos;
+        f->vel_setpoint_rad_s = input_vel;
+        return;
+    }
+    /* ODrive update_filter_gains：bw 钳位≤0.25/dt，ki=2bw，kp=0.25ki²=bw²（临界阻尼） */
+    float bandwidth = bandwidth_rad_s > 0.25f / dt ? 0.25f / dt : bandwidth_rad_s;
+    if (!foc_finite(f->pos_setpoint_rad) || !foc_finite(f->vel_setpoint_rad_s)) {
+        f->pos_setpoint_rad = input_pos;
+        f->vel_setpoint_rad_s = input_vel;
+        return;
+    }
+    float ki = 2.0f * bandwidth;
+    float kp = 0.25f * ki * ki;
+    /* 单圈绝对模式：位置差取模最短路径（目标跨零点平滑，不绕大圈） */
+    float delta_pos = foc_wrap_pm_pi(input_pos - f->pos_setpoint_rad);
+    float accel = kp * delta_pos + ki * (input_vel - f->vel_setpoint_rad_s);
+    f->vel_setpoint_rad_s += dt * accel;
+    f->pos_setpoint_rad += dt * f->vel_setpoint_rad_s;
+}
+FOC_ATTR_RAMFUNC
+float algo_motion_position(float pos_setpoint, float pos_est, float pos_gain, float vel_ff) {
+    if (!foc_finite(pos_setpoint) || !foc_finite(pos_est) || !foc_finite(pos_gain)
+        || !foc_finite(vel_ff))
+        return 0;
+    /* 单圈绝对模式：位置误差取模最短路径（±π，ODrive circular 语义） */
+    return vel_ff + pos_gain * foc_wrap_pm_pi(pos_setpoint - pos_est);
+}

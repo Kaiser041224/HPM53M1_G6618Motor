@@ -66,3 +66,25 @@ void test_motion_timer(void) {
     CHECK(!g_mock_timer_running[4] && !g_mock_timer_running[5]);
     g_mock_timer_start_failure = -1;
 }
+
+static unsigned s_position_bind_calls;
+static void position_bind_callback(void) { s_position_bind_calls++; }
+
+/** @brief CH0 位置拍绑定回调（镜像 velocity 绑定） */
+void test_motion_timer_position_bind(void) {
+    s_position_bind_calls = 0;
+    CHECK(app_motion_timer_init() == 0);
+    app_motion_timer_bind_position(position_bind_callback);
+    CHECK(app_motion_timer_start() == 0);
+    if (g_mock_timer_config[4].callback != NULL)
+        g_mock_timer_config[4].callback();
+    CHECK(s_position_bind_calls == 1);
+    app_motion_timer_snapshot_t snapshot;
+    app_motion_timer_get_snapshot(&snapshot);
+    CHECK(snapshot.position.count == 1);
+    app_motion_timer_bind_position(NULL); /* 解绑后不再调用 */
+    if (g_mock_timer_config[4].callback != NULL)
+        g_mock_timer_config[4].callback();
+    CHECK(s_position_bind_calls == 1);
+    app_motion_timer_stop();
+}

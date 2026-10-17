@@ -18,9 +18,9 @@ extern void hpm_flash_driver_register(void);
 
 #define APP_PARAM_MAGIC     (0x504D5048U) /* "HPMP" */
 #define APP_PARAM_VERSION   (1U)
-#define APP_PARAM_SLOT_SIZE (128U)
+#define APP_PARAM_SLOT_SIZE (256U)
 #define APP_PARAM_HDR_SIZE  (12U)         /* magic + key + version + length */
-#define APP_PARAM_SLOT_MAX  (32U)         /* 4KB 扇区 / 128B */
+#define APP_PARAM_SLOT_MAX  (16U)         /* 4KB 扇区 / 256B */
 
 /**
  * @brief 单个参数槽记录（头 + 数据 + CRC）
@@ -41,6 +41,9 @@ static bool s_ready;
 
 /* 保存时的整扇区缓冲（仅 store 使用） */
 static app_param_slot_t s_slots[APP_PARAM_SLOT_MAX];
+static app_param_slot_t s_load_slot;   /**< load 读暂存（避免 256B 栈帧；load/store 分缓冲，
+                                        *  运行期 terminal(store)×diag/init(load) 交叉可重入） */
+static app_param_slot_t s_verify_slot; /**< store 回读校验暂存（同上） */
 
 /**
  * @brief CRC-32/ISO-HDLC 校验（反射多项式 0xEDB88320）
@@ -102,22 +105,22 @@ int app_param_init(void) {
 bool app_param_is_ready(void) { return s_ready; }
 
 int app_param_load(uint32_t key, void* buf, size_t len) {
-    app_param_slot_t slot;
+    app_param_slot_t* slot = &s_load_slot;
 
     if (!s_ready || (buf == NULL) || (len == 0U) || (len > APP_PARAM_DATA_MAX)) {
         return -1;
     }
 
     for (uint32_t i = 0U; i < s_slot_count; i++) {
-        memset(&slot, 0, sizeof(slot));
-        if (s_flash->read(s_sector_addr + (i * APP_PARAM_SLOT_SIZE), &slot, sizeof(slot)) != 0) {
+        memset(slot, 0, sizeof(*slot));
+        if (s_flash->read(s_sector_addr + (i * APP_PARAM_SLOT_SIZE), slot, sizeof(*slot)) != 0) {
             return -1;
         }
-        if (param_slot_valid(&slot) && (slot.key == key)) {
-            if (slot.length != len) {
+        if (param_slot_valid(slot) && (slot->key == key)) {
+            if (slot->length != len) {
                 return -1;
             }
-            memcpy(buf, slot.data, len);
+            memcpy(buf, slot->data, len);
             return 0;
         }
     }
@@ -126,7 +129,7 @@ int app_param_load(uint32_t key, void* buf, size_t len) {
 }
 
 int app_param_store(uint32_t key, const void* buf, size_t len) {
-    app_param_slot_t verify;
+    app_param_slot_t* verify = &s_verify_slot;
     uint32_t target = s_slot_count;
 
     if (!s_ready || (buf == NULL) || (len == 0U) || (len > APP_PARAM_DATA_MAX)) {
@@ -175,12 +178,12 @@ int app_param_store(uint32_t key, const void* buf, size_t len) {
     }
 
     /* 5) 回读校验（本槽） */
-    memset(&verify, 0, sizeof(verify));
-    if (s_flash->read(s_sector_addr + (target * APP_PARAM_SLOT_SIZE), &verify, sizeof(verify))
+    memset(verify, 0, sizeof(*verify));
+    if (s_flash->read(s_sector_addr + (target * APP_PARAM_SLOT_SIZE), verify, sizeof(*verify))
         != 0) {
         return -1;
     }
-    if (memcmp(&verify, &s_slots[target], sizeof(verify)) != 0) {
+    if (memcmp(verify, &s_slots[target], sizeof(*verify)) != 0) {
         return -1;
     }
 

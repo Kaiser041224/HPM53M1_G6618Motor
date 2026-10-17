@@ -277,6 +277,24 @@ def test_meta_range(root: Path) -> None:
            f"duty={duty.get('min')}..{duty.get('max')} kp={kp.get('min')}..{kp.get('max')}")
 
 
+def test_position_loop_fields(root: Path) -> None:
+    """位置环字段：结构体成员 + APPLY_REBOOT 元数据（Task4 管线钉）"""
+    cfg = fresh_copy(root)
+    rc, _so, _se = run(cfg, check=False)
+    src = (cfg / "out" / "params_generated.c").read_text(encoding="utf-8")
+    meta = {m["name"]: m for m in parse_meta(cfg)}
+    want = {
+        "software.control.position_loop.pos_gain": "f32",
+        "software.control.position_loop.input_filter_bandwidth": "f32",
+    }
+    ok = rc == 0 and "position_loop" in src and "pos_gain" in src and "input_filter_bandwidth" in src
+    for name, ctype in want.items():
+        m = meta.get(name)
+        ok = ok and m is not None and m["type"] == gen.META_TYPE_ENUMS[ctype]
+        ok = ok and m is not None and m["apply"] == gen.META_APPLY_REBOOT
+    expect("position-loop-fields", ok, f"rc={rc} meta={list(meta)}")
+
+
 def test_meta_deterministic(root: Path) -> None:
     cfg = fresh_copy(root)
     run(cfg, check=False)
@@ -303,6 +321,7 @@ CASES = (
     test_bare_ambiguity,
     test_expression_hex,
     test_meta_count,
+    test_position_loop_fields,
     test_meta_name_sequence,
     test_meta_apply,
     test_meta_unit,

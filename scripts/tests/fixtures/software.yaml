@@ -41,6 +41,9 @@ control:
     friction_viscous_nm_per_rad_s: 0.1 # [Nm/(rad/s)]（测试夹具值）
     friction_smoothing_rad_s: 0.02     # [rad/s]（测试夹具值）
     velocity_lpf_coeff: 0.05       # 测速一阶滤波系数（测试夹具值）
+  position_loop:
+    pos_gain: 20.0                    # [1/s]（测试夹具值）
+    input_filter_bandwidth: 10.0      # [rad/s]（测试夹具值）
   limits:
     i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3
     i_trip_a: 10.0                     # 快速过流跳闸 [A]（0 = 关闭）

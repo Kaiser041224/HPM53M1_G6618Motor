@@ -319,12 +319,14 @@ static const char* app_terminal_motion_reason(int rc) {
     case APP_MOTION_CMD_TARGET_LIMIT:
         return "target over limit (torque<=50Kt Nm; speed has no command limit)";
     case APP_MOTION_CMD_GAIN_NOT_SET:
-        return "speed gains not set; run 'motion gains kp ki' while OFF";
+        return "gains not set; run 'motion gains kp ki' (speed) or 'motion pos_gains p [bw]' "
+               "(position) while OFF";
     case APP_MOTION_CMD_FOC_NOT_READY:
         return "foc not READY/RUN; run 'foc on' ('motion off' stops foc)";
     case APP_MOTION_CMD_BASE_CHANGED:
         return "Kt/direction changed while active; 'motion off' first";
-    case APP_MOTION_CMD_MODE_LOCKED: return "torque/speed switch while active; 'motion off' first";
+    case APP_MOTION_CMD_MODE_LOCKED:
+        return "torque/speed/position switch while active; 'motion off' first";
     case APP_MOTION_CMD_OWNER_DENIED: return "calibration/vtest owns output";
     default: return "unknown";
     }
@@ -487,6 +489,12 @@ static int cmd_motion(int argc, char** argv) {
     } else if (strcmp(sub, "show") == 0) {
         app_motion_snapshot_t state;
         app_motion_get_snapshot(&state);
+        /* 位置误差显示取模±π（跨零点不显示±2π假误差） */
+        float position_error = state.pos_setpoint_rad - state.shaft_rad;
+        if (position_error > 3.14159265f)
+            position_error -= 6.2831853f;
+        else if (position_error < -3.14159265f)
+            position_error += 6.2831853f;
         csh_printf(csh, "phase trial done=%u (apply required)\r\n", state.calibration_done);
         csh_printf(
             csh, "reject: sample=%lu duplicate=%lu vernier=%lu timing=%lu\r\n",
@@ -494,17 +502,20 @@ static int cmd_motion(int argc, char** argv) {
             (unsigned long)state.vernier_failure_count, (unsigned long)state.timing_failure_count);
         csh_printf(
             csh,
-            "motion: cal=%u zero=%u valid=%u active=%u calibrating=%u samples=%lu reason=%u\r\n"
+            "motion: mode=%u cal=%u zero=%u valid=%u active=%u calibrating=%u samples=%lu "
+            "reason=%u\r\n"
             "shaft=%.6frad speed=%.6frad/s phase=%.8fturn torque=%.4fNm iq=%.4fA "
             "good/bad=%lu/%lu\r\n"
-            "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n",
-            state.calibrated, state.zero_valid, state.feedback_valid, state.active,
-            state.calibrating, (unsigned long)state.calibration_samples, (unsigned)state.reason,
-            (double)state.shaft_rad, (double)state.speed_rad_s, (double)state.phase_turns,
-            (double)state.torque_nm, (double)state.iq_a, (unsigned long)state.good_count,
-            (unsigned long)state.bad_count, (double)state.iq_accepted_a,
-            (unsigned long)state.hold_count, (unsigned)state.current_limited,
-            (unsigned)state.voltage_saturated);
+            "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n"
+            "position: sp=%.6frad vel_cmd=%.6frad/s err=%.6frad\r\n",
+            (unsigned)state.mode, state.calibrated, state.zero_valid, state.feedback_valid,
+            state.active, state.calibrating, (unsigned long)state.calibration_samples,
+            (unsigned)state.reason, (double)state.shaft_rad, (double)state.speed_rad_s,
+            (double)state.phase_turns, (double)state.torque_nm, (double)state.iq_a,
+            (unsigned long)state.good_count, (unsigned long)state.bad_count,
+            (double)state.iq_accepted_a, (unsigned long)state.hold_count,
+            (unsigned)state.current_limited, (unsigned)state.voltage_saturated,
+            (double)state.pos_setpoint_rad, (double)state.vel_cmd_rad_s, (double)position_error);
         return 0;
     }
     if (app_friction_identify_busy() && strcmp(sub, "off") != 0 && strcmp(sub, "friction") != 0
@@ -529,7 +540,21 @@ static int cmd_motion(int argc, char** argv) {
             rc = app_motion_torque(value);
         else if (strcmp(sub, "speed") == 0)
             rc = app_motion_speed(value);
-        else if (
+        else if (strcmp(sub, "pos") == 0) {
+            float vel_ff = 0, torque_ff = 0;
+            if ((argc >= 4 && app_terminal_cmd_parse_float(argv[3], &vel_ff) != 0)
+                || (argc >= 5 && app_terminal_cmd_parse_float(argv[4], &torque_ff) != 0))
+                return app_terminal_cmd_usage(
+                    csh, "motion pos deg[0~360] [vel_ff_rad_s] [torque_ff_nm]");
+            /* 单圈绝对值模式：0~360° → [0,2π]（360°=0°，API 取模最短路径） */
+            rc = app_motion_position(value * (6.28318530718f / 360.0f), vel_ff, torque_ff);
+        } else if (strcmp(sub, "pos_gains") == 0) {
+            float filter_bw = 0; /* 省略=0（直通）；与 motion gains 可选参数同语义 */
+            if (argc >= 4 && app_terminal_cmd_parse_float(argv[3], &filter_bw) != 0)
+                return app_terminal_cmd_usage(
+                    csh, "motion pos_gains pos_gain [input_filter_bandwidth] (idle)");
+            rc = app_motion_position_gains(value, filter_bw);
+        } else if (
             strcmp(sub, "gains") == 0 && argc >= 4
             && app_terminal_cmd_parse_float(argv[3], &ki) == 0) {
             float coulomb_nm = 0, viscous_nm_per_rad_s = 0;
@@ -539,16 +564,20 @@ static int cmd_motion(int argc, char** argv) {
                     csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)");
             rc = app_motion_gains(value, ki, coulomb_nm, viscous_nm_per_rad_s);
         } else
-            return app_terminal_cmd_usage(csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)");
+            return app_terminal_cmd_usage(
+                csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)|pos deg[0~360] "
+                     "[vel_ff] [torque_ff]|pos_gains p [bw] (idle)");
     } else
         return app_terminal_cmd_usage(
             csh, "motion show|cal (OFF stationary)|apply|zero|save|gains kp ki "
                  "[coulomb] [viscous] (idle)|friction show|cal|apply|save|"
-                 "torque Nm|speed rad/s|off|direct (OFF)");
+                 "torque Nm|speed rad/s|pos deg[0~360] [vel_ff] [torque_ff]|pos_gains p [bw] "
+                 "(idle)|off|direct (OFF)");
     csh_printf(
         csh,
         "%s: motion rc=%d%s%s%s; show|cal (OFF stationary)|apply|zero|save|"
-        "gains kp ki [coulomb] [viscous] (idle)|torque Nm|speed rad/s|off|direct (OFF)\r\n",
+        "gains kp ki [coulomb] [viscous] (idle)|torque Nm|speed rad/s|"
+        "pos deg[0~360] [vel_ff] [torque_ff]|pos_gains p [bw] (idle)|off|direct (OFF)\r\n",
         rc == 0 ? "accepted" : "ERR", rc, rc == 0 ? "" : " (",
         rc == 0 ? "" : app_terminal_motion_reason(rc), rc == 0 ? "" : ")");
     return rc;

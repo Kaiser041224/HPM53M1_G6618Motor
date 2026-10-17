@@ -56,6 +56,14 @@ typedef struct {
 } app_software_speed_loop_t;
 
 /**
+ * @brief 位置环参数（app_motion init 期消费；motion pos_gains 在线改并可 param save 持久化）
+ */
+typedef struct {
+    float pos_gain; /**< 位置环P [1/s]（vel_cmd += pos_gain*pos_err；0 = 禁用位置模式） */
+    float input_filter_bandwidth; /**< 输入二阶滤波带宽 [rad/s]（0 = 直通） */
+} app_software_position_loop_t;
+
+/**
  * @brief 控制限幅参数（FOC 电流环消费）
  */
 typedef struct {
@@ -81,9 +89,10 @@ typedef struct {
  * @brief 控制环参数
  */
 typedef struct {
-    app_software_current_loop_t current_loop; /**< 电流环 */
-    app_software_speed_loop_t speed_loop;     /**< 速度环 */
-    app_software_limits_t limits;             /**< 控制限幅 */
+    app_software_current_loop_t current_loop;   /**< 电流环 */
+    app_software_speed_loop_t speed_loop;       /**< 速度环 */
+    app_software_position_loop_t position_loop; /**< 位置环 */
+    app_software_limits_t limits;               /**< 控制限幅 */
 } app_software_control_t;
 
 /**

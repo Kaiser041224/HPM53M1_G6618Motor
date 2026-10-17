@@ -41,8 +41,8 @@ extern "C" {
 #define APP_PARAM_KEY_SOFTWARE_PARAMS \
     (0x5350524DU)                               /* "SPRM"：软件参数在线改记忆（app_param_record） */
 
-/* 单条记录最大数据长度（128 - 头 12 - CRC 4） */
-#define APP_PARAM_DATA_MAX (112U)
+/* 单条记录最大数据长度（256 - 头 12 - CRC 4） */
+#define APP_PARAM_DATA_MAX (240U)
 
 /**
  * @brief 初始化参数存储：注册 flash 驱动、初始化 flash。

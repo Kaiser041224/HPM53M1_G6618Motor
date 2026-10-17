@@ -18,9 +18,15 @@ static uint32_t s_previous_cycle[2];
 static uint32_t s_expected_cycles[2];
 static bool s_motion_timer_initialized;
 static void (*s_velocity_callback)(void);
+static void (*s_position_callback)(void);
 void app_motion_timer_bind_velocity(void (*callback)(void)) {
     uint32_t st = intf_sys_irq_save();
     s_velocity_callback = callback;
+    intf_sys_irq_restore(st);
+}
+void app_motion_timer_bind_position(void (*callback)(void)) {
+    uint32_t st = intf_sys_irq_save();
+    s_position_callback = callback;
     intf_sys_irq_restore(st);
 }
 /** @brief 只观测最新编码器快照和入口间隔 */
@@ -52,10 +58,16 @@ static void motion_timer_observe(unsigned index, app_motion_timer_channel_snapsh
     if (elapsed > snapshot->execution_max_cycles)
         snapshot->execution_max_cycles = elapsed;
 }
-/** @brief 5kHz位置观测，CH0在共享IRQ中先分发 */
+/** @brief 5kHz位置入口：计时并执行绑定的外环回调（CH0在共享IRQ中先分发） */
 APP_ATTR_RAMFUNC
 static void motion_timer_position(void) {
+    uint32_t start = intf_clock_get_cycle();
     motion_timer_observe(0, &s_motion_timer_snapshot.position);
+    if (s_position_callback)
+        s_position_callback();
+    uint32_t elapsed = intf_clock_get_cycle() - start;
+    if (elapsed > s_motion_timer_snapshot.position.execution_max_cycles)
+        s_motion_timer_snapshot.position.execution_max_cycles = elapsed;
 }
 /** @brief 10kHz速度入口：计时并执行绑定的外环回调 */
 APP_ATTR_RAMFUNC

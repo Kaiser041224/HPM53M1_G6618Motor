@@ -222,8 +222,12 @@ void app_init(void) {
         app_friction_identify_init();
         int output_rc = app_encoder_output_start();
         app_debug_printf("[ENC] vernier sync: %s\r\n", output_rc == 0 ? "started" : "FAILED");
-        if (output_rc == 0)
+        if (output_rc == 0) {
+            /* 两回调都必须以游标输出链武装为前提（原守卫语义）：
+             * 未武装时 app_motion_step 会以 10kHz 空转拒绝路径搅动 FOC 请求 */
+            app_motion_timer_bind_position(app_motion_position_step);
             app_motion_timer_bind_velocity(app_motion_step);
+        }
         if (rc == 0)
             rc = app_motion_timer_start();
         app_debug_printf(
