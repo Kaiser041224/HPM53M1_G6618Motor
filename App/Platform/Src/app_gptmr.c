@@ -20,9 +20,9 @@
 #define APP_GPTMR_INSTANCE 1U
 #define APP_GPTMR_CH_BASE  (APP_GPTMR_INSTANCE * 4U)
 
-#define APP_GPTMR_CH0_FREQ 5000U
-/* motion速度观测周期，与位置形成2:1频率关系 */
-#define APP_GPTMR_CH1_FREQ 10000U
+#define APP_GPTMR_CH0_FREQ 10000U
+/* motion速度观测周期，与位置形成1.5:1频率关系 */
+#define APP_GPTMR_CH1_FREQ 15000U
 #define APP_GPTMR_CH2_FREQ 10000U
 /* 编码器采样：25kHz 的一半，供 25kHz FOC 复用（用时间戳算 dt） */
 #define APP_GPTMR_CH3_FREQ 12500U /* 预留通道（原转子采样器频率，现无使用者） */
@@ -48,7 +48,7 @@ void app_gptmr_init(void) {
     s_channel_frequency[2] = APP_GPTMR_CH2_FREQ;
     s_channel_frequency[3] = APP_GPTMR_CH3_FREQ;
 
-    /* CH0: motion位置观测5kHz */
+    /* CH0: motion位置观测10kHz */
     intf_gptmr_cfg_t cfg_voltage = {
         .mode = INTF_GPTMR_MODE_TIMER,
         .frequency_hz = APP_GPTMR_CH0_FREQ,

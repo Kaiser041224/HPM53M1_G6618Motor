@@ -19,8 +19,8 @@ void test_motion_timer(void) {
     CHECK(app_gptmr_register_callback(APP_GPTMR_CH_0, NULL) == 0);
     CHECK(g_mock_timer_config[4].callback == NULL);
     CHECK(app_motion_timer_init() == 0);
-    CHECK(g_mock_timer_config[4].frequency_hz == 5000);
-    CHECK(g_mock_timer_config[5].frequency_hz == 10000);
+    CHECK(g_mock_timer_config[4].frequency_hz == 10000);
+    CHECK(g_mock_timer_config[5].frequency_hz == 15000);
     CHECK(g_mock_timer_config[4].mode == INTF_GPTMR_MODE_TIMER);
     CHECK(g_mock_timer_config[5].mode == INTF_GPTMR_MODE_TIMER);
     CHECK(!g_mock_timer_running[4]);
@@ -44,13 +44,13 @@ void test_motion_timer(void) {
     app_motion_timer_take_window(&snapshot);
     CHECK(snapshot.velocity.window_count == 2);
     CHECK(snapshot.velocity.window_late_count == 1);
-    mock_advance_cycle(48000U);
+    mock_advance_cycle(32000U);
     if (g_mock_timer_config[5].callback)
         g_mock_timer_config[5].callback();
     app_motion_timer_take_window(&snapshot);
     CHECK(snapshot.velocity.count == 3 && snapshot.velocity.window_count == 1);
-    CHECK(snapshot.velocity.period_min_cycles == 48000U);
-    CHECK(snapshot.velocity.period_max_cycles == 48000U);
+    CHECK(snapshot.velocity.period_min_cycles == 32000U);
+    CHECK(snapshot.velocity.period_max_cycles == 32000U);
     CHECK(snapshot.velocity.window_late_count == 0);
     app_motion_timer_stop();
     CHECK(!g_mock_timer_running[4] && !g_mock_timer_running[5]);

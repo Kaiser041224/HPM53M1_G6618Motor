@@ -35,7 +35,8 @@
 
 #include <string.h>
 
-#define APP_ENCODER_SCLK_HZ (5000000U) /* 降为 5MHz：10MHz 台架实测坏帧率高（EMI） */
+#define APP_ENCODER_SCLK_HZ \
+    (8000000U) /* 8MHz：手册≤10MHz；10MHz 台架实测坏帧率高（EMI），取 8MHz */
 
 /** 机械角单步跳变上限 [deg]（25kHz 采样；5° ≈ 20000 rpm，远超实际转速） */
 #define APP_ENCODER_JUMP_LIMIT_DEG (5.0f)
@@ -45,8 +46,8 @@
 #define APP_ENCODER_SYNC_TRGM_SRC INTF_TRGM_SRC_PWM1_CH10REF
 #define APP_ENCODER_SYNC_TRGM_DST INTF_TRGM_DST_DMA_REQ0
 #define APP_ENCODER_SYNC_SPI_TRIG INTF_SPI_TRIG_DMA_REQ0
-/* 取帧时帧仍在传输的最长等待 [µs]：16bit@5MHz = 3.2µs + cs2sclk + csht(12 半 SCLK = 1.2µs)
- * ≈ 4.5µs 以上。正常 ISR 在 ADC 转换（~4µs）之后进入，帧已结束、不等待；仅 ISR 迟到一个
+/* 取帧时帧仍在传输的最长等待 [µs]：16bit@8MHz = 2µs + cs2sclk + csht(12 半 SCLK = 0.75µs)
+ * ≈ 3µs。正常 ISR 在 ADC 转换（~4µs）之后进入，帧已结束、不等待；仅 ISR 迟到一个
  * 周期（下一帧正在传输）时才等待，8µs 保证该情形能取到完整的新帧而非判失败。 */
 #define APP_ENCODER_SYNC_WAIT_US (8U)
 

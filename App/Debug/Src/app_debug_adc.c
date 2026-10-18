@@ -70,7 +70,7 @@ void app_debug_adc_init(void) {
         "ADC1[IN15,IN6,IN11,IN1] SEQ 1kHz(GPTMR0)\r\n",
         (unsigned)cfg->trigger_delay_ns);
     app_debug_printf(
-        "[ADC] %u bit / sample_cycle=%u / 触发 = PWM1 计数（25kHz）\r\n", (unsigned)cfg->resolution,
+        "[ADC] %u bit / sample_cycle=%u / 触发 = PWM1 计数（30kHz）\r\n", (unsigned)cfg->resolution,
         (unsigned)cfg->sample_cycle);
 }
 

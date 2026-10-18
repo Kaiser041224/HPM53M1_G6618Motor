@@ -32,9 +32,9 @@ canid_dip:
   levels: 16                              # 占位：4-bit 拨码档数；解码逻辑未实现（节点号映射待硬件确认）
 
 adc:
-  sample_cycle: 25                        # 采样窗口 [ADC 时钟数]（SDK 最小 10；曾复现通道数据重复，勿低于 10）
+  sample_cycle: 15                        # 采样窗口 [ADC 时钟数]（30kHz 三相：15 兼顾低侧窗口与噪声；下限 10）
   trigger_delay_ns: 500                   # 谷底后触发延时 [ns]
 
 inverter:
-  pwm_freq_hz: 25000                      # 开关频率 [Hz]
+  pwm_freq_hz: 30000                      # 开关频率 [Hz]
   deadtime_ns: 50                         # HPM 侧死区 [ns]（预驱自带 50~250ns）

@@ -58,7 +58,7 @@ static void motion_timer_observe(unsigned index, app_motion_timer_channel_snapsh
     if (elapsed > snapshot->execution_max_cycles)
         snapshot->execution_max_cycles = elapsed;
 }
-/** @brief 5kHz位置入口：计时并执行绑定的外环回调（CH0在共享IRQ中先分发） */
+/** @brief 10kHz位置入口：计时并执行绑定的外环回调（CH0在共享IRQ中先分发） */
 APP_ATTR_RAMFUNC
 static void motion_timer_position(void) {
     uint32_t start = intf_clock_get_cycle();
@@ -69,7 +69,7 @@ static void motion_timer_position(void) {
     if (elapsed > s_motion_timer_snapshot.position.execution_max_cycles)
         s_motion_timer_snapshot.position.execution_max_cycles = elapsed;
 }
-/** @brief 10kHz速度入口：计时并执行绑定的外环回调 */
+/** @brief 15kHz速度入口：计时并执行绑定的外环回调 */
 APP_ATTR_RAMFUNC
 static void motion_timer_velocity(void) {
     uint32_t start = intf_clock_get_cycle();
@@ -84,12 +84,12 @@ int app_motion_timer_init(void) {
     app_motion_timer_stop();
     s_motion_timer_initialized = false;
     s_motion_timer_snapshot = (app_motion_timer_snapshot_t){0};
-    s_expected_cycles[0] = intf_clock_get_cpu_freq() / 5000U;
-    s_expected_cycles[1] = intf_clock_get_cpu_freq() / 10000U;
+    s_expected_cycles[0] = intf_clock_get_cpu_freq() / 10000U;
+    s_expected_cycles[1] = intf_clock_get_cpu_freq() / 15000U;
     intf_gptmr_cfg_t position = {
-        .mode = INTF_GPTMR_MODE_TIMER, .frequency_hz = 5000, .callback = motion_timer_position};
+        .mode = INTF_GPTMR_MODE_TIMER, .frequency_hz = 10000, .callback = motion_timer_position};
     intf_gptmr_cfg_t velocity = {
-        .mode = INTF_GPTMR_MODE_TIMER, .frequency_hz = 10000, .callback = motion_timer_velocity};
+        .mode = INTF_GPTMR_MODE_TIMER, .frequency_hz = 15000, .callback = motion_timer_velocity};
     if (intf_gptmr_init(4, &position) != 0 || intf_gptmr_init(5, &velocity) != 0) {
         app_motion_timer_stop();
         return -1;

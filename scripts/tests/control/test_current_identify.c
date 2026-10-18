@@ -179,9 +179,17 @@ void test_current_identify(void) {
     app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 25000;
     CHECK(app_current_identify_start() != 0);
     app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 6283.185307f;
-    CHECK(app_current_identify_start() == 0); /* 25kHz采样下允许1kHz试验 */
+    CHECK(app_current_identify_start() == 0); /* 1kHz 仍允许 */
     app_current_identify_abort();
-    app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 6284.0f;
-    CHECK(app_current_identify_start() != 0);
+    app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 10471.9f;
+    CHECK(app_current_identify_start() == 0); /* fs/15 @25kHz ≈1666.7Hz 边界允许 */
+    app_current_identify_abort();
+    app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 10473.0f;
+    CHECK(app_current_identify_start() != 0); /* 超过 fs/15 拒绝 */
+    mock_set_pwm_hz(30000);
+    app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 12566.370614f;
+    CHECK(app_current_identify_start() == 0); /* 30kHz 下 2kHz 允许 */
+    app_current_identify_abort();
+    mock_set_pwm_hz(25000);
     app_foc_disable();
 }

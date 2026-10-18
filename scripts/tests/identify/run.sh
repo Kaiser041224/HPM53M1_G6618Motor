@@ -13,6 +13,7 @@ trap 'rm -rf "$OUT"' EXIT
 CC="${CC:-cc}"
 INCLUDES=(
     "-I$ROOT/App/Control/Inc"
+    "-I$ROOT/App/Control/Identify/Inc"
     "-I$ROOT/App/Algorithm/FOC/Inc"
     "-I$ROOT/App/Algorithm/Inc"
     "-I$ROOT/App/Platform/Inc"
@@ -23,7 +24,7 @@ BASE_FLAGS=(-std=c17 -Wall -Wextra -Werror)
 
 shopt -s nullglob
 APP_SRC=(
-    "$ROOT/App/Control/Src/app_motor_identify.c"
+    "$ROOT/App/Control/Identify/Src/app_motor_identify.c"
     "$ROOT/App/Algorithm/FOC/Src/id_encoder.c"
 )
 TEST_SRC=("$HERE"/test_*.c)

@@ -560,7 +560,7 @@ void test_motion_params(void) {
     CHECK(app_software_params_current()->control.speed_loop.friction_viscous_nm_per_rad_s == 4);
     CHECK(app_motion_gains(1, 2, 3, -1) == 0); /* 负Kv合法（Stribeck斜率） */
     CHECK(app_motion_gains(1, 2, 3, -101) == APP_MOTION_CMD_BAD_PARAM);
-    /* velocity_lpf_coeff=1：单拍测速无滤波，即达原始速度 (.01/50rad)/40us=5rad/s */
+    /* velocity_lpf_coeff=1：单拍测速无滤波，即达原始速度 (.01/20rad)/40us=12.5rad/s */
     g_mock_rotor_rad = 0;
     g_mock_output_timestamp_override = true;
     g_mock_output_timestamp_cycles = 1000000U;
@@ -571,7 +571,7 @@ void test_motion_params(void) {
     mock_advance_cycle(48000);
     app_motion_step();
     app_motion_get_snapshot(&snapshot);
-    CHECK_NEAR(snapshot.speed_rad_s, 5.0f, 1e-3f);
+    CHECK_NEAR(snapshot.speed_rad_s, 12.5f, 1e-3f);
     g_mock_output_timestamp_override = false;
     g_mock_rotor_rad = 0;
 }
@@ -691,7 +691,7 @@ static void pos_setup(float speed_limit_rad_s) {
     CHECK(app_foc_enable() == 0);
 }
 
-/** @brief 仿真 ticks 拍：CH0 位置拍 5kHz（先于速度拍，驱动分发序 CH0→CH1）+ CH1 速度拍 10kHz */
+/** @brief 仿真 ticks 拍：位置/速度均按 10kHz 模拟（位置先于速度，驱动分发序 CH0→CH1） */
 static void pos_run_ticks(unsigned ticks) {
     extern void mock_advance_cycle(uint32_t cycles);
     extern uint32_t g_mock_output_timestamp_cycles;
@@ -699,8 +699,7 @@ static void pos_run_ticks(unsigned ticks) {
         pos_plant_step(1e-4f);
         mock_advance_cycle(48000);
         g_mock_output_timestamp_cycles += 48000U;
-        if (i % 2 == 0)
-            app_motion_position_step();
+        app_motion_position_step();
         app_motion_step();
     }
 }

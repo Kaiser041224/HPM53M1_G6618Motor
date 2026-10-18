@@ -25,6 +25,9 @@ static float s_current_identify_currents[5], s_current_identify_voltages[5];
 static float s_current_identify_ld[2];
 static bool s_current_identify_applied;
 static uint32_t s_identify_pwm_hz, s_identify_pole_pairs;
+/* 位移门限 [rad 电角]：0.5 rad≈2.9°机械（10 对极）。50:1 减速器带载时
+ * cal encoder 实测回差 8.6~10.6°电角；原 0.15 rad 会在正常齿隙内误报。 */
+#define APP_CURRENT_IDENTIFY_MOVEMENT_MAX_RAD (0.5f)
 static float s_current_identify_origin_rotor;
 static bool s_pi_baseline_armed;
 static double s_phase_sum[3];
@@ -86,9 +89,9 @@ int app_current_identify_start(void) {
     float offset, direction;
     float bandwidth = app_software_params_current()->control.current_loop.bandwidth_rad_s;
     uint32_t pwm_hz = app_hardware_params_current()->inverter.pwm_freq_hz;
-    /* 试验上界fs/25：25kHz时允许1kHz。不是实测相位裕度保证。 */
+    /* 试验上界fs/15：30kHz时允许2kHz（25kHz时约1.67kHz）。不是实测相位裕度保证。 */
     if (!foc_finite(bandwidth) || bandwidth <= 0 || pwm_hz == 0
-        || bandwidth > (float)pwm_hz * (6.283185307f / 25.0f))
+        || bandwidth > (float)pwm_hz * (6.283185307f / 15.0f))
         return -1;
     app_encoder_rotor_snapshot_t rotor;
     if (s_current_identify_result.active || app_foc_get_state() != APP_FOC_STATE_READY
@@ -195,7 +198,8 @@ void app_current_identify_run_once(void) {
             : 0;
     /* 不可信数据/明显转动拒绝辨识，不执行关机。 */
     if (!snapshot.valid || !foc_finite(snapshot.theta_e_rad) || rotor_rc || !rotor.valid
-        || !foc_finite(rotor.rad) || fabsf(result->theta_delta_rad) > 0.15f) {
+        || !foc_finite(rotor.rad)
+        || fabsf(result->theta_delta_rad) > APP_CURRENT_IDENTIFY_MOVEMENT_MAX_RAD) {
         result->detail = !snapshot.valid || !foc_finite(snapshot.theta_e_rad)
                            ? APP_CURRENT_IDENTIFY_DETAIL_SNAPSHOT
                            : APP_CURRENT_IDENTIFY_DETAIL_MOVEMENT;
@@ -588,7 +592,7 @@ int app_current_identify_restore(void) {
         || record.kp <= 0 || !foc_finite(record.ki) || record.ki <= 0
         || !foc_finite(record.bandwidth) || record.bandwidth <= 0
         || record.pwm_hz==0 || record.pole_pairs==0
-        || record.bandwidth>(float)record.pwm_hz/25.0f)
+        || record.bandwidth>(float)record.pwm_hz/15.0f)
         return -1;
     app_motor_params_mutable()->rs_ohm = record.rs;
     app_motor_params_mutable()->ls_h = record.ld;

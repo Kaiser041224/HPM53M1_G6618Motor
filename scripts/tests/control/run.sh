@@ -11,6 +11,7 @@ trap 'rm -rf "$OUT"' EXIT
 CC="${CC:-cc}"
 INCLUDES=(
     "-I$ROOT/App/Control/Inc"
+    "-I$ROOT/App/Control/Identify/Inc"
     "-I$ROOT/App/Algorithm/FOC/Inc"
     "-I$ROOT/App/Algorithm/Inc"
     "-I$ROOT/App/Platform/Inc"
@@ -22,13 +23,13 @@ BASE_FLAGS=(-std=c17 -Wall -Wextra -Werror)
 shopt -s nullglob
 APP_SRC=(
     "$ROOT/App/Control/Src/app_motion.c"
-    "$ROOT/App/Control/Src/app_friction_identify.c"
+    "$ROOT/App/Control/Identify/Src/app_friction_identify.c"
     "$ROOT/App/Algorithm/Src/algo_motion.c"
     "$ROOT/App/Algorithm/Src/algo_friction.c"
     "$ROOT/App/Platform/Src/app_gptmr.c"
     "$ROOT/App/Platform/Src/app_motion_timer.c"
     "$ROOT/App/Algorithm/FOC/Src/id_rl_pulse.c"
-    "$ROOT/App/Control/Src/app_current_identify.c"
+    "$ROOT/App/Control/Identify/Src/app_current_identify.c"
     "$ROOT/App/Algorithm/FOC/Src/id_rl.c"
     "$ROOT/App/Control/Src/app_foc_current.c"
     "$ROOT/App/Control/Src/app_foc.c"

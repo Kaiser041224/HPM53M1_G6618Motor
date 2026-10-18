@@ -44,7 +44,10 @@
 /* ---- 验证（探针法）：零点 ~90° 错误 → 无转矩 → 行程≈0 → 失败；180° 错误 → 反转 → 失败 ---- */
 #define APP_IDENTIFY_VERIFY_SETTLE_MS     (50U)   /**< 静默段 [ms]（排除扫描残余速度） */
 #define APP_IDENTIFY_VERIFY_RESID_MS      (50U)   /**< 残差采样窗口 [ms] */
-#define APP_IDENTIFY_VERIFY_RESID_MAX_DEG (90.0f) /**< 静默段残差峰值上限 [deg] */
+#define APP_IDENTIFY_VERIFY_RESID_MAX_DEG (15.0f) /**< 验证残差峰值上限 [deg 电角]：
+                                                    * 带 50:1 减速器+输出负载时实测 12.85°；
+                                                    * 10° 过紧。15° 仍拒绝 23°+ 的坏结果
+                                                    * （44° 级必须重标，不得 apply）。 */
 #define APP_IDENTIFY_PROBE_A              (1.0f)  /**< 探针 i_q [A] */
 #define APP_IDENTIFY_PROBE_MS             (60U)   /**< 探针时长 [ms] */
 #define APP_IDENTIFY_PROBE_MIN_RAD        (0.05f) /**< 探针最小机械行程 [rad] */

@@ -28,10 +28,11 @@ static float s_velocity_lpf_coeff;              /**< 测速一阶滤波系数（
 static float s_motion_iq_max_a;          /**< motion 命令电流硬限制[A]（力矩命令与PI输出上限） */
 static float s_motion_speed_limit_rad_s; /**< 轴端速度命令限[rad/s]（0=不限） */
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
+static float s_previous_motor_rad; /**< 上一拍转子机械角（测速基准；输出侧速度=转子速度/减速比） */
 static float s_calibration_sum, s_calibration_first;
 static float s_calibration_phase;
 static uint32_t s_previous_cycle, s_previous_sequence, s_epoch, s_request_sequence;
-static uint32_t s_previous_sample_cycle; /**< 上一个用于测速的配对快照时间 */
+static uint32_t s_previous_sample_cycle;                     /**< 上一个用于测速的配对快照时间 */
 static float s_seconds_per_cycle;
 static bool s_primed;
 static float s_input_pos, s_input_vel_ff, s_input_torque_ff; /**< 位置模式输入（ODrive input_*） */
@@ -125,6 +126,7 @@ void app_motion_init(void) {
     s_previous_sequence = 0;
     s_previous_cycle = 0;
     s_previous_sample_cycle = 0;
+    s_previous_motor_rad = 0;
     s_hold_samples = 0;
     s_velocity_gap = false;
     s_have_nearest = false;
@@ -495,6 +497,11 @@ void app_motion_step(void) {
         return;
     }
     angle *= direction;
+    float reducer = s_motion_motor_params->reducer_ratio;
+    if (!foc_finite(reducer) || reducer <= 0) {
+        motion_reject(APP_MOTION_REASON_PARAMETER);
+        return;
+    }
     float dt = (float)(now - s_previous_cycle) * s_seconds_per_cycle;
     float sample_dt =
         (float)(uint32_t)(rotor.timestamp_cycles - s_previous_sample_cycle) * s_seconds_per_cycle;
@@ -504,14 +511,18 @@ void app_motion_step(void) {
         motion_reject(APP_MOTION_REASON_TIMING);
         return;
     }
+    /* 测速用转子编码器（1:1、30kHz 同步采样）：不经过游标 50 圈解模糊，
+     * 避免齿隙/扭振/解码噪声进入速度环；输出角仍只用于位置。 */
+    float motor_delta = foc_wrap_pm_pi(rotor.rad - s_previous_motor_rad);
     if (s_velocity_gap) {
         s_velocity_gap = false; /* 跨保持间隙的差分不进入测速滤波 */
     } else if (s_primed && sample_dt > 0 && sample_dt < .001f) {
-        float velocity = foc_wrap_pm_pi(angle - s_previous_angle) / sample_dt;
+        float velocity = (motor_delta * direction) / sample_dt / reducer;
         s_motion.speed_rad_s += s_velocity_lpf_coeff * (velocity - s_motion.speed_rad_s);
     } else if (!s_primed) {
         s_motion.speed_rad_s = 0;
     }
+    s_previous_motor_rad = rotor.rad;
     s_previous_angle = angle;
     s_previous_cycle = now;
     s_previous_sample_cycle = rotor.timestamp_cycles;
@@ -532,9 +543,8 @@ void app_motion_step(void) {
         return;
     }
     float kt = s_motion_motor_params->kt_nm_per_a;
-    float reducer = s_motion_motor_params->reducer_ratio;
-    if (!foc_finite(kt) || kt <= 0 || !foc_finite(reducer) || reducer <= 0 || kt != s_active_kt
-        || reducer != s_active_reducer || direction != s_active_direction) {
+    if (!foc_finite(kt) || kt <= 0 || kt != s_active_kt || reducer != s_active_reducer
+        || direction != s_active_direction) {
         motion_reject(APP_MOTION_REASON_PARAMETER);
         return;
     }
@@ -576,11 +586,11 @@ void app_motion_step(void) {
 APP_ATTR_RAMFUNC
 void app_motion_position_step(void) {
     /* ODrive 级联：滤波输入（input_pos/input_vel）→ 位置P → 速度目标。
-     * 反馈（shaft_rad 单圈绝对角）取自 10kHz 估计器；CH0/CH1 共享 IRQ 串行，零 SPI。 */
+     * 反馈（shaft_rad 单圈绝对角）取自 15kHz 估计器；CH0/CH1 共享 IRQ 串行，零 SPI。 */
     if (!s_motion.active || s_motion.mode != APP_MOTION_MODE_POSITION || !s_motion.feedback_valid)
         return;
     algo_motion_pos_filter_step(
-        &s_pos_filter, s_input_pos, s_input_vel_ff, s_pos_filter_bw, 1.0f / 5000.0f);
+        &s_pos_filter, s_input_pos, s_input_vel_ff, s_pos_filter_bw, 1.0f / 10000.0f);
     float vel_cmd = algo_motion_position(
         s_pos_filter.pos_setpoint_rad, s_motion.shaft_rad, s_pos_gain,
         s_pos_filter.vel_setpoint_rad_s);

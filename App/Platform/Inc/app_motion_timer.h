@@ -30,9 +30,9 @@ typedef struct {
     app_motion_timer_channel_snapshot_t position;
     app_motion_timer_channel_snapshot_t velocity;
 } app_motion_timer_snapshot_t;
-/** @brief 配置GPTMR1 CH0=5kHz CH1=10kHz；调用前app_gptmr_init，配置后停止 */
+/** @brief 配置GPTMR1 CH0=10kHz CH1=15kHz；调用前app_gptmr_init，配置后停止 */
 int app_motion_timer_init(void);
-/** @brief 启动纯5kHz/10kHz定时中断；不触发SPI，不等待PWM同步 */
+/** @brief 启动纯10kHz/15kHz定时中断；不触发SPI，不等待PWM同步 */
 int app_motion_timer_start(void);
 /** @brief 停止期间绑定速度实时消费者；回调必须有界无RTOS调用 */
 void app_motion_timer_bind_velocity(void (*callback)(void));

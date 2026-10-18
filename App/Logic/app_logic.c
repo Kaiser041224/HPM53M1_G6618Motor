@@ -211,7 +211,7 @@ void app_init(void) {
         int sync_rc = app_encoder_sync_start();
 
         app_debug_printf(
-            "[ENC] sync: %s (PWM1 CMP10 -> TRGM DMA0 -> HDMA -> SPI3 CMD, 25kHz) | "
+            "[ENC] sync: %s (PWM1 CMP10 -> TRGM DMA0 -> HDMA -> SPI3 CMD, 30kHz) | "
             "ref(2-frame)=%s0x%04X\r\n",
             (sync_rc == 0) ? "OK" : "FAILED", (ref_rc == 0) ? "" : "ERR ", (unsigned)ref_raw);
     }
@@ -231,7 +231,7 @@ void app_init(void) {
         if (rc == 0)
             rc = app_motion_timer_start();
         app_debug_printf(
-            "[MOTION] timer observation: %s (position=5kHz velocity=10kHz)\r\n",
+            "[MOTION] timer observation: %s (position=10kHz velocity=15kHz)\r\n",
             rc == 0 ? "started" : "FAILED");
     }
 }
