@@ -36,7 +36,7 @@ int app_motion_timer_init(void);
 int app_motion_timer_start(void);
 /** @brief 停止期间绑定速度实时消费者；回调必须有界无RTOS调用 */
 void app_motion_timer_bind_velocity(void (*callback)(void));
-/** @brief 停止期间绑定位置实时消费者（CH0 5kHz拍）；回调必须有界无RTOS调用 */
+/** @brief 停止期间绑定位置实时消费者（CH0 10kHz拍）；回调必须有界无RTOS调用 */
 void app_motion_timer_bind_position(void (*callback)(void));
 /** @brief 停止双通道 */
 void app_motion_timer_stop(void);

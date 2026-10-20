@@ -67,3 +67,18 @@ int app_param_load(uint32_t key, void* buf, size_t len) {
     }
     return -1;
 }
+
+int app_param_load_flex(uint32_t key, void* buf, size_t cap, size_t* out_len) {
+    if (buf == NULL || out_len == NULL)
+        return -1;
+    for (unsigned i = 0; i < MOCK_FLASH_SLOTS; ++i) {
+        if (s_slots[i].used && s_slots[i].key == key) {
+            if (s_slots[i].length > cap) /* 记录长于调用方缓冲 */
+                return -1;
+            memcpy(buf, s_slots[i].data, s_slots[i].length);
+            *out_len = s_slots[i].length;
+            return 0;
+        }
+    }
+    return -1;
+}

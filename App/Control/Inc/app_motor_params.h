@@ -50,7 +50,7 @@ typedef struct {
     float inertia_kgm2;          /**< 转动惯量 [kg·m²] */
     float torque_rated_nm;       /**< 额定转矩 [N·m] */
     float torque_peak_10s_nm;    /**< 峰值转矩 10s [N·m] */
-    float reducer_ratio;         /**< 减速比（出轴/转子）；转矩换算 τ_out = Kt·iq·reducer_ratio */
+    float reducer_ratio;         /**< 减速比（出轴/转子）；多圈游标、转矩/速度换算统一使用 */
     app_motor_encoder_t encoder; /**< 编码器齿系与电角度标定 */
 } app_motor_params_t;
 

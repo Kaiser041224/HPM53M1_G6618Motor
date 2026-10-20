@@ -13,6 +13,8 @@ int g_checks = 0;
 int g_fails = 0;
 
 void test_foc_current_integration(void);
+void test_foc_speed_observer(void);
+void test_algo_speed_observer(void);
 void test_foc_calib_port(void);
 void test_id_rl(void);
 void test_current_capture(void);
@@ -38,7 +40,7 @@ void test_motion_anti_windup(void);
 void test_motion_cmd_status(void);
 void test_motion_friction_feedforward(void);
 void test_motion_params(void);
-void test_motion_vernier_fallback(void);
+void test_motion_speed_rotor_only(void);
 void test_motion_position_command(void);
 void test_motion_position_gains(void);
 void test_motion_position_cascade(void);
@@ -53,6 +55,8 @@ void test_friction_identify_diagnostics(void);
 int main(void) {
     printf("Control host tests\n");
     test_foc_current_integration();
+    test_foc_speed_observer();
+    test_algo_speed_observer();
     test_foc_calib_port();
     test_id_rl();
     test_current_capture();
@@ -78,7 +82,7 @@ int main(void) {
     test_motion_cmd_status();
     test_motion_friction_feedforward();
     test_motion_params();
-    test_motion_vernier_fallback();
+    test_motion_speed_rotor_only();
     test_motion_position_command();
     test_motion_position_gains();
     test_motion_position_cascade();

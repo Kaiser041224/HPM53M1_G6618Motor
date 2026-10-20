@@ -1,6 +1,6 @@
 /**
  * @file    app_foc_current.c
- * @brief   FOC 电流环 25kHz 执行
+ * @brief   FOC 电流环 30kHz 执行
  * @author  Kaiser
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -20,6 +20,7 @@
 #include "app_protect_policy.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
+#include "foc_angle.h"
 #include "foc_current.h"
 #include "foc_math.h"
 #include "foc_modulation.h"
@@ -27,6 +28,17 @@
 #include <math.h>
 
 #define APP_FOC_V_BUS_MIN_V (9.0f) /**< 最低母线电压 [V]（低于则拒绝输出，零矢量） */
+/* 采样到下一 PWM 输出的一拍延迟；由 software.current_loop.output_delay_s 在 init 期覆盖。
+ * 非法值退回 0（关闭），避免未标定延迟影响既有辨识/摩擦测试。 */
+static float s_output_delay_s;
+/* init 期缓存的参数单例地址：ISR 内读字段不再调用 Flash 访问器 */
+static const app_motor_params_t* s_motor_params;
+
+void app_foc_current_set_output_delay(float delay_s) {
+    if (foc_finite(delay_s) && (delay_s >= 0.0f) && (delay_s <= 1.0e-3f)) {
+        s_output_delay_s = delay_s;
+    }
+}
 
 /* 控制层有效占空比上限（与用户配置取较小值）。
  * 0.95为24V空载速度试验选定，采样精度仍须示波验证。
@@ -99,7 +111,7 @@ const id_rl_sample_t* app_foc_current_identify_data(uint16_t* count) {
     *count = s_identify_count;
     return s_identify_samples;
 }
-/** 电流慢平均系数（25kHz → ~32Hz 一阶低通） */
+/** 电流慢平均系数（30kHz 采样；慢观测用，非控制反馈） */
 #define APP_FOC_CURRENT_AVG_ALPHA (0.002f)
 
 /** d/q 反馈慢平均状态 [A] */
@@ -151,6 +163,8 @@ void app_foc_current_init(void) {
     const app_motor_params_t* motor = app_motor_params_current();
     foc_current_cfg_t cfg;
 
+    s_motor_params = motor;
+
     cfg.kp = software->control.current_loop.kp;
     cfg.ki = software->control.current_loop.ki;
     cfg.sample_time_s = 1.0f / (float)app_hardware_params_current()->inverter.pwm_freq_hz;
@@ -162,6 +176,15 @@ void app_foc_current_init(void) {
 
     foc_current_ctor(&s_current);
     s_ready = (s_current.init(&s_current, &cfg) == 0);
+    /* 输出延迟：YAML init 期消费；非法值退回 0（关闭），不阻断电流环 */
+    s_output_delay_s = 0.0f;
+    {
+        float delay_s = software->current_loop_output_delay_s;
+
+        if (foc_finite(delay_s) && (delay_s >= 0.0f) && (delay_s <= 1.0e-3f)) {
+            s_output_delay_s = delay_s;
+        }
+    }
     g_foc_current_snapshot = (app_foc_current_snapshot_t){0};
     (void)app_foc_effective_duty_max(software); /* 记录有效上限（init 即可观测） */
 }
@@ -418,7 +441,7 @@ float app_foc_current_get_v_scale(void) {
  * @brief 电流环（显式输入版本：供 ADC 完成回调使用，输入为本拍新鲜采样）
  * @note 与 app_foc_current_run 的区别：不读模拟量缓存，电流/母线由调用方给出
  */
-APP_ATTR_RAMFUNC /* 25kHz 电流环主体（ADC0 PMT ISR） */
+APP_ATTR_RAMFUNC /* 30kHz 电流环主体（ADC0 PMT ISR） */
 int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_ref, float i_q_ref,
                               float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
                               float duty_abc_out[3], bool* saturated_out) {
@@ -429,6 +452,7 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     foc_current_out_t out = {0};
     foc_modulation_cfg_t mod_cfg;
     float i_alpha, i_beta, v_alpha, v_beta, duty[3], v_scale = 1.0f, s, c;
+    float s_out, c_out, theta_e_out;
     float v_bus, duty_max;
 
     if (!s_ready) {
@@ -523,8 +547,10 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     }
     g_foc_cyc_pi = intf_clock_get_cycle() - t_pi;
 
-    /* 反 Park → 调制（min-max 零序注入） */
-    foc_inv_park_sc(out.v_d, out.v_q, s, c, &v_alpha, &v_beta);
+    /* 反 Park 使用采样到输出的延迟补偿角；Park 仍用采样角 */
+    theta_e_out = foc_angle_advance(theta_e_rad, omega_e_rad_s, s_output_delay_s);
+    foc_sincos(theta_e_out, &s_out, &c_out);
+    foc_inv_park_sc(out.v_d, out.v_q, s_out, c_out, &v_alpha, &v_beta);
     mod_cfg.duty_max = duty_max;
     mod_cfg.v_bus_min = APP_FOC_V_BUS_MIN_V;
     if (foc_modulation_step(&mod_cfg, v_alpha, v_beta, v_bus, duty, &v_scale) != 0) {
@@ -563,9 +589,21 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
 
     g_foc_current_snapshot.theta_e_rad = theta_e_rad;
     g_foc_current_snapshot.omega_e_rad_s = omega_e_rad_s;
+    {
+        float pp = (float)s_motor_params->pole_pairs;
+        float dir = s_motor_params->encoder.direction;
+        float red = s_motor_params->reducer_ratio;
+
+        g_foc_current_snapshot.speed_out_rad_s =
+            (foc_finite(omega_e_rad_s) && (pp > 0.0f) && (red > 0.0f)
+             && ((dir == 1.0f) || (dir == -1.0f)))
+                ? omega_e_rad_s / (pp * dir * red)
+                : 0.0f;
+        g_foc_current_snapshot.speed_out_valid = false; /* P0-B observer 有效时由 app_foc 置位 */
+    }
     g_foc_current_snapshot.i_d_a = foc_finite(in.i_d_a) ? in.i_d_a : 0.0f;
     g_foc_current_snapshot.i_q_a = foc_finite(in.i_q_a) ? in.i_q_a : 0.0f;
-    /* 慢平均（~32Hz @25kHz）：终端单拍瞬时值无意义（PI 尚未响应） */
+    /* 慢平均（30kHz 采样）：终端单拍瞬时值无意义（PI 尚未响应） */
     s_i_d_avg += APP_FOC_CURRENT_AVG_ALPHA * (g_foc_current_snapshot.i_d_a - s_i_d_avg);
     s_i_q_avg += APP_FOC_CURRENT_AVG_ALPHA * (g_foc_current_snapshot.i_q_a - s_i_q_avg);
     g_foc_current_snapshot.i_d_avg_a = s_i_d_avg;

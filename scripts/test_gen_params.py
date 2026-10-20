@@ -210,6 +210,17 @@ def test_expression_hex(root: Path) -> None:
     expect("expression-hex-literal", rc == 0 and "校验通过" in so, f"rc={rc} se={se!r}")
 
 
+def test_vernier_consistency(root: Path) -> None:
+    cfg = fresh_copy(root)
+    sub1(cfg / "motor.yaml", r"^reducer_ratio:.*$", "reducer_ratio: 20.0")
+    rc, so, se = run(cfg, check=True)
+    expect(
+        "vernier-consistency",
+        rc == 1 and "游标参数不一致" in se,
+        f"rc={rc} se={se!r}",
+    )
+
+
 def test_meta_count(root: Path) -> None:
     cfg = fresh_copy(root)
     rc, so, se = run(cfg, check=False)
@@ -320,6 +331,7 @@ CASES = (
     test_pow_guard,
     test_bare_ambiguity,
     test_expression_hex,
+    test_vernier_consistency,
     test_meta_count,
     test_position_loop_fields,
     test_meta_name_sequence,

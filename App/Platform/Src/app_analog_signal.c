@@ -24,7 +24,10 @@
  * ============================================================================ */
 
 /* 零点标定过程参数（不随 YAML，标定流程专用） */
-#define APP_ANALOG_ZERO_CAL_FRAMES      (256U)   /* ~10ms @25kHz（TBD：随 pwm_freq 派生） */
+#define APP_ANALOG_ZERO_CAL_FRAMES      (256U)   /* ~8.5ms @30kHz（TBD：随 pwm_freq 派生） */
+/* app_analog_signal_process() 的调用频率：app_io_step 1ms 慢任务，不是 PWM/电流拍。
+ * 滤波器初始化必须用本值，否则 LPF 系数会按 30kHz 计算而实际以 1kHz 运行。 */
+#define APP_ANALOG_PROCESS_RATE_HZ      (1000.0f)
 #define APP_ANALOG_ZERO_CAL_TIMEOUT_US  (50000U) /* 50ms 超时 */
 #define APP_ANALOG_ZERO_CAL_MAX_DEV_PCT (5U)     /* 偏离中值超过 5% FS → 视为有电流 */
 
@@ -51,9 +54,9 @@ static app_analog_filter_t s_filters[ADC_CH_COUNT] = {
     [ADC_CH_I_U] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_I_V] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_I_W] = {.type = APP_ANALOG_FILTER_NONE},
-    /* 慢速通道（ADC1 读取模式 @1kHz）：值本身为直流，process 以主循环节拍（=
-     * inverter.pwm_freq_hz，config/hardware.yaml）重复调用，
-     * 滤波系数与调用频率不匹配会过度滤波，故暂用直通；待 FOC 阶段按 1kHz 重新标定。 */
+    /* 慢速通道（ADC1 读取模式 @1kHz）：值本身为直流，process 以 app_io_step
+     * 1ms 节拍重复调用（不是 pwm_freq），滤波系数按 APP_ANALOG_PROCESS_RATE_HZ
+     * 标定；当前仍用直通，待 FOC 阶段按 1kHz 重新标定。 */
     [ADC_CH_V_VBUS] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_NTC0] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_NTC1] = {.type = APP_ANALOG_FILTER_NONE},
@@ -165,7 +168,7 @@ void app_analog_signal_init(void) {
         } else if (filter->type == APP_ANALOG_FILTER_LPF) {
             algo_lpf_cfg_t cfg = {
                 .cutoff_hz = filter->lpf_cutoff_hz,
-                .sample_rate_hz = (float)app_hardware_params_current()->inverter.pwm_freq_hz,
+                .sample_rate_hz = APP_ANALOG_PROCESS_RATE_HZ,
             };
             algo_lpf_ctor(&filter->lpf);
             (void)filter->lpf.init(&filter->lpf, &cfg);

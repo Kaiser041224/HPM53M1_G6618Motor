@@ -128,6 +128,32 @@ int app_param_load(uint32_t key, void* buf, size_t len) {
     return -1; /* 未找到 */
 }
 
+int app_param_load_flex(uint32_t key, void* buf, size_t cap, size_t* out_len) {
+    app_param_slot_t* slot = &s_load_slot;
+
+    if (!s_ready || (buf == NULL) || (cap == 0U) || (cap > APP_PARAM_DATA_MAX)
+        || (out_len == NULL)) {
+        return -1;
+    }
+
+    for (uint32_t i = 0U; i < s_slot_count; i++) {
+        memset(slot, 0, sizeof(*slot));
+        if (s_flash->read(s_sector_addr + (i * APP_PARAM_SLOT_SIZE), slot, sizeof(*slot)) != 0) {
+            return -1;
+        }
+        if (param_slot_valid(slot) && (slot->key == key)) {
+            if (slot->length > cap) {
+                return -1;
+            }
+            memcpy(buf, slot->data, slot->length);
+            *out_len = slot->length;
+            return 0;
+        }
+    }
+
+    return -1; /* 未找到 */
+}
+
 int app_param_store(uint32_t key, const void* buf, size_t len) {
     app_param_slot_t* verify = &s_verify_slot;
     uint32_t target = s_slot_count;

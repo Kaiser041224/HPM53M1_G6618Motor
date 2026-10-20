@@ -95,6 +95,12 @@ SCHEMA = {
         ("control.current_loop.ki", "control.current_loop.ki", "f32", None, None),
         ("control.current_loop.bandwidth_rad_s", "control.current_loop.bandwidth_rad_s", "f32", 0.0, None),
         ("control.current_loop.decoupling_en", "control.current_loop.decoupling_en", "u8", 0, 1),
+        ("control.current_loop.output_delay_s", "current_loop_output_delay_s", "f32", 0.0, 1.0e-3),
+        ("control.speed_observer.enable", "speed_observer.enable", "u8", 0, 1),
+        ("control.speed_observer.bandwidth_rad_s",
+         "speed_observer.bandwidth_rad_s", "f32", 1.0, None),
+        ("control.speed_observer.max_speed_rad_s",
+         "speed_observer.max_speed_rad_s", "f32", 1.0, None),
         ("control.speed_loop.kp", "control.speed_loop.kp", "f32", None, None),
         ("control.speed_loop.ki", "control.speed_loop.ki", "f32", None, None),
         ("control.speed_loop.friction_coulomb_nm",
@@ -176,6 +182,11 @@ APPLY_REBOOT = {
     "software.control.speed_loop.friction_viscous_nm_per_rad_s",
     "software.control.speed_loop.friction_smoothing_rad_s",
     "software.control.speed_loop.velocity_lpf_coeff",
+    # 软件：FOC observer / 输出延迟（app_foc、app_foc_current init 期缓存）
+    "software.control.speed_observer.enable",
+    "software.control.speed_observer.bandwidth_rad_s",
+    "software.control.speed_observer.max_speed_rad_s",
+    "software.control.current_loop.output_delay_s",
     "software.control.position_loop.pos_gain",
     "software.control.position_loop.input_filter_bandwidth",
     "software.control.limits.motion_iq_max_a",
@@ -515,6 +526,16 @@ def cross_checks(symbols) -> None:
         raise err("跨域校验", "vbus_ov_v 超过电机额定电压（motor.vbus_nom_v）")
     if g("software", "fault.oc_trip_a") < g("motor", "i_rated_a"):
         raise err("跨域校验", "oc_trip_a 低于额定电流（会误报）")
+    reducer = g("motor", "reducer_ratio")
+    output_ratio = g("motor", "encoder.output_ratio")
+    if not (0.0 < output_ratio < 1.0):
+        raise err("跨域校验", "encoder.output_ratio 必须在 (0, 1) 内（出轴/转子比）")
+    if abs(reducer - round(reducer)) > 1e-6:
+        raise err("跨域校验", "motor.reducer_ratio 必须为正整数圈数")
+    if abs(reducer * (1.0 - output_ratio) - 1.0) > 1e-3:
+        raise err(
+            "跨域校验",
+            "游标参数不一致：reducer_ratio × (1 - encoder.output_ratio) 必须≈1")
     full_scale = g("hardware", "current_sense.bias_v") * g("hardware", "current_sense.a_per_volt")
     if g("software", "fault.oc_trip_a") > full_scale:
         raise err("跨域校验", f"oc_trip_a 超过采样链路满量程（{full_scale:.1f} A）")

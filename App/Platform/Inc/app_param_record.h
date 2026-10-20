@@ -37,6 +37,20 @@ typedef struct {
 int app_param_record_load(uint32_t key, void* payload, size_t payload_size, uint32_t generation);
 
 /**
+ * @brief 读取记录并叠加到 payload 前缀（允许旧版短记录，供结构体追加字段迁移）
+ * @param key 记录键
+ * @param payload 负载缓冲（先由调用方填出厂默认）
+ * @param payload_cap 负载缓冲容量（新结构体大小）
+ * @param min_payload_size 可接受的最小负载字节数（旧结构体大小）
+ * @param generation 当前固件代次
+ * @return 0 = 有效记录已拷贝（长度为 min..cap）；-1 = 无记录/代次或长度不符
+ * @note 只拷贝记录中的实际字节；新增字段保持调用方预填的出厂默认。
+ */
+int app_param_record_load_prefix(
+    uint32_t key, void* payload, size_t payload_cap, size_t min_payload_size,
+    uint32_t generation);
+
+/**
  * @brief 写入记录（头 + 负载，整记录覆盖写）
  * @return 0 = 成功；-1 = 非法参数/超出记录槽/写入失败
  */

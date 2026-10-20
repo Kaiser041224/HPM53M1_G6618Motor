@@ -1,6 +1,6 @@
 /**
  * @file    app_foc_current.h
- * @brief   FOC 电流环 25kHz 执行（读输入 → Algorithm/FOC → 写逆变桥）
+ * @brief   FOC 电流环 30kHz 执行（读输入 → Algorithm/FOC → 写逆变桥）
  * @author  Kaiser
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -29,6 +29,8 @@ int app_foc_current_identify_voltage(float voltage, uint32_t cycles);
 int app_foc_current_identify_pulse(float amplitude, uint16_t half_period);
 /** @brief 内部上限设置，调用方须保证OFF */
 int app_foc_current_set_duty_ceiling(float ceiling);
+/** @brief 设置反 Park 输出延迟补偿 [s]（0=关闭；software.yaml init 期消费，调试可覆盖） */
+void app_foc_current_set_output_delay(float delay_s);
 /** @brief 返回冻结缓冲，count达到128才允许任务读取 */
 const id_rl_sample_t* app_foc_current_identify_data(uint16_t* count);
 
@@ -39,6 +41,8 @@ typedef struct {
     float theta_e_rad;            /**< 本拍电角度 [rad] */
     float omega_e_rad_s;          /**< 本拍电角速度 [rad/s] */
     float i_d_a, i_q_a;           /**< d/q 反馈 [A]（瞬时，单拍） */
+    float speed_out_rad_s;        /**< 由 ωe 换算的轴端机械速度 [rad/s]（诊断/速度环） */
+    bool speed_out_valid;         /**< speed_out 来自有效的 30kHz observer（非 foc_angle 回退） */
     float i_d_avg_a, i_q_avg_a;   /**< d/q 反馈慢平均 [A]（~32Hz 一阶低通，供终端观测） */
     float i_d_ref_a, i_q_ref_a;   /**< d/q 给定（限幅后）[A] */
     float v_d_v, v_q_v;           /**< d/q 电压 [V] */
@@ -83,7 +87,7 @@ void app_foc_current_reset(void);
 bool app_foc_current_is_ready(void);
 
 /**
- * @brief 25kHz 执行：读电流/母线 → 电流环 → 调制 → 写三相占空比。
+ * @brief 30kHz 执行：读电流/母线 → 电流环 → 调制 → 写三相占空比。
  * @param theta_e_rad 电角度 [rad]
  * @param omega_e_rad_s 电角速度 [rad/s]
  * @param i_d_ref d 轴给定 [A]
@@ -159,7 +163,7 @@ int app_foc_current_vtest_step(void);
 int app_foc_current_vtest_step_fresh(float i_u_a, float i_v_a, float i_w_a, float v_bus_v,
                                      float dt_s);
 
-/** 波形捕获最大样本数（25kHz × 128 ≈ 5.1ms） */
+/** 波形捕获最大样本数（30kHz × 128 ≈ 4.3ms） */
 #define APP_FOC_TRACE_MAX (128U)
 
 /**

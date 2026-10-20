@@ -15,11 +15,16 @@
 #include "params_generated.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 
 _Static_assert(
     sizeof(app_software_params_t) + sizeof(app_param_record_header_t) <= APP_PARAM_DATA_MAX,
     "software params record exceeds app_param slot");
-#include <stddef.h>
+/* 追加字段迁移基准：旧记录（到 params_generation 为止）必须能被前缀拷贝接受 */
+#define APP_SOFTWARE_PARAMS_V1_SIZE (offsetof(app_software_params_t, speed_observer))
+_Static_assert(
+    APP_SOFTWARE_PARAMS_V1_SIZE > 0U && APP_SOFTWARE_PARAMS_V1_SIZE < sizeof(app_software_params_t),
+    "new software params fields must be appended after params_generation");
 
 /** 运行期参数单例（boot 时 load；Shell param 命令可写） */
 static app_software_params_t s_software_params_current;
@@ -34,8 +39,10 @@ int app_software_params_load(app_software_params_t* out) {
         return -1;
     }
     *out = g_software_params_factory;
-    return app_param_record_load(
-        APP_PARAM_KEY_SOFTWARE_PARAMS, out, sizeof(*out),
+    /* 先按旧版前缀长度接受记录：旧字段叠加，新增字段保留出厂默认。
+     * 这样 params_generation 不变时升级固件不会静默丢弃已保存的运动整定。 */
+    return app_param_record_load_prefix(
+        APP_PARAM_KEY_SOFTWARE_PARAMS, out, sizeof(*out), APP_SOFTWARE_PARAMS_V1_SIZE,
         g_software_params_factory.params_generation);
 }
 

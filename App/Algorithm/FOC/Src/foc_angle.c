@@ -133,6 +133,20 @@ static float foc_angle_step(foc_angle_t* self, float theta_m_raw_rad, float dt_s
 }
 
 /**
+ * @brief 输出延迟相位补偿：θout = wrap_2pi(θe + ωe·delay)
+ */
+FOC_ATTR_RAMFUNC
+float foc_angle_advance(float theta_e_rad, float omega_e_rad_s, float delay_s) {
+    if (!foc_finite(theta_e_rad)) {
+        return 0.0f;
+    }
+    if (!foc_finite(omega_e_rad_s) || !foc_finite(delay_s) || (delay_s <= 0.0f)) {
+        return foc_wrap_2pi(theta_e_rad);
+    }
+    return foc_wrap_2pi(theta_e_rad + omega_e_rad_s * delay_s);
+}
+
+/**
  * @brief 构造
  */
 void foc_angle_ctor(foc_angle_t* self) {

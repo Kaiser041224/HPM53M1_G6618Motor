@@ -11,6 +11,8 @@
 #include "app_param_record.h"
 #include "app_software_params.h"
 
+#include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -113,10 +115,59 @@ static void test_params_persistence(void) {
     CHECK(app_software_params_current()->params_generation == generation);
 }
 
+/** @brief P0-B observer/输出延迟字段 + 旧版短记录前缀迁移（不丢运动整定） */
+static void test_observer_params_migration(void) {
+    mock_flash_reset();
+    const app_software_params_t* def = app_software_params_default();
+
+    CHECK(def->speed_observer.enable == 1U);
+    CHECK(def->speed_observer.bandwidth_rad_s == 500.0f);
+    CHECK(def->speed_observer.max_speed_rad_s == 700.0f);
+    CHECK(fabsf(def->current_loop_output_delay_s - 3.3333333e-5f) < 1e-9f);
+    /* motion 电流硬限与矢量限幅同源（24.3A），避免两套限值不一致 */
+    CHECK(def->control.limits.motion_iq_max_a == def->control.limits.i_q_max_a);
+
+    size_t legacy_size = offsetof(app_software_params_t, speed_observer);
+    CHECK(legacy_size > 0U && legacy_size < sizeof(app_software_params_t));
+    app_software_params_t legacy = *def;
+    legacy.control.speed_loop.kp = 7.25f;
+    legacy.control.limits.motion_iq_max_a = 3.5f;
+    CHECK(
+        app_param_record_store(
+            APP_PARAM_KEY_SOFTWARE_PARAMS, &legacy, legacy_size, def->params_generation)
+        == 0); /* 旧结构体长度，无新增字段 */
+    app_software_params_t out;
+    memset(&out, 0xA5, sizeof(out));
+    CHECK(app_software_params_load(&out) == 0);
+    CHECK(out.control.speed_loop.kp == 7.25f);
+    CHECK(out.control.limits.motion_iq_max_a == 3.5f);
+    /* 新增字段保持出厂默认：旧记录不覆盖它们 */
+    CHECK(out.speed_observer.enable == def->speed_observer.enable);
+    CHECK(out.speed_observer.bandwidth_rad_s == def->speed_observer.bandwidth_rad_s);
+    CHECK(out.current_loop_output_delay_s == def->current_loop_output_delay_s);
+
+    /* 新格式回存后，新增字段也应持久化 */
+    out.speed_observer.enable = 0U;
+    out.speed_observer.bandwidth_rad_s = 123.0f;
+    out.current_loop_output_delay_s = 1.5e-5f;
+    CHECK(
+        app_param_record_store(
+            APP_PARAM_KEY_SOFTWARE_PARAMS, &out, sizeof(out), def->params_generation)
+        == 0);
+    app_software_params_t out2;
+    memset(&out2, 0xA5, sizeof(out2));
+    CHECK(app_software_params_load(&out2) == 0);
+    CHECK(out2.speed_observer.enable == 0U);
+    CHECK(out2.speed_observer.bandwidth_rad_s == 123.0f);
+    CHECK(out2.current_loop_output_delay_s == 1.5e-5f);
+    CHECK(out2.control.speed_loop.kp == 7.25f);
+}
+
 int main(void) {
     printf("Params host tests\n");
     test_param_record();
     test_store_before_init();
+    test_observer_params_migration();
     test_params_persistence();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

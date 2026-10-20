@@ -96,13 +96,28 @@ typedef struct {
 } app_software_control_t;
 
 /**
+ * @brief 速度/ωe 观测器参数（P0-B；app_foc init 期消费）
+ */
+typedef struct {
+    uint8_t enable;          /**< 1 = 30kHz observer 运行；0 = 仅 foc_angle 回退 */
+    float bandwidth_rad_s;   /**< PLL 带宽 [rad/s] */
+    float max_speed_rad_s;   /**< 机械转速限幅 [rad/s] */
+} app_software_speed_observer_t;
+
+/**
  * @brief 软件参数（工厂默认）
+ *
+ * @note flash 迁移约定：新增字段只能追加在结构体末尾（现有字段偏移保持不变）。
+ *       app_software_params_load() 接受旧长度的前缀记录，旧字段照常叠加，
+ *       新增字段保持出厂默认，避免升级时静默丢失已保存的运动整定。
  */
 typedef struct {
     app_software_can_t can;         /**< CAN 通信 */
     app_software_fault_t fault;     /**< 故障保护 */
     app_software_control_t control; /**< 控制环 */
     uint32_t params_generation;     /**< flash 记忆清除控制：bump → 烧录后忽略 flash 值用出厂值 */
+    app_software_speed_observer_t speed_observer; /**< P0-B 速度/ωe 观测器（追加字段） */
+    float current_loop_output_delay_s; /**< 反 Park 输出延迟补偿 [s]（追加字段；0=关闭） */
 } app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */

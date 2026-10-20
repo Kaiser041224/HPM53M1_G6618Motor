@@ -15,7 +15,7 @@
  *   - 运行期（app_encoder_sync_start 之后）：转子 SPI3 由硬件同步采样接管——
  *     PWM1 CMP10（与相电流 ADC 同一触发点）→ TRGM DMA_REQ0 → HDMA 写 SPI3 CMD 启动单帧，
  *     角度与电流同拍采样；ADC0 PMT 完成中断（FOC 快车道）内 app_encoder_sync_sample()
- *     取SPI3及SPI1 RX字并发布完整配对（游标亦为PWM25kHz触发，DMA_REQ1/HDMA1）。
+ *     取SPI3及SPI1 RX字并发布完整配对（游标亦为PWM30kHz触发，DMA_REQ1/HDMA1）。
  *   - 单一所有者：ADC ISR取两路帧；运行期读API只返回快照，绝不重新触碰SPI。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -38,7 +38,7 @@
 #define APP_ENCODER_SCLK_HZ \
     (8000000U) /* 8MHz：手册≤10MHz；10MHz 台架实测坏帧率高（EMI），取 8MHz */
 
-/** 机械角单步跳变上限 [deg]（25kHz 采样；5° ≈ 20000 rpm，远超实际转速） */
+/** 机械角单步跳变上限 [deg]（30kHz 采样；5° ≈ 25000 rpm，远超实际转速） */
 #define APP_ENCODER_JUMP_LIMIT_DEG (5.0f)
 
 /* 同步采样触发：与相电流 ADC 共用 PWM1 CMP10（app_adc.h APP_ADC_TRIGGER_CMP_INDEX），

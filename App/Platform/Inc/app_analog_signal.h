@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-/* process() 调用频率 = 主循环节拍（= inverter.pwm_freq_hz，config/hardware.yaml） */
+/* process() 调用频率 = app_io_step 1ms 节拍（1kHz），不是 PWM/电流拍 */
 
 /**
  * @brief 物理量快照（换算 + 滤波后）

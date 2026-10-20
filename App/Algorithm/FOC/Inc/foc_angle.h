@@ -51,6 +51,14 @@ typedef int (*foc_angle_init_fn)(foc_angle_t* self, const foc_angle_cfg_t* cfg);
 typedef float (*foc_angle_step_fn)(foc_angle_t* self, float theta_m_raw_rad, float dt_s,
                                    float* omega_e_out);
 /**
+ * @brief 输出延迟相位补偿：θout = wrap_2pi(θe + ωe·delay)
+ * @param theta_e_rad 采样时刻电角度 [rad]
+ * @param omega_e_rad_s 电角速度 [rad/s]
+ * @param delay_s 采样到实际输出电压的延迟 [s]
+ * @return 补偿后的电角度 [rad]；θe 非有限返回 0；ωe/delay 非有限或 delay≤0 时返回 wrap(θe)
+ */
+float foc_angle_advance(float theta_e_rad, float omega_e_rad_s, float delay_s);
+/**
  * @brief 复位（清除差分历史与 ωe）
  */
 typedef void (*foc_angle_reset_fn)(foc_angle_t* self);

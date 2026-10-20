@@ -20,6 +20,44 @@ static app_motion_snapshot_t s_motion;
 volatile float g_motion_shaft_angle_rad __attribute__((section(".noncacheable.bss")));
 volatile float g_motion_shaft_angle_deg __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_motion_shaft_angle_valid __attribute__((section(".noncacheable.bss")));
+/* 调试观测（.noncacheable，Ozone/RTT 直读；不参与控制）：
+ * 速度纹波按 15kHz 速度拍统计 1ms 窗口（15 拍）峰峰值。 */
+volatile float g_motion_speed_dbg_rad_s __attribute__((section(".noncacheable.bss")));
+volatile float g_motion_speed_ripple_pp_dbg __attribute__((section(".noncacheable.bss")));
+volatile float g_motion_speed_ripple_max_dbg __attribute__((section(".noncacheable.bss")));
+#define APP_MOTION_DBG_WINDOW_SAMPLES (15U) /**< 1ms @15kHz */
+static float s_speed_dbg_min, s_speed_dbg_max;
+static uint32_t s_speed_dbg_samples;
+
+/** @brief 速度调试窗口更新（仅单写者 app_motion_step 调用；热路径放 ILM） */
+APP_ATTR_RAMFUNC
+static void motion_debug_speed_update(float speed) {
+    g_motion_speed_dbg_rad_s = speed;
+    if (s_speed_dbg_samples == 0U) {
+        s_speed_dbg_min = speed;
+        s_speed_dbg_max = speed;
+    } else {
+        if (speed < s_speed_dbg_min) {
+            s_speed_dbg_min = speed;
+        }
+        if (speed > s_speed_dbg_max) {
+            s_speed_dbg_max = speed;
+        }
+    }
+    s_speed_dbg_samples++;
+    if (s_speed_dbg_samples >= APP_MOTION_DBG_WINDOW_SAMPLES) {
+        float ripple = s_speed_dbg_max - s_speed_dbg_min;
+
+        if (!foc_finite(ripple) || (ripple < 0.0f)) {
+            ripple = 0.0f;
+        }
+        g_motion_speed_ripple_pp_dbg = ripple;
+        if (ripple > g_motion_speed_ripple_max_dbg) {
+            g_motion_speed_ripple_max_dbg = ripple;
+        }
+        s_speed_dbg_samples = 0U;
+    }
+}
 static algo_motion_pi_t s_velocity_pi;
 static float s_target, s_velocity_kp, s_velocity_ki;
 static algo_friction_params_t s_friction_model; /**< 摩擦前馈模型（Tc/Kv/平滑；init/gains 消费） */
@@ -31,13 +69,14 @@ static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_previous_motor_rad; /**< 上一拍转子机械角（测速基准；输出侧速度=转子速度/减速比） */
 static float s_calibration_sum, s_calibration_first;
 static float s_calibration_phase;
+static float s_calibration_reducer, s_calibration_output_ratio;
 static uint32_t s_previous_cycle, s_previous_sequence, s_epoch, s_request_sequence;
 static uint32_t s_previous_sample_cycle;                     /**< 上一个用于测速的配对快照时间 */
 static float s_seconds_per_cycle;
 static bool s_primed;
 static float s_input_pos, s_input_vel_ff, s_input_torque_ff; /**< 位置模式输入（ODrive input_*） */
 static float s_pos_gain, s_pos_filter_bw;     /**< 位置环增益（init/gains 消费；0=禁用/直通） */
-static algo_motion_pos_filter_t s_pos_filter; /**< 输入二阶滤波（5kHz CH0 拍） */
+static algo_motion_pos_filter_t s_pos_filter; /**< 输入二阶滤波（10kHz CH0 拍） */
 static float s_vel_cmd_rad_s;                 /**< 位置环输出（CH0写CH1读，共享IRQ串行） */
 static float s_active_direction, s_active_kt, s_active_reducer;
 static float s_calibrated_direction;
@@ -46,11 +85,32 @@ static bool s_velocity_gap;                   /**< 保持恢复后首拍跳过�
 static float s_nearest_turn;                  /**< 最近解析的游标整数圈号（兜底测速基准） */
 static bool s_have_nearest;
 static uint32_t s_vernier_fallback_samples;   /**< 连续兜底样本数（超限判真失效） */
-#define APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES (5000U) /**< 兜底上限500ms@10kHz */
+#define APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES (7500U) /**< 兜底上限500ms@15kHz */
 static const app_motor_params_t* s_motion_motor_params; /**< init解析，仅读RAM参数对象 */
-/* 保持窗口10kHz×200=20ms零力矩：游标残差坏拍簇（齿隙/扭振瞬态）可穿过；
+
+/** @brief 游标多圈解算参数是否可用（reducer 圈数 + 出轴/转子比） */
+APP_ATTR_RAMFUNC
+static bool motion_vernier_params_valid(void) {
+    if (s_motion_motor_params == NULL) {
+        return false;
+    }
+    float reducer = s_motion_motor_params->reducer_ratio;
+    float output_ratio = s_motion_motor_params->encoder.output_ratio;
+
+    if (!foc_finite(reducer) || (reducer < 1.0f) || !foc_finite(output_ratio)
+        || (output_ratio <= 0.0f) || (output_ratio >= 1.0f)) {
+        return false;
+    }
+    float expected_reducer = 1.0f / (1.0f - output_ratio);
+    float reducer_delta = reducer - expected_reducer;
+
+    return foc_finite(expected_reducer) && (reducer_delta <= 1.0e-3f)
+        && (reducer_delta >= -1.0e-3f);
+}
+
+/* 保持窗口15kHz×300=20ms零力矩：游标残差坏拍簇（齿隙/扭振瞬态）可穿过；
  * 游标每拍独立重解绝对圈号，恢复无累计误差。>窗口判真失败。 */
-#define APP_MOTION_HOLD_MAX_SAMPLES (200U)
+#define APP_MOTION_HOLD_MAX_SAMPLES (300U)
 /** @brief 最新有效反馈不超过500us */
 static bool motion_feedback_fresh(void) {
     return s_motion.feedback_valid
@@ -122,6 +182,12 @@ void app_motion_init(void) {
     g_motion_shaft_angle_rad = 0;
     g_motion_shaft_angle_deg = 0;
     g_motion_shaft_angle_valid = 0;
+    g_motion_speed_dbg_rad_s = 0;
+    g_motion_speed_ripple_pp_dbg = 0;
+    g_motion_speed_ripple_max_dbg = 0;
+    s_speed_dbg_min = 0;
+    s_speed_dbg_max = 0;
+    s_speed_dbg_samples = 0;
     s_primed = false;
     s_previous_sequence = 0;
     s_previous_cycle = 0;
@@ -175,8 +241,12 @@ void app_motion_init(void) {
     if (!foc_finite(s_pos_filter_bw) || s_pos_filter_bw < 0 || s_pos_filter_bw > 100)
         s_pos_filter_bw = 0;
     motion_record_t record;
-    if (app_param_load(APP_PARAM_KEY_MOTION, &record, sizeof(record)) == 0 && record.version == 1
-        && foc_finite(record.phase) && record.phase >= 0 && record.phase < .02f
+    float phase_limit =
+        motion_vernier_params_valid() ? (1.0f / s_motion_motor_params->reducer_ratio) : 0.0f;
+    if (motion_vernier_params_valid()
+        && app_param_load(APP_PARAM_KEY_MOTION, &record, sizeof(record)) == 0
+        && record.version == 1 && foc_finite(record.phase) && record.phase >= 0
+        && record.phase < phase_limit
         && foc_finite(record.zero) && fabsf(record.zero) < FOC_TWO_PI_F && record.zero_valid <= 1
         && (record.direction == 1 || record.direction == -1)
         && record.direction == s_motion_motor_params->encoder.direction) {
@@ -193,6 +263,12 @@ int app_motion_calibrate(void) {
         intf_sys_irq_restore(st);
         return -1;
     }
+    if (!motion_vernier_params_valid()) {
+        intf_sys_irq_restore(st);
+        return -1;
+    }
+    s_calibration_reducer = s_motion_motor_params->reducer_ratio;
+    s_calibration_output_ratio = s_motion_motor_params->encoder.output_ratio;
     s_motion.calibrating = true;
     s_motion.feedback_valid = false;
     g_motion_shaft_angle_valid = 0;
@@ -209,6 +285,12 @@ int app_motion_apply(void) {
     uint32_t st = intf_sys_irq_save();
     if (app_foc_get_state() != APP_FOC_STATE_OFF || !s_motion.calibration_done
         || s_motion.calibrating) {
+        intf_sys_irq_restore(st);
+        return -1;
+    }
+    if (!motion_vernier_params_valid()
+        || (s_calibration_reducer != s_motion_motor_params->reducer_ratio)
+        || (s_calibration_output_ratio != s_motion_motor_params->encoder.output_ratio)) {
         intf_sys_irq_restore(st);
         return -1;
     }
@@ -301,6 +383,10 @@ static int motion_command(float target, float vel_ff, float torque_ff, app_motio
     float kt = s_motion_motor_params->kt_nm_per_a;
     float reducer = s_motion_motor_params->reducer_ratio;
     if (!foc_finite(kt) || kt <= 0 || !foc_finite(reducer) || reducer <= 0) {
+        intf_sys_irq_restore(st);
+        return APP_MOTION_CMD_BAD_PARAM;
+    }
+    if ((mode == APP_MOTION_MODE_POSITION) && !motion_vernier_params_valid()) {
         intf_sys_irq_restore(st);
         return APP_MOTION_CMD_BAD_PARAM;
     }
@@ -416,19 +502,56 @@ void app_motion_step(void) {
     app_encoder_rotor_snapshot_t rotor;
     uint16_t raw;
     uint32_t now = intf_clock_get_cycle();
-    if (app_encoder_output_sample(&rotor, &raw) != 0) {
-        s_motion.sample_failure_count++;
-        motion_reject(APP_MOTION_REASON_SAMPLE);
-        return;
+    bool need_pair = s_motion.calibrating
+                     || (s_motion.active && (s_motion.mode == APP_MOTION_MODE_POSITION));
+    /* 速度/力矩模式只用转子/observer：不读游标 pair，也不做 vernier 解算。
+     * 位置模式与标定仍要求完整 rotor+vernier。 */
+    bool rotor_only = s_motion.active && !s_motion.calibrating
+                      && (s_motion.mode != APP_MOTION_MODE_POSITION);
+    bool pair_ok = false;
+    float reducer = s_motion_motor_params->reducer_ratio;
+    float output_ratio = s_motion_motor_params->encoder.output_ratio;
+
+    if (rotor_only) {
+        if ((app_encoder_get_rotor_snapshot(&rotor) != 0) || !rotor.valid) {
+            s_motion.sample_failure_count++;
+            motion_reject(APP_MOTION_REASON_SAMPLE);
+            return;
+        }
+        raw = 0U;
+    } else {
+        pair_ok = (app_encoder_output_sample(&rotor, &raw) == 0);
+        if (!pair_ok) {
+            /* 位置/标定必须完整 pair；非活动的诊断路径允许转子快照 */
+            if (need_pair || (app_encoder_get_rotor_snapshot(&rotor) != 0) || !rotor.valid) {
+                s_motion.sample_failure_count++;
+                motion_reject(APP_MOTION_REASON_SAMPLE);
+                return;
+            }
+            raw = 0U;
+        }
     }
+
+    /* P0-B：速度环与 FOC 共用 30kHz observer 的轴端速度；无效时退回转子差分。
+     * 直读 ISR 发布的 .noncacheable 快照，避免 15kHz 热路径调用 Flash 访问器。 */
+    bool observer_speed_ok =
+        g_foc_speed_out_valid && foc_finite(g_foc_speed_out_rad_s);
     if (rotor.seq == s_previous_sequence) {
-        s_motion.duplicate_count++;
-        motion_reject(APP_MOTION_REASON_DUPLICATE);
-        return;
+        if (!rotor_only) {
+            s_motion.duplicate_count++;
+            motion_reject(APP_MOTION_REASON_DUPLICATE);
+            return;
+        }
+        /* 速度/力矩：无新转子样本时继续用 observer 或上拍速度；不因游标/配对节奏中断 */
     }
     s_previous_sequence = rotor.seq;
     if (!foc_finite(rotor.rad) || rotor.rad < 0 || rotor.rad >= FOC_TWO_PI_F) {
         motion_reject(APP_MOTION_REASON_SAMPLE);
+        return;
+    }
+    if (!foc_finite(reducer) || reducer <= 0.0f
+        || (!rotor_only && !motion_vernier_params_valid())) {
+        motion_reject(APP_MOTION_REASON_PARAMETER);
         return;
     }
     float u = rotor.rad / FOC_TWO_PI_F, v = (float)raw / 65536.0f;
@@ -438,16 +561,17 @@ void app_motion_step(void) {
             s_motion.reason = APP_MOTION_REASON_FOC_STATE;
             return;
         }
-        float scaled_phase = (v - .98f * u) * 50.0f;
+        float scaled_phase = (v - output_ratio * u) * reducer;
         int32_t phase_whole = (int32_t)scaled_phase;
         if ((float)phase_whole > scaled_phase)
             phase_whole--;
-        float phase = (scaled_phase - (float)phase_whole) * .02f;
+        float phase_limit = 1.0f / reducer;
+        float phase = (scaled_phase - (float)phase_whole) * phase_limit;
         if (s_motion.calibration_samples == 0) {
             s_calibration_first = phase;
             s_previous_rotor = u;
         }
-        float difference = motion_delta((phase - s_calibration_first) * 50) / 50;
+        float difference = motion_delta((phase - s_calibration_first) * reducer) / reducer;
         float movement = motion_delta(u - s_previous_rotor);
         if (movement > .001f || movement < -.001f || difference > .002f || difference < -.002f) {
             s_motion.calibrating = false;
@@ -458,9 +582,9 @@ void app_motion_step(void) {
         if (++s_motion.calibration_samples == 1000) {
             float mean = s_calibration_first + s_calibration_sum / 1000;
             if (mean < 0)
-                mean += .02f;
-            else if (mean >= .02f)
-                mean -= .02f;
+                mean += phase_limit;
+            else if (mean >= phase_limit)
+                mean -= phase_limit;
             s_calibration_phase = mean;
             s_motion.calibration_done = true;
             s_motion.calibrating = false;
@@ -474,9 +598,12 @@ void app_motion_step(void) {
         g_motion_shaft_angle_valid = 0;
         return;
     }
-    if (algo_motion_vernier(u, v, s_motion.phase_turns, &angle) == 0) {
+    if (!pair_ok) {
+        angle = s_previous_angle; /* 速度/力矩：保持最后游标角，仅诊断；速度由 observer 提供 */
+    } else if (algo_motion_vernier(u, v, s_motion.phase_turns, reducer, output_ratio, &angle)
+               == 0) {
         s_vernier_fallback_samples = 0;
-        s_nearest_turn = angle * (50.0f / FOC_TWO_PI_F) - u;
+        s_nearest_turn = angle * (reducer / FOC_TWO_PI_F) - u;
         s_have_nearest = true;
     } else {
         /* 游标失配（齿隙/扭振瞬态或低力矩松垂）：转子角+最近圈号兜底测速。
@@ -489,7 +616,7 @@ void app_motion_step(void) {
             return;
         }
         s_motion.vernier_fallback_count++;
-        angle = (s_nearest_turn + u) * (FOC_TWO_PI_F / 50.0f);
+        angle = (s_nearest_turn + u) * (FOC_TWO_PI_F / reducer);
     }
     float direction = s_motion_motor_params->encoder.direction;
     if ((direction != 1 && direction != -1) || direction != s_calibrated_direction) {
@@ -497,11 +624,6 @@ void app_motion_step(void) {
         return;
     }
     angle *= direction;
-    float reducer = s_motion_motor_params->reducer_ratio;
-    if (!foc_finite(reducer) || reducer <= 0) {
-        motion_reject(APP_MOTION_REASON_PARAMETER);
-        return;
-    }
     float dt = (float)(now - s_previous_cycle) * s_seconds_per_cycle;
     float sample_dt =
         (float)(uint32_t)(rotor.timestamp_cycles - s_previous_sample_cycle) * s_seconds_per_cycle;
@@ -511,10 +633,14 @@ void app_motion_step(void) {
         motion_reject(APP_MOTION_REASON_TIMING);
         return;
     }
-    /* 测速用转子编码器（1:1、30kHz 同步采样）：不经过游标 50 圈解模糊，
-     * 避免齿隙/扭振/解码噪声进入速度环；输出角仍只用于位置。 */
+    /* 测速：observer 有效时直接用其轴端速度；否则退回转子编码器差分+LPF。
+     * 不经过游标多圈解模糊，避免齿隙/扭振/解码噪声进入速度环；输出角仍只用于位置。 */
     float motor_delta = foc_wrap_pm_pi(rotor.rad - s_previous_motor_rad);
-    if (s_velocity_gap) {
+    if (observer_speed_ok) {
+        /* observer 已含 PLL 滤波：不再叠加速度 LPF，避免双滤波滞后 */
+        s_motion.speed_rad_s = g_foc_speed_out_rad_s;
+        s_velocity_gap = false;
+    } else if (s_velocity_gap) {
         s_velocity_gap = false; /* 跨保持间隙的差分不进入测速滤波 */
     } else if (s_primed && sample_dt > 0 && sample_dt < .001f) {
         float velocity = (motor_delta * direction) / sample_dt / reducer;
@@ -522,6 +648,7 @@ void app_motion_step(void) {
     } else if (!s_primed) {
         s_motion.speed_rad_s = 0;
     }
+    motion_debug_speed_update(s_motion.speed_rad_s);
     s_previous_motor_rad = rotor.rad;
     s_previous_angle = angle;
     s_previous_cycle = now;
@@ -561,7 +688,7 @@ void app_motion_step(void) {
     float torque_limit = reducer * kt * s_motion_iq_max_a;
     float torque;
     if (s_motion.mode != APP_MOTION_MODE_TORQUE) {
-        /* 位置模式速度目标=位置环输出（5kHz CH0 拍）；速度模式=命令目标 */
+        /* 位置模式速度目标=位置环输出（10kHz CH0 拍）；速度模式=命令目标 */
         float target = s_motion.mode == APP_MOTION_MODE_POSITION ? s_vel_cmd_rad_s : s_target;
         torque = algo_motion_speed(
             &s_velocity_pi, target, s_motion.speed_rad_s, s_velocity_kp, s_velocity_ki, dt,
@@ -586,7 +713,7 @@ void app_motion_step(void) {
 APP_ATTR_RAMFUNC
 void app_motion_position_step(void) {
     /* ODrive 级联：滤波输入（input_pos/input_vel）→ 位置P → 速度目标。
-     * 反馈（shaft_rad 单圈绝对角）取自 15kHz 估计器；CH0/CH1 共享 IRQ 串行，零 SPI。 */
+     * 反馈（shaft_rad 单圈绝对角）取自 15kHz 速度拍；CH0/CH1 共享 IRQ 串行，零 SPI。 */
     if (!s_motion.active || s_motion.mode != APP_MOTION_MODE_POSITION || !s_motion.feedback_valid)
         return;
     algo_motion_pos_filter_step(

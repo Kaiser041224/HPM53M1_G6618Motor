@@ -9,6 +9,7 @@
 
 #include "app_foc.h"
 
+#include "algo_speed_observer.h"
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
 #include "app_analog_signal.h"
@@ -28,19 +29,29 @@
 /* 限速滞环：超限切断，回落至 85% 才恢复（ωe 噪声/回摆不再造成转矩断续） */
 #define APP_FOC_SPEED_LIMIT_RESTORE (0.85f)
 
-/* 编码器同步采样节拍与新鲜度：与电流同拍（25kHz → 40µs，同一 PWM1 CMP10 触发）。
- * 新鲜度上限 = 采样周期 + 40µs 余量 = 80µs：最多容忍一拍丢样复用保持角。 */
-#define APP_FOC_ENC_PERIOD_US  (40U)
+/* 编码器同步采样节拍与新鲜度：与电流同拍（30kHz → 33.3µs，同一 PWM1 CMP10 触发）。
+ * 新鲜度上限 = 采样周期 + 40µs 余量：最多容忍一拍丢样复用保持角。 */
+#define APP_FOC_ENC_PERIOD_US  (34U)
 #define APP_FOC_ENC_MARGIN_US  (40U)
 #define APP_FOC_ENC_MAX_AGE_US (APP_FOC_ENC_PERIOD_US + APP_FOC_ENC_MARGIN_US)
 /* 连续失败/跳变阈值：达到即判换相角不可信（与 algo fail_limit 默认一致） */
 #define APP_FOC_ENC_FAIL_TRIP (3U)
 /* 时序类编码器故障确认（坏帧拒绝发布 → age 越限到 2 采样周期，单拍不判死） */
-#define APP_FOC_ENC_DEG_TRIP_STREAK (32U) /**< 连续 32 拍（25kHz ≈ 1.3ms）不可用才停机 */
+#define APP_FOC_ENC_DEG_TRIP_STREAK (32U) /**< 连续 32 拍（30kHz ≈ 1.1ms）不可用才停机 */
 #define APP_FOC_OVR_TRIP_STREAK     (32U) /**< 连续 32 拍超预算才停用快路径（真失控/风暴） */
 
 static app_foc_state_t s_state;
 static foc_angle_t s_angle;
+/* 速度/ωe 观测器（P0-B）：30kHz 状态；速度环读快照 */
+#define APP_FOC_SPEED_OBSERVER_BW_RAD_S (500.0f)
+#define APP_FOC_SPEED_OBSERVER_MAX_RAD_S (700.0f)
+static algo_speed_observer_t s_speed_observer;
+static const app_motor_params_t* s_motor_params; /**< init 期缓存单例地址（ISR 免 Flash 访问器调用） */
+static bool s_speed_observer_ready;
+static bool s_speed_observer_enabled;
+static bool s_speed_observer_valid;
+static float s_omega_m_observer;
+static float s_omega_e_observer;
 static app_foc_angle_source_t s_angle_src;
 static float s_forced_theta;
 static float s_i_d_ref;
@@ -96,17 +107,17 @@ static float s_angle_direction;  /**< 当前生效方向（±1） */
 /** 外部（Debug）紧急停机请求邮箱（Control 持有指针；ISR 只读，绝不阻塞） */
 static volatile uint32_t* s_estop_request;
 
-/** ISR 单拍预算 [µs]（ISR 周期 40µs；超限即停用快路径并安全关桥） */
-#define APP_FOC_ISR_BUDGET_US (25U)
+/** ISR 单拍预算 [µs]（ISR 周期 33.3µs；连续超限才停用快路径并安全关桥） */
+#define APP_FOC_ISR_BUDGET_US (25U) /* < 30kHz 周期 33.3µs；超限连续 32 拍才判失控 */
 
 /* Ozone 观测：ISR 超预算次数 */
 volatile uint32_t g_foc_isr_overruns __attribute__((section(".noncacheable.bss")));
 
 /* Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss，调试器直读） */
 volatile uint32_t g_foc_loop_cycles __attribute__((section(".noncacheable.bss")));
-/* Ozone 观测：主循环调用间隔 [µs]（25kHz 标称；抖动/丢拍时明显大于 40） */
+/* Ozone 观测：主循环调用间隔 [µs]（30kHz 标称；抖动/丢拍时明显大于 34） */
 volatile uint32_t g_foc_loop_dt_us __attribute__((section(".noncacheable.bss")));
-/* Ozone 观测：25kHz ISR 单拍耗时 [cycle] 与历史最大 */
+/* Ozone 观测：30kHz ISR 单拍耗时 [cycle] 与历史最大 */
 volatile uint32_t g_foc_isr_cycles __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_foc_isr_cycles_max __attribute__((section(".noncacheable.bss")));
 /* Ozone 观测：ISR 侧编码器快照年龄 [cycle] / [µs] 与接受序号 */
@@ -115,10 +126,14 @@ volatile uint32_t g_foc_enc_age_us __attribute__((section(".noncacheable.bss")))
 volatile uint32_t g_foc_enc_seq __attribute__((section(".noncacheable.bss")));
 /* ISR→主循环 故障请求（ISR 只置位；主循环负责状态迁移） */
 volatile uint32_t g_foc_fault_request __attribute__((section(".noncacheable.bss")));
+/* ISR→15kHz motion：observer 轴端速度快照（避免 app_motion 在热路径调用 Flash 快照函数）。
+ * 先写速度再写 valid；motion 只在 valid 时消费。 */
+volatile float g_foc_speed_out_rad_s __attribute__((section(".noncacheable.bss")));
+volatile bool g_foc_speed_out_valid __attribute__((section(".noncacheable.bss")));
 
 /**
  * @brief 实测本拍与上一拍的调用间隔 [s]
- * @note 主循环节拍存在抖动/丢拍（USB/终端/打印同循环），固定 1/25kHz 换算 ωe
+ * @note 主循环节拍存在抖动/丢拍（USB/终端/打印同循环），固定 1/30kHz 换算 ωe
  *       会产生数倍尖峰；首拍返回 0（角度链保持 ωe 不更新）
  */
 static float app_foc_measure_dt(void) {
@@ -153,10 +168,44 @@ static int app_foc_angle_init(void) {
     return s_angle.init(&s_angle, &cfg);
 }
 
+/**
+ * @brief 初始化转子速度/ωe 观测器（30kHz 状态；速度环消费快照）
+ */
+static void app_foc_speed_observer_init(void) {
+    const app_hardware_params_t* hardware = app_hardware_params_current();
+    const app_software_params_t* software = app_software_params_current();
+    float bandwidth_rad_s = software->speed_observer.bandwidth_rad_s;
+    float max_speed_rad_s = software->speed_observer.max_speed_rad_s;
+
+    /* YAML 值非法时退回编译期安全默认，避免坏参数使 observer init 失败 */
+    if (!foc_finite(bandwidth_rad_s) || (bandwidth_rad_s <= 0.0f)) {
+        bandwidth_rad_s = APP_FOC_SPEED_OBSERVER_BW_RAD_S;
+    }
+    if (!foc_finite(max_speed_rad_s) || (max_speed_rad_s <= 0.0f)) {
+        max_speed_rad_s = APP_FOC_SPEED_OBSERVER_MAX_RAD_S;
+    }
+    algo_speed_observer_cfg_t cfg = {
+        .bandwidth_rad_s = bandwidth_rad_s,
+        .sample_time_s = 1.0f / (float)hardware->inverter.pwm_freq_hz,
+        .max_speed_rad_s = max_speed_rad_s,
+    };
+
+    algo_speed_observer_ctor(&s_speed_observer);
+    s_speed_observer_ready = s_speed_observer.init(&s_speed_observer, &cfg) == 0;
+    s_speed_observer_enabled = software->speed_observer.enable != 0U;
+    s_speed_observer_valid = false;
+    s_omega_m_observer = 0.0f;
+    s_omega_e_observer = 0.0f;
+    if (s_speed_observer_ready) {
+        s_speed_observer.reset(&s_speed_observer);
+    }
+}
+
 void app_foc_init(void) {
     uint32_t cpu_hz = intf_clock_get_cpu_freq();
 
     foc_math_init(); /* sincos 查表（用 libm 一次） */
+    s_motor_params = app_motor_params_current();
 
     s_cycles_per_us = (cpu_hz / 1000000U != 0U) ? (cpu_hz / 1000000U) : 1U;
     s_sec_per_cycle = (cpu_hz != 0U) ? (1.0f / (float)cpu_hz) : 0.0f;
@@ -173,10 +222,13 @@ void app_foc_init(void) {
     s_i_q_ref_cmd = 0.0f;
     s_i_q_ref = 0.0f;
     s_angle_ready = (app_foc_angle_init() == 0);
+    app_foc_speed_observer_init();
+    g_foc_speed_out_rad_s = 0.0f;
+    g_foc_speed_out_valid = false;
     app_foc_current_init();
     s_initialized = true;
 
-    /* 电流环挂到 ADC0 PMT 完成中断（固定 25kHz、采样到输出延迟最小） */
+    /* 电流环挂到 ADC0 PMT 完成中断（固定 30kHz、采样到输出延迟最小） */
     app_adc_register_current_hook(app_foc_isr_step);
 }
 
@@ -212,7 +264,7 @@ static bool app_foc_read_rotor_rad(float* theta_m_rad) {
 }
 
 /**
- * @brief 25kHz 单拍主体（由 app_foc_run_once 计时包裹）
+ * @brief 30kHz 单拍主体（由 app_foc_run_once 计时包裹）
  */
 static void app_foc_run_body(void) {
     float omega_e = 0.0f;
@@ -277,7 +329,7 @@ static void app_foc_run_body(void) {
     /* 校准（CALIB）：由隔离的 app_motor_identify 经校准端口在 1kHz 任务中驱动；
      * 本函数不感知校准算法（无调用点）。 */
 
-    /* 角度/电流环已迁至 app_foc_isr_step（ADC 完成回调，固定 25kHz）；
+    /* 角度/电流环已迁至 app_foc_isr_step（ADC 完成回调，固定 30kHz）；
      * 此处只做状态机、限幅与激励编排。ωe 取 ISR 侧快照用于限速判据。 */
     omega_e = g_foc_current_snapshot.omega_e_rad_s;
 
@@ -330,7 +382,7 @@ static void app_foc_isr_emergency(void) {
 
 /**
  * @brief FOC 快速路径（ADC0 PMT 完成中断内调用）：编码器同步采样 + 角度链 + 电流环
- * @note 固定 25kHz。PWM1 CMP10 同一触发点同时启动三相电流 ADC（PMT）与转子 SPI 帧（HDMA 写
+ * @note 固定 30kHz。PWM1 CMP10 同一触发点同时启动三相电流 ADC（PMT）与转子 SPI 帧（HDMA 写
  *       SPI3 CMD），本 ISR 入口时两者均已完成：电流从 PMT 结果取，角度从 SPI RX FIFO 取，
  *       无启动开销、正常无忙等。编码器采样每拍执行（含 OFF 态），保证主循环快照新鲜。
  *       所有退出路径（正常/故障/无效输入）在单一出口统一计时与预算检查。
@@ -369,6 +421,30 @@ void app_foc_isr_step(void) {
     }
     s_isr_last_cycle = t_isr;
     s_isr_dt_valid = true;
+
+    /* 0b) 速度/ωe 观测器：每拍用最新原始转子角；坏帧/超龄不更新，速度快照失效 */
+    if (s_speed_observer_enabled && s_speed_observer_ready) {
+        bool enc_ok = enc.valid && (enc.consecutive_fail < APP_FOC_ENC_FAIL_TRIP)
+                      && (enc.age_cycles <= s_enc_max_age_cycles) && (isr_dt_s > 0.0f);
+
+        if (enc_ok) {
+            (void)s_speed_observer.step(&s_speed_observer, enc.rad, isr_dt_s, &s_omega_m_observer);
+            /* 参数地址/字段在 init 期已确定；速度/方向变更走既有重初始化路径 */
+            float pp = (float)s_motor_params->pole_pairs;
+            float dir = s_motor_params->encoder.direction;
+            float red = s_motor_params->reducer_ratio;
+
+            if (foc_finite(s_omega_m_observer) && (pp > 0.0f) && (red > 0.0f)
+                && ((dir == 1.0f) || (dir == -1.0f))) {
+                s_omega_e_observer = pp * dir * s_omega_m_observer;
+                s_speed_observer_valid = true;
+            } else {
+                s_speed_observer_valid = false;
+            }
+        } else {
+            s_speed_observer_valid = false;
+        }
+    }
 
     /* ISR 内即时故障门控：故障模块 FAULT / 外部 estop / 已锁存抑制 → 关桥并锁存 */
     if (s_isr_inhibited || ((s_estop_request != NULL) && (*s_estop_request != 0U))
@@ -422,7 +498,7 @@ void app_foc_isr_step(void) {
             }
         } else if (s_theta_held_valid) {
             /* 时序/质量类不可用（坏帧丢样、超龄、连续失败）：复用保持角继续出矢量
-             * （40µs 级误差可忽略）；连续 ENC_DEG_TRIP_STREAK 拍判定"真失效"事件。
+             * （33µs 级误差可忽略）；连续 ENC_DEG_TRIP_STREAK 拍判定"真失效"事件。
              * M1（动作全关）：判定只计数、不升级 fault —— 控制输出保持连续。 */
             theta_e = s_theta_held;
             omega_e = s_omega_held;
@@ -444,6 +520,11 @@ void app_foc_isr_step(void) {
                 fault = true;
             }
         }
+    }
+
+    /* observer ωe 优先用于解耦/限速/快照；θe 仍来自原始角度链 */
+    if ((s_angle_src == APP_FOC_ANGLE_ENCODER) && s_speed_observer_valid) {
+        omega_e = s_omega_e_observer;
     }
 
     /* 本拍新鲜电流（原始码 → A，无滤波） */
@@ -507,6 +588,7 @@ void app_foc_isr_step(void) {
         if (APP_PROTECT_ACTION_EN && app_foc_current_is_tripped()) {
             app_foc_isr_emergency();
         }
+        g_foc_current_snapshot.speed_out_valid = s_speed_observer_valid;
     }
 
 isr_exit:
@@ -526,6 +608,11 @@ isr_exit:
                                    : s_i_q_ref_cmd;
     s_execution.valid =
         executed && !fault && !degraded && s_execution.normal_owner && g_foc_current_snapshot.valid;
+    /* 15kHz motion 直读：本拍确实执行了电流环且 observer 有效才发布 */
+    g_foc_speed_out_rad_s = g_foc_current_snapshot.speed_out_rad_s;
+    g_foc_speed_out_valid = s_speed_observer_valid && executed;
+    /* 快照与直读标志保持一致：故障/estop/未执行路径不得保留上一拍 valid */
+    g_foc_current_snapshot.speed_out_valid = g_foc_speed_out_valid;
     s_execution.accepted_id_a = s_execution.valid ? g_foc_current_snapshot.i_d_ref_a : 0;
     s_execution.accepted_iq_a = s_execution.valid ? g_foc_current_snapshot.i_q_ref_a : 0;
     s_execution.measured_id_a = g_foc_current_snapshot.i_d_a;
@@ -635,7 +722,7 @@ int app_foc_enable(void) {
     }
 
     /* 注：app_3phase_inverter_enable() 内含 +12V 栅极供电稳定等待（约 10ms 阻塞）。
-     * 该窗口内桥处于关闭态（PWM 未启动），无电流风险；但 25kHz 环与 L2/L3 保护暂停。
+     * 该窗口内桥处于关闭态（PWM 未启动），无电流风险；但 30kHz 环与 L2/L3 保护暂停。
      * 与既有 V/F 启动路径同构；非阻塞桥使能为 v2 项（spec §10）。 */
     /* 清除调试 inv 可能遗留的逐相强制关断（否则该相输出被屏蔽） */
     for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
@@ -648,6 +735,14 @@ int app_foc_enable(void) {
     app_foc_current_reset();
     app_foc_current_zero_vector();
     s_angle.reset(&s_angle);
+    if (s_speed_observer_ready) {
+        s_speed_observer.reset(&s_speed_observer);
+    }
+    s_speed_observer_valid = false;
+    s_omega_m_observer = 0.0f;
+    s_omega_e_observer = 0.0f;
+    g_foc_speed_out_valid = false;
+    g_foc_current_snapshot.speed_out_valid = false;
     {
         uint32_t st = intf_sys_irq_save();
 
@@ -713,6 +808,14 @@ void app_foc_disable(void) {
     app_foc_current_zero_vector();
     app_3phase_inverter_disable();
     app_foc_current_reset();
+    if (s_speed_observer_ready) {
+        s_speed_observer.reset(&s_speed_observer);
+    }
+    s_speed_observer_valid = false;
+    s_omega_m_observer = 0.0f;
+    s_omega_e_observer = 0.0f;
+    g_foc_speed_out_valid = false;
+    g_foc_current_snapshot.speed_out_valid = false;
 
     /* 3) 进行中的电角度自校准：不在此反向依赖校准模块；其每拍守卫检测到
      *    状态 ≠ CALIB 即以 STATE 失败退出（≤1ms）。 */
@@ -886,6 +989,15 @@ bool app_foc_is_active(void) { return (s_state != APP_FOC_STATE_OFF); }
 
 void app_foc_get_snapshot(app_foc_current_snapshot_t* out) { app_foc_current_get_snapshot(out); }
 
+void app_foc_set_speed_observer_enable(bool enable) {
+    uint32_t st = intf_sys_irq_save();
+    s_speed_observer_enabled = enable;
+    if (!enable) {
+        s_speed_observer_valid = false;
+    }
+    intf_sys_irq_restore(st);
+}
+
 /**
  * @brief 角度链历史复位（零点/角源切换后：下一拍重新建立序号/时间戳/保持角基准）
  * @note 调用方须持有临界区
@@ -915,6 +1027,12 @@ int app_foc_calib_begin(void) {
         return -1;
     }
     app_foc_current_reset();                 /* 临界区内：与 ISR 电流环互斥（仅清零积分器） */
+    if (s_speed_observer_ready) {
+        s_speed_observer.reset(&s_speed_observer);
+    }
+    s_speed_observer_valid = false;
+    s_omega_m_observer = 0.0f;
+    s_omega_e_observer = 0.0f;
     s_angle_src = APP_FOC_ANGLE_FORCED;
     s_forced_theta = 0.0f;
     s_i_d_ref = 0.0f;
@@ -967,6 +1085,12 @@ void app_foc_calib_end(void) {
         s_angle_src = APP_FOC_ANGLE_ENCODER;
         app_foc_angle_history_reset();
         app_foc_current_reset();
+        if (s_speed_observer_ready) {
+            s_speed_observer.reset(&s_speed_observer);
+        }
+        s_speed_observer_valid = false;
+        s_omega_m_observer = 0.0f;
+        s_omega_e_observer = 0.0f;
         s_state = APP_FOC_STATE_READY;
         app_foc_revoke_current();
     }

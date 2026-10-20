@@ -9,7 +9,7 @@
  *
  * 实时性：
  *   - 初始化/自检期：read_raw 为阻塞短操作（两帧 ~7µs），无打印/动态分配；
- *   - 运行期：PWM1 CMP10同时经DMA_REQ0/1启动SPI3/SPI1，25kHz；
+ *   - 运行期：PWM1 CMP10同时经DMA_REQ0/1启动SPI3/SPI1，30kHz；
  *     ADC0 PMT ISR取两帧并发布配对快照，GPTMR仅消费缓存，不访问SPI；
  *   - 每实例单所有者，不可在多上下文并发调用。
  *
@@ -93,7 +93,7 @@ int app_encoder_sync_start(void);
  * @brief 硬件同步采样是否已启用
  */
 bool app_encoder_sync_active(void);
-/** @brief 游标SPI1同PWM25kHz触发，DMA_REQ1/HDMA1；初始化期调用 */
+/** @brief 游标SPI1同PWM30kHz触发，DMA_REQ1/HDMA1；初始化期调用 */
 int app_encoder_output_start(void);
 /** @brief 只读ADC发布的完整配对；超龄/任一路无效返回-1，不触碰SPI */
 int app_encoder_output_sample(app_encoder_rotor_snapshot_t* rotor, uint16_t* output);

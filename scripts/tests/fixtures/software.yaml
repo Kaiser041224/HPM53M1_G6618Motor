@@ -34,6 +34,11 @@ control:
     ki: 496.4                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
     bandwidth_rad_s: 3141.6  # 目标带宽 [rad/s]（自整定用）
     decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
+    output_delay_s: 2.0e-5   # 反 Park 输出延迟补偿 [s]（测试夹具值）
+  speed_observer:            # P0-B observer（测试夹具值）
+    enable: 1
+    bandwidth_rad_s: 400.0
+    max_speed_rad_s: 600.0
   speed_loop:
     kp: 1.5                  # [Nm/(rad/s)]（测试夹具值）
     ki: 20.0                 # [Nm/rad]（测试夹具值）

@@ -17,6 +17,7 @@
 #include "app_analog_signal.h"
 #include "app_encoder.h"
 #include "app_fault.h"
+#include "app_motor_params.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
 
@@ -52,8 +53,14 @@ static void mock_fill_rotor(app_encoder_rotor_snapshot_t* out) {
     out->timestamp_cycles = s_rotor_seq * 19200U; /* 40µs @480MHz */
     out->valid = true;
 }
+int g_mock_rotor_fail;
 int app_encoder_sync_sample(uint32_t now_cycles, app_encoder_rotor_snapshot_t* out) {
     (void)now_cycles;
+    if (g_mock_rotor_fail) {
+        memset(out, 0, sizeof(*out));
+        out->valid = false;
+        return -1;
+    }
     s_rotor_seq++;
     mock_fill_rotor(out);
     return 0;
@@ -95,7 +102,11 @@ int app_encoder_output_sample(app_encoder_rotor_snapshot_t* rotor, uint16_t* out
     rotor->seq = ++s_rotor_seq;
     if (g_mock_output_timestamp_override)
         rotor->timestamp_cycles = g_mock_output_timestamp_cycles;
-    *output = foc_finite(rotor->rad) ? (uint16_t)(.98f * rotor->rad / 6.283185307f * 65536.0f) : 0U;
+    const app_motor_params_t* motor = app_motor_params_current();
+    *output = foc_finite(rotor->rad)
+                  ? (uint16_t)(motor->encoder.output_ratio * rotor->rad / 6.283185307f
+                               * 65536.0f)
+                  : 0U;
     if (g_mock_output_raw_override)
         *output = g_mock_output_raw;
     return 0;

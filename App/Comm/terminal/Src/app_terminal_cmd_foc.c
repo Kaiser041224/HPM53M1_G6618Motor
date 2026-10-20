@@ -26,6 +26,13 @@
 
 #define APP_TERMINAL_FOC_DEG_PER_RAD (57.2957795f)
 #define APP_TERMINAL_FOC_RAD_PER_DEG (0.01745329252f)
+#define APP_TERMINAL_FOC_RAD_PER_RPM (0.10471975512f) /* 2π/60：rpm → 轴端 rad/s */
+
+static const char k_motion_usage[] =
+    "motion show|cal (OFF stationary)|apply|zero [save]|save|"
+    "gains kp ki [coulomb] [viscous] (idle)|friction show|cal|apply|save|"
+    "torque Nm|speed rpm|pos deg[0~360] [vel_ff] [torque_ff]|"
+    "pos_gains p [bw] (idle)|off|direct (OFF)";
 
 const char* app_terminal_cmd_foc_state_name(app_foc_state_t state) {
     switch (state) {
@@ -85,7 +92,7 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     }
 }
 
-/* ── foc trace：捕获 25kHz 波形并以 CSV 输出（每拍最多 8 行，避免占满 TX 环） ── */
+/* ── foc trace：捕获 30kHz 波形并以 CSV 输出（每拍最多 8 行，避免占满 TX 环） ── */
 static uint32_t s_trace_ticks;
 static uint16_t s_trace_sent;
 
@@ -300,7 +307,7 @@ static int cmd_foc(int argc, char** argv) {
             return -1;
         }
         csh_printf(
-            csh, "trace: capturing %u samples @25kHz (~5ms)...\r\n", (unsigned)APP_FOC_TRACE_MAX);
+            csh, "trace: capturing %u samples @30kHz (~4.3ms)...\r\n", (unsigned)APP_FOC_TRACE_MAX);
         return 0;
     }
 
@@ -331,6 +338,18 @@ static const char* app_terminal_motion_reason(int rc) {
     default: return "unknown";
     }
 }
+
+/** @brief motion 顶层用法 + 生命周期提示（zero/apply/save 语义容易混淆） */
+static int motion_usage(chry_shell_t* csh) {
+    int rc = app_terminal_cmd_usage(csh, k_motion_usage);
+
+    csh_printf(
+        csh,
+        "  zero: RAM only | zero save: RAM+flash | apply: phase RAM (zero invalidated) | "
+        "save: phase+zero flash\r\n");
+    return rc;
+}
+
 /* ============================================================================
  * motion friction cal：摩擦辨识 job（200ms 进度条，照 cal encoder 形式）
  * ============================================================================ */
@@ -504,34 +523,93 @@ static int cmd_motion(int argc, char** argv) {
             csh,
             "motion: mode=%u cal=%u zero=%u valid=%u active=%u calibrating=%u samples=%lu "
             "reason=%u\r\n"
-            "shaft=%.6frad speed=%.6frad/s phase=%.8fturn torque=%.4fNm iq=%.4fA "
+            "shaft=%.6frad speed=%.6frad/s (%.3frpm) phase=%.8fturn torque=%.4fNm iq=%.4fA "
             "good/bad=%lu/%lu\r\n"
             "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n"
             "position: sp=%.6frad vel_cmd=%.6frad/s err=%.6frad\r\n",
             (unsigned)state.mode, state.calibrated, state.zero_valid, state.feedback_valid,
             state.active, state.calibrating, (unsigned long)state.calibration_samples,
             (unsigned)state.reason, (double)state.shaft_rad, (double)state.speed_rad_s,
-            (double)state.phase_turns, (double)state.torque_nm, (double)state.iq_a,
+            (double)(state.speed_rad_s * 60.0f / 6.28318530718f), (double)state.phase_turns,
+            (double)state.torque_nm, (double)state.iq_a,
             (unsigned long)state.good_count, (unsigned long)state.bad_count,
             (double)state.iq_accepted_a, (unsigned long)state.hold_count,
             (unsigned)state.current_limited, (unsigned)state.voltage_saturated,
             (double)state.pos_setpoint_rad, (double)state.vel_cmd_rad_s, (double)position_error);
         return 0;
     }
+    if (strcmp(sub, "help") == 0) {
+        return motion_usage(csh);
+    }
     if (app_friction_identify_busy() && strcmp(sub, "off") != 0 && strcmp(sub, "friction") != 0
         && strcmp(sub, "show") != 0) {
         csh_printf(csh, "ERR: friction identify busy; 'motion off' aborts it\r\n");
         return -1;
     }
-    if (strcmp(sub, "cal") == 0)
+    if (strcmp(sub, "cal") == 0) {
+        if (argc != 2)
+            return motion_usage(csh);
         rc = app_motion_calibrate();
-    else if (strcmp(sub, "apply") == 0)
+        if (rc == 0)
+            csh_printf(csh, "accepted: calibration started; wait for calibration_done=1; "
+                            "next: motion apply\r\n");
+        else
+            csh_printf(csh, "ERR: motion cal rejected (requires FOC OFF, motion idle, "
+                            "valid reducer/output_ratio)\r\n");
+        return rc == 0 ? 0 : -1;
+    }
+    if (strcmp(sub, "apply") == 0) {
+        if (argc != 2)
+            return motion_usage(csh);
         rc = app_motion_apply();
-    else if (strcmp(sub, "zero") == 0)
+        if (rc == 0)
+            csh_printf(csh, "accepted: phase applied (RAM); zero invalidated; "
+                            "wait for valid=1, next: motion zero save\r\n");
+        else
+            csh_printf(csh, "ERR: motion apply rejected (requires completed calibration, "
+                            "FOC OFF, unchanged motor ratio)\r\n");
+        return rc == 0 ? 0 : -1;
+    }
+    if (strcmp(sub, "zero") == 0) {
+        bool save_after = false;
+        if (argc == 3) {
+            if (strcmp(argv[2], "save") != 0)
+                return motion_usage(csh);
+            save_after = true;
+        } else if (argc != 2) {
+            return motion_usage(csh);
+        }
         rc = app_motion_zero();
-    else if (strcmp(sub, "save") == 0)
+        if (rc != 0) {
+            csh_printf(csh, "ERR: motion zero rejected (requires FOC OFF, calibrated, "
+                            "fresh feedback)\r\n");
+            return -1;
+        }
+        if (save_after) {
+            rc = app_motion_save();
+            if (rc != 0) {
+                csh_printf(csh, "WARN: zero set in RAM, but flash save failed; "
+                                "keep FOC OFF and retry 'motion save'\r\n");
+                return -1;
+            }
+            csh_printf(csh, "accepted: zero set and saved to flash\r\n");
+        } else {
+            csh_printf(csh, "accepted: zero set in RAM only; run 'motion zero save' "
+                            "or 'motion save' to persist\r\n");
+        }
+        return 0;
+    }
+    if (strcmp(sub, "save") == 0) {
+        if (argc != 2)
+            return motion_usage(csh);
         rc = app_motion_save();
-    else if (strcmp(sub, "off") == 0) {
+        if (rc == 0)
+            csh_printf(csh, "accepted: phase/zero saved to flash\r\n");
+        else
+            csh_printf(csh, "ERR: motion save rejected (requires FOC OFF, calibrated)\r\n");
+        return rc == 0 ? 0 : -1;
+    }
+    if (strcmp(sub, "off") == 0) {
         rc = app_motion_stop();
     } else if (strcmp(sub, "direct") == 0)
         rc = app_foc_set_current_source(APP_FOC_CURRENT_SOURCE_DIRECT);
@@ -539,7 +617,7 @@ static int cmd_motion(int argc, char** argv) {
         if (strcmp(sub, "torque") == 0)
             rc = app_motion_torque(value);
         else if (strcmp(sub, "speed") == 0)
-            rc = app_motion_speed(value);
+            rc = app_motion_speed(value * APP_TERMINAL_FOC_RAD_PER_RPM); /* rpm → rad/s */
         else if (strcmp(sub, "pos") == 0) {
             float vel_ff = 0, torque_ff = 0;
             if ((argc >= 4 && app_terminal_cmd_parse_float(argv[3], &vel_ff) != 0)
@@ -568,18 +646,11 @@ static int cmd_motion(int argc, char** argv) {
                 csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)|pos deg[0~360] "
                      "[vel_ff] [torque_ff]|pos_gains p [bw] (idle)");
     } else
-        return app_terminal_cmd_usage(
-            csh, "motion show|cal (OFF stationary)|apply|zero|save|gains kp ki "
-                 "[coulomb] [viscous] (idle)|friction show|cal|apply|save|"
-                 "torque Nm|speed rad/s|pos deg[0~360] [vel_ff] [torque_ff]|pos_gains p [bw] "
-                 "(idle)|off|direct (OFF)");
+        return motion_usage(csh);
     csh_printf(
-        csh,
-        "%s: motion rc=%d%s%s%s; show|cal (OFF stationary)|apply|zero|save|"
-        "gains kp ki [coulomb] [viscous] (idle)|torque Nm|speed rad/s|"
-        "pos deg[0~360] [vel_ff] [torque_ff]|pos_gains p [bw] (idle)|off|direct (OFF)\r\n",
-        rc == 0 ? "accepted" : "ERR", rc, rc == 0 ? "" : " (",
-        rc == 0 ? "" : app_terminal_motion_reason(rc), rc == 0 ? "" : ")");
+        csh, "%s: motion rc=%d%s%s%s; %s\r\n", rc == 0 ? "accepted" : "ERR", rc,
+        rc == 0 ? "" : " (", rc == 0 ? "" : app_terminal_motion_reason(rc),
+        rc == 0 ? "" : ")", k_motion_usage);
     return rc;
 }
 CSH_CMD_EXPORT_ALIAS(cmd_motion, motion, );

@@ -9,17 +9,30 @@
 /** @brief 已验证单圈输入产生的差值仅在(-1,1)内，无libm调用 */
 static inline float motion_wrap(float value) { return value < 0 ? value + 1.0f : value; }
 FOC_ATTR_RAMFUNC
-int algo_motion_vernier(float rotor, float vernier, float phase, float* shaft_rad) {
-    if (!shaft_rad || !foc_finite(rotor) || !foc_finite(vernier) || !foc_finite(phase) || phase < 0
-        || phase >= .02f || rotor < 0 || rotor >= 1 || vernier < 0 || vernier >= 1)
+int algo_motion_vernier(float rotor, float vernier, float phase, float reducer_ratio,
+                        float output_ratio, float* shaft_rad) {
+    if (!shaft_rad || !foc_finite(rotor) || !foc_finite(vernier) || !foc_finite(phase)
+        || !foc_finite(reducer_ratio) || !foc_finite(output_ratio) || (reducer_ratio < 1.0f)
+        || (output_ratio <= 0.0f) || (output_ratio >= 1.0f) || (phase < 0.0f)
+        || (phase >= 1.0f / reducer_ratio) || (rotor < 0.0f) || (rotor >= 1.0f)
+        || (vernier < 0.0f) || (vernier >= 1.0f))
         return -1;
-    float estimate = 50.0f * motion_wrap(.98f * rotor - vernier + phase);
+    /* 游标一致性：reducer 必须是 output_ratio 的游标周期 1/(1-output_ratio) */
+    float expected_reducer = 1.0f / (1.0f - output_ratio);
+    float reducer_delta = reducer_ratio - expected_reducer;
+    if (!foc_finite(expected_reducer) || (reducer_delta > 1.0e-3f)
+        || (reducer_delta < -1.0e-3f))
+        return -1;
+
+    float estimate = reducer_ratio * motion_wrap(output_ratio * rotor - vernier + phase);
+    if (!foc_finite(estimate))
+        return -1;
     float nearest = (float)(uint32_t)(estimate + .5f);
     if (estimate - nearest > .25f || nearest - estimate > .25f)
         return -1;
-    if (nearest >= 50)
+    if (nearest >= reducer_ratio)
         nearest = 0;
-    *shaft_rad = (nearest + rotor) * (FOC_TWO_PI_F / 50.0f);
+    *shaft_rad = (nearest + rotor) * (FOC_TWO_PI_F / reducer_ratio);
     return 0;
 }
 FOC_ATTR_RAMFUNC

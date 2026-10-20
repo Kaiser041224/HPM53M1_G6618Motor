@@ -48,10 +48,17 @@ void mock_params_reset(void) {
     s_sw.control.speed_loop.friction_viscous_nm_per_rad_s = 0.0f;
     s_sw.control.speed_loop.friction_smoothing_rad_s = 0.05f;
     s_sw.control.speed_loop.velocity_lpf_coeff = 0.03f;
+    /* P0-B observer 默认启用；输出延迟保持 0，既有测试不受影响（延迟专项测试自行设置） */
+    s_sw.speed_observer.enable = 1U;
+    s_sw.speed_observer.bandwidth_rad_s = 500.0f;
+    s_sw.speed_observer.max_speed_rad_s = 700.0f;
+    s_sw.current_loop_output_delay_s = 0.0f;
     s_sw.params_generation = 1U;
 
     s_motor.pole_pairs = 10U;
     s_motor.reducer_ratio = 50.0f;
+    s_motor.encoder.rotor_ratio = 1.0f;
+    s_motor.encoder.output_ratio = 0.98f;
     s_motor.rs_ohm = 0.158f;
     s_motor.ls_h = 118.5e-6f;
     s_motor.flux_linkage_wb = 0.01f;

@@ -9,7 +9,10 @@
 
 #include "test_util.h"
 
+#include "app_foc.h"
 #include "app_foc_current.h"
+#include "app_motor_params.h"
+#include "foc_math.h"
 
 #include <math.h>
 
@@ -77,6 +80,32 @@ void test_foc_current_integration(void) {
     app_foc_current_get_snapshot(&snap);
     CHECK_NEAR(snap.v_scale, 1.0f, 1e-4f); /* 到达调制前已被 PI 圆限幅 */
 
+    /* 4b) 输出延迟：同一 vdq、不同 ωe → 反 Park 角不同，duty 必须变化 */
+    {
+        float duty0[3], duty833[3];
+        const app_motor_params_t* motor_params = app_motor_params_current();
+        float expected_speed = 5236.0f / ((float)motor_params->pole_pairs
+                                          * motor_params->encoder.direction
+                                          * motor_params->reducer_ratio);
+
+        mock_set_current_gains(0.3f, 0.0f);
+        app_foc_current_set_output_delay(1.0f / 30000.0f);
+        app_foc_current_reset();
+        rc = app_foc_current_run_fresh(0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 24.0f, duty0,
+                                       &sat);
+        CHECK(rc == 0);
+        app_foc_current_reset();
+        rc = app_foc_current_run_fresh(0.0f, 5236.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 24.0f,
+                                       duty833, &sat);
+        CHECK(rc == 0);
+        CHECK(duties_in_window(app_foc_current_duty_max()));
+        CHECK(fabsf(duty0[0] - duty833[0]) + fabsf(duty0[1] - duty833[1])
+                  + fabsf(duty0[2] - duty833[2])
+              > 1e-4f);
+        app_foc_current_get_snapshot(&snap);
+        CHECK_NEAR(snap.speed_out_rad_s, expected_speed, 1e-2f);
+    }
+
     /* 5) vtest 过流判断：M1 保护动作全关（app_protect_policy.h APP_PROTECT_ACTION_EN=0）
      *     —— 只判断（rc=-1 + 本拍零矢量回退 + 计数），不锁存跳闸、不停 vtest。
      *     动作加回（开关置 1）后本组断言应恢复为：tripped==true / vtest_active==false。 */
@@ -110,4 +139,47 @@ void test_foc_current_integration(void) {
     }
     CHECK(app_foc_current_vtest_active() == false);
     CHECK_NEAR(g_mock_duty[0], 0.5f, 1e-6f);
+}
+
+void test_foc_speed_observer(void) {
+    extern float g_mock_rotor_rad;
+    extern int g_mock_rotor_fail;
+    extern void mock_advance_cycle(uint32_t cycles);
+    app_foc_current_snapshot_t snap;
+
+    mock_params_reset();
+    app_motor_params_mutable()->pole_pairs = 10U;
+    app_motor_params_mutable()->encoder.direction = 1.0f;
+    app_motor_params_mutable()->reducer_ratio = 20.0f;
+    app_foc_init();
+    app_foc_set_speed_observer_enable(true);
+    CHECK(app_foc_enable() == 0);
+
+    g_mock_rotor_rad = 0.0f;
+    for (int i = 0; i < 2000; ++i) {
+        g_mock_rotor_rad = fmodf(g_mock_rotor_rad + 10.0f * (48000.0f / 480000000.0f),
+                                 FOC_TWO_PI_F);
+        mock_advance_cycle(48000U);
+        app_foc_isr_step();
+    }
+    app_foc_get_snapshot(&snap);
+    CHECK_NEAR(snap.omega_e_rad_s, 100.0f, 2.0f);
+    CHECK_NEAR(snap.speed_out_rad_s, 0.5f, 0.05f);
+    CHECK(snap.speed_out_valid);
+
+    /* 编码器坏帧：observer 速度失效，快照保持有限，不产生 NaN */
+    g_mock_rotor_fail = 1;
+    mock_advance_cycle(48000U);
+    app_foc_isr_step();
+    app_foc_get_snapshot(&snap);
+    CHECK(isfinite(snap.speed_out_rad_s));
+    CHECK(isfinite(snap.omega_e_rad_s));
+    g_mock_rotor_fail = 0;
+    mock_advance_cycle(48000U);
+    app_foc_isr_step(); /* 恢复一帧有效 observer */
+    app_foc_get_snapshot(&snap);
+    CHECK(snap.speed_out_valid);
+    app_foc_disable();
+    app_foc_get_snapshot(&snap);
+    CHECK(!snap.speed_out_valid); /* 停用后不得保留上一拍 observer 有效标志 */
 }

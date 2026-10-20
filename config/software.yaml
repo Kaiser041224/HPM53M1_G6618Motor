@@ -37,11 +37,16 @@ control:
     ki: 1985.486557         # [V/(A·s)] = Rs × (2π×2000Hz)
     bandwidth_rad_s: 12566.370614    # 目标带宽 [rad/s]（自整定用）
     decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
+    output_delay_s: 3.3333333e-5 # 反 Park 输出延迟补偿 [s]（一拍 30kHz；0=关闭；init 期消费）
+  speed_observer:            # P0-B：30kHz 转子速度/ωe observer（FOC 与速度环共用）
+    enable: 1                # 1=启用；0=退回 foc_angle/差分测速（init 期消费）
+    bandwidth_rad_s: 500.0   # PLL 带宽 [rad/s]
+    max_speed_rad_s: 700.0   # 机械转速限幅 [rad/s]
   speed_loop:
     kp: 50.0                  # [Nm/(rad/s)] 速度环P（轴端；机上整定值2026-10-15；0=禁用速度模式）
     ki: 1000.0                 # [Nm/rad] 速度环I（轴端；同上；motion gains 可在线改）
-    friction_coulomb_nm: 1.1          # [Nm] 库仑摩擦前馈 Tc（机上整定值；motion friction cal 自整定）
-    friction_viscous_nm_per_rad_s: -0.3 # [Nm/(rad/s)] 粘性摩擦前馈 Kv（可负=Stribeck斜率）
+    friction_coulomb_nm: 1.5          # [Nm] 库仑摩擦前馈 Tc（机上整定值；motion friction cal 自整定）
+    friction_viscous_nm_per_rad_s: 0.95 # [Nm/(rad/s)] 粘性摩擦前馈 Kv（可负=Stribeck斜率）
     friction_smoothing_rad_s: 0.05     # [rad/s] 平滑符号速度尺度（模型常量；0=硬符号）
     velocity_lpf_coeff: 0.05        # 测速一阶滤波系数（15kHz 下约 120Hz；有效域(0,1]）
   position_loop:
@@ -52,5 +57,5 @@ control:
     i_trip_a: 0.0                     # 快速过流跳闸 [A]（峰值口径；0 = 关闭；连续 2 拍超限 → 零矢量+关桥+FAULT）
     speed_max_rad_s: 0.0            # 转矩模式限速 [rad/s 电角]（0 = 关闭；超限零转矩，速度回落自动恢复；G66-18 额定 3300rpm≈3456rad/s）
     duty_max: 0.95                     # 24V空载速度试验选定；高占空比采样精度仍需波形验证
-    motion_iq_max_a: 25.0               # [A] motion命令电流硬限制（力矩命令与速度PI输出上限）
+    motion_iq_max_a: "motor.i_peak_10s_a" # [A] motion命令电流硬限制（与 i_q_max_a 对齐 → 24.3）
     motion_speed_limit_rad_s: 0.0      # [rad/s] 轴端速度命令限（0 = 不限）

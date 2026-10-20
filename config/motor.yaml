@@ -22,7 +22,7 @@ rpm_max: 3300              # 最高转速 [rpm]
 inertia_kgm2: 2.3e-5       # 转动惯量 [kg·m²]
 torque_rated_nm: 1.16      # 额定转矩 [N·m]（手册值；与 Kt×I 差异待校核）
 torque_peak_10s_nm: 2.8    # 峰值转矩 10s [N·m]（手册值；与 Kt×I 差异待校核）
-reducer_ratio: 50.0        # 减速比（出轴/转子，游标测量确认）；转矩换算 τ_out = Kt·iq·reducer_ratio
+reducer_ratio: 50.0        # 减速比（出轴/转子）；多圈游标、转矩/速度换算统一使用本值；须满足 reducer_ratio × (1 - encoder.output_ratio) ≈ 1
 
 encoder:
   model: "KTH7823"              # 仅文档
@@ -32,6 +32,7 @@ encoder:
   output_pinion_teeth: 50       # 出轴编码器小齿轮齿数（49:50）
   rotor_ratio: "rotor_ring_teeth / rotor_pinion_teeth"     # 转子编码器转角/转子转角 → 1.0
   output_ratio: "rotor_ring_teeth / output_pinion_teeth"   # 出轴编码器转角/转子转角 → 0.98（实测确认）
+  # 多圈解算使用顶层 reducer_ratio + 本处 output_ratio；两者须满足
+  # reducer_ratio × (1 - output_ratio) = 1。修改后须重做 motion cal/apply/save。
   electrical_offset_rad: 0.0    # 电角度零点 [rad]（出厂默认；cal encoder apply/save 覆盖，flash "FENC" 上电恢复优先）
-  direction: 1.0                # 编码器方向（合法值仅 +1.0 / −1.0；同上）
-  # reducer_ratio: <待确认>    # 减速器出轴/转子减速比（多圈解算用，待机械确认后加入）
+  direction: -1.0                # 编码器方向（合法值仅 +1.0 / −1.0；同上）

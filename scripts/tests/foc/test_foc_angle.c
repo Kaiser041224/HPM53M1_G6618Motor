@@ -32,6 +32,18 @@ void test_foc_angle(void) {
         CHECK_NEAR(omega, 0.0f, 1e-6f);
     }
 
+    /* 输出延迟补偿：θout = wrap(θe + ωe·delay) */
+    {
+        CHECK_NEAR(foc_angle_advance(0.0f, 100.0f, 1.0f / 30000.0f), 0.0033333334f, 1e-6f);
+        CHECK_NEAR(foc_angle_advance(0.0f, 5236.0f, 1.0f / 30000.0f), 0.174533f, 1e-5f);
+        CHECK_NEAR(foc_angle_advance(6.2f, 100.0f, 0.01f), 0.9168147f, 1e-5f);
+        CHECK_NEAR(foc_angle_advance(1.0f, -100.0f, 0.01f), 0.0f, 1e-6f);
+        CHECK_NEAR(foc_angle_advance(1.0f, NAN, 0.01f), 1.0f, 1e-6f);
+        CHECK_NEAR(foc_angle_advance(1.0f, 100.0f, NAN), 1.0f, 1e-6f);
+        CHECK_NEAR(foc_angle_advance(1.0f, 100.0f, 0.0f), 1.0f, 1e-6f);
+        CHECK_NEAR(foc_angle_advance(NAN, 100.0f, 0.01f), 0.0f, 1e-6f);
+    }
+
     /* 恒定电角速度 → ωe 收敛（LPF 后接近真值） */
     {
         float omega = 0.0f;

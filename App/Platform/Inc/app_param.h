@@ -65,6 +65,17 @@ bool app_param_is_ready(void);
 int app_param_load(uint32_t key, void* buf, size_t len);
 
 /**
+ * @brief 读取参数（长度可变）：记录长度 ≤ cap 时拷贝实际长度
+ * @param key 参数键
+ * @param buf 输出缓冲
+ * @param cap 输出缓冲容量
+ * @param out_len 实际拷贝长度（非 NULL）
+ * @return 0 = 成功；-1 = 未找到 / 校验失败 / 记录长于 cap / 存储不可用
+ * @note 供带版本迁移的记录读取使用；普通调用仍应使用 app_param_load() 的精确长度语义
+ */
+int app_param_load_flex(uint32_t key, void* buf, size_t cap, size_t* out_len);
+
+/**
  * @brief 保存参数：更新（或新增）key 对应记录（整扇区读-改-写 + 回读校验）。
  * @return 0 = 成功；-1 = 失败
  */

@@ -1,6 +1,6 @@
 /**
  * @file    app_foc.h
- * @brief   FOC 编排：状态机 / 模式 / 联锁 / 25kHz 入口
+ * @brief   FOC 编排：状态机 / 模式 / 联锁 / 30kHz 入口
  * @author  Kaiser
  *
  * 状态机（spec §4.1）：
@@ -87,12 +87,12 @@ typedef enum {
 } app_foc_angle_source_t;
 
 /**
- * Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss；25kHz 节拍）
+ * Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss；30kHz 节拍）
  */
 extern volatile uint32_t g_foc_loop_cycles;
-/** Ozone 观测：FOC 调用间隔 [µs]（25kHz 标称；明显大于 40 = 节拍抖动/丢拍） */
+/** Ozone 观测：FOC 调用间隔 [µs]（30kHz 标称；明显大于 34 = 节拍抖动/丢拍） */
 extern volatile uint32_t g_foc_loop_dt_us;
-/** Ozone 观测：25kHz ISR 单拍耗时 [cycle] / 历史最大 */
+/** Ozone 观测：30kHz ISR 单拍耗时 [cycle] / 历史最大 */
 extern volatile uint32_t g_foc_isr_cycles;
 extern volatile uint32_t g_foc_isr_cycles_max;
 /** Ozone 观测：ISR 单拍超预算次数（超限即停用快路径并紧急关桥） */
@@ -101,6 +101,10 @@ extern volatile uint32_t g_foc_isr_overruns;
 extern volatile uint32_t g_foc_enc_age_cycles;
 extern volatile uint32_t g_foc_enc_age_us;
 extern volatile uint32_t g_foc_enc_seq;
+/** @brief observer 轴端速度快照 [rad/s]（ISR 发布；15kHz motion 直读，热路径免 Flash 调用） */
+extern volatile float g_foc_speed_out_rad_s;
+/** @brief g_foc_speed_out_rad_s 有效（本拍电流环执行且 observer 有效） */
+extern volatile bool g_foc_speed_out_valid;
 /** ISR→主循环 故障请求（ISR 只置位；主循环负责状态迁移） */
 extern volatile uint32_t g_foc_fault_request;
 
@@ -124,13 +128,13 @@ void app_foc_register_estop_request(volatile uint32_t* req);
 bool app_foc_isr_inhibited(void);
 
 /**
- * @brief 25kHz 节拍（app_logic 主循环调用）
+ * @brief 30kHz 节拍（ADC0 PMT ISR 调用）
  */
 void app_foc_run_once(void);
 
 /**
  * @brief FOC 快速路径（ADC0 PMT 完成中断内调用；由 app_foc_init 自动注册）
- * @note 编码器采样 + 角度链 + 电流环；固定 25kHz。禁止在中断外直接调用。
+ * @note 编码器采样 + 角度链 + 电流环；固定 30kHz。禁止在中断外直接调用。
  */
 void app_foc_isr_step(void);
 
@@ -196,6 +200,11 @@ bool app_foc_is_active(void);
  * @param out 输出快照（不可为 NULL）
  */
 void app_foc_get_snapshot(app_foc_current_snapshot_t* out);
+/**
+ * @brief 使能/停用 30kHz speed/ωe observer（默认由 software.yaml 决定；此 API 供测试/调试覆盖）
+ * @param enable true = 步进 observer 并发布 ωe/speed；false = 只用 foc_angle
+ */
+void app_foc_set_speed_observer_enable(bool enable);
 
 /* ============================================================================
  * 校准端口（Calibration Port）
