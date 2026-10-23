@@ -96,7 +96,8 @@ typedef struct {
     float progress;           /**< 进度 0~1 */
     float offset_fwd_rad;     /**< 正向扫描零点 [rad]（诊断：与反向之差 = 回差/打滑） */
     float offset_rev_rad;     /**< 反向扫描零点 [rad] */
-    float offset_rad;         /**< 结果：电角度零点 [rad] */
+    float offset_end_rad;     /**< 反向扫描终点零点 [rad]（静止保持点，供 trial 诊断） */
+    float offset_rad;         /**< 结果：电角度零点 [rad]（正/反向圆均值） */
     float direction;          /**< 结果：方向（+1.0 / −1.0） */
     float quality;            /**< 结果：质量 |Σ|/N */
     float mech_ratio_err;     /**< 结果：极对数校验偏差（相对） */
@@ -145,10 +146,13 @@ struct id_encoder {
     float _theta_m_start;      /**< 方向判定起点机械角 [rad] */
     float _mech_travel;        /**< 正向扫描机械行程（端点差，wrap-safe）[rad] */
     float _theta_m_sweep_start;/**< 正向扫描起点机械角 [rad] */
+    float _theta_m_end;        /**< 反向扫描终点机械角 [rad] */
+    bool _theta_m_end_valid;   /**< 反向扫描终点机械角有效 */
     bool _sweep_started;       /**< 正向扫描已越过起始静默 */
     float _offset_rad;         /**< 结果：零点 [rad]（正/反向合计） */
     float _offset_fwd_rad;     /**< 结果：正向零点 [rad]（诊断） */
     float _offset_rev_rad;     /**< 结果：反向零点 [rad]（诊断） */
+    float _offset_end_rad;     /**< 结果：反向终点零点 [rad]（诊断/trial 候选） */
     float _hyst_rad;           /**< 正/反向零点差 [rad]（回差/打滑度量） */
     float _direction;          /**< 结果：方向 */
     float _quality;            /**< 结果：质量 */

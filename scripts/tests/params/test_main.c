@@ -81,8 +81,8 @@ static void test_store_before_init(void) {
 /** @brief 参数域持久化：store→load 回读；代次 bump 后不叠加（出厂值/内存保持） */
 static void test_params_persistence(void) {
     mock_flash_reset();
-    uint32_t generation = app_software_params_default()->params_generation;
-    CHECK(generation != 0);
+    uint32_t storage = app_software_params_default()->storage;
+    CHECK(storage == APP_SW_STORAGE_KEEP);
     app_motor_params_load(app_motor_params_mutable());
     app_software_params_load(app_software_params_mutable());
     /* 在线修改并持久化 */
@@ -105,14 +105,14 @@ static void test_params_persistence(void) {
     CHECK(
         app_param_record_store(
             APP_PARAM_KEY_SOFTWARE_PARAMS, app_software_params_default(),
-            sizeof(app_software_params_t), generation + 1)
+            sizeof(app_software_params_t), 2U)
         == 0); /* 异代次记录 */
     CHECK(app_software_params_load(app_software_params_mutable()) != 0);
     /* 代次不符 = 本次烧录清除语义：整体回落出厂值（非保留内存） */
     CHECK(
         app_software_params_current()->control.speed_loop.kp
         == app_software_params_default()->control.speed_loop.kp);
-    CHECK(app_software_params_current()->params_generation == generation);
+    CHECK(app_software_params_current()->storage == storage);
 }
 
 /** @brief P0-B observer/输出延迟字段 + 旧版短记录前缀迁移（不丢运动整定） */
@@ -124,6 +124,10 @@ static void test_observer_params_migration(void) {
     CHECK(def->speed_observer.bandwidth_rad_s == 500.0f);
     CHECK(def->speed_observer.max_speed_rad_s == 700.0f);
     CHECK(fabsf(def->current_loop_output_delay_s - 3.3333333e-5f) < 1e-9f);
+    CHECK(def->motion.output_direction == 1.0f);
+    CHECK(def->current_ff.r_en == 0U);
+    CHECK(def->current_ff.wl_en == 0U);
+    CHECK(def->current_ff.bemf_en == 0U);
     /* motion 电流硬限与矢量限幅同源（24.3A），避免两套限值不一致 */
     CHECK(def->control.limits.motion_iq_max_a == def->control.limits.i_q_max_a);
 
@@ -134,7 +138,7 @@ static void test_observer_params_migration(void) {
     legacy.control.limits.motion_iq_max_a = 3.5f;
     CHECK(
         app_param_record_store(
-            APP_PARAM_KEY_SOFTWARE_PARAMS, &legacy, legacy_size, def->params_generation)
+            APP_PARAM_KEY_SOFTWARE_PARAMS, &legacy, legacy_size, 1U)
         == 0); /* 旧结构体长度，无新增字段 */
     app_software_params_t out;
     memset(&out, 0xA5, sizeof(out));
@@ -145,14 +149,22 @@ static void test_observer_params_migration(void) {
     CHECK(out.speed_observer.enable == def->speed_observer.enable);
     CHECK(out.speed_observer.bandwidth_rad_s == def->speed_observer.bandwidth_rad_s);
     CHECK(out.current_loop_output_delay_s == def->current_loop_output_delay_s);
+    CHECK(out.motion.output_direction == def->motion.output_direction);
+    CHECK(out.current_ff.r_en == def->current_ff.r_en);
+    CHECK(out.current_ff.wl_en == def->current_ff.wl_en);
+    CHECK(out.current_ff.bemf_en == def->current_ff.bemf_en);
 
     /* 新格式回存后，新增字段也应持久化 */
     out.speed_observer.enable = 0U;
     out.speed_observer.bandwidth_rad_s = 123.0f;
     out.current_loop_output_delay_s = 1.5e-5f;
+    out.motion.output_direction = -1.0f;
+    out.current_ff.r_en = 1U;
+    out.current_ff.wl_en = 1U;
+    out.current_ff.bemf_en = 1U;
     CHECK(
         app_param_record_store(
-            APP_PARAM_KEY_SOFTWARE_PARAMS, &out, sizeof(out), def->params_generation)
+            APP_PARAM_KEY_SOFTWARE_PARAMS, &out, sizeof(out), 1U)
         == 0);
     app_software_params_t out2;
     memset(&out2, 0xA5, sizeof(out2));
@@ -160,6 +172,10 @@ static void test_observer_params_migration(void) {
     CHECK(out2.speed_observer.enable == 0U);
     CHECK(out2.speed_observer.bandwidth_rad_s == 123.0f);
     CHECK(out2.current_loop_output_delay_s == 1.5e-5f);
+    CHECK(out2.motion.output_direction == -1.0f);
+    CHECK(out2.current_ff.r_en == 1U);
+    CHECK(out2.current_ff.wl_en == 1U);
+    CHECK(out2.current_ff.bemf_en == 1U);
     CHECK(out2.control.speed_loop.kp == 7.25f);
 }
 

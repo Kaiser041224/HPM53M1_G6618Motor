@@ -150,6 +150,14 @@ int app_foc_enable(void);
 void app_foc_disable(void);
 /** @brief 用户关闭：100个1ms任务拍缓降+20拍零给定，非阻塞 */
 int app_foc_request_stop(void);
+/**
+ * @brief 等待正常停机完成（阻塞；内部推进 stop 状态机）
+ * @param timeout_ms 超时 [ms]（0 按 1ms）
+ * @return true = state=OFF 且 stop_pending=false
+ * @note 仅由任务上下文调用；阻塞期间 FOC 电流环 ISR 继续运行。
+ *       超时会强制 app_foc_disable()（正常路径为软关断）后返回 false。
+ */
+bool app_foc_wait_off(uint32_t timeout_ms);
 /** @brief 正常关闭尚未完成，期间拒绝新给定/校准 */
 bool app_foc_stop_pending(void);
 /** @brief OFF时设置占空比上限[0.70,0.98]，RAM；重启默认0.95；高值采样精度未验证 */
@@ -226,6 +234,8 @@ int app_foc_calib_begin(void);
 int app_foc_calib_capture(float voltage, bool voltage_mode);
 /** @brief CALIB专用临时PI，不修改正式软件参数 */
 int app_foc_calib_trial_pi(float kp, float ki);
+/** @brief 校准期临时强制 R*I 前馈，不修改用户配置；0成功 */
+int app_foc_calib_trial_r_ff(uint8_t enable);
 /** @brief 有限恒压租约；voltage<0退出恒压，周期数由ADC拍数计数 */
 int app_foc_calib_voltage(float voltage, uint32_t cycles);
 /** @brief 恒压偏置周围同步交替激励，half_period单位ADC拍 */

@@ -320,3 +320,113 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   （`mcause` bit31=中断/低 31 位=异常码；`mepc`=肇事指令；`mscratch`=中断嵌套深度）→
   按 `mepc` 落点分类（Flash=代码逻辑、`ucHeap`=栈砸烂、外设区=寄存器/总线错误）→
   再查调度。**不要先改调度代码。**
+
+### Flash XPI 读写与烧录纪律（2026-10-22）
+
+- **现象**：`cal rl save` 进入 `app_param_store()` 后跑飞；Ozone 停在
+  `portASM.S` 的 trap 上下文保存处。实测指纹：
+  ```text
+  g_param_store_stage = 1        # 整扇区 read，尚未 erase/program
+  mcause = 0x2                   # illegal instruction
+  mtval  = 0xFFFFFFFF            # 取指得到全 1
+  pc     = 0x000007EE            # freertos_vector_save_context，不是故障指令
+  sp     = 0x0009CE40            # ISR/main 栈区域
+  ```
+  `stage=1` 说明参数区尚未擦除，FENC/FCUR/SPRM 没有因这次失败被主动破坏。
+- **根因（高置信）**：`Driver/hpm_impl/drv_flash.c` 的 `flash_read_impl()` 当时
+  **在 XIP flash 中执行，且 `rom_xpi_nor_read()` 期间未关闭全局中断**。
+  25kHz ADC/USB ISR 可在 XPI ROM read 窗口运行并从 flash 取指；取到全 1 指令后
+  触发 `mcause=2`，最终落入 FreeRTOS trap 保存上下文。`program`/`erase` 已有关中断，
+  只有 `read` 漏了。
+- **修复**：
+  - `flash_read_impl()` 增加 `ATTR_RAMFUNC`，放入 ILM（`.fast`）；
+  - 在 `rom_xpi_nor_read()` 前后使用 `flash_enter_critical()` /
+    `flash_exit_critical()`，保存/恢复 `mstatus.MIE`；
+  - `Interface/intf_flash.h` 的契约同步为：**擦/写/ROM 读期间关闭全局中断**。
+  - 修复后符号应在 ILM：`nm` 中 `flash_read_impl`/`flash_program_impl`/
+    `flash_erase_sector_impl` 均为 `0x00000xxx`，不得回到 `0x80008...`。
+  - 台架验证：修复后 `cal rl save` 成功。
+- **不可回退的规则**：
+  1. 任何 `rom_xpi_nor_read/program/erase` 调用都必须满足：**函数在 ILM/RAM + 调用期间 MIE 关闭**；
+  2. 不要在 XIP flash 中的函数里直接调用上述 ROM API；
+  3. 不要在 ISR 或已关中断的临界区内调用 `app_param_store()`/flash 保存；
+  4. `program`/`erase` 后按需做 D-Cache invalidate；read 的目标缓冲若有缓存别名，也要确认一致性；
+  5. `g_param_store_stage=1/2` 表示尚未擦写，参数区通常仍可用；出现 `3/4` 才说明进入了擦写窗口。
+- **烧录工作流陷阱**：`make build` 只生成 `build/output/demo.*`；
+  `make flash` / `make flash-jlink` 读取的是 `output/HPM53M1_G6618Motor.*`。
+  只执行 `make build` 后直接烧录 `output/`，可能烧到旧固件。已给
+  `flash-openocd` / `flash-jlink` 增加 `artifacts` 依赖；手工烧录前也必须先
+  `make artifacts`，并核对 `output/HPM53M1_G6618Motor.elf` 的时间戳和
+  `flash_read_impl` 符号地址。
+- **调试顺序**：`cal rl save` 类异常先读 `g_param_store_stage/slot/error`，
+  再读 CPU 的 `mcause/mepc/mtval/sp`；不要只看 `portASM.S` 的 PC，
+  也不要先怀疑 `cal rl` 算法或 FreeRTOS 调度。
+- **`cal rl show` 是 RAM 快照，不读取 flash**：重启后它显示全 0 属于正常，
+  不能据此判断 `cal rl save` 失败。验证持久化应看
+  `motor.rs_ohm` / `motor.ls_h` / `software.control.current_loop.*`，
+  以及启动日志 `[FOC] current tuning: restored(flash)`。
+
+### YAML 布尔字段（2026-10-23）
+
+- 配置中的开关统一写 `true/false`（生成器也接受 `on/off`、`yes/no`、旧 `1/0`）。
+- C 结构体仍保持 `uint8_t` 0/1，参数元数据仍为 `u8`，不改变运行时 ABI/Flash 布局。
+- 已覆盖：`hardware.current_sense.invert`、`software.fault.shutdown_en`、
+  `software.control.current_loop.decoupling_en`、`software.control.speed_observer.enable`、
+  `software.current_ff.r_en/wl_en/bemf_en`。
+
+### 软件参数存储策略（2026-10-23）
+
+- `config/software.yaml` 使用单字 `storage`，取值：
+  - `keep`：使用 flash 已保存参数（默认）；
+  - `reset`：忽略 flash；SPRM/MPRM 回 YAML 默认并写回，FCUR 清除；
+  - `override`：本次启动仅 SPRM 使用 YAML 默认，不写回 flash。
+- `storage` 是编译期参数；改 YAML 后必须 `make artifacts` + 重新烧录，
+  **不要**用 `param set software.storage` + `param save` 代替。
+- `reset` 的清理范围是 SPRM + MPRM + FCUR；FENC（电角度零点）和
+  MOTN（游标机械零位）是独立机械标定记录，不在此策略内。
+- `app_current_identify_clear()` / Terminal `cal rl clear` 可单独清除 FCUR。
+- 参数单例必须在 `app_param_init()` 之后初始化：`app_init()` 在 0b 先调用
+  `app_param_init()`，再初始化 MPRM/SPRM；`app_encoder_init()` 内的重复调用为幂等。
+  CAN/UART/Terminal 也会消费 software 参数，不能用“编码器初始化后再加载参数”的顺序。
+- `app_software_params_load()` 的 `storage=keep` 仍按固定记录代次 1
+  兼容旧固件保存的 SPRM；`reset/override` 跳过 flash 读取。
+
+### 电流环 R*I 自整定 A/B（2026-10-23）
+
+- `cal rl` 的 PI 阶跃阶段是 d 轴小电流阶跃，可在同一测试点自动做
+  `R*I off → R*I on` 对比；校准期通过 `app_foc_calib_trial_r_ff()` 临时覆盖，
+  **不修改用户 `current_ff.r_en`**。
+- 结果字段：`r_ff_step_off` / `r_ff_step_on` / `r_ff_tested` /
+  `r_ff_recommended`；`cal rl` 输出 `RI A/B` 行。
+- `r_ff_recommended=YES` 仅在 on 阶跃通过且 rise/overshoot/error/RMS
+  未超出容差时成立；它不自动启用 R*I，仍由用户显式
+  `param set software.current_ff.r_en 1` + `param save`。
+- 台架可另用 `motor id`（d 轴电流、自由轴零转矩）做 2A/5A/10A
+  的手动 R*I 对比；`motor id` 不得在电机旋转时使用。
+
+### PWM 正常关断瞬态（2026-10-23，台架已验证）
+
+- **现象**：`driver power on/off` 单独切换正常；`foc on` 后即使静止，
+  `foc off` 会让 USB CDC 断连，J-Link/Ozone 保持在线，MCU 未复位。
+- **定位**：不是 +12V GPIO 单独造成，也不是 `foc` 控制算法规格；
+  触发点在 **PWM 停止时栅极驱动仍带电**。
+- **当前软件顺序**：
+  - 正常停机走 `app_3phase_inverter_disable_soft()`：
+    **先关 +12V 栅极供电 → 等待 20ms → 再停 PWM**；
+  - `app_foc_disable()` 正常路径调用该函数；
+  - 故障/急停仍走 `app_3phase_inverter_disable()` / `emergency_stop()`，
+    保持“先停 PWM/force_low → 再关 +12V”的安全顺序。
+- **台架验证（2026-10-23）**：静止、`motion speed 5`、`motion speed 20`
+  条件下 `foc off` 均不再导致 USB CDC 断连；`foc: state=OFF, gate power OFF`
+  正常打印。后续不要回退为“先停 PWM、再关 +12V”的正常停机顺序。
+- **高速边界**：`motion speed 30` 直接 `foc off` 仍会断 USB；正常停机状态机
+  在电流归零后新增“轴端速度 ≤0.5 rad/s 或最多等待 2s”再执行软关断，
+  Terminal `foc off` 等待上限改为 3s。
+- **台架验证（2026-10-23）**：`motion speed 30` 及多次 `±30` 后 `foc off`
+  全部完成，USB CDC 未再断连；最终 `omega` 已降到约 0.5 rad/s 轴端速度。
+- **残留观测**：`foc off` 后 `foc` 的 `protect/pvb` 计数每次增加约 30，
+  不是 USB 断连；说明关断期间仍有短暂 Vbus 采样异常，后续若要清理保护计数
+  再单独查 ADC/母线窗口，不要为此回退软关断顺序。
+- **若需调整**：先只调 `APP_3PHASE_GATE_OFF_SETTLE_MS`（当前 20ms）或
+  `APP_FOC_STOP_SPEED_WAIT_TICKS`；若仍无效，再查 +12V/USB 地线、共模和母线回流，
+  不要先改 USB 协议栈。

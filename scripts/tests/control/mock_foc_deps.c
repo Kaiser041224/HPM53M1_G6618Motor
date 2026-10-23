@@ -81,6 +81,8 @@ int app_encoder_get_rotor_raw(uint16_t* raw, bool* valid, uint32_t* seq) {
 /* ---- 逆变桥 / 故障 / 中断 / 时钟 ---- */
 int app_3phase_inverter_enable(void) { return 0; }
 void app_3phase_inverter_disable(void) {}
+void app_3phase_inverter_coast(void) {}
+void app_3phase_inverter_disable_soft(void) {}
 int app_3phase_inverter_release(app_3phase_id_t phase) {
     (void)phase;
     return 0;
@@ -90,6 +92,7 @@ app_fault_state_t app_fault_get_state(void) { return APP_FAULT_STATE_NORMAL; }
 uint32_t intf_sys_irq_save(void) { return 0U; }
 void intf_sys_irq_restore(uint32_t state) { (void)state; }
 uint32_t intf_clock_get_cpu_freq(void) { return 480000000U; }
+void intf_clock_delay_ms(uint32_t ms) { (void)ms; }
 int g_mock_output_failure;
 bool g_mock_output_timestamp_override;
 uint32_t g_mock_output_timestamp_cycles;

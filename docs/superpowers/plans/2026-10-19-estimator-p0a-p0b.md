@@ -297,7 +297,7 @@ Expected: fail on missing fields/migration.
 
 - [ ] **Step 3: Implement YAML/struct/migration + consumers**
 
-Wire `app_foc` observer bandwidth/enable, `app_foc_current` output delay, `app_motion` observer enable/fallback. Update `params_generation`/record version as needed and implement the additive migration.
+Wire `app_foc` observer bandwidth/enable, `app_foc_current` output delay, `app_motion` observer enable/fallback. Update `generation`/record version as needed and implement the additive migration.
 
 - [ ] **Step 4: Run and verify pass**
 

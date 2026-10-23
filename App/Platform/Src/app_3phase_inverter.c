@@ -40,7 +40,11 @@ static const hrpwm_pair_t s_phase_pair[APP_3PHASE_COUNT] = {
 #define APP_3PHASE_INVERTER_DUTY_ZERO (0.5f)
 
 static bool s_enabled;
+static bool s_gate_power_on;
 static float s_duty[APP_3PHASE_COUNT];
+
+#define APP_3PHASE_GATE_POWER_ON_DELAY_MS (20U) /**< +12V 上电稳定等待 [ms] */
+#define APP_3PHASE_GATE_OFF_SETTLE_MS     (20U) /**< 关栅极供电后等待驱动无源 [ms] */
 
 /**
  * @brief 将占空比限制到 [0, 1]；NaN 视为零电压矢量
@@ -87,16 +91,46 @@ void app_3phase_inverter_init(const app_3phase_inverter_cfg_t* cfg) {
 
     app_3phase_inverter_disable(); /* 输出与 +12V 均保持关闭 */
     s_enabled = false;
+    s_gate_power_on = false;
 }
+
+int app_3phase_inverter_gate_power_on(void) {
+    if (s_enabled) {
+        return -1; /* 输出使能时不允许单独改栅极供电 */
+    }
+    if (s_gate_power_on) {
+        return 0;
+    }
+    app_gpio_set(PIN_GDRV_12V_EN, 1U);
+    intf_clock_delay_ms(APP_3PHASE_GATE_POWER_ON_DELAY_MS);
+    s_gate_power_on = true;
+    return 0;
+}
+
+int app_3phase_inverter_gate_power_off(void) {
+    if (s_enabled) {
+        return -1; /* 必须先停 PWM */
+    }
+    if (!s_gate_power_on) {
+        return 0;
+    }
+    app_gpio_set(PIN_GDRV_12V_EN, 0U);
+    s_gate_power_on = false;
+    return 0;
+}
+
+bool app_3phase_inverter_gate_power_is_on(void) { return s_gate_power_on; }
 
 int app_3phase_inverter_enable(void) {
     if (s_enabled) {
         return 0;
     }
 
-    /* 安全顺序：先开 +12V 栅极供电，稳定后再启动三相 PWM */
-    app_gpio_set(PIN_GDRV_12V_EN, 1U);
-    intf_clock_delay_ms(10U);
+    /* 安全顺序：先开 +12V 栅极供电，稳定后再启动三相 PWM。
+     * 若 driver power on 已预先上电，则不再重复等待。 */
+    if (app_3phase_inverter_gate_power_on() != 0) {
+        return -1;
+    }
 
     for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         app_hrpwm_start(s_phase_pair[i]);
@@ -106,12 +140,51 @@ int app_3phase_inverter_enable(void) {
     return 0;
 }
 
-void app_3phase_inverter_disable(void) {
+/**
+ * @brief 停止三相 PWM 输出（不改变 +12V 栅极供电）
+ */
+static void inverter_stop_outputs(void) {
     for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         app_hrpwm_stop(s_phase_pair[i]);
     }
+}
+
+void app_3phase_inverter_coast(void) {
+    /* 正常关闭：只停输出，保留 +12V。转子可 coast，避免零矢量主动短路；
+     * 也避免关 +12V 栅极供电造成的母线/3.3V 瞬态。 */
+    inverter_stop_outputs();
+    s_enabled = false;
+}
+
+void app_3phase_inverter_disable_soft(void) {
+    /* 正常停机的低瞬态顺序：
+     *   1) 先撤 +12V 栅极供电 → 驱动输出进入无源态；
+     *   2) 等驱动/栅极电荷释放；
+     *   3) 最后停 PWM 输出。
+     * 若先停 PWM、栅极驱动仍带电，实测会在停止瞬间造成 USB CDC 断连。
+     * 故障/急停不调用本函数，仍走 disable/emergency_stop 的强制顺序。 */
+    bool was_gate_on = s_gate_power_on;
+
+    app_gpio_set(PIN_GDRV_12V_EN, 0U);
+    s_gate_power_on = false;
+    if (was_gate_on) {
+        intf_clock_delay_ms(APP_3PHASE_GATE_OFF_SETTLE_MS);
+    }
+    inverter_stop_outputs();
+    s_enabled = false;
+}
+
+void app_3phase_inverter_disable(void) {
+    bool was_gate_on = s_gate_power_on;
+
+    /* 全关：先停 PWM，等输出级/栅极电荷释放，再断 +12V。 */
+    inverter_stop_outputs();
+    if (was_gate_on) {
+        intf_clock_delay_ms(5U);
+    }
     app_gpio_set(PIN_GDRV_12V_EN, 0U);
     s_enabled = false;
+    s_gate_power_on = false;
 }
 
 APP_ATTR_RAMFUNC /* 25kHz FOC ISR 输出点 */
@@ -169,6 +242,7 @@ void app_3phase_inverter_emergency_stop(void) {
     }
     app_gpio_set(PIN_GDRV_12V_EN, 0U);
     s_enabled = false;
+    s_gate_power_on = false;
 }
 
 bool app_3phase_inverter_is_enabled(void) { return s_enabled; }

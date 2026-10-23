@@ -44,13 +44,13 @@ typedef enum {
 } app_motion_reason_t;
 typedef struct {
     app_motion_mode_t mode; /**< 当前控制模式 */
-    float shaft_rad;        /**< 已应用机械零点的轴端单圈角[rad] */
-    float speed_rad_s;      /**< 轴端速度[rad/s]（observer 有效时为其输出，否则差分+LPF），非反馈限速 */
-    float torque_nm;        /**< motion模型转矩请求[Nm]；不是实测轴端转矩 */
-    float iq_a;             /**< motion电流请求[A]，不是FOC实测电流 */
-    float iq_accepted_a;    /**< FOC最近确认执行的接受iq[A]，诊断非实测 */
-    float pos_setpoint_rad; /**< 位置滤波后设定[rad]，显示取模单圈（ODrive pos_setpoint） */
-    float vel_cmd_rad_s;    /**< 位置环输出速度命令[rad/s]（10kHz拍写，15kHz速度拍读） */
+    float shaft_rad;        /**< 已应用机械零点的轴端单圈角[rad]（内部物理坐标） */
+    float speed_rad_s;      /**< 轴端速度[rad/s]（内部物理坐标；observer/差分+LPF） */
+    float torque_nm;        /**< motion模型转矩请求[Nm]（内部物理坐标）；不是实测轴端转矩 */
+    float iq_a;             /**< motion电流请求[A]（FOC 物理坐标），不是FOC实测电流 */
+    float iq_accepted_a;    /**< FOC最近确认执行的接受iq[A]（物理坐标），诊断非实测 */
+    float pos_setpoint_rad; /**< 位置滤波后设定[rad]（内部物理坐标），显示取模单圈 */
+    float vel_cmd_rad_s;    /**< 位置环输出速度命令[rad/s]（内部物理坐标） */
     float phase_turns;      /**< 已应用游标安装相位[turn] */
     uint32_t good_count, bad_count, calibration_samples;
     uint32_t sample_failure_count, duplicate_count, vernier_failure_count;
@@ -60,6 +60,7 @@ typedef struct {
     app_motion_reason_t reason; /**< 最近拒绝/输出撤销；成功新命令清零 */
     bool current_limited, voltage_saturated; /**< 最近FOC执行限幅状态（仅属本请求时有效） */
     bool calibrated, zero_valid, feedback_valid, active, calibrating, calibration_done;
+    float output_direction; /**< 出轴正方向定义（+1/-1）；用户坐标=本值×内部物理坐标 */
 } app_motion_snapshot_t;
 /** @brief 初始化/恢复参数；采样计时回调停止期间调用，不使能 */
 void app_motion_init(void);
@@ -77,12 +78,11 @@ int app_motion_save(void);
 int app_motion_release_output(void);
 /** @brief 配置速度增益kp/ki与摩擦前馈Tc/Kv（轴端），不驱动时可改，写透参数单例 */
 int app_motion_gains(float kp, float ki, float coulomb_nm, float viscous_nm_per_rad_s);
-/** @brief 轴端模型转矩Nm，电流硬限制1A */
+/** @brief 轴端模型转矩Nm（用户坐标；正=出轴正方向），电流硬限制 */
 int app_motion_torque(float torque);
-/** @brief 轴端rad/s目标；命令不限幅，输出受电流硬限制（Terminal `motion speed` 以 rpm 输入） */
+/** @brief 轴端rad/s目标（用户坐标；正=出轴正方向）；输出受电流硬限制 */
 int app_motion_speed(float speed);
-/** @brief 位置目标rad（可多圈）+速度前馈+力矩前馈（ODrive
- * input_pos/vel/torque）；活动同模式=目标更新 */
+/** @brief 位置目标rad（用户坐标；单圈0~2π）+速度/力矩前馈（用户坐标） */
 int app_motion_position(float position_rad, float vel_ff_rad_s, float torque_ff_nm);
 /** @brief 位置环增益pos_gain[1/s]与输入滤波带宽[rad/s]（0=禁用/直通）；不驱动时可改，写透参数单例
  */

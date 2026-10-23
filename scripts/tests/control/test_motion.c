@@ -599,6 +599,49 @@ void test_motion_params(void) {
     g_mock_rotor_rad = 0;
 }
 
+/** @brief 出轴用户方向：仅翻转 motion 边界，不改变 FOC/编码器方向 */
+void test_motion_output_direction(void) {
+    extern void mock_advance_cycle(uint32_t cycles);
+    extern void mock_param_store_reset(void);
+    mock_param_store_reset();
+    mock_params_reset();
+    app_software_params_mutable()->motion.output_direction = -1.0f;
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+    app_foc_init();
+    app_motion_init();
+    app_motion_snapshot_t snap;
+    app_motion_get_snapshot(&snap);
+    CHECK(snap.output_direction == -1.0f);
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    app_motion_step();
+    CHECK(app_foc_enable() == 0);
+    /* 用户 +0.1Nm → 内部物理 -0.1Nm / 负 iq */
+    CHECK(app_motion_torque(.1f) == 0);
+    mock_advance_cycle(48000);
+    app_motion_step();
+    app_motion_get_snapshot(&snap);
+    CHECK_NEAR(snap.torque_nm, -.1f, 1e-4f);
+    CHECK_NEAR(snap.iq_a, -.1f / (50.0f * .117f), 1e-5f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    /* 位置：用户 +0.5rad → 内部 -0.5rad → 负速度命令 */
+    CHECK(app_motion_gains(2, 50, 0, 0) == 0);
+    CHECK(app_foc_enable() == 0);
+    mock_advance_cycle(48000);
+    app_motion_step();
+    CHECK(app_motion_position_gains(1.0f, 0.0f) == 0);
+    CHECK(app_motion_position(.5f, 0, 0) == 0);
+    app_motion_position_step();
+    app_motion_get_snapshot(&snap);
+    CHECK(snap.vel_cmd_rad_s < 0);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    app_software_params_mutable()->motion.output_direction = 1.0f;
+}
+
 /** @brief 速度模式只用转子/observer：游标失配/配对失败不得产生 vernier hold 或中止 */
 void test_motion_speed_rotor_only(void) {
     extern float g_mock_rotor_rad;

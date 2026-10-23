@@ -61,10 +61,13 @@ static void id_encoder_reset(id_encoder_t* self) {
     self->_theta_m_start = 0.0f;
     self->_mech_travel = 0.0f;
     self->_theta_m_sweep_start = 0.0f;
+    self->_theta_m_end = 0.0f;
+    self->_theta_m_end_valid = false;
     self->_sweep_started = false;
     self->_offset_rad = 0.0f;
     self->_offset_fwd_rad = 0.0f;
     self->_offset_rev_rad = 0.0f;
+    self->_offset_end_rad = 0.0f;
     self->_hyst_rad = 0.0f;
     self->_direction = 1.0f;
     self->_quality = 0.0f;
@@ -136,6 +139,11 @@ static bool id_encoder_sweep_step(id_encoder_t* self, const id_encoder_in_t* in,
     if (fwd && foc_finite(in->theta_m_raw_rad)) {
         self->_mech_travel = foc_wrap_pm_pi(in->theta_m_raw_rad - self->_theta_m_sweep_start);
     }
+    if (!fwd && foc_finite(in->theta_m_raw_rad)) {
+        /* REV 终点命令为 0；静止保持后的编码器角就是 trial 的候选零点 */
+        self->_theta_m_end = in->theta_m_raw_rad;
+        self->_theta_m_end_valid = true;
+    }
     return true;
 }
 
@@ -184,6 +192,7 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     out->offset_rad = self->_offset_rad;
     out->offset_fwd_rad = self->_offset_fwd_rad;
     out->offset_rev_rad = self->_offset_rev_rad;
+    out->offset_end_rad = self->_offset_end_rad;
     out->direction = self->_direction;
     out->quality = self->_quality;
     out->mech_ratio_err = self->_mech_ratio_err;
@@ -257,7 +266,12 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
             self->_phase = ID_ENCODER_PHASE_SWEEP_REV;
             self->_t_ms = 0.0f;
             self->_step_idx = 0U;
-            self->_theta_cmd = FOC_TWO_PI_F;
+            /* 保持 FWD 末点，REV 首步从同一点向下扫描。
+             * 不能写死 2π：sweep_turns>1 时数值上会回退 (sweep_turns-1) 圈；
+             * 角度取模后虽等价，但会破坏命令连续性并污染多圈诊断。 */
+            self->_theta_cmd =
+                FOC_TWO_PI_F * self->_cfg.sweep_turns
+                * ((float)(self->_cfg.sweep_steps - 1U) / (float)self->_cfg.sweep_steps);
         }
         break;
 
@@ -288,6 +302,13 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
                     ? foc_wrap_2pi(-atan2f(self->_s_sum_rev, self->_c_sum_rev))
                     : self->_offset_fwd_rad;
             self->_offset_rad = foc_wrap_2pi(-atan2f(s_all, c_all));
+            /* REV 终点为 0：offset_end = p·dir·θm_end。
+             * 它是静止保持点，可直接作为 verify trial；与扫描圆均值分开保留。 */
+            self->_offset_end_rad =
+                self->_theta_m_end_valid
+                    ? foc_wrap_2pi((float)self->_cfg.pole_pairs * self->_direction
+                                   * self->_theta_m_end)
+                    : self->_offset_rad;
             self->_hyst_rad = foc_wrap_pm_pi(self->_offset_fwd_rad - self->_offset_rev_rad);
             self->_quality = sqrtf(s_all * s_all + c_all * c_all) / (float)n_all;
             self->_mech_ratio_err =
@@ -336,6 +357,7 @@ static void id_encoder_step(id_encoder_t* self, const id_encoder_in_t* in,
     out->offset_rad = self->_offset_rad;
     out->offset_fwd_rad = self->_offset_fwd_rad;
     out->offset_rev_rad = self->_offset_rev_rad;
+    out->offset_end_rad = self->_offset_end_rad;
     out->direction = self->_direction;
     out->quality = self->_quality;
     out->mech_ratio_err = self->_mech_ratio_err;
@@ -374,10 +396,13 @@ void id_encoder_ctor(id_encoder_t* self) {
     self->_theta_m_start = 0.0f;
     self->_mech_travel = 0.0f;
     self->_theta_m_sweep_start = 0.0f;
+    self->_theta_m_end = 0.0f;
+    self->_theta_m_end_valid = false;
     self->_sweep_started = false;
     self->_offset_rad = 0.0f;
     self->_offset_fwd_rad = 0.0f;
     self->_offset_rev_rad = 0.0f;
+    self->_offset_end_rad = 0.0f;
     self->_hyst_rad = 0.0f;
     self->_direction = 1.0f;
     self->_quality = 0.0f;

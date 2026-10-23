@@ -18,10 +18,11 @@ static int foc_current_init(foc_current_t* self, const foc_current_cfg_t* cfg) {
     }
     if (!foc_finite(cfg->sample_time_s) || !foc_finite(cfg->kp) || !foc_finite(cfg->ki)
         || !foc_finite(cfg->aw_decay) || !foc_finite(cfg->l_d) || !foc_finite(cfg->l_q)
-        || !foc_finite(cfg->lambda)) {
+        || !foc_finite(cfg->lambda) || !foc_finite(cfg->r_ohm)) {
         return -1;
     }
-    if ((cfg->sample_time_s <= 0.0f) || (cfg->kp < 0.0f) || (cfg->ki < 0.0f)) {
+    if ((cfg->sample_time_s <= 0.0f) || (cfg->kp < 0.0f) || (cfg->ki < 0.0f)
+        || (cfg->r_ohm < 0.0f)) {
         return -1;
     }
     if ((cfg->aw_decay <= 0.0f) || (cfg->aw_decay > 1.0f)) {
@@ -33,9 +34,13 @@ static int foc_current_init(foc_current_t* self, const foc_current_cfg_t* cfg) {
     self->_ts = cfg->sample_time_s;
     self->_kits = cfg->ki * cfg->sample_time_s;
     self->_decouple = (cfg->decoupling_en != 0U) ? 1U : 0U;
+    self->_wl_ff = (self->_decouple || (cfg->wl_ff_en != 0U)) ? 1U : 0U;
+    self->_bemf_ff = (self->_decouple || (cfg->bemf_ff_en != 0U)) ? 1U : 0U;
     self->_ld = cfg->l_d;
     self->_lq = cfg->l_q;
     self->_lambda = cfg->lambda;
+    self->_r = cfg->r_ohm;
+    self->_r_ff = (cfg->r_ff_en != 0U) ? 1U : 0U;
     self->_aw_decay = cfg->aw_decay;
     self->_integ_d = 0.0f;
     self->_integ_q = 0.0f;
@@ -80,6 +85,41 @@ static void foc_current_set_decoupling(foc_current_t* self, uint8_t enable) {
         return;
     }
     self->_decouple = (enable != 0U) ? 1U : 0U;
+    self->_wl_ff = self->_decouple;
+    self->_bemf_ff = self->_decouple;
+}
+
+/**
+ * @brief 运行中开关 ωL 交叉耦合前馈（25kHz ISR 每拍调用 → ILM）
+ */
+FOC_ATTR_RAMFUNC
+static void foc_current_set_wl_ff(foc_current_t* self, uint8_t enable) {
+    if (self == NULL) {
+        return;
+    }
+    self->_wl_ff = (enable != 0U) ? 1U : 0U;
+}
+
+/**
+ * @brief 运行中开关 bEMF 前馈（25kHz ISR 每拍调用 → ILM）
+ */
+FOC_ATTR_RAMFUNC
+static void foc_current_set_bemf_ff(foc_current_t* self, uint8_t enable) {
+    if (self == NULL) {
+        return;
+    }
+    self->_bemf_ff = (enable != 0U) ? 1U : 0U;
+}
+
+/**
+ * @brief 运行中开关 R·I 前馈（25kHz ISR 每拍调用 → ILM）
+ */
+FOC_ATTR_RAMFUNC
+static void foc_current_set_r_ff(foc_current_t* self, uint8_t enable) {
+    if (self == NULL) {
+        return;
+    }
+    self->_r_ff = (enable != 0U) ? 1U : 0U;
 }
 
 /**
@@ -129,12 +169,24 @@ static int foc_current_step(foc_current_t* self, const foc_current_in_t* in,
     vd = self->_kp * ed + self->_integ_d;
     vq = self->_kp * eq + self->_integ_q;
 
-    /* 3) 解耦前馈（结构预留；V1 默认关闭；非有限 ωe 按 0 处理） */
-    if (self->_decouple != 0U) {
+    /* 3a) R·I 前馈：PI 后、电压限幅前，使用限幅后的给定。
+     *     R 在 init 期固定；默认关闭，避免未验证的 Rs 直接注入电压。 */
+    if (self->_r_ff != 0U) {
+        vd += self->_r * out->i_d_ref_lim;
+        vq += self->_r * out->i_q_ref_lim;
+    }
+
+    /* 3b) ωL / bEMF 独立前馈（默认关闭；非有限 ωe 按 0 处理） */
+    if ((self->_wl_ff != 0U) || (self->_bemf_ff != 0U)) {
         float omega_e = foc_finite(in->omega_e_rad_s) ? in->omega_e_rad_s : 0.0f;
 
-        vd -= omega_e * self->_lq * iq_fb;
-        vq += omega_e * (self->_ld * id_fb + self->_lambda);
+        if (self->_wl_ff != 0U) {
+            vd -= omega_e * self->_lq * iq_fb;
+            vq += omega_e * self->_ld * id_fb;
+        }
+        if (self->_bemf_ff != 0U) {
+            vq += omega_e * self->_lambda;
+        }
     }
 
     /* 4) 圆形电压限幅（保角；常用路径仅平方比较，避免 sqrtf） */
@@ -201,14 +253,21 @@ void foc_current_ctor(foc_current_t* self) {
     self->reset = foc_current_reset;
     self->set_gains = foc_current_set_gains;
     self->set_decoupling = foc_current_set_decoupling;
+    self->set_r_ff = foc_current_set_r_ff;
+    self->set_wl_ff = foc_current_set_wl_ff;
+    self->set_bemf_ff = foc_current_set_bemf_ff;
     self->_kp = 0.0f;
     self->_ki = 0.0f;
     self->_ts = 1.0f;
     self->_kits = 0.0f;
     self->_decouple = 0U;
+    self->_wl_ff = 0U;
+    self->_bemf_ff = 0U;
     self->_ld = 0.0f;
     self->_lq = 0.0f;
     self->_lambda = 0.0f;
+    self->_r = 0.0f;
+    self->_r_ff = 0U;
     self->_aw_decay = 0.99f;
     self->_integ_d = 0.0f;
     self->_integ_q = 0.0f;

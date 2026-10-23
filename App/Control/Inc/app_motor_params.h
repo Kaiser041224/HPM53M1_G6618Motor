@@ -73,6 +73,13 @@ int app_motor_params_load(app_motor_params_t* out);
 int app_motor_params_store(void);
 
 /**
+ * @brief 把运行期电机参数恢复为 YAML 默认并写入 flash（MPRM）
+ * @return 0 = 成功；-1 = 写入失败
+ * @note 用于 `storage: reset`；FENC/MOTN 独立记录不在此函数内清除。
+ */
+int app_motor_params_reset(void);
+
+/**
  * @brief 初始化运行期单例（boot 时调用一次；幂等）。
  */
 void app_motor_params_init(void);

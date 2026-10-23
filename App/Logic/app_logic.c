@@ -47,6 +47,7 @@
 #include "app_motion_timer.h"
 #include "app_motor_identify.h"
 #include "app_motor_params.h"
+#include "app_param.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
 #include "app_terminal.h"
@@ -87,11 +88,24 @@ void app_init(void) {
     app_debug_printf(
         "boot: seq=%u rst_status=0x%08x\r\n", (unsigned)s_boot_seq, (unsigned)rst_status);
 
-    /* 0b. 参数单例初始化 + 摘要（验证 YAML 参数管线端到端） */
+    /* 0b. flash 参数区先就绪，再初始化参数单例；CAN/UART/Terminal 也会消费
+     *     software 参数，因此不能把参数初始化推迟到编码器初始化之后。 */
+    (void)app_param_init();
+
+    /* 0c. 参数单例初始化 + 摘要（验证 YAML 参数管线端到端） */
     {
         app_motor_params_init();
         app_hardware_params_init();
         app_software_params_init();
+
+        if (app_software_params_default()->storage == APP_SW_STORAGE_RESET) {
+            int motor_rc = app_motor_params_reset();
+            int fcur_rc = app_current_identify_clear();
+
+            app_debug_printf(
+                "[PARAM] storage=reset: SPRM/MPRM defaults, FCUR=%s MPRM=%s\r\n",
+                (fcur_rc == 0) ? "cleared" : "FAILED", (motor_rc == 0) ? "OK" : "FAILED");
+        }
 
         const app_motor_params_t* motor_params = app_motor_params_current();
         const app_hardware_params_t* hardware = app_hardware_params_current();
@@ -128,7 +142,8 @@ void app_init(void) {
     app_usb_init();
     app_terminal_init();
 
-    /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴） */
+    /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴）。
+     *    flash 参数区已在 0b 就绪；app_encoder_init() 内重复调用 app_param_init() 为幂等。 */
     app_debug_encoder_init();
 
     /* 7b. GPTMR 外设（GPTMR1 通道组保留初始化；CH3 原 12.5kHz 转子采样器已移除）。

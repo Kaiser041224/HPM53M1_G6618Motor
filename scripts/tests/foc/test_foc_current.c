@@ -198,6 +198,78 @@ void test_foc_current(void) {
         CHECK_NEAR(out.v_q, -2.235f, 1e-3f); /* 再次关闭 */
     }
 
+    /* ωL 与 bEMF 独立开关：只开 ωL 不应叠加 ωλ，只开 bEMF 不应叠加 ωL */
+    {
+        foc_current_t c17;
+        foc_current_cfg_t c17cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 0.0f, .i_q_ref = 0.0f,
+            .i_d_a = 2.0f, .i_q_a = 3.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f,
+            .omega_e_rad_s = 100.0f,
+        };
+        c17cfg.kp = 0.0f;
+        c17cfg.ki = 0.0f;
+        c17cfg.decoupling_en = 0U;
+        c17cfg.wl_ff_en = 1U;
+        c17cfg.bemf_ff_en = 0U;
+        c17cfg.l_d = 1.0e-4f;
+        c17cfg.l_q = 1.0e-4f;
+        c17cfg.lambda = 0.1f;
+        foc_current_ctor(&c17);
+        CHECK(c17.init(&c17, &c17cfg) == 0);
+        CHECK(c17.step(&c17, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, -0.03f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.02f, 1e-6f);
+
+        c17.reset(&c17);
+        c17cfg.wl_ff_en = 0U;
+        c17cfg.bemf_ff_en = 1U;
+        CHECK(c17.init(&c17, &c17cfg) == 0);
+        CHECK(c17.step(&c17, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 10.0f, 1e-6f);
+
+        c17.reset(&c17);
+        c17cfg.wl_ff_en = 1U;
+        CHECK(c17.init(&c17, &c17cfg) == 0);
+        CHECK(c17.step(&c17, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, -0.03f, 1e-6f);
+        CHECK_NEAR(out.v_q, 10.02f, 1e-6f);
+    }
+
+    /* 运行中独立开关 ωL / bEMF */
+    {
+        foc_current_t c18;
+        foc_current_cfg_t c18cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 0.0f, .i_q_ref = 0.0f,
+            .i_d_a = 2.0f, .i_q_a = 3.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f,
+            .omega_e_rad_s = 100.0f,
+        };
+        c18cfg.kp = 0.0f;
+        c18cfg.ki = 0.0f;
+        c18cfg.decoupling_en = 0U;
+        c18cfg.wl_ff_en = 0U;
+        c18cfg.bemf_ff_en = 0U;
+        c18cfg.l_d = 1.0e-4f;
+        c18cfg.l_q = 1.0e-4f;
+        c18cfg.lambda = 0.1f;
+        foc_current_ctor(&c18);
+        CHECK(c18.init(&c18, &c18cfg) == 0);
+        c18.set_wl_ff(&c18, 1U);
+        CHECK(c18.step(&c18, &in, &out) == 0);
+        CHECK_NEAR(out.v_q, 0.02f, 1e-6f);
+        c18.set_wl_ff(&c18, 0U);
+        c18.set_bemf_ff(&c18, 1U);
+        c18.reset(&c18); /* 清掉上一次积分（ki=0 时无影响） */
+        CHECK(c18.step(&c18, &in, &out) == 0);
+        CHECK_NEAR(out.v_q, 10.0f, 1e-6f);
+    }
+
     /* 前馈开启 + 非有限 ωe → 按 0 处理，输出仍有限 */
     {
         foc_current_t c9;
@@ -258,6 +330,74 @@ void test_foc_current(void) {
         CHECK(c11.step(&c11, &in, &out) == 0);
         CHECK_NEAR(out.i_d_ref_lim, 0.0f, 1e-6f);
         CHECK_NEAR(out.i_q_ref_lim, 0.0f, 1e-6f);
+    }
+
+    /* R·I 前馈：默认关闭；开启后在 PI 后叠加 R × 限幅给定 */
+    {
+        foc_current_t c14;
+        foc_current_cfg_t c14cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 2.0f, .i_q_ref = 3.0f, .i_d_a = 0.0f, .i_q_a = 0.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f, .omega_e_rad_s = 0.0f,
+        };
+        c14cfg.kp = 1.0f;
+        c14cfg.ki = 0.0f;
+        c14cfg.decoupling_en = 0U;
+        c14cfg.r_ohm = 0.25f;
+        c14cfg.r_ff_en = 0U;
+        foc_current_ctor(&c14);
+        CHECK(c14.init(&c14, &c14cfg) == 0);
+        CHECK(c14.step(&c14, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, 2.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 3.0f, 1e-6f);
+
+        c14.set_r_ff(&c14, 1U);
+        c14.reset(&c14);
+        CHECK(c14.step(&c14, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, 2.5f, 1e-6f);
+        CHECK_NEAR(out.v_q, 3.75f, 1e-6f);
+
+        c14.set_r_ff(&c14, 0U);
+        c14.reset(&c14);
+        CHECK(c14.step(&c14, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, 2.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 3.0f, 1e-6f);
+    }
+
+    /* R·I 使用限幅后的给定，而不是原始给定 */
+    {
+        foc_current_t c15;
+        foc_current_cfg_t c15cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 3.0f, .i_q_ref = 4.0f, .i_d_a = 0.0f, .i_q_a = 0.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 1.0f, .omega_e_rad_s = 0.0f,
+        };
+        c15cfg.kp = 1.0f;
+        c15cfg.ki = 0.0f;
+        c15cfg.decoupling_en = 0U;
+        c15cfg.r_ohm = 0.25f;
+        c15cfg.r_ff_en = 1U;
+        foc_current_ctor(&c15);
+        CHECK(c15.init(&c15, &c15cfg) == 0);
+        CHECK(c15.step(&c15, &in, &out) == 0);
+        CHECK_NEAR(out.i_d_ref_lim, 0.6f, 1e-6f);
+        CHECK_NEAR(out.i_q_ref_lim, 0.8f, 1e-6f);
+        CHECK_NEAR(out.v_d, 0.75f, 1e-5f);
+        CHECK_NEAR(out.v_q, 1.0f, 1e-5f);
+    }
+
+    /* R·I 开启但 R 非法 → 初始化拒绝；R=0 时允许且无作用 */
+    {
+        foc_current_t c16;
+        foc_current_cfg_t c16cfg = cfg;
+        foc_current_ctor(&c16);
+        c16cfg.r_ohm = NAN;
+        c16cfg.r_ff_en = 1U;
+        CHECK(c16.init(&c16, &c16cfg) == -1);
+        c16cfg.r_ohm = 0.0f;
+        CHECK(c16.init(&c16, &c16cfg) == 0);
     }
 
     /* 未初始化对象 → step 返回 -1 */

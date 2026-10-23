@@ -100,6 +100,34 @@ void test_id_rl(void) {
     CHECK(id_rl_step(samples, 128, dt, 2, 2.5f, &step) == 0);
     CHECK(step.passed);
     CHECK(step.rise_s > 0 && step.rise_s < 0.002f);
+
+    /* 单个 q 轴采样尖峰不应否决整个阶跃；q 轴角度错误会表现为均值偏差。 */
+    samples[10].i_q_a = 0.5f;
+    CHECK(id_rl_step(samples, 128, dt, 2, 2.5f, &step) == 0);
+    CHECK(step.passed);
+    samples[10].i_q_a = 0.0f;
+
+    /* 采样纹波不应把已稳定的阶跃判成失败：尾段峰峰值可超过 0.1A，
+     * 但 RMS 低于 0.1A，且平滑后超调仍小于 20%。 */
+    for (unsigned i = 0; i < 128; ++i) {
+        float ripple = (i % 4U == 0U) ? 0.08f : ((i % 4U == 2U) ? -0.08f : 0.0f);
+        samples[i].i_d_a = 2.5f - 0.5f * expf(-(float)i * dt * 2000) + ripple;
+    }
+    CHECK(id_rl_step(samples, 128, dt, 2, 2.5f, &step) == 0);
+    CHECK(step.passed);
+    CHECK(step.ripple_a > 0.10f);
+    CHECK(step.ripple_rms_a < 0.10f);
+    CHECK(step.overshoot <= 0.20f);
+
+    /* 单点尖峰可以被平滑成低超调，但 raw 必须仍能否决。 */
+    for (unsigned i = 0; i < 128; ++i)
+        samples[i].i_d_a = 2.5f - 0.5f * expf(-(float)i * dt * 2000);
+    samples[120].i_d_a = 2.7f; /* raw 40%，3点平滑约 13% */
+    CHECK(id_rl_step(samples, 128, dt, 2, 2.5f, &step) == 0);
+    CHECK(step.overshoot < 0.20f);
+    CHECK(step.overshoot_raw > 0.30f);
+    CHECK(!step.passed);
+
     samples[120].i_d_a = 4;
     CHECK(id_rl_step(samples, 128, dt, 2, 2.5f, &step) == 0);
     CHECK(!step.passed);

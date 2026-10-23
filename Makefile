@@ -173,7 +173,7 @@ artifacts:
 # ============================================================================
 flash: flash-$(FLASH_TOOL)
 
-flash-openocd:
+flash-openocd: artifacts
 	@echo "[FLASH] Using OpenOCD..."
 	$(OPENOCD_BIN) \
 		-s $(OCD_SCRIPTS) \
@@ -182,7 +182,7 @@ flash-openocd:
 		-f $(BOARD_CFG) \
 		-c "program $(OUTPUT_DIR)/$(PROJECT_NAME).elf verify reset exit"
 
-flash-jlink:
+flash-jlink: artifacts
 	@echo "[FLASH] Using J-Link..."
 	@echo "device $(JLINK_DEVICE)" > /tmp/jlink_flash.jlink
 	@echo "if $(JLINK_IF)" >> /tmp/jlink_flash.jlink

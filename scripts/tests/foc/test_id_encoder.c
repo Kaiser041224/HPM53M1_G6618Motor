@@ -294,6 +294,8 @@ void test_id_encoder(void) {
         CHECK(id12.init(&id12, &c12) == 0);
         id12.reset(&id12);
         out12 = (id_encoder_out_t){0};
+        float prev_cmd = out12.theta_e_cmd;
+        float max_cmd_step = 0.0f;
         for (int n = 0; n < 300000; n++) {
             float theta_m = foc_wrap_2pi((out12.theta_e_cmd + 1.234f) / 10.0f);
 
@@ -303,14 +305,22 @@ void test_id_encoder(void) {
             in.v_bus_v = 24.0f;
             in.dt_s = ts;
             id12.step(&id12, &in, &out12);
+            float cmd_step = fabsf(foc_wrap_pm_pi(out12.theta_e_cmd - prev_cmd));
+            if (cmd_step > max_cmd_step)
+                max_cmd_step = cmd_step;
+            prev_cmd = out12.theta_e_cmd;
             if (out12.done || out12.failed) {
                 break;
             }
         }
         CHECK(out12.done);
         CHECK_NEAR(out12.offset_rad, 1.234f, 0.05f);
+        CHECK_NEAR(out12.offset_end_rad, 1.234f, 0.05f);
         CHECK(out12.quality > 0.95f);
         CHECK_NEAR(out12.mech_ratio_err, 0.0f, 0.05f);
+        /* FWD→REV 不得把 3 圈扫描瞬间拉回 2π；DIR→FWD 的 60° 回落允许，
+         * 但任何单拍命令跳变都不得接近一个电周期。 */
+        CHECK(max_cmd_step < FOC_TWO_PI_F);
     }
 
     /* 传动打滑：反向扫描零点偏移 0.6 rad（34°）→ FAILED(HYST) */

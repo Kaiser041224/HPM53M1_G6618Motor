@@ -8,7 +8,8 @@
  *   - program：目标区间必须已擦除（0xFF），且不跨扇区（调用方保证）；
  *     src 缓冲区需 4 字节对齐
  *   - erase_sector：addr 必须扇区对齐
- *   - 擦/写期间关闭全局中断（flash 读窗口不可用），单次耗时 ms 级
+ *   - 擦/写/ROM 读期间关闭全局中断（XPI 操作期间 flash 取指窗口不可用），
+ *     单次耗时 ms 级
  *   - 本 SoC 单实例，instance_id 固定为 0
  *
  * Copyright (c) 2026 Alliance HardwareGroup

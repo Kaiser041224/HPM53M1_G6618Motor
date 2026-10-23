@@ -65,6 +65,7 @@ static bool s_friction_suspended;               /**< 辨识期挂起前馈（速
 static float s_velocity_lpf_coeff;              /**< 测速一阶滤波系数（参数 init 期消费） */
 static float s_motion_iq_max_a;          /**< motion 命令电流硬限制[A]（力矩命令与PI输出上限） */
 static float s_motion_speed_limit_rad_s; /**< 轴端速度命令限[rad/s]（0=不限） */
+static float s_output_direction = 1.0f;  /**< 用户出轴正方向（+1/-1；仅 motion 边界） */
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_previous_motor_rad; /**< 上一拍转子机械角（测速基准；输出侧速度=转子速度/减速比） */
 static float s_calibration_sum, s_calibration_first;
@@ -210,6 +211,12 @@ void app_motion_init(void) {
     s_velocity_pi = (algo_motion_pi_t){0};
     /* 力矩/速度环参数：YAML 出厂值 + flash 记忆覆盖（init 期消费；motion gains 在线改） */
     const app_software_params_t* software = app_software_params_current();
+    s_output_direction = software->motion.output_direction;
+    if (!foc_finite(s_output_direction)
+        || ((s_output_direction != 1.0f) && (s_output_direction != -1.0f))) {
+        s_output_direction = 1.0f;
+    }
+    s_motion.output_direction = s_output_direction;
     s_velocity_kp = software->control.speed_loop.kp;
     s_velocity_ki = software->control.speed_loop.ki;
     s_friction_model.coulomb_nm = software->control.speed_loop.friction_coulomb_nm;
@@ -333,7 +340,8 @@ int app_motion_zero(void) {
 int app_motion_save(void) {
     motion_record_t record;
     uint32_t st = intf_sys_irq_save();
-    if (app_foc_get_state() != APP_FOC_STATE_OFF || !s_motion.calibrated || s_motion.calibrating
+    if (app_foc_get_state() != APP_FOC_STATE_OFF || app_foc_stop_pending() || !s_motion.calibrated
+        || s_motion.calibrating
         || s_calibrated_direction != app_motor_params_current()->encoder.direction) {
         intf_sys_irq_restore(st);
         return -1;
@@ -414,6 +422,11 @@ static int motion_command(float target, float vel_ff, float torque_ff, app_motio
         intf_sys_irq_restore(st);
         return APP_MOTION_CMD_TARGET_LIMIT;
     }
+    /* 用户坐标 → 内部物理坐标：输出方向只在这里翻转，FOC/编码器方向保持硬件事实。
+     * 位置/速度/转矩一致翻转，保证“正命令 → 出轴正方向运动”。 */
+    target *= s_output_direction;
+    vel_ff *= s_output_direction;
+    torque_ff *= s_output_direction;
     /* 位置级联内环=速度PI：位置模式同时要求 kp 与 pos_gain 已配置 */
     if ((mode == APP_MOTION_MODE_SPEED && s_velocity_kp <= 0)
         || (mode == APP_MOTION_MODE_POSITION && (s_pos_gain <= 0 || s_velocity_kp <= 0))) {
@@ -449,7 +462,7 @@ static int motion_command(float target, float vel_ff, float torque_ff, app_motio
     }
     s_motion.mode = mode;
     if (mode == APP_MOTION_MODE_POSITION) {
-        s_input_pos = target >= FOC_TWO_PI_F ? 0 : target;
+        s_input_pos = foc_wrap_2pi(target);
         s_input_vel_ff = vel_ff;
         s_input_torque_ff = torque_ff;
     } else {

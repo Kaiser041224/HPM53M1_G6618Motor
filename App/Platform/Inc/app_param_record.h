@@ -4,7 +4,7 @@
  * @author  Kaiser
  *
  * 记录布局：头 {generation} + payload（域结构体原始字节）；长度不符整条拒绝。
- * 代次语义：与软件参数 params_generation 一致才叠加；不一致（bump 后烧录）或
+ * 代次语义：与软件参数 storage 策略配套的固定记录代次一致才叠加；不一致（bump 后烧录）或
  * 长度不符（旧 schema）时整条忽略，调用方保持出厂值 —— 即"清除并替换"。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -23,7 +23,7 @@ extern "C" {
 
 /** @brief 记录头（代次；负载长度由 app_param 记录长度校验兜底，不重复存储） */
 typedef struct {
-    uint32_t generation; /**< 写入时的 params_generation */
+    uint32_t generation; /**< 写入时的 generation */
 } app_param_record_header_t;
 
 /**
@@ -31,7 +31,7 @@ typedef struct {
  * @param key 记录键（app_param 4字符键）
  * @param payload 负载缓冲（域结构体）
  * @param payload_size 负载字节数（须与记录一致）
- * @param generation 当前固件代次（software.params_generation）
+ * @param generation 当前固件代次（记录头固定为 1）
  * @return 0 = flash 记录有效并已叠加；-1 = 无记录/代次或长度不符/存储不可用（payload 不改）
  */
 int app_param_record_load(uint32_t key, void* payload, size_t payload_size, uint32_t generation);

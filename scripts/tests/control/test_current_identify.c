@@ -38,7 +38,7 @@ void test_current_identify(void) {
     float current = 0;
     bool rs_edge_injected = false;
     unsigned ld_corrupt_blocks = 0;
-    for (unsigned tick = 0; tick < 30000 && app_current_identify_is_active(); ++tick) {
+    for (unsigned tick = 0; tick < 60000 && app_current_identify_is_active(); ++tick) {
         app_current_identify_result_t live;
         app_current_identify_get_result(&live);
         float ref = live.current_ref_a;
@@ -90,6 +90,11 @@ void test_current_identify(void) {
     app_current_identify_result_t result;
     app_current_identify_get_result(&result);
     CHECK(result.done);
+    CHECK(result.step.passed);
+    CHECK(result.r_ff_tested);
+    CHECK(result.r_ff_step_off.passed);
+    CHECK(result.r_ff_step_on.passed);
+    CHECK(result.bandwidth_retries == 0U);
     CHECK(result.ld_extra_batches > 0);
     CHECK_NEAR(result.pi_baseline_a, 3.0f, 0.05f);
     CHECK(result.pi_baseline_rms_a < 0.05f);
@@ -118,6 +123,8 @@ void test_current_identify(void) {
     mock_set_pwm_hz(20000);
     CHECK(app_current_identify_restore() == -1);
     mock_set_pwm_hz(25000);
+    CHECK(app_current_identify_clear() == 0);
+    CHECK(app_current_identify_restore() == 1); /* FCUR 已清除 */
     app_foc_init();
     CHECK(app_foc_enable() == 0);
     CHECK(app_current_identify_start() == 0);
@@ -132,8 +139,17 @@ void test_current_identify(void) {
     CHECK(app_foc_enable() == 0);
     CHECK(app_current_identify_start() == 0);
     for (unsigned tick = 0; tick < 2000 && app_current_identify_is_active(); ++tick) {
+        app_current_identify_result_t live;
+        app_current_identify_get_result(&live);
+        /* 零电压阶段注入零电流；Rs 阶段才注入 q=0.3A，验证相对零基线检查。
+         * 若用同一 q 偏置贯穿零和 Rs，偏置会被正确视为零偏而不是故障。 */
+        bool inject_q = live.state == APP_CURRENT_IDENTIFY_RS;
+        float feedback = inject_q ? 1.0f : 0.0f;
+        float feedback_v = inject_q ? -0.2401924f : 0.0f;
+        float feedback_w = inject_q ? -0.7598076f : 0.0f;
         for (unsigned i = 0; i < 25; ++i)
-            app_foc_current_run_fresh(0, 0, 1, 0, 1, -0.2401924f, -0.7598076f, 24, NULL, NULL);
+            app_foc_current_run_fresh(0, 0, live.current_ref_a, 0, feedback, feedback_v,
+                                      feedback_w, 24, NULL, NULL);
         app_current_identify_run_once();
     }
     app_current_identify_get_result(&result);
@@ -147,7 +163,7 @@ void test_current_identify(void) {
     CHECK(app_foc_enable() == 0);
     CHECK(app_current_identify_start() == 0);
     current = 0;
-    for (unsigned tick = 0; tick < 30000 && app_current_identify_is_active(); ++tick) {
+    for (unsigned tick = 0; tick < 60000 && app_current_identify_is_active(); ++tick) {
         app_current_identify_result_t live;
         app_current_identify_get_result(&live);
         for (unsigned i = 0; i < 25; ++i) {
@@ -169,8 +185,8 @@ void test_current_identify(void) {
     CHECK_NEAR(result.trial_bandwidth_hz, 200, 0.1f);
     CHECK(result.trial_kp > 0 && result.trial_ki > 0);
     app_foc_disable();
-    CHECK(app_current_identify_apply() == 0); /* 模型结果可显式应用；不是自动应用 */
-    CHECK_NEAR(app_software_params_current()->control.current_loop.kp, result.kp, 1e-6f);
+    CHECK(app_current_identify_apply() == -5); /* step 未通过：不得应用 */
+    CHECK_NEAR(app_software_params_current()->control.current_loop.kp, 0.3f, 1e-6f);
     app_foc_init();
     CHECK(app_foc_enable() == 0);
     app_software_params_mutable()->control.current_loop.bandwidth_rad_s = NAN;
@@ -192,4 +208,44 @@ void test_current_identify(void) {
     app_current_identify_abort();
     mock_set_pwm_hz(25000);
     app_foc_disable();
+
+    /* 2kHz + 电流环附加一拍延迟：首轮超调，自动降带宽重试到通过。
+     * 仅 PI 阶段附加延迟；Rs/Ld 开环平台仍按原对象验证。 */
+    mock_params_reset();
+    mock_set_pwm_hz(30000);
+    app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 12566.370614f;
+    app_foc_init();
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_current_identify_start() == 0);
+    current = 0.0f;
+    float delayed_voltage[2] = {0.0f, 0.0f};
+    const float sub_dt = 1.0f / 30000.0f;
+    for (unsigned tick = 0; tick < 60000 && app_current_identify_is_active(); ++tick) {
+        app_current_identify_result_t live;
+        app_current_identify_get_result(&live);
+        bool pi_stage = live.state == APP_CURRENT_IDENTIFY_PI_SETTLE
+                        || live.state == APP_CURRENT_IDENTIFY_PI;
+        for (unsigned i = 0; i < 25; ++i) {
+            float v = g_foc_current_snapshot.v_d_v;
+            float applied = v;
+            if (pi_stage) {
+                applied = delayed_voltage[0];
+                delayed_voltage[0] = delayed_voltage[1];
+                delayed_voltage[1] = v;
+            }
+            current = (current - applied / 0.2f) * expf(-0.2f * sub_dt / 120e-6f)
+                      + applied / 0.2f;
+            app_foc_current_run_fresh(0, 0, live.current_ref_a, 0, current, -0.5f * current,
+                                      -0.5f * current, 24, NULL, NULL);
+        }
+        app_current_identify_run_once();
+    }
+    app_current_identify_get_result(&result);
+    CHECK(result.done && !result.failed && result.reason == 0);
+    CHECK(result.step.passed);
+    CHECK(result.bandwidth_retries > 0U);
+    CHECK(result.bandwidth_hz < 2000.0f);
+    CHECK(result.bandwidth_hz >= 200.0f);
+    app_foc_disable();
+    CHECK(app_current_identify_apply() == 0);
 }

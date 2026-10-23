@@ -66,6 +66,8 @@ static bool s_identify_voltage_mode;
 static float s_identify_voltage;
 static float s_identify_previous_voltage;
 static bool s_identify_trial_active;
+static bool s_identify_r_ff_override_active;
+static bool s_identify_r_ff_override;
 static float s_identify_kp, s_identify_ki;
 static uint32_t s_identify_voltage_cycles;
 static float s_identify_bias_voltage;
@@ -77,6 +79,15 @@ int app_foc_current_identify_voltage(float voltage, uint32_t cycles) {
     s_identify_bias_voltage = voltage;
     s_identify_voltage_cycles = voltage >= 0 ? cycles : 0;
     s_current.reset(&s_current);
+    return 0;
+}
+
+int app_foc_current_identify_r_ff(uint8_t enable) {
+    if (!s_ready) {
+        return -1;
+    }
+    s_identify_r_ff_override_active = true;
+    s_identify_r_ff_override = (enable != 0U) ? true : false;
     return 0;
 }
 
@@ -172,6 +183,10 @@ void app_foc_current_init(void) {
     cfg.l_d = motor->ls_h;
     cfg.l_q = motor->ls_h;
     cfg.lambda = motor->flux_linkage_wb; /* 磁链（电角度·相峰值口径；勿用机械角·线 RMS 的 ke） */
+    cfg.r_ohm = (foc_finite(motor->rs_ohm) && (motor->rs_ohm > 0.0f)) ? motor->rs_ohm : 0.0f;
+    cfg.r_ff_en = (software->current_ff.r_en != 0U && cfg.r_ohm > 0.0f) ? 1U : 0U;
+    cfg.wl_ff_en = software->current_ff.wl_en;
+    cfg.bemf_ff_en = software->current_ff.bemf_en;
     cfg.aw_decay = 0.99f;
 
     foc_current_ctor(&s_current);
@@ -195,6 +210,8 @@ void app_foc_current_reset(void) {
     s_identify_capture_active = false;
     s_identify_voltage_mode = false;
     s_identify_trial_active = false;
+    s_identify_r_ff_override_active = false;
+    s_identify_r_ff_override = false;
     s_identify_count = 0;
     if (s_ready) {
         s_current.reset(&s_current);
@@ -477,6 +494,20 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     if (s_identify_trial_active)
         s_current.set_gains(&s_current, s_identify_kp, s_identify_ki);
     s_current.set_decoupling(&s_current, software->control.current_loop.decoupling_en);
+    s_current.set_wl_ff(&s_current,
+                        (software->control.current_loop.decoupling_en != 0U
+                         || software->current_ff.wl_en != 0U) ? 1U : 0U);
+    s_current.set_bemf_ff(&s_current,
+                          (software->control.current_loop.decoupling_en != 0U
+                           || software->current_ff.bemf_en != 0U) ? 1U : 0U);
+    {
+        uint8_t r_ff = (software->current_ff.r_en != 0U && s_motor_params->rs_ohm > 0.0f) ? 1U : 0U;
+
+        if (s_identify_r_ff_override_active) {
+            r_ff = s_identify_r_ff_override ? 1U : 0U;
+        }
+        s_current.set_r_ff(&s_current, r_ff);
+    }
 
     /* Clarke → Park（同一 θ 的 sincos 复用于反 Park） */
     foc_clarke(i_u_a, i_v_a, i_w_a, &i_alpha, &i_beta);
@@ -594,10 +625,12 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
         float dir = s_motor_params->encoder.direction;
         float red = s_motor_params->reducer_ratio;
 
+        /* ωe 已经包含 encoder.direction；不能再除一次 dir，
+         * 否则 direction=-1 时速度环反馈符号与位置/差分路径相反。 */
         g_foc_current_snapshot.speed_out_rad_s =
             (foc_finite(omega_e_rad_s) && (pp > 0.0f) && (red > 0.0f)
              && ((dir == 1.0f) || (dir == -1.0f)))
-                ? omega_e_rad_s / (pp * dir * red)
+                ? omega_e_rad_s / (pp * red)
                 : 0.0f;
         g_foc_current_snapshot.speed_out_valid = false; /* P0-B observer 有效时由 app_foc 置位 */
     }

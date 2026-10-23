@@ -51,6 +51,9 @@
 #define APP_IDENTIFY_PROBE_A              (1.0f)  /**< 探针 i_q [A] */
 #define APP_IDENTIFY_PROBE_MS             (60U)   /**< 探针时长 [ms] */
 #define APP_IDENTIFY_PROBE_MIN_RAD        (0.05f) /**< 探针最小机械行程 [rad] */
+#define APP_IDENTIFY_ENDPOINT_MAX_DELTA_RAD (0.50f) /**< 终点与圆均值最大允许差 [rad]（≈28.6°；
+                                                     * 圆均值会被正/反向动态滞后拉偏，不能当权威；
+                                                     * 终点是静止保持点，优先作为 trial。 */
 
 /* ---- 持久化记录（app_param 键 APP_PARAM_KEY_FOC_ENCODER） ---- */
 #define APP_IDENTIFY_RECORD_VERSION (1U)
@@ -248,13 +251,24 @@ static void identify_step_run(const app_foc_current_snapshot_t* snap, float dt_s
         return;
     }
     if (out.done) {
-        s_identify_result.offset_rad = out.offset_rad;
+        /* 正/反向圆均值用于扫描诊断；verify trial 优先使用 REV 静止终点。
+         * 终点零点是转子在 0 命令下稳定后的实际位置，避免动态滞后把 trial 推偏。 */
+        float trial_offset = out.offset_end_rad;
+
+        /* 终点与圆均值差过大时回退圆均值，避免用一个明显跑偏的终点做 trial。 */
+        if (!foc_finite(trial_offset)
+            || (fabsf(foc_wrap_pm_pi(trial_offset - out.offset_rad))
+                > APP_IDENTIFY_ENDPOINT_MAX_DELTA_RAD)) {
+            trial_offset = out.offset_rad;
+        }
+        s_identify_result.offset_rad = trial_offset;
+        s_identify_result.offset_end_rad = out.offset_end_rad;
         s_identify_result.offset_fwd_rad = out.offset_fwd_rad;
         s_identify_result.offset_rev_rad = out.offset_rev_rad;
         s_identify_result.direction = out.direction;
 
         /* 试用零点：编码器角源 + i_d 锁定（运行零点不动，end 时恢复） */
-        if ((app_foc_calib_use_trial_offset(out.offset_rad, out.direction) != 0)
+        if ((app_foc_calib_use_trial_offset(trial_offset, out.direction) != 0)
             || (app_foc_calib_set_current(APP_IDENTIFY_I_CAL_A, 0.0f) != 0)) {
             identify_fail(APP_IDENTIFY_REASON_STATE);
             return;
@@ -473,8 +487,8 @@ int app_motor_identify_save(void) {
     const app_motor_params_t* motor = app_motor_params_current();
     app_identify_record_t record;
 
-    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
-        return -1;                        /* flash 操作仅停机窗口 */
+    if ((app_foc_get_state() != APP_FOC_STATE_OFF) || app_foc_stop_pending()) {
+        return -1;                        /* flash 操作仅完整停机窗口（含异步停止完成） */
     }
     if (s_identify_result.done && !s_identify_result_applied) {
         return APP_IDENTIFY_SAVE_PENDING; /* 新结果未 apply：拒绝把旧参数当结果落盘 */

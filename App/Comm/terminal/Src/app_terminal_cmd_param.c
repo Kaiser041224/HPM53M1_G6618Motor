@@ -38,6 +38,15 @@ static const char* param_apply_name(uint8_t apply) {
     return (apply == PARAM_META_APPLY_REBOOT) ? "reboot" : "live";
 }
 
+/** @brief flash 存储策略文本 */
+static const char* param_storage_name(uint32_t storage) {
+    switch (storage) {
+    case APP_SW_STORAGE_RESET: return "reset";
+    case APP_SW_STORAGE_OVERRIDE: return "override";
+    default: return "keep";
+    }
+}
+
 /** @brief 按名称查找元数据（名称须为域限定全名） */
 static const param_meta_t* param_find(const char* name) {
     for (uint32_t i = 0U; i < g_params_meta_count; i++) {
@@ -111,9 +120,13 @@ static void param_print(chry_shell_t* csh, const param_meta_t* meta) {
             apply);
         break;
     case PARAM_META_TYPE_U32:
-        csh_printf(
-            csh, "%-46s = %u %s (%s)\r\n", meta->name, (unsigned)*(const uint32_t*)value, unit,
-            apply);
+        if (strcmp(meta->name, "software.storage") == 0) {
+            csh_printf(csh, "%-46s = %s %s (%s)\r\n", meta->name,
+                       param_storage_name(*(const uint32_t*)value), unit, apply);
+        } else {
+            csh_printf(csh, "%-46s = %u %s (%s)\r\n", meta->name,
+                       (unsigned)*(const uint32_t*)value, unit, apply);
+        }
         break;
     case PARAM_META_TYPE_F32:
     default:
@@ -313,6 +326,10 @@ static int cmd_param_reset(chry_shell_t* csh, const char* target) {
  * @note flash 写仅停机窗口：FOC 非 OFF 时拒绝（AGENTS.md 通讯子系统约定）
  */
 static int cmd_param_save(chry_shell_t* csh) {
+    if (app_foc_stop_pending()) {
+        csh_printf(csh, "ERR: FOC stop pending; wait for OFF before flash save\r\n");
+        return -1;
+    }
     if (app_foc_get_state() != APP_FOC_STATE_OFF) {
         csh_printf(csh, "ERR: parameter save requires FOC OFF (flash write in stop window)\r\n");
         return -1;
@@ -323,9 +340,9 @@ static int cmd_param_save(chry_shell_t* csh) {
     csh_printf(
         csh,
         "param save: motor=%s software=%s | hardware not persisted (board facts) | "
-        "generation=%lu (bump in software.yaml to clear flash memory on next flash)\r\n",
+        "storage=%s (software.yaml: keep/reset/override; change + reflash)\r\n",
         rc_motor == 0 ? "OK" : "FAIL", rc_software == 0 ? "OK" : "FAIL",
-        (unsigned long)app_software_params_default()->params_generation);
+        param_storage_name(app_software_params_default()->storage));
     return (rc_motor == 0 && rc_software == 0) ? 0 : -1;
 }
 

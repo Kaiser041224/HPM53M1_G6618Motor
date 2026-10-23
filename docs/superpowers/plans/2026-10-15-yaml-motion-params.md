@@ -15,7 +15,7 @@
 - 不改 flash 扇区布局（复用末尾 8KB 参数区，app_param 记录制）；不动 MOTN/ENCD/FENC/FCUR 现有记录。
 - flash 写仅由停机窗口命令触发（`param save` 前置 FOC OFF 联锁）；boot 不写 flash。
 - hardware 域**不持久化**（板级硬事实 + 安全阈值，防在线改写覆盖；决策）。
-- 烧录清除控制（决策）：`software.params_generation`（u32）。flash 记录头带代次；
+- 烧录清除控制（决策）：`software.storage`（u32）。flash 记录头带代次；
   boot 代次/长度不符 → 忽略记录用出厂值（功能上即"清除并替换"），下次 `param save` 覆盖写回。
   bump 该值 = 本次烧录回收出厂；不采用布尔开关（布尔置 1 会每 boot 清除，破坏掉电保存）。
 - motion 参数消费在 init 期缓存（apply=reboot）；`motion gains` 保留 OFF 联锁在线改，
@@ -34,9 +34,9 @@
 - `software.control.speed_loop.velocity_lpf_coeff` f32=0.03（测速一阶滤波）
 - `software.control.limits.motion_iq_max_a` f32=1.0（motion 命令电流限）
 - `software.control.limits.motion_speed_limit_rad_s` f32=0.0（0=不限）
-- `software.params_generation` u32=1（烧录清除控制）
+- `software.storage` u32=1（烧录清除控制）
 - 既有 `speed_loop.kp/ki` 填空载实测起点值 2.0/50.0（注释注明来源）
-- APPLY_REBOOT 增以上消费项（除 params_generation 外均 reboot 语义）
+- APPLY_REBOOT 增以上消费项（除 generation 外均 reboot 语义）
 
 - [x] Step 1: `python3 scripts/test_gen_params.py` 先红（新键未入 SCHEMA 会 unknown key）→ 改 SCHEMA/头文件/YAML → 绿。
 - [x] Step 2: `python3 scripts/gen_params.py --config-dir config --out-dir build/generated --check` 通过。

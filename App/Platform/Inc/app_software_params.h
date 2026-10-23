@@ -105,6 +105,29 @@ typedef struct {
 } app_software_speed_observer_t;
 
 /**
+ * @brief 运动用户坐标参数（app_motion init 期消费）
+ */
+typedef struct {
+    float output_direction; /**< 出轴正方向：+1 或 -1；仅 motion 用户坐标，不改 FOC 换相 */
+} app_software_motion_t;
+
+/**
+ * @brief 电流环前馈参数（追加字段；app_foc_current 每拍 live 消费）
+ */
+typedef struct {
+    uint8_t r_en;    /**< 1 = 启用 R·I 前馈；默认 0（需先通过 cal rl step） */
+    uint8_t wl_en;   /**< 1 = 启用 ωL 交叉耦合前馈；默认 0 */
+    uint8_t bemf_en; /**< 1 = 启用 bEMF（ωλ）前馈；默认 0 */
+} app_software_current_ff_t;
+
+/** @brief flash 参数加载策略 */
+typedef enum {
+    APP_SW_STORAGE_KEEP = 0,     /**< 使用 flash 中已保存的参数 */
+    APP_SW_STORAGE_RESET = 1,    /**< 忽略 flash；SPRM/MPRM 回 YAML，FCUR 清除 */
+    APP_SW_STORAGE_OVERRIDE = 2, /**< 本次启动仅 SPRM 使用 YAML 默认，不写回 flash */
+} app_sw_storage_t;
+
+/**
  * @brief 软件参数（工厂默认）
  *
  * @note flash 迁移约定：新增字段只能追加在结构体末尾（现有字段偏移保持不变）。
@@ -115,16 +138,19 @@ typedef struct {
     app_software_can_t can;         /**< CAN 通信 */
     app_software_fault_t fault;     /**< 故障保护 */
     app_software_control_t control; /**< 控制环 */
-    uint32_t params_generation;     /**< flash 记忆清除控制：bump → 烧录后忽略 flash 值用出厂值 */
+    uint32_t storage; /**< flash 策略：keep=用flash；reset=SPRM/MPRM回YAML并清FCUR；override=仅SPRM本次用YAML */
     app_software_speed_observer_t speed_observer; /**< P0-B 速度/ωe 观测器（追加字段） */
     float current_loop_output_delay_s; /**< 反 Park 输出延迟补偿 [s]（追加字段；0=关闭） */
+    app_software_motion_t motion;      /**< 运动用户坐标（追加字段） */
+    app_software_current_ff_t current_ff; /**< 电流环前馈（追加字段） */
 } app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */
 const app_software_params_t* app_software_params_default(void);
 
 /** @brief 加载参数：工厂默认 + flash 记忆覆盖（代次/长度不符时仅出厂值）
- * @return 0 = flash 记录已叠加；-1 = 使用出厂值 */
+ * @return 0 = 策略执行完成（keep 有效记录已叠加，或 reset/override 主动跳过 flash）；
+ *         -1 = 参数非法/flash 读取失败，out 保持工厂默认 */
 int app_software_params_load(app_software_params_t* out);
 
 /** @brief 持久化当前参数到 flash（"SPRM"；停机窗口由调用方保证）；0成功 */

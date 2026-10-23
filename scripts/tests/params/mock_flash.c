@@ -68,6 +68,17 @@ int app_param_load(uint32_t key, void* buf, size_t len) {
     return -1;
 }
 
+int app_param_erase(uint32_t key) {
+    for (unsigned i = 0; i < MOCK_FLASH_SLOTS; ++i) {
+        if (s_slots[i].used && s_slots[i].key == key) {
+            s_slots[i].used = false;
+            s_slots[i].length = 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
 int app_param_load_flex(uint32_t key, void* buf, size_t cap, size_t* out_len) {
     if (buf == NULL || out_len == NULL)
         return -1;

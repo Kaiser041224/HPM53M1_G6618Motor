@@ -31,3 +31,10 @@ int app_param_load(uint32_t key, void* buf, size_t len) {
     memcpy(buf, s_record, len);
     return 0;
 }
+int app_param_erase(uint32_t key) {
+    if (key != s_key)
+        return 0;
+    s_length = 0;
+    s_key = 0;
+    return 0;
+}

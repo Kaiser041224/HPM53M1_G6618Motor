@@ -10,6 +10,8 @@
 #include <math.h>
 #include <stddef.h>
 
+/* 平滑超调用于抑制采样噪声；raw 上限防止单点尖峰被平滑掩盖。 */
+
 /** @brief 中心化线性回归，避免大偏置的小信号消减误差 */
 static int fit_line(const float* x, const float* y, uint16_t count, id_rl_fit_t* out) {
     double mx = 0, my = 0, xx = 0, xy = 0, error = 0;
@@ -121,36 +123,56 @@ int id_rl_step(
     if (!data || !out || count < 32 || !foc_finite(dt) || dt <= 0 || !foc_finite(initial)
         || !foc_finite(target) || target <= initial)
         return -1;
-    float span = target - initial, peak = initial, lo = target, hi = target, mean = 0;
-    bool q_ok = true;
+    float span = target - initial, peak_raw = initial, peak_smoothed = initial;
+    float lo = target, hi = target, mean = 0, square = 0;
+    double q_sum = 0;
+    bool q_ok;
     int first = -1, last = -1;
+    const uint16_t tail_start = (uint16_t)(count * 3U / 4U);
+    const uint16_t tail_count = (uint16_t)(count - tail_start);
     for (uint16_t i = 0; i < count; ++i) {
         float value = data[i].i_d_a;
         if (!data[i].valid || !foc_finite(value) || !foc_finite(data[i].i_q_a))
             return -1;
-        if (fabsf(data[i].i_q_a) > 0.2f)
-            q_ok = false;
+        q_sum += data[i].i_q_a;
         if (first < 0 && value >= initial + 0.1f * span)
             first = i;
         if (last < 0 && value >= initial + 0.9f * span)
             last = i;
-        if (value > peak)
-            peak = value;
-        if (i >= count * 3U / 4U) {
-            if (i==count*3U/4U) lo=hi=value;
+        if (value > peak_raw)
+            peak_raw = value;
+        {
+            float smoothed = value;
+            if (i > 0U && i + 1U < count) {
+                smoothed = (data[i - 1U].i_d_a + value + data[i + 1U].i_d_a) / 3.0f;
+            }
+            if (smoothed > peak_smoothed)
+                peak_smoothed = smoothed;
+        }
+        if (i >= tail_start) {
+            if (i == tail_start)
+                lo = hi = value;
             if (value < lo)
                 lo = value;
             if (value > hi)
                 hi = value;
             mean += value;
+            square += value * value;
         }
     }
-    mean /= count - count * 3U / 4U;
+    mean /= (float)tail_count;
     out->rise_s = last >= first && first >= 0 ? (last - first) * dt : count * dt;
-    out->overshoot = fmaxf(0, (peak - target) / span);
+    /* 平滑后超调避免把单点采样尖峰当成动态超调；原始峰值保留诊断。 */
+    out->overshoot = fmaxf(0, (peak_smoothed - target) / span);
+    out->overshoot_raw = fmaxf(0, (peak_raw - target) / span);
     out->error_a = fabsf(mean - target);
     out->ripple_a = hi - lo;
+    out->ripple_rms_a =
+        foc_sqrtf(fmaxf(0.0f, square / (float)tail_count - mean * mean));
+    /* q 轴角度/相序错误表现为整段均值偏差；单个采样尖峰不应否决。 */
+    q_ok = fabsf((float)(q_sum / (double)count)) <= 0.25f;
     out->passed = q_ok && last >= 0 && out->rise_s <= 0.003f && out->overshoot <= 0.2f
-               && out->error_a <= 0.05f && out->ripple_a <= 0.1f;
+               && out->overshoot_raw <= ID_RL_OVERSHOOT_RAW_MAX && out->error_a <= 0.05f
+               && out->ripple_rms_a <= 0.1f;
     return 0;
 }

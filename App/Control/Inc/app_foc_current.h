@@ -25,6 +25,8 @@ int app_foc_current_identify_arm(float voltage, bool voltage_mode);
 int app_foc_current_identify_pi(float kp, float ki);
 /** @brief CALIB内部有限恒压租约 */
 int app_foc_current_identify_voltage(float voltage, uint32_t cycles);
+/** @brief CALIB内部临时强制 R*I 前馈开关（不修改用户配置；0=关闭，1=开启） */
+int app_foc_current_identify_r_ff(uint8_t enable);
 /** @brief 校准内部交替激励 */
 int app_foc_current_identify_pulse(float amplitude, uint16_t half_period);
 /** @brief 内部上限设置，调用方须保证OFF */
@@ -68,10 +70,11 @@ extern app_foc_current_snapshot_t g_foc_current_snapshot;
  * @brief 初始化（构造算法对象；不使能桥）
  *
  * 参数生效语义：
- *   - 每拍 live：kp/ki（set_gains）、decoupling_en（set_decoupling）、
- *     duty_max、i_q_max_a（每拍经 app_*_params_current 读取）
- *   - init 期固定：sample_time_s（= 1/pwm_freq_hz）、l_d/l_q/lambda（motor 域手册值）
- *     修改后需重新调用 app_foc_current_init()
+ *   - 每拍 live：kp/ki（set_gains）、decoupling_en（set_decoupling，兼容旧组合开关）、
+ *     current_ff.r_en/wl_en/bemf_en（set_r_ff/set_wl_ff/set_bemf_ff）、duty_max、
+ *     i_q_max_a（每拍经 app_*_params_current 读取）
+ *   - init 期固定：sample_time_s（= 1/pwm_freq_hz）、l_d/l_q/lambda、r_ohm
+ *     （motor 域手册/辨识值）；修改后需重新调用 app_foc_current_init()
  */
 void app_foc_current_init(void);
 

@@ -81,6 +81,13 @@ int app_param_load_flex(uint32_t key, void* buf, size_t cap, size_t* out_len);
  */
 int app_param_store(uint32_t key, const void* buf, size_t len);
 
+/**
+ * @brief 删除指定 key 的记录（不改变其他记录）
+ * @return 0 = 删除成功或记录本就不存在；-1 = flash 不可用 / 读写失败
+ * @note 需要整扇区擦写；仅允许停机窗口调用。
+ */
+int app_param_erase(uint32_t key);
+
 #ifdef __cplusplus
 }
 #endif

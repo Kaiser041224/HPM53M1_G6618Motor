@@ -40,6 +40,7 @@ void test_motion_anti_windup(void);
 void test_motion_cmd_status(void);
 void test_motion_friction_feedforward(void);
 void test_motion_params(void);
+void test_motion_output_direction(void);
 void test_motion_speed_rotor_only(void);
 void test_motion_position_command(void);
 void test_motion_position_gains(void);
@@ -82,6 +83,7 @@ int main(void) {
     test_motion_cmd_status();
     test_motion_friction_feedforward();
     test_motion_params();
+    test_motion_output_direction();
     test_motion_speed_rotor_only();
     test_motion_position_command();
     test_motion_position_gains();

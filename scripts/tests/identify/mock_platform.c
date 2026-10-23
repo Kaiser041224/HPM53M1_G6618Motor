@@ -134,6 +134,7 @@ void mock_plant_step(void) {
 
 /* ---- FOC 校准端口替身 ---- */
 app_foc_state_t app_foc_get_state(void) { return g_mock_foc_state; }
+bool app_foc_stop_pending(void) { return false; }
 
 int app_foc_calib_begin(void) {
     if ((g_mock_foc_state != APP_FOC_STATE_READY) && (g_mock_foc_state != APP_FOC_STATE_RUN)) {
@@ -241,6 +242,7 @@ app_motor_params_t* app_motor_params_mutable(void) { return &s_motor; }
 
 uint32_t intf_clock_get_cycle(void) { return s_cycle; }
 uint32_t intf_clock_get_cpu_freq(void) { return MOCK_CYCLES_PER_MS * 1000U; }
+void intf_clock_delay_ms(uint32_t ms) { (void)ms; }
 
 /* ---- 参数存储替身（内存单记录） ---- */
 bool app_param_is_ready(void) { return true; }
@@ -262,5 +264,13 @@ int app_param_store(uint32_t key, const void* buf, size_t len) {
     s_store_key = key;
     s_store_valid = true;
     g_mock_store_count++;
+    return 0;
+}
+
+int app_param_erase(uint32_t key) {
+    if (s_store_valid && (key == s_store_key)) {
+        s_store_valid = false;
+        s_store_len = 0;
+    }
     return 0;
 }

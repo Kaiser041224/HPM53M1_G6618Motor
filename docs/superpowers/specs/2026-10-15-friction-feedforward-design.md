@@ -55,7 +55,7 @@ App/Comm/terminal/.../app_terminal_cmd_foc.c    motion friction show|cal|apply|s
                                                  （OFF 联锁 + 分步确认，照 motion cal 风格）
 持久化（二选一，实施时定）：
   P1 参数管线：schema 增 control.speed_loop.{tc_nm, kv_nm_per_rad_s, smooth_rad_s}
-     （复用 params_generation / param save / 出厂值语义）——与刚建的基础设施一致，推荐
+     （复用 generation / param save / 出厂值语义）——与刚建的基础设施一致，推荐
   P2 独立记录 "FRIC"（照 MOTN/FENC）——自定义布局，迁移成本高
 宿主测试：algo_friction 拟合数学（含病态输入/残差拒绝）；辨识状态机 mock 测试
 ```

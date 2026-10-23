@@ -9,7 +9,7 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
 CC="${CC:-cc}"
-python3 "$ROOT/scripts/gen_params.py" --config-dir "$ROOT/config" --out-dir "$OUT/gen" >/dev/null
+python3 "$ROOT/scripts/gen_params.py" --config-dir "$ROOT/scripts/tests/fixtures" --out-dir "$OUT/gen" >/dev/null
 
 INCLUDES=(
     "-I$ROOT/App/Platform/Inc"

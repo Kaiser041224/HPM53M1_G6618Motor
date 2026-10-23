@@ -20,11 +20,11 @@
 _Static_assert(
     sizeof(app_software_params_t) + sizeof(app_param_record_header_t) <= APP_PARAM_DATA_MAX,
     "software params record exceeds app_param slot");
-/* 追加字段迁移基准：旧记录（到 params_generation 为止）必须能被前缀拷贝接受 */
+/* 追加字段迁移基准：旧记录（到 storage 为止）必须能被前缀拷贝接受 */
 #define APP_SOFTWARE_PARAMS_V1_SIZE (offsetof(app_software_params_t, speed_observer))
 _Static_assert(
     APP_SOFTWARE_PARAMS_V1_SIZE > 0U && APP_SOFTWARE_PARAMS_V1_SIZE < sizeof(app_software_params_t),
-    "new software params fields must be appended after params_generation");
+    "new software params fields must be appended after storage");
 
 /** 运行期参数单例（boot 时 load；Shell param 命令可写） */
 static app_software_params_t s_software_params_current;
@@ -39,24 +39,33 @@ int app_software_params_load(app_software_params_t* out) {
         return -1;
     }
     *out = g_software_params_factory;
-    /* 先按旧版前缀长度接受记录：旧字段叠加，新增字段保留出厂默认。
-     * 这样 params_generation 不变时升级固件不会静默丢弃已保存的运动整定。 */
-    return app_param_record_load_prefix(
-        APP_PARAM_KEY_SOFTWARE_PARAMS, out, sizeof(*out), APP_SOFTWARE_PARAMS_V1_SIZE,
-        g_software_params_factory.params_generation);
+    /* reset/override 都忽略 flash；keep 才加载旧版前缀记录。
+     * 记录头仍用固定 generation=1，旧固件保存的记录保持兼容。 */
+    if (g_software_params_factory.storage != APP_SW_STORAGE_KEEP) {
+        return 0;
+    }
+    int rc = app_param_record_load_prefix(
+        APP_PARAM_KEY_SOFTWARE_PARAMS, out, sizeof(*out), APP_SOFTWARE_PARAMS_V1_SIZE, 1U);
+    out->storage = g_software_params_factory.storage;
+    return rc;
 }
 
 int app_software_params_store(void) {
     /* 经 mutable() 懒初始化：未 init 直接 store 也不落全零记录 */
     const app_software_params_t* current = app_software_params_mutable();
     return app_param_record_store(
-        APP_PARAM_KEY_SOFTWARE_PARAMS, current, sizeof(*current),
-        g_software_params_factory.params_generation);
+        APP_PARAM_KEY_SOFTWARE_PARAMS, current, sizeof(*current), 1U);
 }
 
 void app_software_params_init(void) {
     app_software_params_load(&s_software_params_current);
     s_software_params_initialized = true;
+    /* reset：本次启动已用 YAML 默认，回写一条默认记录；
+     * 否则下次 keep 还会看到旧 flash。override 不回写。
+     * MPRM/FCUR 的清理由 app_logic 在 flash 就绪后统一编排。 */
+    if (g_software_params_factory.storage == APP_SW_STORAGE_RESET) {
+        (void)app_software_params_store();
+    }
 }
 
 APP_ATTR_RAMFUNC /* FOC ISR 读取（电流环增益/限幅） */

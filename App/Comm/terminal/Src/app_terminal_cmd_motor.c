@@ -4,7 +4,8 @@
  * @author  Kaiser
  *
  * 命令：
- *   motor iq [<A>]     （FOC 转矩给定；无参 = 查询）
+ *   motor iq [<A>]     （FOC q 轴电流给定；无参 = 查询）
+ *   motor id [<A>]     （FOC d 轴电流给定；无参 = 查询；用于零转矩电流环测试）
  *   cal current        （电流零点标定）
  *   cal encoder        （电角度自校准：约 19s，任意键中止；结果只作数据，不自动生效）
  *   cal encoder apply  （应用最近一次成功结果：电机运行参数 + FOC 运行零点，RAM）
@@ -34,22 +35,55 @@
 #include "app_motor_identify.h"
 #include "app_current_identify.h"
 #include "app_motor_params.h"
+#include "app_software_params.h"
 #include "foc_math.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /**
  * @brief 命令 motor：iq（FOC 转矩给定）。
  *
  * 用法：
- *   motor [iq [<A>]]   无参 = 查询；有参 = 设置（限幅 ±i_q_max）
+ *   motor iq [<A>]   无参 = 查询；有参 = 设置 q 轴电流
+ *   motor id [<A>]   无参 = 查询；有参 = 设置 d 轴电流（零转矩测试）
  */
 static int cmd_motor(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
     const char* sub = (argc >= 2) ? argv[1] : "iq";
 
     if ((strcmp(sub, "help") == 0) || (strcmp(sub, "status") == 0)) {
-        csh_printf(csh, "usage: motor iq [<A>]   (FOC torque ref; no arg = query)\r\n");
+        csh_printf(csh, "usage: motor iq [<A>] | motor id [<A>]\r\n");
+        return 0;
+    }
+
+    if (strcmp(sub, "id") == 0) {
+        float value;
+        app_foc_current_snapshot_t snap;
+
+        if (app_foc_get_state() == APP_FOC_STATE_CALIB) {
+            csh_printf(csh, "ERR: FOC busy (calibration in progress)\r\n");
+            return -1;
+        }
+        if ((app_foc_get_state() != APP_FOC_STATE_READY)
+            && (app_foc_get_state() != APP_FOC_STATE_RUN)) {
+            csh_printf(csh, "ERR: FOC not enabled (use 'foc on')\r\n");
+            return -1;
+        }
+        if (argc >= 3) {
+            if (app_terminal_cmd_parse_float(argv[2], &value) != 0) {
+                csh_printf(csh, "ERR: invalid value '%s'\r\n", argv[2]);
+                return -1;
+            }
+            /* 零转矩 d 轴测试必须同时把 q 轴给定清零，避免沿用上一条 iq 命令。 */
+            if ((app_foc_set_iq_ref(0.0f) != 0) || (app_foc_set_id_ref(value) != 0)) {
+                csh_printf(csh, "ERR: set id failed (requires direct current source)\r\n");
+                return -1;
+            }
+        }
+        app_foc_get_snapshot(&snap);
+        csh_printf(csh, "foc id: ref=%.3f A  avg=%.3f A  now=%.3f A\r\n",
+                   (double)snap.i_d_ref_a, (double)snap.i_d_avg_a, (double)snap.i_d_a);
         return 0;
     }
 
@@ -84,7 +118,7 @@ static int cmd_motor(int argc, char** argv) {
     }
 
     csh_printf(csh, "ERR: unknown subcommand '%s'\r\n", sub);
-    return app_terminal_cmd_usage(csh, "motor iq [<A>]");
+    return app_terminal_cmd_usage(csh, "motor iq [<A>] | motor id [<A>]");
 }
 
 /**
@@ -163,20 +197,22 @@ static const char* cal_encoder_fail_name(app_identify_fail_t reason) {
  * @param result 结果
  */
 static void cal_encoder_emit_result(const app_motor_identify_result_t* result) {
-    app_terminal_cmd_emit("    offset=%.4f rad (%.2f deg)  dir=%+.0f  q=%.3f  ratio_err=%+.1f%%\r\n",
+    app_terminal_cmd_emit("    offset=%.4f rad (%.2f deg)  end=%.2f deg  dir=%+.0f  q=%.3f  "
+                          "ratio_err=%+.1f%%\r\n",
                           (double)result->offset_rad,
                           (double)(result->offset_rad * CAL_ENCODER_RAD_TO_DEG),
+                          (double)(result->offset_end_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)result->direction, (double)result->quality,
                           (double)(result->ratio_err * 100.0f));
     app_terminal_cmd_emit("    fwd=%.2f rev=%.2f deg (hyst=%.2f)  probe=%.3f rad  resid mean/max=%.2f/%.2f "
-                          "deg  i_peak=%.2f A  t=%.1f s\r\n",
+                          "deg  drift=%.1f deg/s  i_peak=%.2f A  t=%.1f s\r\n",
                           (double)(result->offset_fwd_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)(result->offset_rev_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)(foc_wrap_pm_pi(result->offset_fwd_rad - result->offset_rev_rad)
                                    * CAL_ENCODER_RAD_TO_DEG),
                           (double)result->probe_travel_rad, (double)result->verify_mean_deg,
-                          (double)result->verify_max_deg, (double)result->i_peak_a,
-                          (double)result->elapsed_ms / 1000.0);
+                          (double)result->verify_max_deg, (double)result->verify_drift_deg_s,
+                          (double)result->i_peak_a, (double)result->elapsed_ms / 1000.0);
 }
 
 /**
@@ -287,13 +323,19 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
     }
 
     if (strcmp(sub, "save") == 0) {
+        if (app_foc_stop_pending()) {
+            csh_printf(csh, "ERR: FOC stop pending; wait for 'foc: state=OFF' before flash save\r\n");
+            return -1;
+        }
         if (app_foc_get_state() != APP_FOC_STATE_OFF) {
             csh_printf(csh, "ERR: FOC enabled (use 'foc off' first; flash only in stop window)\r\n");
             return -1;
         }
         {
-            int save_rc = app_motor_identify_save();
+            int save_rc;
 
+            csh_printf(csh, "saving FENC to flash (IRQ briefly off; USB may pause)...\r\n");
+            save_rc = app_motor_identify_save();
             if (save_rc == APP_IDENTIFY_SAVE_PENDING) {
                 csh_printf(csh, "ERR: latest calibration result not applied; run 'cal encoder "
                                 "apply' first (save writes the APPLIED offset)\r\n");
@@ -337,8 +379,90 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
 /**
  * @brief 命令 cal：电流零点标定（current）/ 电角度自校准（encoder），job 驱动，不阻塞控制环。
  */
-/** @brief Rs/Ld与PI结果显示，不进入实时控制路径 */
+/** @brief 表格单元格式化：无记录显示 "--" */
+static void cal_rl_value(char* out, size_t size, bool present, float value) {
+    if (!present) {
+        (void)snprintf(out, size, "--");
+        return;
+    }
+    (void)snprintf(out, size, "%.6g", (double)value);
+}
+
+/** @brief 输出一行参数对比 */
+static void cal_rl_row(const char* item, const char* yaml, const char* flash, const char* ram_now,
+                       const char* ram_cal) {
+    app_terminal_cmd_emit("| %-10s | %10s | %10s | %10s | %10s |\r\n", item, yaml, flash,
+                          ram_now, ram_cal);
+}
+
+/** @brief Rs/Ld 与 PI 参数显示：YAML / FLASH / RAM 当前 / RAM 本次 */
 static void cal_rl_emit(const app_current_identify_result_t* result) {
+    const app_motor_params_t* yaml_motor = app_motor_params_default();
+    const app_software_params_t* yaml_software = app_software_params_default();
+    const app_motor_params_t* ram_motor = app_motor_params_current();
+    const app_software_params_t* ram_software = app_software_params_current();
+    app_current_identify_saved_t saved = {0};
+    int saved_rc = app_current_identify_get_saved(&saved);
+    bool flash_present = (saved_rc == 0) && saved.present;
+    bool cal_present = result->done;
+    char yaml_rs[16], yaml_ls[16], yaml_kp[16], yaml_ki[16], yaml_bw[16];
+    char flash_rs[16], flash_ls[16], flash_kp[16], flash_ki[16], flash_bw[16];
+    char now_rs[16], now_ls[16], now_kp[16], now_ki[16], now_bw[16];
+    char cal_rs[16], cal_ls[16], cal_kp[16], cal_ki[16], cal_bw[16];
+
+    cal_rl_value(yaml_rs, sizeof(yaml_rs), true, yaml_motor->rs_ohm);
+    cal_rl_value(yaml_ls, sizeof(yaml_ls), true, yaml_motor->ls_h * 1e6f);
+    cal_rl_value(yaml_kp, sizeof(yaml_kp), true, yaml_software->control.current_loop.kp);
+    cal_rl_value(yaml_ki, sizeof(yaml_ki), true, yaml_software->control.current_loop.ki);
+    cal_rl_value(yaml_bw, sizeof(yaml_bw), true,
+                 yaml_software->control.current_loop.bandwidth_rad_s / 6.283185307f);
+
+    cal_rl_value(flash_rs, sizeof(flash_rs), flash_present, saved.rs_ohm);
+    cal_rl_value(flash_ls, sizeof(flash_ls), flash_present, saved.ld_h * 1e6f);
+    cal_rl_value(flash_kp, sizeof(flash_kp), flash_present, saved.kp);
+    cal_rl_value(flash_ki, sizeof(flash_ki), flash_present, saved.ki);
+    cal_rl_value(flash_bw, sizeof(flash_bw), flash_present, saved.bandwidth_hz);
+
+    cal_rl_value(now_rs, sizeof(now_rs), true, ram_motor->rs_ohm);
+    cal_rl_value(now_ls, sizeof(now_ls), true, ram_motor->ls_h * 1e6f);
+    cal_rl_value(now_kp, sizeof(now_kp), true, ram_software->control.current_loop.kp);
+    cal_rl_value(now_ki, sizeof(now_ki), true, ram_software->control.current_loop.ki);
+    cal_rl_value(now_bw, sizeof(now_bw), true,
+                 ram_software->control.current_loop.bandwidth_rad_s / 6.283185307f);
+
+    cal_rl_value(cal_rs, sizeof(cal_rs), cal_present, result->rs_ohm);
+    cal_rl_value(cal_ls, sizeof(cal_ls), cal_present, result->ld_h * 1e6f);
+    cal_rl_value(cal_kp, sizeof(cal_kp), cal_present, result->kp);
+    cal_rl_value(cal_ki, sizeof(cal_ki), cal_present, result->ki);
+    cal_rl_value(cal_bw, sizeof(cal_bw), cal_present, result->bandwidth_hz);
+
+    app_terminal_cmd_emit("Rs/Ld / current-loop tuning (FCUR)\r\n");
+    app_terminal_cmd_emit("+------------+------------+------------+------------+------------+\r\n");
+    app_terminal_cmd_emit("| item       |       YAML |      FLASH |    RAM now |    RAM cal |\r\n");
+    app_terminal_cmd_emit("+------------+------------+------------+------------+------------+\r\n");
+    cal_rl_row("Rs [ohm]", yaml_rs, flash_rs, now_rs, cal_rs);
+    cal_rl_row("Ls [uH]", yaml_ls, flash_ls, now_ls, cal_ls);
+    cal_rl_row("Kp [V/A]", yaml_kp, flash_kp, now_kp, cal_kp);
+    cal_rl_row("Ki [V/As]", yaml_ki, flash_ki, now_ki, cal_ki);
+    cal_rl_row("bw [Hz]", yaml_bw, flash_bw, now_bw, cal_bw);
+    app_terminal_cmd_emit("+------------+------------+------------+------------+------------+\r\n");
+    app_terminal_cmd_emit("flash: %s | RAM cal: %s\r\n",
+        (saved_rc < 0) ? "read-error" : !flash_present ? "none" : saved.valid ? "valid" : "mismatch",
+        !cal_present ? "--" : result->step.passed ? "PASS" : "FAIL");
+    app_terminal_cmd_emit("feedforward (RAM now): R=%u wl=%u bemf=%u | legacy_decouple=%u\r\n",
+        (unsigned)ram_software->current_ff.r_en,
+        (unsigned)ram_software->current_ff.wl_en,
+        (unsigned)ram_software->current_ff.bemf_en,
+        (unsigned)ram_software->control.current_loop.decoupling_en);
+    if (!cal_present) {
+        app_terminal_cmd_emit("RAM result: empty (reboot clears this snapshot; FLASH is persistent)\r\n");
+    }
+
+    /* 无活动/无结果时只显示对比表，避免重启后满屏 0。 */
+    if (!result->done && !result->failed && !result->active) {
+        return;
+    }
+
     app_terminal_cmd_emit("phase zero: U=%.4f V=%.4f W=%.4f sum=%.4fA theta=%.4frad\r\n",
         (double)result->zero_phase_a[0],(double)result->zero_phase_a[1],(double)result->zero_phase_a[2],
         (double)(result->zero_phase_a[0]+result->zero_phase_a[1]+result->zero_phase_a[2]),
@@ -374,22 +498,38 @@ static void cal_rl_emit(const app_current_identify_result_t* result) {
                            (double)(result->ld_half4_h*1e6f), (double)(result->ld_half8_h*1e6f));
     app_terminal_cmd_emit("robustness: Rs half-window drift=%.4fA Ld extra_batches=%u\r\n",
         (double)result->rs_window_drift_a,(unsigned)result->ld_extra_batches);
-    app_terminal_cmd_emit("PI trial: bw=%.0fHz Kp=%.5f Ki=%.3f passed=%u rise=%.3fms overshoot=%.1f%% error=%.4fA ripple=%.4fA\r\n",
+    app_terminal_cmd_emit("PI trial: bw=%.0fHz Kp=%.5f Ki=%.3f passed=%u retry=%u rise=%.3fms overshoot=%.1f%% raw=%.1f%% error=%.4fA ripple=%.4fA rms=%.4fA\r\n",
         (double)result->trial_bandwidth_hz, (double)result->trial_kp, (double)result->trial_ki,
-        (unsigned)result->trial_step.passed, (double)(result->trial_step.rise_s*1000),
-        (double)(result->trial_step.overshoot*100), (double)result->trial_step.error_a,
-        (double)result->trial_step.ripple_a);
+        (unsigned)result->trial_step.passed, (unsigned)result->bandwidth_retries,
+        (double)(result->trial_step.rise_s*1000),
+        (double)(result->trial_step.overshoot*100),
+        (double)(result->trial_step.overshoot_raw*100), (double)result->trial_step.error_a,
+        (double)result->trial_step.ripple_a, (double)result->trial_step.ripple_rms_a);
+    if (result->r_ff_tested) {
+        app_terminal_cmd_emit(
+            "RI A/B: off rise=%.3fms overshoot=%.1f%% rms=%.4fA | on rise=%.3fms "
+            "overshoot=%.1f%% rms=%.4fA | recommend=%u\r\n",
+            (double)(result->r_ff_step_off.rise_s * 1000),
+            (double)(result->r_ff_step_off.overshoot * 100),
+            (double)result->r_ff_step_off.ripple_rms_a,
+            (double)(result->r_ff_step_on.rise_s * 1000),
+            (double)(result->r_ff_step_on.overshoot * 100),
+            (double)result->r_ff_step_on.ripple_rms_a, (unsigned)result->r_ff_recommended);
+    } else {
+        app_terminal_cmd_emit("RI A/B: not tested (baseline step not passed)\r\n");
+    }
     app_terminal_cmd_emit("rl: state=%u active=%u done=%u reason=%d t=%ums\r\n",
         (unsigned)result->state, (unsigned)result->active, (unsigned)result->done,
         result->reason, (unsigned)result->elapsed_ms);
     app_terminal_cmd_emit("Rs_eff=%.5f ohm Ld=%.2f uH (Lq assumed equal) Kp=%.5f Ki=%.3f bw=%.0f Hz\r\n",
         (double)result->rs_ohm, (double)(result->ld_h*1e6f), (double)result->kp,
         (double)result->ki, (double)result->bandwidth_hz);
-    app_terminal_cmd_emit("fit R=%.4fV L=%.4fA repeat=%.1f%% rise=%.3fms overshoot=%.1f%% error=%.4fA ripple=%.4fA\r\n",
+    app_terminal_cmd_emit("fit R=%.4fV L=%.4fA repeat=%.1f%% rise=%.3fms overshoot=%.1f%% raw=%.1f%% error=%.4fA ripple=%.4fA rms=%.4fA\r\n",
         (double)result->rs_residual_v, (double)result->ld_residual_a,
         (double)(result->ld_repeat_error*100), (double)(result->step.rise_s*1000),
-        (double)(result->step.overshoot*100), (double)result->step.error_a,
-        (double)result->step.ripple_a);
+        (double)(result->step.overshoot*100), (double)(result->step.overshoot_raw*100),
+        (double)result->step.error_a, (double)result->step.ripple_a,
+        (double)result->step.ripple_rms_a);
 }
 /** @brief 显示job取消回调 */
 static void cal_rl_abort(void) {
@@ -436,12 +576,29 @@ static void cal_rl_tick(uint32_t now_ms) {
                               (double)result.elapsed_ms/1000.0);
         app_terminal_cmd_emit("    Rs_eff=%.5f ohm  Ld=%.2f uH  half-period diff=%.1f%%\r\n",
             (double)result.rs_ohm,(double)(result.ld_h*1e6f),(double)(result.ld_repeat_error*100));
-        app_terminal_cmd_emit("    PI: Kp=%.5f Ki=%.3f bw=%.0fHz  step=%s\r\n",
+        app_terminal_cmd_emit("    PI: Kp=%.5f Ki=%.3f bw=%.0fHz retry=%u  step=%s\r\n",
             (double)result.kp,(double)result.ki,(double)result.bandwidth_hz,
+            (unsigned)result.bandwidth_retries,
             result.step.passed ? "PASS" : "NOT PASSED");
-        app_terminal_cmd_emit("    rise=%.3fms overshoot=%.1f%% error=%.4fA ripple=%.4fA baseline_rms=%.4fA\r\n",
+        app_terminal_cmd_emit("    rise=%.3fms overshoot=%.1f%% raw=%.1f%% error=%.4fA ripple=%.4fA rms=%.4fA baseline_rms=%.4fA\r\n",
             (double)(result.step.rise_s*1000),(double)(result.step.overshoot*100),
-            (double)result.step.error_a,(double)result.step.ripple_a,(double)result.pi_baseline_rms_a);
+            (double)(result.step.overshoot_raw*100),(double)result.step.error_a,
+            (double)result.step.ripple_a,(double)result.step.ripple_rms_a,
+            (double)result.pi_baseline_rms_a);
+        if (result.r_ff_tested) {
+            app_terminal_cmd_emit(
+                "    RI A/B: off rise=%.3fms overshoot=%.1f%% rms=%.4fA | on rise=%.3fms "
+                "overshoot=%.1f%% rms=%.4fA | recommend=%s\r\n",
+                (double)(result.r_ff_step_off.rise_s * 1000),
+                (double)(result.r_ff_step_off.overshoot * 100),
+                (double)result.r_ff_step_off.ripple_rms_a,
+                (double)(result.r_ff_step_on.rise_s * 1000),
+                (double)(result.r_ff_step_on.overshoot * 100),
+                (double)result.r_ff_step_on.ripple_rms_a,
+                result.r_ff_recommended ? "YES" : "NO");
+        } else {
+            app_terminal_cmd_emit("    RI A/B: not tested (baseline step not passed)\r\n");
+        }
     } else {
         app_terminal_cmd_emit("\r\nFAIL: cal rl stage=%s reason=%d detail=%u t=%.1fs\r\n",
             cal_rl_stage_name(result.failure_stage),result.reason,(unsigned)result.detail,
@@ -473,23 +630,26 @@ static int cmd_cal_rl(chry_shell_t* csh, const char* sub) {
     }
     if (!strcmp(sub, "show")) {
         app_current_identify_result_t result;
-        app_current_identify_get_result(&result); cal_rl_emit(&result); return 0;
+        app_current_identify_get_result(&result);
+        cal_rl_emit(&result);
+        return 0;
     }
     int rc;
     if (!strcmp(sub, "apply")) {
-        app_current_identify_result_t result;
-        app_current_identify_get_result(&result);
-        if (result.done && !result.step.passed)
-            csh_printf(csh, "WARN: applying model gains with failed step diagnostic; stability NOT verified\r\n");
         rc = app_current_identify_apply();
     }
     else if (!strcmp(sub, "save")) rc = app_current_identify_save();
-    else return app_terminal_cmd_usage(csh, "cal rl [show|apply|save]");
+    else if (!strcmp(sub, "clear")) rc = app_current_identify_clear();
+    else return app_terminal_cmd_usage(csh, "cal rl [show|apply|save|clear]");
     if (!strcmp(sub,"apply") && rc) {
         csh_printf(csh,"apply: %s\r\n",rc==-1 ? "FOC not OFF (stop may still be pending)"
             : rc==-2 ? "no completed RAM result; run 'cal rl show' (reset loses unsaved result)"
             : rc==-4 ? "PWM frequency/pole pairs changed; recalibrate"
+            : rc==-5 ? "dynamic step NOT PASSED; refuse to apply tuning/feedforward"
                      : "calibration still active");
+    } else if (!strcmp(sub, "clear")) {
+        csh_printf(csh, "clear: %s (FCUR removed; reboot restores YAML)\r\n",
+                   rc ? "FAIL (FOC must be OFF and idle)" : "OK");
     } else csh_printf(csh, "%s: %s (save requires OFF and applied result)\r\n", sub, rc ? "FAIL" : "OK");
     return rc;
 }
@@ -503,7 +663,7 @@ static int cmd_cal(int argc, char** argv) {
         return cmd_cal_encoder(csh, (argc >= 3) ? argv[2] : NULL);
     }
     if ((argc < 2) || (strcmp(argv[1], "current") != 0)) {
-        return app_terminal_cmd_usage(csh, "cal current | cal encoder [apply|save|show] | cal rl [apply|save|show]");
+        return app_terminal_cmd_usage(csh, "cal current | cal encoder [apply|save|show] | cal rl [apply|save|show|clear]");
     }
     if (!app_terminal_cmd_require_motor_stopped(csh)) {
         return -1;

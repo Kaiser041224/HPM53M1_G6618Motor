@@ -24,6 +24,7 @@ static uint8_t s_current_identify_index;
 static float s_current_identify_currents[5], s_current_identify_voltages[5];
 static float s_current_identify_ld[2];
 static bool s_current_identify_applied;
+static bool s_ri_test_phase;
 static uint32_t s_identify_pwm_hz, s_identify_pole_pairs;
 /* 位移门限 [rad 电角]：0.5 rad≈2.9°机械（10 对极）。50:1 减速器带载时
  * cal encoder 实测回差 8.6~10.6°电角；原 0.15 rad 会在正常齿隙内误报。 */
@@ -44,6 +45,13 @@ static id_rl_sample_t s_current_identify_average[APP_FOC_IDENTIFY_SAMPLES];
 #define CURRENT_IDENTIFY_BLOCKS     20U
 #define CURRENT_IDENTIFY_REPEATS    16U
 #define CURRENT_IDENTIFY_LD_REPEATS 64U
+/* step 未通过时自动降带宽重试：2kHz 在 30kHz/一拍输出延迟下相位裕度不足，
+ * 实测阶跃超调会超过 20%。只降低 trial 带宽，不改用户配置；最多三次。 */
+#define CURRENT_IDENTIFY_BW_RETRY_FACTOR (0.7f)
+#define CURRENT_IDENTIFY_BW_RETRY_MAX    (3U)
+#define CURRENT_IDENTIFY_BW_MIN_HZ       (200.0f)
+/* 正常流程在 29~30s 附近，原 30s 超时会与正常完成竞争。 */
+#define CURRENT_IDENTIFY_TIMEOUT_MS      (60000U)
 
 /** @brief 复用固定缓冲累加重复响应，任务上下文执行 */
 static void current_identify_average_clear(void) {
@@ -63,6 +71,23 @@ typedef struct {
     float rs, ld, kp, ki, bandwidth;
 } current_identify_record_t;
 _Static_assert(sizeof(current_identify_record_t)<=APP_PARAM_DATA_MAX,"FCUR record exceeds slot");
+
+/** @brief FCUR 记录是否与当前硬件条件匹配且数值合法 */
+static bool current_identify_record_valid(const current_identify_record_t* record) {
+    if (record == NULL) {
+        return false;
+    }
+    return (record->version == 1U)
+           && (record->pwm_hz == app_hardware_params_current()->inverter.pwm_freq_hz)
+           && (record->pole_pairs == app_motor_params_current()->pole_pairs)
+           && foc_finite(record->rs) && (record->rs > 0.0f)
+           && foc_finite(record->ld) && (record->ld > 0.0f)
+           && foc_finite(record->kp) && (record->kp > 0.0f)
+           && foc_finite(record->ki) && (record->ki > 0.0f)
+           && foc_finite(record->bandwidth) && (record->bandwidth > 0.0f)
+           && (record->pwm_hz != 0U) && (record->pole_pairs != 0U)
+           && (record->bandwidth <= (float)record->pwm_hz / 15.0f);
+}
 
 /** @brief 完成/失败均释放校准端口并恢复临时参数 */
 static void current_identify_finish(int reason) {
@@ -101,12 +126,17 @@ int app_current_identify_start(void) {
         return -1;
     if (app_foc_calib_begin())
         return -1;
+    if (app_foc_calib_trial_r_ff(0U)) {
+        app_foc_calib_end();
+        return -1;
+    }
     app_foc_get_encoder_offset(&offset, &direction);
     if (app_foc_calib_use_trial_offset(offset, direction)) {
         app_foc_calib_end();
         return -1;
     }
     s_current_identify_result = (app_current_identify_result_t){.active = true};
+    s_ri_test_phase = false;
     s_current_identify_result.trial_bandwidth_hz = bandwidth / 6.283185307f;
     s_current_identify_applied = false;
     s_identify_pwm_hz=pwm_hz;
@@ -178,7 +208,8 @@ void app_current_identify_run_once(void) {
         current_identify_finish(2); return;
     }
     s_current_identify_ticks++;
-    if (app_foc_get_state() != APP_FOC_STATE_CALIB || result->elapsed_ms > 30000) {
+    if (app_foc_get_state() != APP_FOC_STATE_CALIB
+        || result->elapsed_ms > CURRENT_IDENTIFY_TIMEOUT_MS) {
         result->detail = app_foc_get_state() != APP_FOC_STATE_CALIB
                            ? APP_CURRENT_IDENTIFY_DETAIL_STATE
                            : APP_CURRENT_IDENTIFY_DETAIL_TIMEOUT;
@@ -317,7 +348,10 @@ void app_current_identify_run_once(void) {
         for (unsigned i = 0; i < 3; ++i)
             result->driven_phase_a[i] =
                 (float)(s_phase_sum[i] / (s_current_identify_blocks * count));
-        if (fabsf(q_mean) > 0.25f) {
+        /* q 轴零偏在同一固定坐标系、零电压阶段已测量；Rs 平台只应按
+         * 相对增量判角度/相序错误，否则 0.17A 零偏会把 0.25A 阈值误触发。 */
+        float q_zero = foc_finite(result->zero_q_mean_a) ? result->zero_q_mean_a : 0.0f;
+        if (fabsf(q_mean - q_zero) > 0.25f) {
             result->detail = APP_CURRENT_IDENTIFY_DETAIL_Q_CURRENT;
             current_identify_finish(2);
             break;
@@ -525,7 +559,57 @@ void app_current_identify_run_once(void) {
             break;
         }
         result->trial_step = step;
-        result->step = step;
+        /* 2kHz 等较高带宽在采样/输出延迟下可能超调；step 未通过时按固定比例
+         * 降到下一档重试。只重试“超调型”失败，跟踪误差/纹波失败不降带宽。
+         * 不修改用户的带宽配置，最终结果显式报告实际 trial 带宽。 */
+        if (!step.passed
+            && ((step.overshoot > 0.2f) || (step.overshoot_raw > ID_RL_OVERSHOOT_RAW_MAX))
+            && (result->bandwidth_retries < CURRENT_IDENTIFY_BW_RETRY_MAX)) {
+            float next_hz = result->trial_bandwidth_hz * CURRENT_IDENTIFY_BW_RETRY_FACTOR;
+
+            if (next_hz >= CURRENT_IDENTIFY_BW_MIN_HZ) {
+                result->trial_bandwidth_hz = next_hz;
+                result->bandwidth_retries++;
+                current_identify_average_clear();
+                s_pi_baseline_sum = 0;
+                s_pi_baseline_variance_sum = 0;
+                s_pi_baseline_armed = false;
+                current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+                break;
+            }
+        }
+        /* 先记录 R*I 关闭的最终基线；通过后在同一 d 轴小电流阶跃上
+         * 强制开启 R*I 再跑一轮，评估其对动态指标的实际影响。 */
+        if (step.passed && !s_ri_test_phase) {
+            result->r_ff_step_off = step;
+            if (app_foc_calib_trial_r_ff(1U)) {
+                result->detail = APP_CURRENT_IDENTIFY_DETAIL_PORT;
+                current_identify_finish(2);
+                break;
+            }
+            s_ri_test_phase = true;
+            result->r_ff_tested = false;
+            current_identify_average_clear();
+            s_pi_baseline_sum = 0;
+            s_pi_baseline_variance_sum = 0;
+            s_pi_baseline_armed = false;
+            current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+            break;
+        }
+        if (s_ri_test_phase) {
+            result->r_ff_step_on = step;
+            result->r_ff_tested = true;
+            result->r_ff_recommended =
+                step.passed
+                && (step.rise_s <= (result->r_ff_step_off.rise_s * 1.15f + 1.0e-4f))
+                && (step.overshoot <= result->r_ff_step_off.overshoot + 0.03f)
+                && (step.error_a <= result->r_ff_step_off.error_a + 0.02f)
+                && (step.ripple_rms_a
+                    <= (result->r_ff_step_off.ripple_rms_a * 1.20f + 0.01f));
+            s_ri_test_phase = false;
+            (void)app_foc_calib_trial_r_ff(0U);
+        }
+        result->step = (result->r_ff_tested) ? result->r_ff_step_off : step;
         result->bandwidth_hz = result->trial_bandwidth_hz;
         result->kp=result->trial_kp; /* 已经过有限值检查并实际试用的增益 */
         result->ki=result->trial_ki;
@@ -542,6 +626,8 @@ int app_current_identify_apply(void) {
         return -1;
     if (!s_current_identify_result.done)
         return -2;
+    if (!s_current_identify_result.step.passed)
+        return -5; /* 动态 step 未通过：不应用模型/增益，也不允许后续 save */
     if (s_identify_pwm_hz!=app_hardware_params_current()->inverter.pwm_freq_hz
         || s_identify_pole_pairs!=app_motor_params_current()->pole_pairs) return -4;
     app_motor_params_t* motor = app_motor_params_mutable();
@@ -557,8 +643,8 @@ int app_current_identify_apply(void) {
     return 0;
 }
 int app_current_identify_save(void) {
-    if (app_foc_get_state() != APP_FOC_STATE_OFF || !s_current_identify_applied
-        || !s_current_identify_result.done)
+    if ((app_foc_get_state() != APP_FOC_STATE_OFF) || app_foc_stop_pending()
+        || !s_current_identify_applied || !s_current_identify_result.done)
         return -1;
     const app_motor_params_t* motor = app_motor_params_current();
     const app_software_params_t* software = app_software_params_current();
@@ -581,18 +667,35 @@ int app_current_identify_save(void) {
         software->control.current_loop.bandwidth_rad_s / 6.283185307f};
     return app_param_store(APP_PARAM_KEY_FOC_CURRENT, &record, sizeof(record));
 }
+int app_current_identify_get_saved(app_current_identify_saved_t* out) {
+    current_identify_record_t record;
+
+    if (out == NULL) {
+        return -1;
+    }
+    *out = (app_current_identify_saved_t){0};
+    if (!app_param_is_ready()) {
+        return -1;
+    }
+    if (app_param_load(APP_PARAM_KEY_FOC_CURRENT, &record, sizeof(record)) != 0) {
+        return 1;
+    }
+    out->present = true;
+    out->valid = current_identify_record_valid(&record);
+    out->rs_ohm = record.rs;
+    out->ld_h = record.ld;
+    out->kp = record.kp;
+    out->ki = record.ki;
+    out->bandwidth_hz = record.bandwidth;
+    return 0;
+}
+
 int app_current_identify_restore(void) {
     if (app_foc_get_state()!=APP_FOC_STATE_OFF || s_current_identify_result.active) return -1;
     current_identify_record_t record;
     if (!app_param_is_ready() || app_param_load(APP_PARAM_KEY_FOC_CURRENT, &record, sizeof(record)))
         return 1;
-    if (record.version != 1 || record.pwm_hz != app_hardware_params_current()->inverter.pwm_freq_hz
-        || record.pole_pairs != app_motor_params_current()->pole_pairs || !foc_finite(record.rs)
-        || record.rs <= 0 || !foc_finite(record.ld) || record.ld <= 0 || !foc_finite(record.kp)
-        || record.kp <= 0 || !foc_finite(record.ki) || record.ki <= 0
-        || !foc_finite(record.bandwidth) || record.bandwidth <= 0
-        || record.pwm_hz==0 || record.pole_pairs==0
-        || record.bandwidth>(float)record.pwm_hz/15.0f)
+    if (!current_identify_record_valid(&record))
         return -1;
     app_motor_params_mutable()->rs_ohm = record.rs;
     app_motor_params_mutable()->ls_h = record.ld;
@@ -601,4 +704,11 @@ int app_current_identify_restore(void) {
     app_software_params_mutable()->control.current_loop.bandwidth_rad_s =
         record.bandwidth * 6.283185307f;
     return 0;
+}
+
+int app_current_identify_clear(void) {
+    if (app_foc_get_state() != APP_FOC_STATE_OFF || s_current_identify_result.active) {
+        return -1;
+    }
+    return app_param_erase(APP_PARAM_KEY_FOC_CURRENT);
 }

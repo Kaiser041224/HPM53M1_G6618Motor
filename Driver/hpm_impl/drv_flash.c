@@ -6,7 +6,8 @@
  * 实现策略：
  *   - 使用 boot ROM 的 XPI NOR API（rom_xpi_nor_*），与 SDK flashstress 样例一致
  *   - auto_config 依据板级 option（board.h）探测并配置 flash；容量/扇区大小运行时查询
- *   - 擦/写前关闭全局中断（mstatus.MIE 保存/恢复）：flash 读窗口在操作期间不可用
+ *   - 擦/写/ROM 读期间关闭全局中断（mstatus.MIE 保存/恢复）：
+ *     XPI 操作期间 flash 取指窗口不可用，必须阻止 ISR 从 flash 取指。
  *
  * 注意：
  *   - 本驱动会重新配置 XPI 控制器（auto_config），应在系统初始化阶段调用一次
@@ -135,17 +136,25 @@ static uint32_t flash_get_sector_size_impl(void)
  * @param buf 目的缓冲
  * @param len 长度 [byte]
  * @return 0 = 成功；-1 = 参数非法或 ROM 读失败
+ * @note ROM XPI read 期间必须关中断；否则 25kHz ADC/USB ISR 可能从
+ *       flash 取指，遇到 XPI 读窗口会取到全 1 指令并触发 illegal instruction。
  */
+ATTR_RAMFUNC
 static int flash_read_impl(uint32_t addr, void *buf, size_t len)
 {
+    uint32_t irq_state;
+    hpm_stat_t status;
+
     if (!s_initialized || (buf == NULL) || !flash_addr_in_range(addr, (uint32_t) len)) {
         return -1;
     }
 
-    return (rom_xpi_nor_read(BOARD_APP_XPI_NOR_XPI_BASE, xpi_xfer_channel_auto, &s_nor_config,
-                             (uint32_t *) buf, addr - s_base, (uint32_t) len) == status_success)
-               ? 0
-               : -1;
+    irq_state = flash_enter_critical();
+    status = rom_xpi_nor_read(BOARD_APP_XPI_NOR_XPI_BASE, xpi_xfer_channel_auto, &s_nor_config,
+                              (uint32_t *) buf, addr - s_base, (uint32_t) len);
+    flash_exit_critical(irq_state);
+
+    return (status == status_success) ? 0 : -1;
 }
 
 /**
@@ -155,6 +164,7 @@ static int flash_read_impl(uint32_t addr, void *buf, size_t len)
  * @param len 长度 [byte]
  * @return 0 = 成功；-1 = 参数非法或 ROM 编程失败
  */
+ATTR_RAMFUNC
 static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
 {
     uint32_t irq_state;
@@ -187,6 +197,7 @@ static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
  * @param addr 扇区地址（须扇区对齐）
  * @return 0 = 成功；-1 = 参数非法或 ROM 擦除失败
  */
+ATTR_RAMFUNC
 static int flash_erase_sector_impl(uint32_t addr)
 {
     uint32_t irq_state;

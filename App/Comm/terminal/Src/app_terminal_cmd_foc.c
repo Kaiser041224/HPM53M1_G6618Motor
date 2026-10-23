@@ -14,6 +14,7 @@
 #include "app_terminal.h"
 #include "app_terminal_job.h"
 
+#include "app_3phase_inverter.h"
 #include "app_foc.h"
 #include "app_friction_identify.h"
 #include "app_motion.h"
@@ -33,6 +34,8 @@ static const char k_motion_usage[] =
     "gains kp ki [coulomb] [viscous] (idle)|friction show|cal|apply|save|"
     "torque Nm|speed rpm|pos deg[0~360] [vel_ff] [torque_ff]|"
     "pos_gains p [bw] (idle)|off|direct (OFF)";
+
+static int foc_complete_off(chry_shell_t* csh, const char* who);
 
 const char* app_terminal_cmd_foc_state_name(app_foc_state_t state) {
     switch (state) {
@@ -210,8 +213,9 @@ static int cmd_foc(int argc, char** argv) {
             csh_printf(csh, "ERR: calibration/vtest owns output; cancel it before normal stop\r\n");
             return -1;
         }
-        if (app_foc_stop_pending())
-            csh_printf(csh, "foc: stopping asynchronously (~120ms); wait for state=OFF\r\n");
+        if (foc_complete_off(csh, "foc") != 0) {
+            return -1;
+        }
         app_terminal_cmd_foc_status(csh);
         return 0;
     }
@@ -346,8 +350,26 @@ static int motion_usage(chry_shell_t* csh) {
     csh_printf(
         csh,
         "  zero: RAM only | zero save: RAM+flash | apply: phase RAM (zero invalidated) | "
-        "save: phase+zero flash\r\n");
+        "save: phase+zero flash\r\n"
+        "  user direction: software.motion.output_direction = +1/-1 (reboot required)\r\n");
     return rc;
+}
+
+/**
+ * @brief 阻塞等待 FOC 完整 OFF，然后全关栅极供电并打印完成提示
+ * @return 0 = OFF + gate off；-1 = 超时/已强制关闭
+ * @note 仅由 Terminal 命令上下文调用；等待期间命令层不再接受下一条指令。
+ */
+static int foc_complete_off(chry_shell_t* csh, const char* who) {
+    bool ok = app_foc_wait_off(3000U);
+
+    app_3phase_inverter_disable(); /* 完整 OFF 后才关 +12V */
+    if (!ok) {
+        csh_printf(csh, "ERR: %s stop timeout; outputs forced OFF, gate power OFF\r\n", who);
+        return -1;
+    }
+    csh_printf(csh, "%s: state=OFF, gate power OFF\r\n", who);
+    return 0;
 }
 
 /* ============================================================================
@@ -508,13 +530,26 @@ static int cmd_motion(int argc, char** argv) {
     } else if (strcmp(sub, "show") == 0) {
         app_motion_snapshot_t state;
         app_motion_get_snapshot(&state);
+        /* 内部为物理坐标；终端显示统一按 software.motion.output_direction 转成用户坐标。
+         * iq/iq_acc 仍为 FOC 物理电流符号，便于与 foc status 对照。 */
+        float out_dir = (state.output_direction < 0.0f) ? -1.0f : 1.0f;
+        float shaft_user = state.shaft_rad * out_dir;
+        float pos_sp_user = state.pos_setpoint_rad * out_dir;
+        float speed_user = state.speed_rad_s * out_dir;
+        float vel_cmd_user = state.vel_cmd_rad_s * out_dir;
+        float torque_user = state.torque_nm * out_dir;
+        if (shaft_user < 0.0f)
+            shaft_user += 6.2831853f;
+        if (pos_sp_user < 0.0f)
+            pos_sp_user += 6.2831853f;
         /* 位置误差显示取模±π（跨零点不显示±2π假误差） */
-        float position_error = state.pos_setpoint_rad - state.shaft_rad;
+        float position_error = pos_sp_user - shaft_user;
         if (position_error > 3.14159265f)
             position_error -= 6.2831853f;
         else if (position_error < -3.14159265f)
             position_error += 6.2831853f;
-        csh_printf(csh, "phase trial done=%u (apply required)\r\n", state.calibration_done);
+        csh_printf(csh, "phase trial done=%u (apply required) out_dir=%+.0f\r\n",
+                   state.calibration_done, (double)out_dir);
         csh_printf(
             csh, "reject: sample=%lu duplicate=%lu vernier=%lu timing=%lu\r\n",
             (unsigned long)state.sample_failure_count, (unsigned long)state.duplicate_count,
@@ -529,13 +564,13 @@ static int cmd_motion(int argc, char** argv) {
             "position: sp=%.6frad vel_cmd=%.6frad/s err=%.6frad\r\n",
             (unsigned)state.mode, state.calibrated, state.zero_valid, state.feedback_valid,
             state.active, state.calibrating, (unsigned long)state.calibration_samples,
-            (unsigned)state.reason, (double)state.shaft_rad, (double)state.speed_rad_s,
-            (double)(state.speed_rad_s * 60.0f / 6.28318530718f), (double)state.phase_turns,
-            (double)state.torque_nm, (double)state.iq_a,
+            (unsigned)state.reason, (double)shaft_user, (double)speed_user,
+            (double)(speed_user * 60.0f / 6.28318530718f), (double)state.phase_turns,
+            (double)torque_user, (double)state.iq_a,
             (unsigned long)state.good_count, (unsigned long)state.bad_count,
             (double)state.iq_accepted_a, (unsigned long)state.hold_count,
             (unsigned)state.current_limited, (unsigned)state.voltage_saturated,
-            (double)state.pos_setpoint_rad, (double)state.vel_cmd_rad_s, (double)position_error);
+            (double)pos_sp_user, (double)vel_cmd_user, (double)position_error);
         return 0;
     }
     if (strcmp(sub, "help") == 0) {
@@ -611,6 +646,9 @@ static int cmd_motion(int argc, char** argv) {
     }
     if (strcmp(sub, "off") == 0) {
         rc = app_motion_stop();
+        if (rc == 0) {
+            return (foc_complete_off(csh, "motion") == 0) ? 0 : -1;
+        }
     } else if (strcmp(sub, "direct") == 0)
         rc = app_foc_set_current_source(APP_FOC_CURRENT_SOURCE_DIRECT);
     else if (argc >= 3 && app_terminal_cmd_parse_float(argv[2], &value) == 0) {

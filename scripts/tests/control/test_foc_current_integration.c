@@ -12,6 +12,7 @@
 #include "app_foc.h"
 #include "app_foc_current.h"
 #include "app_motor_params.h"
+#include "app_software_params.h"
 #include "foc_math.h"
 
 #include <math.h>
@@ -63,6 +64,54 @@ void test_foc_current_integration(void) {
     CHECK(snap.valid == true);
     CHECK_NEAR(snap.v_bus_v, 24.0f, 1e-3f);
 
+    /* 2b) R·I 前馈：默认关闭；打开后 vq 增加 R×iq_ref */
+    mock_set_current_gains(1.0f, 0.0f);
+    app_motor_params_mutable()->rs_ohm = 0.25f;
+    app_software_params_mutable()->current_ff.r_en = 0U;
+    app_foc_current_init();
+    app_foc_current_reset();
+    rc = app_foc_current_run_fresh(0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f, 24.0f, duty, &sat);
+    CHECK(rc == 0);
+    app_foc_current_get_snapshot(&snap);
+    CHECK_NEAR(snap.v_q_v, 2.0f, 1e-5f);
+    app_software_params_mutable()->current_ff.r_en = 1U;
+    app_foc_current_reset();
+    rc = app_foc_current_run_fresh(0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f, 24.0f, duty, &sat);
+    CHECK(rc == 0);
+    app_foc_current_get_snapshot(&snap);
+    CHECK_NEAR(snap.v_q_v, 2.5f, 1e-5f);
+    app_software_params_mutable()->current_ff.r_en = 0U;
+
+    /* 2c) ωL / bEMF 独立开关：只开 ωL 不叠加 bEMF；只开 bEMF 不叠加 ωL */
+    mock_set_current_gains(0.0f, 0.0f);
+    app_motor_params_mutable()->rs_ohm = 0.25f;
+    app_motor_params_mutable()->ls_h = 1.0e-4f;
+    app_motor_params_mutable()->flux_linkage_wb = 0.1f;
+    app_software_params_mutable()->control.current_loop.decoupling_en = 0U;
+    app_software_params_mutable()->current_ff.r_en = 0U;
+    app_software_params_mutable()->current_ff.wl_en = 1U;
+    app_software_params_mutable()->current_ff.bemf_en = 0U;
+    app_foc_current_init();
+    app_foc_current_reset();
+    rc = app_foc_current_run_fresh(0.0f, 100.0f, 0.0f, 0.0f, 2.0f, 1.5980762f, -3.5980762f,
+                                  24.0f, duty, &sat);
+    CHECK(rc == 0);
+    app_foc_current_get_snapshot(&snap);
+    CHECK_NEAR(snap.v_d_v, -0.03f, 1e-5f);
+    CHECK_NEAR(snap.v_q_v, 0.02f, 1e-5f);
+
+    app_foc_current_reset();
+    app_software_params_mutable()->current_ff.wl_en = 0U;
+    app_software_params_mutable()->current_ff.bemf_en = 1U;
+    rc = app_foc_current_run_fresh(0.0f, 100.0f, 0.0f, 0.0f, 2.0f, 1.5980762f, -3.5980762f,
+                                  24.0f, duty, &sat);
+    CHECK(rc == 0);
+    app_foc_current_get_snapshot(&snap);
+    CHECK_NEAR(snap.v_d_v, 0.0f, 1e-5f);
+    CHECK_NEAR(snap.v_q_v, 10.0f, 1e-5f);
+    app_software_params_mutable()->current_ff.wl_en = 0U;
+    app_software_params_mutable()->current_ff.bemf_en = 0U;
+
     /* 3) 母线过低：保护路径返回 -1，快照不可信 */
     app_foc_current_reset();
     rc = app_foc_current_run_fresh(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 5.0f, duty, &sat);
@@ -84,9 +133,9 @@ void test_foc_current_integration(void) {
     {
         float duty0[3], duty833[3];
         const app_motor_params_t* motor_params = app_motor_params_current();
-        float expected_speed = 5236.0f / ((float)motor_params->pole_pairs
-                                          * motor_params->encoder.direction
-                                          * motor_params->reducer_ratio);
+        /* ωe 已含 encoder.direction；轴端速度 = ωe/(pp×reducer) */
+        float expected_speed =
+            5236.0f / ((float)motor_params->pole_pairs * motor_params->reducer_ratio);
 
         mock_set_current_gains(0.3f, 0.0f);
         app_foc_current_set_output_delay(1.0f / 30000.0f);
@@ -104,6 +153,17 @@ void test_foc_current_integration(void) {
               > 1e-4f);
         app_foc_current_get_snapshot(&snap);
         CHECK_NEAR(snap.speed_out_rad_s, expected_speed, 1e-2f);
+
+        /* direction=-1：正向电角速度仍应发布正向轴端速度。
+         * 旧实现再除一次 dir，会给出相反符号，速度环形成正反馈。 */
+        app_motor_params_mutable()->encoder.direction = -1.0f;
+        app_foc_current_reset();
+        rc = app_foc_current_run_fresh(0.0f, 5236.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 24.0f,
+                                       duty833, &sat);
+        CHECK(rc == 0);
+        app_foc_current_get_snapshot(&snap);
+        CHECK_NEAR(snap.speed_out_rad_s, expected_speed, 1e-2f);
+        app_motor_params_mutable()->encoder.direction = 1.0f;
     }
 
     /* 5) vtest 过流判断：M1 保护动作全关（app_protect_policy.h APP_PROTECT_ACTION_EN=0）

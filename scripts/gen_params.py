@@ -122,8 +122,28 @@ SCHEMA = {
         ("control.limits.motion_iq_max_a", "control.limits.motion_iq_max_a", "f32", 0.0, None),
         ("control.limits.motion_speed_limit_rad_s",
          "control.limits.motion_speed_limit_rad_s", "f32", 0.0, None),
-        ("params_generation", "params_generation", "u32", 0, None),
+        ("motion.output_direction", "motion.output_direction", "f32", -1.0, 1.0),
+        ("current_ff.r_en", "current_ff.r_en", "u8", 0, 1),
+        ("current_ff.wl_en", "current_ff.wl_en", "u8", 0, 1),
+        ("current_ff.bemf_en", "current_ff.bemf_en", "u8", 0, 1),
+        ("storage", "storage", "u32", 0, 2),
     ],
+}
+
+# 字符串枚举字段：YAML 使用可读单词，生成 C 时转为数值
+ENUM_FIELDS = {
+    ("software", "storage"): {"keep": 0, "reset": 1, "override": 2},
+}
+
+# 布尔字段：YAML 接受 true/false、on/off、yes/no、1/0；生成 C 时写 u8 0/1
+BOOL_FIELDS = {
+    ("hardware", "current_sense.invert"),
+    ("software", "fault.shutdown_en"),
+    ("software", "control.current_loop.decoupling_en"),
+    ("software", "control.speed_observer.enable"),
+    ("software", "current_ff.r_en"),
+    ("software", "current_ff.wl_en"),
+    ("software", "current_ff.bemf_en"),
 }
 
 # 仅文档字段：(yaml 路径, 允许值集合或 None)；只校验，不生成 C 字段
@@ -191,8 +211,10 @@ APPLY_REBOOT = {
     "software.control.position_loop.input_filter_bandwidth",
     "software.control.limits.motion_iq_max_a",
     "software.control.limits.motion_speed_limit_rad_s",
+    # 软件：motion 用户坐标方向（app_motion init 期缓存；改向需重启）
+    "software.motion.output_direction",
     # 持久化代次（boot 期比对；不属运行参数）
-    "software.params_generation",
+    "software.storage",
 }
 
 META_DOMAIN_ENUMS = {
@@ -333,6 +355,21 @@ def check_literal(where: str, val, ctype: str, lo, hi) -> None:
         raise err(where, f"越界：{val}（允许 {lo2}..{hi2}）")
 
 
+def parse_bool(where: str, val):
+    """把 YAML 布尔写法归一化为 1/0；保留旧 0/1 兼容。"""
+    if isinstance(val, bool):
+        return 1 if val else 0
+    if isinstance(val, str):
+        text = val.strip().lower()
+        if text in ("true", "on", "yes", "1"):
+            return 1
+        if text in ("false", "off", "no", "0"):
+            return 0
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and val in (0, 1):
+        return int(val)
+    raise err(where, f"布尔字段必须是 true/false/on/off（或 0/1；实际 {val!r}）")
+
+
 def validate_domain(domain: str, flat: dict, marks) -> None:
     spec = {path: (ctype, lo, hi) for (path, _cfield, ctype, lo, hi) in SCHEMA[domain]}
     docs = dict(DOC_ONLY[domain])
@@ -351,6 +388,15 @@ def validate_domain(domain: str, flat: dict, marks) -> None:
                     raise err(where, f"取值必须是 {sorted(allowed)} 之一（实际 {val!r}）")
             elif not isinstance(val, str):
                 raise err(where, f"必须是字符串（实际 {type(val).__name__}）")
+            continue
+        if (domain, path) in BOOL_FIELDS:
+            flat[path] = parse_bool(where, val)
+            continue
+        enum = ENUM_FIELDS.get((domain, path))
+        if enum is not None:
+            if not isinstance(val, str) or val not in enum:
+                raise err(where, f"取值必须是 {sorted(enum)} 之一（实际 {val!r}）")
+            flat[path] = enum[val]
             continue
         ctype, lo, hi = spec[path]
         if isinstance(val, str):

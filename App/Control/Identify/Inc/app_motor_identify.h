@@ -66,6 +66,7 @@ typedef struct {
     float progress;           /**< 进度 0~1 */
     float offset_fwd_rad;     /**< 正向扫描零点 [rad]（诊断） */
     float offset_rev_rad;     /**< 反向扫描零点 [rad]（诊断；与正向之差 = 回差/打滑） */
+    float offset_end_rad;     /**< 反向扫描终点零点 [rad]（静止保持点；trial 候选） */
     float i_peak_a;           /**< 流程中实测 |i_dq| 峰值 [A] */
     uint32_t elapsed_ms;      /**< 流程已用时 [ms] */
     app_identify_fail_t fail_reason; /**< 失败原因 */

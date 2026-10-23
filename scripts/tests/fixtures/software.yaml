@@ -7,7 +7,15 @@
 # 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
 # ============================================================================
 
-params_generation: 7         # 测试夹具值
+storage: keep         # 测试夹具值：keep/reset/override
+
+motion:
+  output_direction: 1.0      # 测试夹具值：出轴用户方向
+
+current_ff:
+  r_en: false                # 测试夹具值：R·I 前馈默认关闭
+  wl_en: false               # 测试夹具值：ωL 前馈默认关闭
+  bemf_en: false             # 测试夹具值：bEMF 前馈默认关闭
 
 can:
   baudrate: 1000000          # CAN 波特率 [bps]
@@ -16,7 +24,7 @@ can:
   tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
 
 fault:
-  shutdown_en: 1
+  shutdown_en: true
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）
@@ -33,12 +41,12 @@ control:
     kp: 0.372                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×1kHz）
     ki: 496.4                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
     bandwidth_rad_s: 3141.6  # 目标带宽 [rad/s]（自整定用）
-    decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
-    output_delay_s: 2.0e-5   # 反 Park 输出延迟补偿 [s]（测试夹具值）
+    decoupling_en: false     # 解耦前馈（旧组合开关；V1 关闭）
+    output_delay_s: 3.3333333e-5 # 反 Park 输出延迟补偿 [s]（测试夹具值：一拍 30kHz）
   speed_observer:            # P0-B observer（测试夹具值）
-    enable: 1
-    bandwidth_rad_s: 400.0
-    max_speed_rad_s: 600.0
+    enable: true
+    bandwidth_rad_s: 500.0
+    max_speed_rad_s: 700.0
   speed_loop:
     kp: 1.5                  # [Nm/(rad/s)]（测试夹具值）
     ki: 20.0                 # [Nm/rad]（测试夹具值）
@@ -54,5 +62,5 @@ control:
     i_trip_a: 10.0                     # 快速过流跳闸 [A]（0 = 关闭）
     speed_max_rad_s: 2500.0            # 转矩模式限速 [rad/s 电角]（0 = 关闭）
     duty_max: 0.885                    # 调制上限（有效域 (0.5, 1.0]；0.885 = 三电阻采样窗口约束，ADC spec §4）
-    motion_iq_max_a: 2.0               # [A]（测试夹具值）
+    motion_iq_max_a: "motor.i_peak_10s_a" # [A]（与 i_q_max_a 对齐，测试夹具值）
     motion_speed_limit_rad_s: 10.0     # [rad/s]（测试夹具值）

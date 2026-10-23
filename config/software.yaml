@@ -6,7 +6,15 @@
 # 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
 # ============================================================================
 
-params_generation: 1         # flash记忆清除控制：bump本值→本次烧录忽略flash记忆值并用出厂值替换
+storage: reset               # flash 参数策略：keep=使用flash保存值；reset=SPRM/MPRM回YAML并清除FCUR；override=本次启动用YAML但不写flash；编译期值，改后需重新烧录
+
+motion:
+  output_direction: 1.0      # 出轴正方向：+1/-1；仅翻转 motion 用户坐标（位置/速度/转矩），不改 FOC/编码器方向；重启生效
+
+current_ff:
+  r_en: true                # R·I 前馈；默认关闭，cal rl step 通过并验证后再开
+  wl_en: true               # ωL 交叉耦合前馈；默认关闭
+  bemf_en: true            # bEMF（ωλ）前馈；默认关闭
 
 can:
   baudrate: 1000000          # CAN 波特率 [bps]
@@ -15,7 +23,7 @@ can:
   tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
 
 fault:
-  shutdown_en: 1                          # 1=故障触发停机（FAULT 锁存）；0=台架模式：过流/健康类仅告警不停机（母线过压/欠压仍停机，硬件风险）
+  shutdown_en: false                       # true=故障触发停机（FAULT 锁存）；false=台架模式：过流/健康类仅告警不停机（母线过压/欠压仍停机，硬件风险）
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）
@@ -36,10 +44,10 @@ control:
     kp: 1.489114918         # [V/A] = Ls × (2π×2000Hz)
     ki: 1985.486557         # [V/(A·s)] = Rs × (2π×2000Hz)
     bandwidth_rad_s: 12566.370614    # 目标带宽 [rad/s]（自整定用）
-    decoupling_en: 0         # 解耦前馈（0/1；V1 关闭）
+    decoupling_en: false     # 解耦前馈（旧组合开关：同时打开 ωL + bEMF；V1 关闭）
     output_delay_s: 3.3333333e-5 # 反 Park 输出延迟补偿 [s]（一拍 30kHz；0=关闭；init 期消费）
   speed_observer:            # P0-B：30kHz 转子速度/ωe observer（FOC 与速度环共用）
-    enable: 1                # 1=启用；0=退回 foc_angle/差分测速（init 期消费）
+    enable: true             # true=启用；false=退回 foc_angle/差分测速（init 期消费）
     bandwidth_rad_s: 500.0   # PLL 带宽 [rad/s]
     max_speed_rad_s: 700.0   # 机械转速限幅 [rad/s]
   speed_loop:

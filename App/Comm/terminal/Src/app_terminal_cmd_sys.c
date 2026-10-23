@@ -15,10 +15,12 @@
 
 #include "app_terminal_cmd.h"
 
+#include "app_3phase_inverter.h"
 #include "app_analog_signal.h"
 #include "app_debug_encoder.h"
 #include "app_encoder.h"
 #include "app_fault.h"
+#include "app_foc.h"
 #include "app_terminal.h"
 #include "app_usb.h"
 #include "intf_sys.h"
@@ -145,7 +147,53 @@ static int cmd_reboot(int argc, char** argv) {
     return 0;
 }
 
+/**
+ * @brief 命令 driver power：FOC OFF 下手动开关 +12V 栅极供电
+ */
+static int cmd_driver(int argc, char** argv) {
+    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    const char* what = (argc >= 2) ? argv[1] : NULL;
+
+    if ((what == NULL) || (strcmp(what, "power") != 0)) {
+        return app_terminal_cmd_usage(csh, "driver power [on|off]");
+    }
+    if ((argc < 3) || (strcmp(argv[2], "on") == 0) || (strcmp(argv[2], "off") == 0)) {
+        if (argc < 3) {
+            csh_printf(csh, "driver gate power: %s\r\n",
+                       app_3phase_inverter_gate_power_is_on() ? "ON" : "OFF");
+            return 0;
+        }
+    } else {
+        return app_terminal_cmd_usage(csh, "driver power [on|off]");
+    }
+
+    if (app_foc_stop_pending()) {
+        csh_printf(csh, "ERR: FOC stop pending; wait for state=OFF\r\n");
+        return -1;
+    }
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        csh_printf(csh, "ERR: driver power requires FOC OFF (use 'foc off' first)\r\n");
+        return -1;
+    }
+
+    if (strcmp(argv[2], "on") == 0) {
+        if (app_3phase_inverter_gate_power_on() != 0) {
+            csh_printf(csh, "ERR: gate power on rejected\r\n");
+            return -1;
+        }
+        csh_printf(csh, "driver gate power: ON (PWM still disabled)\r\n");
+    } else {
+        if (app_3phase_inverter_gate_power_off() != 0) {
+            csh_printf(csh, "ERR: gate power off rejected\r\n");
+            return -1;
+        }
+        csh_printf(csh, "driver gate power: OFF\r\n");
+    }
+    return 0;
+}
+
 CSH_CMD_EXPORT_ALIAS(cmd_ver, ver, );
 CSH_CMD_EXPORT_ALIAS(cmd_status, status, );
 CSH_CMD_EXPORT_ALIAS(cmd_usb, usb, );
 CSH_CMD_EXPORT_ALIAS(cmd_reboot, reboot, );
+CSH_CMD_EXPORT_ALIAS(cmd_driver, driver, );

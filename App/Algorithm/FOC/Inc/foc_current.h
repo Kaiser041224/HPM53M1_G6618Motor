@@ -4,8 +4,8 @@
  * @author  Kaiser
  *
  * 设计（spec §3.4）：
- *   1) 给定圆形限幅（保角）→ 2) PI → 3) 前馈（可选）→ 4) 圆形电压限幅（保角）
- *   → 5) 抗饱和（未饱和累加 / 饱和衰减 + 积分单独限幅）
+ *   1) 给定圆形限幅（保角）→ 2) PI → 3) 前馈（R·I / 解耦可选）
+ *   → 4) 圆形电压限幅（保角）→ 5) 抗饱和（未饱和累加 / 饱和衰减 + 积分单独限幅）
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -32,6 +32,10 @@ typedef struct {
     float l_q;             /**< q 轴电感 [H]（前馈模型） */
     float lambda;          /**< 永磁磁链 [Wb]（前馈模型） */
     float aw_decay;        /**< 饱和时积分衰减系数（0,1]；1.0 = 冻结 */
+    float r_ohm;           /**< 相电阻 [Ω]（R·I 前馈模型） */
+    uint8_t r_ff_en;       /**< R·I 前馈开关（0/1） */
+    uint8_t wl_ff_en;      /**< ωL 交叉耦合前馈开关（0/1） */
+    uint8_t bemf_ff_en;    /**< ωλ bEMF 前馈开关（0/1） */
 } foc_current_cfg_t;
 
 /**
@@ -78,10 +82,26 @@ typedef void (*foc_current_reset_fn)(foc_current_t* self);
  */
 typedef void (*foc_current_set_gains_fn)(foc_current_t* self, float kp, float ki);
 /**
- * @brief 运行中开关解耦前馈
+ * @brief 运行中开关解耦前馈（兼容旧接口：同时开关 ωL + bEMF）
  * @param enable 0 = 关闭；非 0 = 开启
  */
 typedef void (*foc_current_set_decoupling_fn)(foc_current_t* self, uint8_t enable);
+/**
+ * @brief 运行中开关 R·I 前馈
+ * @param enable 0 = 关闭；非 0 = 开启
+ * @note 电阻在 init 期固定；修改 motor.rs_ohm 后需重新初始化
+ */
+typedef void (*foc_current_set_r_ff_fn)(foc_current_t* self, uint8_t enable);
+/**
+ * @brief 运行中开关 ωL 交叉耦合前馈
+ * @param enable 0 = 关闭；非 0 = 开启
+ */
+typedef void (*foc_current_set_wl_ff_fn)(foc_current_t* self, uint8_t enable);
+/**
+ * @brief 运行中开关 bEMF（ωλ）前馈
+ * @param enable 0 = 关闭；非 0 = 开启
+ */
+typedef void (*foc_current_set_bemf_ff_fn)(foc_current_t* self, uint8_t enable);
 
 /**
  * @brief 电流调节器对象
@@ -92,15 +112,22 @@ struct foc_current {
         foc_current_step_fn step;           /**< 单步 */
         foc_current_reset_fn reset;         /**< 复位 */
         foc_current_set_gains_fn set_gains;             /**< 更新增益 */
-        foc_current_set_decoupling_fn set_decoupling;   /**< 开关解耦前馈 */
+        foc_current_set_decoupling_fn set_decoupling;   /**< 兼容旧接口：同时开关 ωL+bEMF */
+        foc_current_set_r_ff_fn set_r_ff;               /**< 开关 R·I 前馈 */
+        foc_current_set_wl_ff_fn set_wl_ff;             /**< 开关 ωL 前馈 */
+        foc_current_set_bemf_ff_fn set_bemf_ff;         /**< 开关 bEMF 前馈 */
     };
 
     float _kp, _ki;    /**< 增益 */
     float _ts;         /**< 采样周期 [s] */
     float _kits;       /**< ki × 采样周期 [V/A]（预计算，热路径） */
-    uint8_t _decouple; /**< 前馈开关 */
+    uint8_t _decouple; /**< 兼容旧解耦开关 */
+    uint8_t _wl_ff;    /**< ωL 前馈开关 */
+    uint8_t _bemf_ff;  /**< bEMF 前馈开关 */
     float _ld, _lq;    /**< 电感 [H] */
     float _lambda;     /**< 磁链 [Wb] */
+    float _r;          /**< 相电阻 [Ω]（R·I 前馈） */
+    uint8_t _r_ff;     /**< R·I 前馈开关 */
     float _aw_decay;   /**< 积分衰减系数 */
     float _integ_d;    /**< d 轴积分项 [V] */
     float _integ_q;    /**< q 轴积分项 [V] */

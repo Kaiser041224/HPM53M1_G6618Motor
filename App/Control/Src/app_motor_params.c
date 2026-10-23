@@ -31,16 +31,18 @@ int app_motor_params_load(app_motor_params_t* out) {
         return -1;
     }
     *out = g_motor_params_factory;
-    return app_param_record_load(
-        APP_PARAM_KEY_MOTOR_PARAMS, out, sizeof(*out), g_software_params_factory.params_generation);
+    return app_param_record_load(APP_PARAM_KEY_MOTOR_PARAMS, out, sizeof(*out), 1U);
 }
 
 int app_motor_params_store(void) {
     /* 经 mutable() 懒初始化：未 init 直接 store 也不落全零记录 */
     const app_motor_params_t* current = app_motor_params_mutable();
-    return app_param_record_store(
-        APP_PARAM_KEY_MOTOR_PARAMS, current, sizeof(*current),
-        g_software_params_factory.params_generation);
+    return app_param_record_store(APP_PARAM_KEY_MOTOR_PARAMS, current, sizeof(*current), 1U);
+}
+
+int app_motor_params_reset(void) {
+    *app_motor_params_mutable() = *app_motor_params_default();
+    return app_motor_params_store();
 }
 
 void app_motor_params_init(void) {

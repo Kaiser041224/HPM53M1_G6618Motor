@@ -33,6 +33,13 @@ typedef enum {
     APP_CURRENT_IDENTIFY_DETAIL_TRACKING,
     APP_CURRENT_IDENTIFY_DETAIL_PORT
 } app_current_identify_detail_t;
+/** @brief flash 中 FCUR 记录的只读快照（终端显示用） */
+typedef struct {
+    bool present; /**< flash 中存在 FCUR 记录 */
+    bool valid;   /**< 记录与当前 PWM 频率/极对数匹配且参数合法 */
+    float rs_ohm, ld_h, kp, ki, bandwidth_hz;
+} app_current_identify_saved_t;
+
 /** @brief 结果及诊断快照 */
 typedef struct {
     bool active, done, failed;                  /**< done=模型整定完成；动态达标另看step.passed */
@@ -41,6 +48,10 @@ typedef struct {
     float rs_residual_v, ld_residual_a, ld_repeat_error;
     float current_ref_a, progress;
     id_rl_step_result_t step;
+    id_rl_step_result_t r_ff_step_off; /**< 同一 d 轴阶跃，R*I 关闭 */
+    id_rl_step_result_t r_ff_step_on;  /**< 同一 d 轴阶跃，R*I 开启 */
+    bool r_ff_tested;                  /**< 已完成 R*I off/on A/B */
+    bool r_ff_recommended;             /**< R*I 开启未导致指标劣化 */
     uint32_t elapsed_ms;
     int reason;                                 /**< 0成功，1取消，2状态/数据，3拟合，4验收 */
     app_current_identify_state_t failure_stage; /**< 退出前阶段 */
@@ -52,6 +63,7 @@ typedef struct {
     float capture_q_mean_a;                        /**< 长窗口q轴均值，区别于瞬时峰值 */
     float trial_bandwidth_hz, trial_kp, trial_ki;  /**< 最后尝试参数，不代表通过 */
     id_rl_step_result_t trial_step;                /**< 最后尝试指标，与已通过step分离 */
+    uint8_t bandwidth_retries;                     /**< 因 step 未通过而自动降带宽的次数 */
     float ld_half4_h, ld_half8_h;                  /**< 两种交替脉冲半周期的独立结果 */
     int ld_fit_status; /**< 0成功，-1输入，-2窗口不足，-3激励不足，-4残差 */
     float ld_rejected_h, ld_rejected_residual_a; /**< 不可应用的失败诊断 */
@@ -72,10 +84,15 @@ void app_current_identify_run_once(void);
 bool app_current_identify_is_active(void);
 /** @brief 任务上下文读取结果 */
 void app_current_identify_get_result(app_current_identify_result_t* out);
-/** @brief OFF时应用最近结果；0成功，-1非OFF，-2无结果，-3活动，-4硬件参数变更 */
+/** @brief OFF时应用最近结果；0成功，-1非OFF，-2无结果，-3活动，-4硬件参数变更，
+ *         -5动态step未通过（拒绝应用） */
 int app_current_identify_apply(void);
 /** @brief OFF时保存已应用结果 */
 int app_current_identify_save(void);
+/** @brief 读取 flash FCUR 记录供显示，不修改运行参数；0有记录、1无记录、-1不可读 */
+int app_current_identify_get_saved(app_current_identify_saved_t* out);
 /** @brief init前恢复匹配PWM频率/极对数的记录；0恢复、1无记录、-1不匹配 */
 int app_current_identify_restore(void);
+/** @brief OFF时清除 flash FCUR 记录；0成功（含本无记录），-1非OFF/活动/不可写 */
+int app_current_identify_clear(void);
 #endif

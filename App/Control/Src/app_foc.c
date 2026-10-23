@@ -110,6 +110,11 @@ static volatile uint32_t* s_estop_request;
 /** ISR 单拍预算 [µs]（ISR 周期 33.3µs；连续超限才停用快路径并安全关桥） */
 #define APP_FOC_ISR_BUDGET_US (25U) /* < 30kHz 周期 33.3µs；超限连续 32 拍才判失控 */
 
+/* 正常停机：电流归零后等待轴端速度降到该阈值再关断。
+ * 高速直接关 PWM/栅极会在 USB/地线上产生瞬态；先让转子 coast 降速。 */
+#define APP_FOC_STOP_SPEED_LOW_RAD_S (0.5f)
+#define APP_FOC_STOP_SPEED_WAIT_TICKS (2000U)
+
 /* Ozone 观测：ISR 超预算次数 */
 volatile uint32_t g_foc_isr_overruns __attribute__((section(".noncacheable.bss")));
 
@@ -650,24 +655,52 @@ isr_exit:
     }
 }
 
+/**
+ * @brief 推进正常停机状态机（1ms 拍；可由后台任务或阻塞等待函数调用）
+ */
+static void app_foc_stop_step(void) {
+    float scale;
+    bool current_low;
+    bool speed_low;
+    uint32_t st;
+
+    if (s_state != APP_FOC_STATE_READY && s_state != APP_FOC_STATE_RUN) {
+        s_stop_pending = false;
+        return;
+    }
+
+    s_stop_ticks++;
+    scale = s_stop_ticks < 100 ? 1.0f - (float)s_stop_ticks / 100.0f : 0.0f;
+    st = intf_sys_irq_save();
+    s_i_d_ref = s_stop_initial_id * scale;
+    s_i_q_ref_cmd = s_stop_initial_iq * scale;
+    s_i_q_ref = s_i_q_ref_cmd;
+    intf_sys_irq_restore(st);
+
+    /* 先等电流真正降到零附近，再 coast 关桥；避免带着剩余电流硬切。
+     * 高速时再等轴端速度降到低速：直接关 PWM/栅极会在 USB/地线上产生瞬态。
+     * 电流未降下来的异常路径仍在 220ms 强制关闭。 */
+    current_low = (fabsf(g_foc_current_snapshot.i_d_a) < 0.5f)
+               && (fabsf(g_foc_current_snapshot.i_q_a) < 0.5f);
+    speed_low = (!g_foc_current_snapshot.speed_out_valid)
+              || (fabsf(g_foc_current_snapshot.speed_out_rad_s) <= APP_FOC_STOP_SPEED_LOW_RAD_S);
+    if (s_stop_ticks >= 120U) {
+        if (current_low
+            && (speed_low || (s_stop_ticks >= APP_FOC_STOP_SPEED_WAIT_TICKS))) {
+            app_foc_disable();
+        } else if (!current_low && (s_stop_ticks >= 220U)) {
+            app_foc_disable();
+        }
+    }
+}
+
 void app_foc_run_once(void) {
     uint32_t t0 = intf_clock_get_cycle();
 
     s_dt_s = app_foc_measure_dt();
     g_foc_loop_dt_us = (uint32_t)(s_dt_s * 1000000.0f);
     if (s_stop_pending) {
-        if (s_state != APP_FOC_STATE_READY && s_state != APP_FOC_STATE_RUN) {
-            s_stop_pending = false;
-        } else if (++s_stop_ticks >= 120) {
-            app_foc_disable();
-        } else {
-            float scale = s_stop_ticks < 100 ? 1.0f - (float)s_stop_ticks / 100.0f : 0;
-            uint32_t st = intf_sys_irq_save();
-            s_i_d_ref = s_stop_initial_id * scale;
-            s_i_q_ref_cmd = s_stop_initial_iq * scale;
-            s_i_q_ref = s_i_q_ref_cmd;
-            intf_sys_irq_restore(st);
-        }
+        app_foc_stop_step();
     }
     app_foc_run_body();
     g_foc_loop_cycles = intf_clock_get_cycle() - t0;
@@ -728,12 +761,13 @@ int app_foc_enable(void) {
     for (uint8_t i = 0U; i < (uint8_t)APP_3PHASE_COUNT; i++) {
         (void)app_3phase_inverter_release((app_3phase_id_t)i);
     }
+    /* 输出未使能时先把占空比放到零矢量，避免 PWM 启动瞬间沿用旧矢量。 */
+    app_foc_current_zero_vector();
     if (app_3phase_inverter_enable() != 0) {
         return -1;
     }
     /* 10ms 阻塞（栅极供电稳定）已在临界区之外完成；此处仅短临界区原子发布状态 */
     app_foc_current_reset();
-    app_foc_current_zero_vector();
     s_angle.reset(&s_angle);
     if (s_speed_observer_ready) {
         s_speed_observer.reset(&s_speed_observer);
@@ -773,6 +807,7 @@ int app_foc_enable(void) {
 }
 
 void app_foc_disable(void) {
+    bool was_fault = (s_state == APP_FOC_STATE_FAULT);
     s_stop_pending = false;
     uint32_t st;
 
@@ -802,11 +837,16 @@ void app_foc_disable(void) {
     s_angle_src = APP_FOC_ANGLE_ENCODER;
     intf_sys_irq_restore(st);
 
-    /* 2) ISR 已停：安全矢量 + 停桥 + 复位算法（较慢操作放在临界区外）。
-     *    正常关闭用 disable()（不强制低），以兼容后续 V/F 调试；
-     *    故障路径才用 emergency_stop()（强制低）。 */
-    app_foc_current_zero_vector();
-    app_3phase_inverter_disable();
+    /* 2) ISR 已停：正常关闭先撤栅极供电，等驱动无源后再停 PWM，
+     *    避免“栅极驱动仍带电时直接停 PWM”的 USB/地线瞬态。
+     *    故障路径仍由 emergency_stop() 做零矢量 + force_low + 关 +12V；
+     *    若从 FAULT 退出，则执行全关。 */
+    if (was_fault) {
+        app_3phase_inverter_disable();
+    } else {
+        app_3phase_inverter_disable_soft();
+    }
+    app_foc_current_zero_vector(); /* 输出已停：只同步诊断/下次使能占空比 */
     app_foc_current_reset();
     if (s_speed_observer_ready) {
         s_speed_observer.reset(&s_speed_observer);
@@ -939,6 +979,37 @@ int app_foc_request_stop(void) {
     return 0;
 }
 
+bool app_foc_wait_off(uint32_t timeout_ms) {
+    uint32_t start;
+    uint32_t timeout_cycles;
+    bool timed_out = false;
+
+    if ((s_state == APP_FOC_STATE_OFF) && !s_stop_pending) {
+        return true;
+    }
+    if (!s_stop_pending) {
+        return false;
+    }
+    if (timeout_ms == 0U) {
+        timeout_ms = 1U;
+    }
+    start = intf_clock_get_cycle();
+    timeout_cycles = (intf_clock_get_cpu_freq() / 1000U) * timeout_ms;
+    while (s_stop_pending) {
+        app_foc_stop_step();
+        if (!s_stop_pending) {
+            break;
+        }
+        if ((uint32_t)(intf_clock_get_cycle() - start) >= timeout_cycles) {
+            timed_out = true;
+            app_foc_disable();
+            break;
+        }
+        intf_clock_delay_ms(1U);
+    }
+    return !timed_out && (s_state == APP_FOC_STATE_OFF) && !s_stop_pending;
+}
+
 int app_foc_set_id_ref(float i_d_a) {
     uint32_t st;
 
@@ -1055,6 +1126,13 @@ int app_foc_calib_capture(float voltage, bool voltage_mode) {
 int app_foc_calib_trial_pi(float kp, float ki) {
     uint32_t st = intf_sys_irq_save();
     int rc = s_state == APP_FOC_STATE_CALIB ? app_foc_current_identify_pi(kp, ki) : -1;
+    intf_sys_irq_restore(st);
+    return rc;
+}
+
+int app_foc_calib_trial_r_ff(uint8_t enable) {
+    uint32_t st = intf_sys_irq_save();
+    int rc = s_state == APP_FOC_STATE_CALIB ? app_foc_current_identify_r_ff(enable) : -1;
     intf_sys_irq_restore(st);
     return rc;
 }

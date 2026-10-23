@@ -121,7 +121,7 @@ encoder/control UBSan(float-cast-overflow) 两配置 0 失败；make artifacts �
 - flash 持久化：`app_param_record` 通用带代次记录（头{generation,payload_size}+payload），
   motor/software 两域各一条（MPRM/SPRM）；hardware 域不持久化（板级硬事实，决策）。
   `param save`（FOC OFF 联锁）写 flash；`param set` 改 RAM；`param reset` 回出厂。
-- 烧录清除控制：`software.params_generation`（u32）。记录代次/长度不符 → 整条忽略并
+- 烧录清除控制：`software.storage`（u32）。记录代次/长度不符 → 整条忽略并
   用出厂值替换（功能即"清除"）；bump 该值 = 本次烧录回收出厂；boot 不写 flash。
 - motion init 期消费参数（apply=reboot）；`motion gains` 保留 OFF 联锁在线改并写透
   参数单例（`param get` 可见），持久化走 `param save`。
