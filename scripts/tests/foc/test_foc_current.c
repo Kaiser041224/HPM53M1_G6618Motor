@@ -96,7 +96,7 @@ void test_foc_current(void) {
         CHECK(sqrtf(out.v_d * out.v_d + out.v_q * out.v_q) < 0.1f);
     }
 
-    /* 电流矢量限幅（圆形，保角） */
+    /* 电流矢量限幅：Id 优先（ODrive 语义），Id 吃满后 Iq 归零 */
     {
         foc_current_t c4;
         foc_current_out_t out;
@@ -107,9 +107,17 @@ void test_foc_current(void) {
         foc_current_ctor(&c4);
         CHECK(c4.init(&c4, &cfg) == 0);
         CHECK(c4.step(&c4, &in, &out) == 0);
+        CHECK_NEAR(out.i_d_ref_lim, 10.0f, 1e-5f);
+        CHECK_NEAR(out.i_q_ref_lim, 0.0f, 1e-5f);
+
+        in.i_d_ref = 4.0f;
+        in.i_q_ref = 4.0f;
+        in.i_max = 5.0f;
+        CHECK(c4.step(&c4, &in, &out) == 0);
+        CHECK_NEAR(out.i_d_ref_lim, 4.0f, 1e-5f);
+        CHECK_NEAR(out.i_q_ref_lim, 3.0f, 1e-5f);
         CHECK_NEAR(sqrtf(out.i_d_ref_lim * out.i_d_ref_lim + out.i_q_ref_lim * out.i_q_ref_lim),
-                   10.0f, 1e-4f);
-        CHECK_NEAR(out.i_d_ref_lim / out.i_q_ref_lim, 30.0f / 40.0f, 1e-4f);
+                   5.0f, 1e-4f);
     }
 
     /* 非有限反馈 → 给定归零 + 输出零电压（有限） */
@@ -156,10 +164,11 @@ void test_foc_current(void) {
         foc_current_ctor(&c8);
         CHECK(c8.init(&c8, &c8cfg) == 0);
         CHECK(c8.step(&c8, &in, &out_on) == 0);
-        /* vd = kp·(−2) − 100·1e-4·3 = −1.49 − 0.03 = −1.52
-         * vq = kp·(−3) + 100·(1e-4·2 + 0.1) = −2.235 + 10.02 = 7.785 */
-        CHECK_NEAR(out_on.v_d, -1.52f, 1e-3f);
-        CHECK_NEAR(out_on.v_q, 7.785f, 1e-2f);
+        /* ωL 使用限幅给定：in 的 d/q 给定为 0，反馈 2/3 不得进入交叉耦合项。
+         * vd = kp·(−2) = −1.49
+         * vq = kp·(−3) + bEMF 100·0.1 = −2.235 + 10.0 = 7.765 */
+        CHECK_NEAR(out_on.v_d, -1.49f, 1e-3f);
+        CHECK_NEAR(out_on.v_q, 7.765f, 1e-2f);
 
         c8cfg.decoupling_en = 0U;
         foc_current_ctor(&c8);
@@ -191,7 +200,7 @@ void test_foc_current(void) {
         c13.reset(&c13); /* 隔离积分器，仅比较前馈效果 */
         c13.set_decoupling(&c13, 1U);
         CHECK(c13.step(&c13, &in, &out) == 0);
-        CHECK_NEAR(out.v_q, 7.785f, 1e-2f); /* 前馈开启（与 init 开启等效） */
+        CHECK_NEAR(out.v_q, 7.765f, 1e-2f); /* ωL 给定为 0，仅 bEMF */
         c13.reset(&c13);
         c13.set_decoupling(&c13, 0U);
         CHECK(c13.step(&c13, &in, &out) == 0);
@@ -220,8 +229,8 @@ void test_foc_current(void) {
         foc_current_ctor(&c17);
         CHECK(c17.init(&c17, &c17cfg) == 0);
         CHECK(c17.step(&c17, &in, &out) == 0);
-        CHECK_NEAR(out.v_d, -0.03f, 1e-6f);
-        CHECK_NEAR(out.v_q, 0.02f, 1e-6f);
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f); /* 给定为 0：反馈 2/3 不参与 ωL */
+        CHECK_NEAR(out.v_q, 0.0f, 1e-6f);
 
         c17.reset(&c17);
         c17cfg.wl_ff_en = 0U;
@@ -235,8 +244,8 @@ void test_foc_current(void) {
         c17cfg.wl_ff_en = 1U;
         CHECK(c17.init(&c17, &c17cfg) == 0);
         CHECK(c17.step(&c17, &in, &out) == 0);
-        CHECK_NEAR(out.v_d, -0.03f, 1e-6f);
-        CHECK_NEAR(out.v_q, 10.02f, 1e-6f);
+        CHECK_NEAR(out.v_d, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_q, 10.0f, 1e-6f);
     }
 
     /* 运行中独立开关 ωL / bEMF */
@@ -262,12 +271,37 @@ void test_foc_current(void) {
         CHECK(c18.init(&c18, &c18cfg) == 0);
         c18.set_wl_ff(&c18, 1U);
         CHECK(c18.step(&c18, &in, &out) == 0);
-        CHECK_NEAR(out.v_q, 0.02f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.0f, 1e-6f); /* 给定为 0：ωL 不再使用反馈 */
         c18.set_wl_ff(&c18, 0U);
         c18.set_bemf_ff(&c18, 1U);
         c18.reset(&c18); /* 清掉上一次积分（ki=0 时无影响） */
         CHECK(c18.step(&c18, &in, &out) == 0);
         CHECK_NEAR(out.v_q, 10.0f, 1e-6f);
+    }
+
+    /* ωL 前馈必须使用限幅后的给定，不得使用反馈电流 */
+    {
+        foc_current_t c19;
+        foc_current_cfg_t c19cfg = cfg;
+        foc_current_out_t out;
+        foc_current_in_t in = {
+            .i_d_ref = 2.0f, .i_q_ref = 3.0f,
+            .i_d_a = 20.0f, .i_q_a = 30.0f,
+            .v_bus_v = 24.0f, .v_max = 12.3f, .i_max = 24.3f,
+            .omega_e_rad_s = 100.0f,
+        };
+        c19cfg.kp = 0.0f;
+        c19cfg.ki = 0.0f;
+        c19cfg.decoupling_en = 0U;
+        c19cfg.wl_ff_en = 1U;
+        c19cfg.bemf_ff_en = 0U;
+        c19cfg.l_d = 1.0e-4f;
+        c19cfg.l_q = 1.0e-4f;
+        foc_current_ctor(&c19);
+        CHECK(c19.init(&c19, &c19cfg) == 0);
+        CHECK(c19.step(&c19, &in, &out) == 0);
+        CHECK_NEAR(out.v_d, -0.03f, 1e-6f);
+        CHECK_NEAR(out.v_q, 0.02f, 1e-6f);
     }
 
     /* 前馈开启 + 非有限 ωe → 按 0 处理，输出仍有限 */
@@ -382,10 +416,11 @@ void test_foc_current(void) {
         foc_current_ctor(&c15);
         CHECK(c15.init(&c15, &c15cfg) == 0);
         CHECK(c15.step(&c15, &in, &out) == 0);
-        CHECK_NEAR(out.i_d_ref_lim, 0.6f, 1e-6f);
-        CHECK_NEAR(out.i_q_ref_lim, 0.8f, 1e-6f);
-        CHECK_NEAR(out.v_d, 0.75f, 1e-5f);
-        CHECK_NEAR(out.v_q, 1.0f, 1e-5f);
+        /* Id 优先：i_max=1A 时 Id 吃满，Iq 被压到 0。 */
+        CHECK_NEAR(out.i_d_ref_lim, 1.0f, 1e-6f);
+        CHECK_NEAR(out.i_q_ref_lim, 0.0f, 1e-6f);
+        CHECK_NEAR(out.v_d, 1.25f, 1e-5f);
+        CHECK_NEAR(out.v_q, 0.0f, 1e-5f);
     }
 
     /* R·I 开启但 R 非法 → 初始化拒绝；R=0 时允许且无作用 */

@@ -7,7 +7,7 @@
  *   motor iq [<A>]     （FOC q 轴电流给定；无参 = 查询）
  *   motor id [<A>]     （FOC d 轴电流给定；无参 = 查询；用于零转矩电流环测试）
  *   cal current        （电流零点标定）
- *   cal encoder        （电角度自校准：约 19s，任意键中止；结果只作数据，不自动生效）
+ *   cal encoder        （电角度自校准：约 26s，任意键中止；结果只作数据，不自动生效）
  *   cal encoder apply  （应用最近一次成功结果：电机运行参数 + FOC 运行零点，RAM）
  *   cal encoder save   （运行参数中的零点/方向写入 flash；须 foc off）
  *   cal encoder show   （最近结果 + 当前生效零点）
@@ -204,13 +204,15 @@ static void cal_encoder_emit_result(const app_motor_identify_result_t* result) {
                           (double)(result->offset_end_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)result->direction, (double)result->quality,
                           (double)(result->ratio_err * 100.0f));
-    app_terminal_cmd_emit("    fwd=%.2f rev=%.2f deg (hyst=%.2f)  probe=%.3f rad  resid mean/max=%.2f/%.2f "
-                          "deg  drift=%.1f deg/s  i_peak=%.2f A  t=%.1f s\r\n",
+    app_terminal_cmd_emit("    fwd=%.2f rev=%.2f deg (hyst=%.2f)  probe=%+.3f/%+.3f rad "
+                          "(i=%.1fA)  resid mean/max=%.2f/%.2f deg  drift=%.1f deg/s  "
+                          "i_peak=%.2f A  t=%.1f s\r\n",
                           (double)(result->offset_fwd_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)(result->offset_rev_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)(foc_wrap_pm_pi(result->offset_fwd_rad - result->offset_rev_rad)
                                    * CAL_ENCODER_RAD_TO_DEG),
-                          (double)result->probe_travel_rad, (double)result->verify_mean_deg,
+                          (double)result->probe_fwd_rad, (double)result->probe_rev_rad,
+                          (double)result->probe_current_a, (double)result->verify_mean_deg,
                           (double)result->verify_max_deg, (double)result->verify_drift_deg_s,
                           (double)result->i_peak_a, (double)result->elapsed_ms / 1000.0);
 }
@@ -294,8 +296,8 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
             csh_printf(csh, "ERR: FOC must be READY/RUN (use 'foc on' first)\r\n");
             return -1;
         }
-        csh_printf(csh, "WARN: motor must be FREE to rotate (no load); I_cal=2A d-axis; ~19s; "
-                        "any key aborts\r\n");
+        csh_printf(csh, "WARN: motor must be FREE to rotate (no load); I_cal=2A d-axis; "
+                        "adaptive probe 2/4A; ~26s; any key aborts\r\n");
         /* 先启动 job（会中止旧 job），再启动校准 */
         if (app_terminal_job_start(&s_cal_encoder_job) != 0) {
             csh_printf(csh, "FAIL: job start\r\n");
@@ -316,8 +318,8 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
             return -1;
         }
         app_motor_identify_get_result(&result);
-        csh_printf(csh, "OK: applied offset=%.4f rad dir=%+.0f (RAM; 'foc off' + 'cal encoder save' "
-                        "to persist)\r\n",
+        csh_printf(csh, "OK: applied offset=%.4f rad dir=%+.0f valid=1 (RAM; 'foc off' + "
+                        "'cal encoder save' to persist)\r\n",
                    (double)result.offset_rad, (double)result.direction);
         return 0;
     }
@@ -346,9 +348,10 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
                 return -1;
             }
         }
-        csh_printf(csh, "OK: saved offset=%.4f rad dir=%+.0f to flash (restored at boot)\r\n",
+        csh_printf(csh, "OK: saved offset=%.4f rad dir=%+.0f valid=%u to flash (restored at boot)\r\n",
                    (double)app_motor_params_current()->encoder.electrical_offset_rad,
-                   (double)app_motor_params_current()->encoder.direction);
+                   (double)app_motor_params_current()->encoder.direction,
+                   (unsigned)app_motor_params_current()->encoder.electrical_offset_valid);
         return 0;
     }
 
@@ -358,9 +361,13 @@ static int cmd_cal_encoder(chry_shell_t* csh, const char* sub) {
         const app_motor_params_t* motor = app_motor_params_current();
 
         app_foc_get_encoder_offset(&run_offset, &run_dir);
-        csh_printf(csh, "encoder offset: foc(runtime)=%.4f rad dir=%+.0f | params=%.4f rad dir=%+.0f\r\n",
+        csh_printf(csh, "encoder offset: foc(runtime)=%.4f rad dir=%+.0f | params=%.4f rad dir=%+.0f | valid=%u\r\n",
                    (double)run_offset, (double)run_dir,
-                   (double)motor->encoder.electrical_offset_rad, (double)motor->encoder.direction);
+                   (double)motor->encoder.electrical_offset_rad, (double)motor->encoder.direction,
+                   (unsigned)motor->encoder.electrical_offset_valid);
+        if (motor->encoder.electrical_offset_valid == 0U) {
+            csh_printf(csh, "WARN: encoder offset uncalibrated; FOC will warn but not block\r\n");
+        }
         app_motor_identify_get_result(&result);
         csh_printf(csh, "last calibration: %s\r\n",
                    result.active ? "running"

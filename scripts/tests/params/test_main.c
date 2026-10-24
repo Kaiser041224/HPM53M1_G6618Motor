@@ -76,6 +76,9 @@ static void test_store_before_init(void) {
     CHECK(app_motor_params_load(&motor) == 0);
     CHECK(motor.reducer_ratio == app_motor_params_default()->reducer_ratio);
     CHECK(motor.kt_nm_per_a == app_motor_params_default()->kt_nm_per_a);
+    CHECK(
+        motor.encoder.electrical_offset_valid
+        == app_motor_params_default()->encoder.electrical_offset_valid);
 }
 
 /** @brief 参数域持久化：store→load 回读；代次 bump 后不叠加（出厂值/内存保持） */
@@ -87,6 +90,7 @@ static void test_params_persistence(void) {
     app_software_params_load(app_software_params_mutable());
     /* 在线修改并持久化 */
     app_motor_params_mutable()->reducer_ratio = 25.0f;
+    app_motor_params_mutable()->encoder.electrical_offset_valid = 1U;
     app_software_params_mutable()->control.speed_loop.kp = 9.0f;
     CHECK(app_motor_params_store() == 0);
     CHECK(app_software_params_store() == 0);
@@ -96,6 +100,7 @@ static void test_params_persistence(void) {
     CHECK(app_motor_params_load(app_motor_params_mutable()) == 0);
     CHECK(app_software_params_load(app_software_params_mutable()) == 0);
     CHECK(app_motor_params_current()->reducer_ratio == 25.0f);
+    CHECK(app_motor_params_current()->encoder.electrical_offset_valid == 1U);
     CHECK(app_software_params_current()->control.speed_loop.kp == 9.0f);
     /* 代次 bump（本次烧录清除）：记录被忽略，内存不被非法数据覆盖 */
     app_motor_params_mutable()->reducer_ratio = 1.0f;

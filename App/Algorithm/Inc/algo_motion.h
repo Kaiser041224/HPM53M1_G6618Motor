@@ -30,6 +30,31 @@ float algo_motion_position(float pos_setpoint, float pos_est, float pos_gain, fl
 /** @brief 速度PI条件积分，输出轴端Nm，ki为连续增益 */
 float algo_motion_speed(
     algo_motion_pi_t* pi, float target, float speed, float kp, float ki, float dt, float limit);
+/**
+ * @brief 目标线性斜坡（速度/力矩命令整形）
+ * @param current 当前生效目标
+ * @param target 新目标
+ * @param rate 目标变化率（单位/秒；<=0 = 直通）
+ * @param dt 本拍周期 [s]（<=0/非有限 = 保持当前值）
+ * @return 本拍生效目标
+ */
+float algo_motion_ramp(float current, float target, float rate, float dt);
+/**
+ * @brief ODrive limitVel 语义的连续速度限幅（轴端转矩）
+ *
+ * 由速度误差余量生成允许转矩区间：
+ *   Tmax = (vel_limit - speed) * gain
+ *   Tmin = (-vel_limit - speed) * gain
+ * 超速时只允许制动方向转矩，避免 bang-bang 清零造成转矩断续。
+ *
+ * @param torque 原始轴端转矩 [Nm]
+ * @param speed 轴端速度 [rad/s]
+ * @param vel_limit 速度上限 [rad/s]（<=0 = 关闭）
+ * @param gain 限幅增益 [Nm/(rad/s)]（<=0 = 关闭）
+ * @param limited 输出是否发生限幅（可为 NULL）
+ * @return 限幅后轴端转矩 [Nm]
+ */
+float algo_motion_limit_vel(float torque, float speed, float vel_limit, float gain, bool* limited);
 #ifdef __cplusplus
 }
 #endif

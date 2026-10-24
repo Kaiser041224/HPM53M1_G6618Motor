@@ -37,6 +37,10 @@ void mock_params_reset(void) {
     s_sw.control.current_loop.bandwidth_rad_s = 1256.63706f;
     s_sw.control.current_loop.decoupling_en = 0U;
     s_sw.control.limits.i_q_max_a = 10.0f;
+    s_sw.i_q_continuous_a = 10.0f;
+    s_sw.i_q_boost_time_s = 0.0f;
+    s_sw.i_q_boost_recover_time_s = 0.0f;
+    s_sw.i_q_boost_recover_ratio = 0.9f;
     s_sw.control.limits.duty_max = 0.885f;
     s_sw.control.limits.i_trip_a = 10.0f;
     s_sw.control.limits.speed_max_rad_s = 0.0f;
@@ -68,6 +72,7 @@ void mock_params_reset(void) {
     s_motor.flux_linkage_wb = 0.01f;
     s_motor.encoder.electrical_offset_rad = 0.0f;
     s_motor.encoder.direction = 1.0f;
+    s_motor.encoder.electrical_offset_valid = 0U;
 }
 
 void mock_set_current_gains(float kp, float ki) {

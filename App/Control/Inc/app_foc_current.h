@@ -73,8 +73,9 @@ extern app_foc_current_snapshot_t g_foc_current_snapshot;
  *   - 每拍 live：kp/ki（set_gains）、decoupling_en（set_decoupling，兼容旧组合开关）、
  *     current_ff.r_en/wl_en/bemf_en（set_r_ff/set_wl_ff/set_bemf_ff）、duty_max、
  *     i_q_max_a（每拍经 app_*_params_current 读取）
- *   - init 期固定：sample_time_s（= 1/pwm_freq_hz）、l_d/l_q/lambda、r_ohm
- *     （motor 域手册/辨识值）；修改后需重新调用 app_foc_current_init()
+ *   - init 期固定：sample_time_s（= 1/pwm_freq_hz）、l_d/l_q、r_ohm，以及由
+ *     `Kt_peak/(1.5·pole_pairs)` 派生的 lambda（motor.flux_linkage_wb 不直接消费）；
+ *     修改后需重新调用 app_foc_current_init()
  */
 void app_foc_current_init(void);
 
@@ -88,6 +89,20 @@ void app_foc_current_reset(void);
  * @return true = 就绪
  */
 bool app_foc_current_is_ready(void);
+
+/**
+ * @brief 更新 FOC 电流 boost 预算（1kHz 调用）
+ * @param current_a 实测电流矢量幅值 [A_peak]
+ * @param dt_s 本拍时间 [s]
+ * @note 连续值/boost 预算由 app_foc_current_init() 从 software 参数加载；
+ *       FOC 电流环与 motion 转矩上限都读取 app_foc_current_get_i_limit()。
+ */
+void app_foc_current_limit_update(float current_a, float dt_s);
+
+/**
+ * @brief 当前 FOC 动态电流上限 [A_peak]
+ */
+float app_foc_current_get_i_limit(void);
 
 /**
  * @brief 30kHz 执行：读电流/母线 → 电流环 → 调制 → 写三相占空比。

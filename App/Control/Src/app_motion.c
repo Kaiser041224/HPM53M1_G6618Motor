@@ -7,7 +7,9 @@
 #include "app_motion.h"
 #include "algo_friction.h"
 #include "algo_motion.h"
+#include "algo_ramp.h"
 #include "app_encoder.h"
+#include "app_foc_current.h"
 #include "app_foc.h"
 #include "app_motor_params.h"
 #include "app_param.h"
@@ -16,6 +18,10 @@
 #include "foc_math.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
+
+#define APP_MOTION_SPEED_RATE_HZ    (15000.0f) /**< 15kHz 速度拍 */
+#define APP_MOTION_POSITION_RATE_HZ (15000.0f) /**< 15kHz 位置拍 */
+
 static app_motion_snapshot_t s_motion;
 volatile float g_motion_shaft_angle_rad __attribute__((section(".noncacheable.bss")));
 volatile float g_motion_shaft_angle_deg __attribute__((section(".noncacheable.bss")));
@@ -64,7 +70,16 @@ static algo_friction_params_t s_friction_model; /**< 摩擦前馈模型（Tc/Kv/
 static bool s_friction_suspended;               /**< 辨识期挂起前馈（速度模式FF置零） */
 static float s_velocity_lpf_coeff;              /**< 测速一阶滤波系数（参数 init 期消费） */
 static float s_motion_iq_max_a;          /**< motion 命令电流硬限制[A]（力矩命令与PI输出上限） */
-static float s_motion_speed_limit_rad_s; /**< 轴端速度命令限[rad/s]（0=不限） */
+static float s_motion_speed_limit_rad_s; /**< 轴端实际速度上限[rad/s]（0=不限） */
+static float s_motion_speed_limit_gain;  /**< 连续速度限幅增益[Nm/(rad/s)]（0=关闭） */
+static float s_velocity_ramp_rate;       /**< 速度目标斜坡[rad/s²]（0=直通） */
+static float s_torque_ramp_rate;         /**< 力矩目标斜坡[Nm/s]（0=直通） */
+static float s_target_effective;         /**< 经过 ramp 的生效目标（速度/力矩模式） */
+static bool s_target_ramp_primed;        /**< 生效目标已从当前状态起算 */
+static algo_ramp_t s_position_traj;      /**< 位置梯形轨迹 */
+static bool s_position_traj_ready;       /**< 轨迹对象已初始化 */
+static volatile bool s_traj_reset;       /**< 新位置命令需要重规划轨迹（跨任务/ISR） */
+static float s_traj_prev_pos;            /**< 上一拍轨迹位置，用于差分测速 */
 static float s_output_direction = 1.0f;  /**< 用户出轴正方向（+1/-1；仅 motion 边界） */
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_previous_motor_rad; /**< 上一拍转子机械角（测速基准；输出侧速度=转子速度/减速比） */
@@ -77,8 +92,8 @@ static float s_seconds_per_cycle;
 static bool s_primed;
 static float s_input_pos, s_input_vel_ff, s_input_torque_ff; /**< 位置模式输入（ODrive input_*） */
 static float s_pos_gain, s_pos_filter_bw;     /**< 位置环增益（init/gains 消费；0=禁用/直通） */
-static algo_motion_pos_filter_t s_pos_filter; /**< 输入二阶滤波（10kHz CH0 拍） */
-static float s_vel_cmd_rad_s;                 /**< 位置环输出（CH0写CH1读，共享IRQ串行） */
+static algo_motion_pos_filter_t s_pos_filter; /**< 输入二阶滤波（15kHz CH0 拍） */
+static float s_vel_cmd_rad_s;                 /**< 位置环输出（同拍 position→velocity 交接） */
 static float s_active_direction, s_active_kt, s_active_reducer;
 static float s_calibrated_direction;
 static uint32_t s_hold_samples;               /**< 当前连续坏拍数（active质量类保持窗口） */
@@ -136,7 +151,11 @@ static void motion_clear_output(app_motion_reason_t reason) {
     s_velocity_pi.integral = 0;
     s_motion.torque_nm = 0;
     s_motion.iq_a = 0;
+    s_motion.speed_limited = false;
     s_motion.reason = reason;
+    s_target_effective = 0;
+    s_target_ramp_primed = false;
+    s_traj_reset = false;
     s_hold_samples = 0;
     s_velocity_gap = false;
 }
@@ -241,6 +260,40 @@ void app_motion_init(void) {
     s_motion_speed_limit_rad_s = software->control.limits.motion_speed_limit_rad_s;
     if (!foc_finite(s_motion_speed_limit_rad_s) || s_motion_speed_limit_rad_s < 0)
         s_motion_speed_limit_rad_s = 0;
+    s_motion_speed_limit_gain = software->motion_speed_limit_gain;
+    if (!foc_finite(s_motion_speed_limit_gain) || s_motion_speed_limit_gain < 0)
+        s_motion_speed_limit_gain = 0;
+    s_velocity_ramp_rate = software->motion_input.vel_ramp_rate;
+    if (!foc_finite(s_velocity_ramp_rate) || s_velocity_ramp_rate < 0)
+        s_velocity_ramp_rate = 0;
+    s_torque_ramp_rate = software->motion_input.torque_ramp_rate;
+    if (!foc_finite(s_torque_ramp_rate) || s_torque_ramp_rate < 0)
+        s_torque_ramp_rate = 0;
+    s_target_effective = 0;
+    s_target_ramp_primed = false;
+    s_traj_reset = false;
+    s_traj_prev_pos = 0;
+    s_position_traj_ready = false;
+    {
+        float traj_vel = software->position_traj.trajectory_vel_limit;
+        float traj_accel = software->position_traj.trajectory_accel_limit;
+
+        if (foc_finite(traj_vel) && (traj_vel > 0.0f) && foc_finite(traj_accel)
+            && (traj_accel > 0.0f)) {
+            algo_ramp_cfg_t traj_cfg = {
+                .mode = ALGO_RAMP_MODE_TRAPEZOIDAL,
+                .rate = traj_vel,
+                .step_time_s = 1.0f / APP_MOTION_POSITION_RATE_HZ,
+                .target = 0.0f,
+                .initial = 0.0f,
+                .accel_max = traj_accel,
+                .duration_s = 0.0f,
+            };
+
+            algo_ramp_ctor(&s_position_traj);
+            s_position_traj_ready = s_position_traj.init(&s_position_traj, &traj_cfg) == 0;
+        }
+    }
     s_pos_gain = software->control.position_loop.pos_gain;
     if (!foc_finite(s_pos_gain) || s_pos_gain < 0 || s_pos_gain > 100)
         s_pos_gain = 0;
@@ -388,6 +441,8 @@ static int motion_command(float target, float vel_ff, float torque_ff, app_motio
     if (!foc_finite(target) || !foc_finite(vel_ff) || !foc_finite(torque_ff))
         return APP_MOTION_CMD_BAD_PARAM;
     uint32_t st = intf_sys_irq_save();
+    bool was_active = s_motion.active;
+    app_motion_mode_t old_mode = s_motion.mode;
     float kt = s_motion_motor_params->kt_nm_per_a;
     float reducer = s_motion_motor_params->reducer_ratio;
     if (!foc_finite(kt) || kt <= 0 || !foc_finite(reducer) || reducer <= 0) {
@@ -465,10 +520,17 @@ static int motion_command(float target, float vel_ff, float torque_ff, app_motio
         s_input_pos = foc_wrap_2pi(target);
         s_input_vel_ff = vel_ff;
         s_input_torque_ff = torque_ff;
+        s_traj_reset = true; /* 新位置命令：从当前反馈重规划梯形轨迹 */
     } else {
         s_target = target;
     }
+    if (!was_active || (old_mode != mode)) {
+        /* 首次进入/切换模式：ramp 从当前可观测状态起算，避免从 0 突跳。 */
+        s_target_ramp_primed = false;
+        s_target_effective = (mode == APP_MOTION_MODE_SPEED) ? s_motion.speed_rad_s : 0.0f;
+    }
     s_motion.active = true;
+    s_motion.speed_limited = false;
     s_motion.reason = APP_MOTION_REASON_NONE;
     s_active_direction = s_motion_motor_params->encoder.direction;
     s_active_kt = kt;
@@ -510,6 +572,18 @@ int app_motion_stop(void) {
     intf_sys_irq_restore(st);
     return app_foc_request_stop() == 0 ? 0 : APP_MOTION_CMD_OWNER_DENIED;
 }
+APP_ATTR_RAMFUNC
+void app_motion_tick(void) {
+    /* 单一 15kHz 实时入口：位置模式先产生速度设定，再由速度环消费。
+     * 位置使用上一拍反馈快照（1/15kHz 延迟）；随后 app_motion_step 刷新反馈并算速度。
+     * 速度/力矩模式完全跳过位置分支，避免无谓的位置滤波/轨迹/游标解算。
+     * 后续多圈/MIT 等模式在此按 mode 分发；当前只有 POSITION 需要前置位置解算。 */
+    if (s_motion.active && (s_motion.mode == APP_MOTION_MODE_POSITION)) {
+        app_motion_position_step();
+    }
+    app_motion_step();
+}
+
 APP_ATTR_RAMFUNC
 void app_motion_step(void) {
     app_encoder_rotor_snapshot_t rotor;
@@ -697,12 +771,35 @@ void app_motion_step(void) {
     s_motion.current_limited = execution_ours && execution.current_limited;
     s_motion.voltage_saturated = execution_ours && execution.voltage_saturated;
     s_velocity_pi.saturated = !execution_ours || execution.current_limited
-                           || execution.voltage_saturated || execution.request_expired;
-    float torque_limit = reducer * kt * s_motion_iq_max_a;
+                           || execution.voltage_saturated || execution.request_expired
+                           || s_motion.speed_limited;
+    float motion_iq_limit = s_motion_iq_max_a;
+    float dynamic_limit = app_foc_current_get_i_limit();
+    if ((dynamic_limit > 0.0f) && (dynamic_limit < motion_iq_limit)) {
+        motion_iq_limit = dynamic_limit;
+    }
+    float torque_limit = reducer * kt * motion_iq_limit;
+    float ramp_dt = (dt > 0.0f && dt <= 0.001f) ? dt : (1.0f / APP_MOTION_SPEED_RATE_HZ);
     float torque;
+    bool speed_limited = false;
+
+    if (!s_target_ramp_primed) {
+        /* 首次进入或切换模式：速度从当前反馈起算，力矩从 0 起算。 */
+        s_target_effective =
+            (s_motion.mode == APP_MOTION_MODE_SPEED) ? s_motion.speed_rad_s : 0.0f;
+        s_target_ramp_primed = true;
+    }
+
     if (s_motion.mode != APP_MOTION_MODE_TORQUE) {
-        /* 位置模式速度目标=位置环输出（10kHz CH0 拍）；速度模式=命令目标 */
-        float target = s_motion.mode == APP_MOTION_MODE_POSITION ? s_vel_cmd_rad_s : s_target;
+        /* 位置模式速度目标=位置环输出（15kHz CH0 拍）；速度模式=ramp 后的命令目标 */
+        float target;
+        if (s_motion.mode == APP_MOTION_MODE_POSITION) {
+            target = s_vel_cmd_rad_s;
+        } else {
+            s_target_effective = algo_motion_ramp(
+                s_target_effective, s_target, s_velocity_ramp_rate, ramp_dt);
+            target = s_target_effective;
+        }
         torque = algo_motion_speed(
             &s_velocity_pi, target, s_motion.speed_rad_s, s_velocity_kp, s_velocity_ki, dt,
             torque_limit);
@@ -711,12 +808,23 @@ void app_motion_step(void) {
             torque += algo_friction_torque(&s_friction_model, target);
         if (s_motion.mode == APP_MOTION_MODE_POSITION)
             torque += s_input_torque_ff;
-        torque = torque > torque_limit  ? torque_limit
-               : torque < -torque_limit ? -torque_limit
-                                        : torque;
     } else {
-        torque = s_target;
+        s_target_effective = algo_motion_ramp(
+            s_target_effective, s_target, s_torque_ramp_rate, ramp_dt);
+        torque = s_target_effective;
     }
+
+    torque = torque > torque_limit  ? torque_limit
+           : torque < -torque_limit ? -torque_limit
+                                    : torque;
+    torque = algo_motion_limit_vel(
+        torque, s_motion.speed_rad_s, s_motion_speed_limit_rad_s, s_motion_speed_limit_gain,
+        &speed_limited);
+    if (speed_limited) {
+        /* 限速正在干预：冻结速度积分，避免退出限速后积分突释。 */
+        s_velocity_pi.saturated = true;
+    }
+    s_motion.speed_limited = speed_limited;
     s_motion.torque_nm = torque;
     s_motion.iq_a = torque / (reducer * kt);
     app_foc_current_request_t request = {0, s_motion.iq_a, ++s_request_sequence, s_epoch, true};
@@ -726,20 +834,41 @@ void app_motion_step(void) {
 APP_ATTR_RAMFUNC
 void app_motion_position_step(void) {
     /* ODrive 级联：滤波输入（input_pos/input_vel）→ 位置P → 速度目标。
-     * 反馈（shaft_rad 单圈绝对角）取自 15kHz 速度拍；CH0/CH1 共享 IRQ 串行，零 SPI。 */
+     * 反馈（shaft_rad 单圈绝对角）取自上一拍 app_motion_step 的反馈快照；
+     * 单 tick 内 position→velocity 串行，零 SPI。 */
     if (!s_motion.active || s_motion.mode != APP_MOTION_MODE_POSITION || !s_motion.feedback_valid)
         return;
-    algo_motion_pos_filter_step(
-        &s_pos_filter, s_input_pos, s_input_vel_ff, s_pos_filter_bw, 1.0f / 10000.0f);
-    float vel_cmd = algo_motion_position(
-        s_pos_filter.pos_setpoint_rad, s_motion.shaft_rad, s_pos_gain,
-        s_pos_filter.vel_setpoint_rad_s);
+
+    float pos_setpoint;
+    float vel_setpoint;
+    if (s_position_traj_ready) {
+        /* 轨迹模式由梯形轨迹自己生成 vel；input_vel_ff 不再叠加，避免双计。 */
+        if (s_traj_reset) {
+            float delta = foc_wrap_pm_pi(s_input_pos - s_motion.shaft_rad);
+            float target = s_motion.shaft_rad + delta;
+
+            (void)s_position_traj.set_current(&s_position_traj, s_motion.shaft_rad);
+            (void)s_position_traj.set_target(&s_position_traj, target);
+            s_traj_prev_pos = s_motion.shaft_rad;
+            s_traj_reset = false;
+        }
+        pos_setpoint = s_position_traj.step(&s_position_traj);
+        vel_setpoint = (pos_setpoint - s_traj_prev_pos) * APP_MOTION_POSITION_RATE_HZ;
+        s_traj_prev_pos = pos_setpoint;
+    } else {
+        algo_motion_pos_filter_step(
+            &s_pos_filter, s_input_pos, s_input_vel_ff, s_pos_filter_bw, 1.0f / APP_MOTION_POSITION_RATE_HZ);
+        pos_setpoint = s_pos_filter.pos_setpoint_rad;
+        vel_setpoint = s_pos_filter.vel_setpoint_rad_s;
+    }
+
+    float vel_cmd = algo_motion_position(pos_setpoint, s_motion.shaft_rad, s_pos_gain, vel_setpoint);
     if (s_motion_speed_limit_rad_s > 0)
         vel_cmd = vel_cmd > s_motion_speed_limit_rad_s  ? s_motion_speed_limit_rad_s
                 : vel_cmd < -s_motion_speed_limit_rad_s ? -s_motion_speed_limit_rad_s
                                                         : vel_cmd;
     s_vel_cmd_rad_s = vel_cmd;
-    s_motion.pos_setpoint_rad = foc_wrap_2pi(s_pos_filter.pos_setpoint_rad); /* 显示取模单圈 */
+    s_motion.pos_setpoint_rad = foc_wrap_2pi(pos_setpoint); /* 显示取模单圈 */
     s_motion.vel_cmd_rad_s = vel_cmd;
 }
 void app_motion_get_snapshot(app_motion_snapshot_t* out) {

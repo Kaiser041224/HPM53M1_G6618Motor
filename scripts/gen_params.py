@@ -58,6 +58,7 @@ SCHEMA = {
         ("encoder.output_ratio", "encoder.output_ratio", "f32", 0.0, None),
         ("encoder.electrical_offset_rad", "encoder.electrical_offset_rad", "f32", 0.0, 6.283185307179586),
         ("encoder.direction", "encoder.direction", "f32", -1.0, 1.0),
+        ("encoder.electrical_offset_valid", "encoder.electrical_offset_valid", "u8", 0, 1),
     ],
     "hardware": [
         ("current_sense.shunt_ohm", "current_sense.shunt_ohm", "f32", 0.0, None),
@@ -91,6 +92,8 @@ SCHEMA = {
         ("fault.slow_debounce", "fault.slow_debounce", "u16", 1, 65535),
         ("fault.adc_stall_ms", "fault.adc_stall_ms", "u16", 1, 65535),
         ("fault.enc_err_delta", "fault.enc_err_delta", "u8", 1, 255),
+        ("control.motion_input.vel_ramp_rate", "motion_input.vel_ramp_rate", "f32", 0.0, None),
+        ("control.motion_input.torque_ramp_rate", "motion_input.torque_ramp_rate", "f32", 0.0, None),
         ("control.current_loop.kp", "control.current_loop.kp", "f32", None, None),
         ("control.current_loop.ki", "control.current_loop.ki", "f32", None, None),
         ("control.current_loop.bandwidth_rad_s", "control.current_loop.bandwidth_rad_s", "f32", 0.0, None),
@@ -115,13 +118,26 @@ SCHEMA = {
          "control.position_loop.pos_gain", "f32", 0.0, 100.0),
         ("control.position_loop.input_filter_bandwidth",
          "control.position_loop.input_filter_bandwidth", "f32", 0.0, 100.0),
+        ("control.position_loop.trajectory_vel_limit",
+         "position_traj.trajectory_vel_limit", "f32", 0.0, None),
+        ("control.position_loop.trajectory_accel_limit",
+         "position_traj.trajectory_accel_limit", "f32", 0.0, None),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
+        ("control.limits.i_q_continuous_a", "i_q_continuous_a", "f32", 0.0, None),
+        ("control.limits.i_q_boost_time_s", "i_q_boost_time_s", "f32", 0.0, None),
+        ("control.limits.i_q_boost_recover_time_s", "i_q_boost_recover_time_s", "f32", 0.0, None),
+        ("control.limits.i_q_boost_recover_ratio", "i_q_boost_recover_ratio", "f32", 0.0, 1.0),
         ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.501, 1.0),
         ("control.limits.i_trip_a", "control.limits.i_trip_a", "f32", 0.0, None),
-        ("control.limits.speed_max_rad_s", "control.limits.speed_max_rad_s", "f32", 0.0, None),
+        ("control.limits.foc_speed_max_rad_s",
+         "control.limits.speed_max_rad_s", "f32", 0.0, None),
+        ("control.limits.foc_speed_limit_gain",
+         "foc_speed_limit_gain", "f32", 0.0, None),
         ("control.limits.motion_iq_max_a", "control.limits.motion_iq_max_a", "f32", 0.0, None),
         ("control.limits.motion_speed_limit_rad_s",
          "control.limits.motion_speed_limit_rad_s", "f32", 0.0, None),
+        ("control.limits.motion_speed_limit_gain",
+         "motion_speed_limit_gain", "f32", 0.0, None),
         ("motion.output_direction", "motion.output_direction", "f32", -1.0, 1.0),
         ("current_ff.r_en", "current_ff.r_en", "u8", 0, 1),
         ("current_ff.wl_en", "current_ff.wl_en", "u8", 0, 1),
@@ -144,6 +160,7 @@ BOOL_FIELDS = {
     ("software", "current_ff.r_en"),
     ("software", "current_ff.wl_en"),
     ("software", "current_ff.bemf_en"),
+    ("motor", "encoder.electrical_offset_valid"),
 }
 
 # 仅文档字段：(yaml 路径, 允许值集合或 None)；只校验，不生成 C 字段
@@ -210,7 +227,16 @@ APPLY_REBOOT = {
     "software.control.position_loop.pos_gain",
     "software.control.position_loop.input_filter_bandwidth",
     "software.control.limits.motion_iq_max_a",
+    "software.control.limits.i_q_continuous_a",
+    "software.control.limits.i_q_boost_time_s",
+    "software.control.limits.i_q_boost_recover_time_s",
+    "software.control.limits.i_q_boost_recover_ratio",
     "software.control.limits.motion_speed_limit_rad_s",
+    "software.control.limits.motion_speed_limit_gain",
+    "software.control.motion_input.vel_ramp_rate",
+    "software.control.motion_input.torque_ramp_rate",
+    "software.control.position_loop.trajectory_vel_limit",
+    "software.control.position_loop.trajectory_accel_limit",
     # 软件：motion 用户坐标方向（app_motion init 期缓存；改向需重启）
     "software.motion.output_direction",
     # 持久化代次（boot 期比对；不属运行参数）
@@ -572,6 +598,27 @@ def cross_checks(symbols) -> None:
         raise err("跨域校验", "vbus_ov_v 超过电机额定电压（motor.vbus_nom_v）")
     if g("software", "fault.oc_trip_a") < g("motor", "i_rated_a"):
         raise err("跨域校验", "oc_trip_a 低于额定电流（会误报）")
+    pole_pairs = g("motor", "pole_pairs")
+    kt = g("motor", "kt_nm_per_a")
+    flux = g("motor", "flux_linkage_wb")
+    flux_expected = kt / (1.5 * pole_pairs)
+    if abs(flux - flux_expected) > 1e-6:
+        raise err(
+            "跨域校验",
+            f"Kt/flux 口径不一致：flux_linkage_wb={flux:.9g}，"
+            f"Kt_peak/(1.5·pole_pairs)={flux_expected:.9g}；"
+            "bEMF 前馈必须与转矩常数使用同一峰值电流口径")
+    i_cont = g("software", "control.limits.i_q_continuous_a")
+    i_boost = g("software", "control.limits.i_q_max_a")
+    i_motion = g("software", "control.limits.motion_iq_max_a")
+    if i_cont > i_boost:
+        raise err(
+            "跨域校验",
+            f"i_q_continuous_a={i_cont:.9g} 不能大于 i_q_max_a={i_boost:.9g}")
+    if i_cont > i_motion:
+        raise err(
+            "跨域校验",
+            f"i_q_continuous_a={i_cont:.9g} 不能大于 motion_iq_max_a={i_motion:.9g}")
     reducer = g("motor", "reducer_ratio")
     output_ratio = g("motor", "encoder.output_ratio")
     if not (0.0 < output_ratio < 1.0):

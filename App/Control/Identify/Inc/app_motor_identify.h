@@ -13,7 +13,8 @@
  *     app_motor_identify_apply() 显式生效（RAM），app_motor_identify_save() 显式落 flash；
  *   - 自带安全中止：过流（|i_dq| 持续超限）、编码器错误/跳变、FOC 状态被外部改变、超时。
  *
- * 流程时长约 19s（lock-in 0.8s + 方向 0.4s + 正/反扫各 3 电周期 × 360 步 × 8ms + 验证 0.16s）。
+ * 流程时长约 26s（lock-in 1.0s + 方向 0.5s + 正/反扫各 3 电周期 × 360 步 × 10ms
+ * + 验证残差 0.1s + 自适应双向探针最多 4 × 160ms）。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -60,8 +61,11 @@ typedef struct {
     float quality;            /**< 质量 |Σ|/N（1 = 完全一致） */
     float ratio_err;          /**< 极对数校验偏差（相对） */
     float verify_mean_deg;    /**< 验证静默段角度残差均值 [deg]（信息量） */
-    float verify_max_deg;     /**< 验证静默段角度残差峰值 [deg]（判据 ≤ 90） */
-    float probe_travel_rad;   /**< 探针段机械行程 [rad]（判据：×direction ≥ 0.05） */
+    float verify_max_deg;     /**< 验证静默段角度残差峰值 [deg]（判据 ≤ 15） */
+    float probe_travel_rad;   /**< 探针段有效机械行程 [rad]（通过方向的最大行程） */
+    float probe_fwd_rad;      /**< +i_q 探针机械行程 [rad]（诊断） */
+    float probe_rev_rad;      /**< -i_q 探针机械行程 [rad]（诊断） */
+    float probe_current_a;    /**< 最终/通过档位的 q 探针电流 [A] */
     float verify_drift_deg_s; /**< 静默段残差漂移 [deg/s]（≈0 静止；大 = 转子被恒转矩驱动） */
     float progress;           /**< 进度 0~1 */
     float offset_fwd_rad;     /**< 正向扫描零点 [rad]（诊断） */

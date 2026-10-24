@@ -36,7 +36,7 @@ typedef enum {
 /** @brief 失败原因（FAILED 时有效；失败不得 apply/save） */
 typedef enum {
     APP_FRICTION_IDENTIFY_FAIL_NONE = 0,
-    APP_FRICTION_IDENTIFY_FAIL_MOTION,      /**< 运动被撤销（10kHz 路径中止/保持超限） */
+    APP_FRICTION_IDENTIFY_FAIL_MOTION,      /**< 运动被撤销（15kHz 路径中止/保持超限） */
     APP_FRICTION_IDENTIFY_FAIL_COMMAND,     /**< 目标命令持续被拒（重试超限） */
     APP_FRICTION_IDENTIFY_FAIL_NOT_SETTLED, /**< 速度未达稳态（含单点超时） */
     APP_FRICTION_IDENTIFY_FAIL_FIT,         /**< 拟合拒绝（样本退化） */

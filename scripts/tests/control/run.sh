@@ -25,6 +25,7 @@ APP_SRC=(
     "$ROOT/App/Control/Src/app_motion.c"
     "$ROOT/App/Control/Identify/Src/app_friction_identify.c"
     "$ROOT/App/Algorithm/Src/algo_motion.c"
+    "$ROOT/App/Algorithm/Src/algo_ramp.c"
     "$ROOT/App/Algorithm/Src/algo_friction.c"
     "$ROOT/App/Algorithm/Src/algo_speed_observer.c"
     "$ROOT/App/Platform/Src/app_gptmr.c"

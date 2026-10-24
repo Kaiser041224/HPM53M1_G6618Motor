@@ -30,6 +30,7 @@ typedef struct {
     float output_ratio;          /**< 出轴编码器转角 / 转子转角 */
     float electrical_offset_rad; /**< 电角度零点 [rad]（cal encoder 写入） */
     float direction;             /**< 编码器方向（+1.0 / −1.0） */
+    uint8_t electrical_offset_valid; /**< 0=未确认标定（仅告警）；1=cal encoder/FENC 已确认 */
 } app_motor_encoder_t;
 
 /**
@@ -39,9 +40,9 @@ typedef struct {
     uint8_t pole_pairs;          /**< 极对数 */
     float rs_ohm;                /**< 相电阻 [Ω] */
     float ls_h;                  /**< 相电感 [H] */
-    float ke_vs_per_rad;         /**< 反电动势系数 [V·s/rad]（机械角·线电压 RMS 口径） */
-    float flux_linkage_wb;       /**< 磁链 [Wb]（电角度·相电压峰值口径；FOC 用） */
-    float kt_nm_per_a;           /**< 转矩系数 [N·m/A] */
+    float ke_vs_per_rad;         /**< 反电动势系数 [V·s/rad]（机械角·线电压 RMS；仅文档/对照） */
+    float flux_linkage_wb;       /**< 磁链 [Wb]（由 Kt_peak/(1.5p) 派生的 FOC 口径；运行时由 Kt 重算） */
+    float kt_nm_per_a;           /**< 转子转矩系数 [N·m/A_peak]（峰值 q 轴电流口径） */
     float i_rated_a;             /**< 额定电流 [A]（RMS，105°C） */
     float i_peak_10s_a;          /**< 峰值电流 10s [A]（峰值） */
     float i_peak_2s_a;           /**< 峰值电流 2s [A]（峰值） */

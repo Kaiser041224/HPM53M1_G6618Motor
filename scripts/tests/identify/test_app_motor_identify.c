@@ -31,6 +31,7 @@ extern float g_mock_applied_offset;
 extern float g_mock_applied_dir;
 extern float g_mock_current_scale;
 extern bool g_mock_probe_stuck;
+extern float g_mock_probe_min_a;
 extern bool g_mock_snap_invalid;
 extern uint32_t g_mock_enc_errors;
 extern int g_mock_store_count;
@@ -78,10 +79,13 @@ void test_app_motor_identify(void) {
     CHECK_NEAR(res.direction, 1.0f, 1e-6f);
     CHECK(res.quality > 0.95f);
     CHECK(res.probe_travel_rad * res.direction >= 0.05f);
+    CHECK((res.probe_fwd_rad * res.direction >= 0.05f)
+          || (res.probe_rev_rad * res.direction <= -0.05f));
     CHECK(g_mock_calib_end_count == 1);     /* 结束必经 end */
     CHECK(g_mock_foc_state == APP_FOC_STATE_READY);
     CHECK(g_mock_apply_count == 0);         /* 不自动应用 */
     CHECK_NEAR(app_motor_params_current()->encoder.electrical_offset_rad, 0.0f, 1e-6f);
+    CHECK(app_motor_params_current()->encoder.electrical_offset_valid == 0U);
 
     /* apply：写运行参数 + FOC 运行零点 */
     CHECK(app_motor_identify_apply() == 0);
@@ -89,6 +93,7 @@ void test_app_motor_identify(void) {
     CHECK_NEAR(g_mock_applied_offset, res.offset_rad, 1e-6f);
     CHECK_NEAR(g_mock_applied_dir, 1.0f, 1e-6f);
     CHECK_NEAR(app_motor_params_current()->encoder.electrical_offset_rad, res.offset_rad, 1e-6f);
+    CHECK(app_motor_params_current()->encoder.electrical_offset_valid == 1U);
 
     /* ---- 2) 反方向 ---- */
     mock_reset(off_true, -1.0f);
@@ -156,6 +161,7 @@ void test_app_motor_identify(void) {
     app_motor_identify_get_result(&res);
     CHECK(res.failed);
     CHECK(res.fail_reason == APP_IDENTIFY_REASON_VERIFY);
+    CHECK_NEAR(res.probe_current_a, 4.0f, 1e-6f);
     CHECK(g_mock_calib_end_count == 1);
     CHECK(g_mock_apply_count == 0);
     CHECK(app_motor_identify_apply() != 0);
@@ -184,8 +190,10 @@ void test_app_motor_identify(void) {
     CHECK(app_motor_identify_save() == 0);                         /* 已 apply：保存结果 */
     CHECK(g_mock_store_count == 1);
     app_motor_params_mutable()->encoder.electrical_offset_rad = 0.0f;
+    app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
     CHECK(app_motor_identify_restore() == 0);
     CHECK_NEAR(app_motor_params_current()->encoder.electrical_offset_rad, res.offset_rad, 1e-6f);
+    CHECK(app_motor_params_current()->encoder.electrical_offset_valid == 1U);
 
     /* ---- 9) save / restore ---- */
     mock_reset(off_true, 1.0f);
@@ -197,6 +205,7 @@ void test_app_motor_identify(void) {
     g_mock_foc_state = APP_FOC_STATE_OFF;
     CHECK(app_motor_identify_save() == 0);
     CHECK(g_mock_store_count == 1);
+    CHECK(app_motor_params_current()->encoder.electrical_offset_valid == 1U);
 
     app_motor_params_mutable()->encoder.electrical_offset_rad = 0.0f;
     app_motor_params_mutable()->encoder.direction = 1.0f;
@@ -214,4 +223,21 @@ void test_app_motor_identify(void) {
     mock_store_reset();
     app_motor_params_mutable()->pole_pairs = 10U;
     CHECK(app_motor_identify_restore() > 0);
+}
+
+/** @brief 高静摩擦：2A 探针不动，应自动升到 4A 后通过 */
+void test_app_motor_identify_adaptive_probe(void) {
+    app_motor_identify_result_t res;
+
+    mock_reset(1.234f, 1.0f);
+    g_mock_probe_min_a = 3.0f; /* 2A 不足，4A 足够 */
+    CHECK(app_motor_identify_start() == 0);
+    CHECK(run_until_idle(60000) < 60000);
+    app_motor_identify_get_result(&res);
+    CHECK(res.done);
+    CHECK(!res.failed);
+    CHECK_NEAR(res.probe_current_a, 4.0f, 1e-6f);
+    CHECK(res.probe_travel_rad * res.direction >= 0.05f);
+    CHECK((res.probe_fwd_rad * res.direction >= 0.05f)
+          || (res.probe_rev_rad * res.direction <= -0.05f));
 }

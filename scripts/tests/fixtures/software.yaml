@@ -36,6 +36,9 @@ fault:
   # settle_ticks: 50
 
 control:
+  motion_input:
+    vel_ramp_rate: 0.0        # [rad/s²]（测试夹具值：0=直通）
+    torque_ramp_rate: 0.0     # [Nm/s]（测试夹具值：0=直通）
   # FOC 电流环（V1 落地；增益 = 手册 R/L + 极点对消初值，V2 自整定更新）
   current_loop:
     kp: 0.372                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×1kHz）
@@ -57,10 +60,18 @@ control:
   position_loop:
     pos_gain: 20.0                    # [1/s]（测试夹具值）
     input_filter_bandwidth: 10.0      # [rad/s]（测试夹具值）
+    trajectory_vel_limit: 0.0         # [rad/s]（测试夹具值：0=关闭轨迹）
+    trajectory_accel_limit: 0.0       # [rad/s²]（测试夹具值：0=关闭轨迹）
   limits:
-    i_q_max_a: "motor.i_peak_10s_a"   # 电流矢量限幅 [A]（峰值口径 = 相电流峰值；须 > 0）→ 24.3
+    i_q_max_a: 30.0                    # [A_peak] boost/绝对上限（测试夹具值）
+    i_q_continuous_a: 24.3             # [A_peak] 连续限幅（测试夹具值）
+    i_q_boost_time_s: 2.0              # [s]（测试夹具值）
+    i_q_boost_recover_time_s: 10.0     # [s]（测试夹具值）
+    i_q_boost_recover_ratio: 0.9       # （测试夹具值）
     i_trip_a: 10.0                     # 快速过流跳闸 [A]（0 = 关闭）
-    speed_max_rad_s: 2500.0            # 转矩模式限速 [rad/s 电角]（0 = 关闭）
+    foc_speed_max_rad_s: 2500.0        # [rad/s 电角] FOC 内部连续限速上限（0 = 关闭）
+    foc_speed_limit_gain: 50.0         # [A/(rad/s)] FOC 内部连续限速增益
     duty_max: 0.885                    # 调制上限（有效域 (0.5, 1.0]；0.885 = 三电阻采样窗口约束，ADC spec §4）
-    motion_iq_max_a: "motor.i_peak_10s_a" # [A]（与 i_q_max_a 对齐，测试夹具值）
+    motion_iq_max_a: 30.0              # [A]（测试夹具值）
     motion_speed_limit_rad_s: 10.0     # [rad/s]（测试夹具值）
+    motion_speed_limit_gain: 50.0      # [Nm/(rad/s)]（测试夹具值）

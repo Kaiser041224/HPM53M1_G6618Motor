@@ -59,6 +59,54 @@ int app_foc_current_set_duty_ceiling(float ceiling) {
 
 static foc_current_t s_current;
 static bool s_ready;
+
+/* 电流 boost 管理（FOC 内部限幅的一部分） */
+static float s_i_limit_continuous_a;
+static float s_i_limit_boost_a;
+static float s_i_limit_boost_time_s;
+static float s_i_limit_recover_time_s;
+static float s_i_limit_recover_ratio;
+static float s_i_limit_credit; /**< [0,1]，1 = boost 满额 */
+static bool s_i_limit_ready;
+
+static float s_i_limit_clamp01(float value) {
+    return value > 1.0f ? 1.0f : value < 0.0f ? 0.0f : value;
+}
+
+/**
+ * @brief 从 software 参数重载 boost 配置并重置预算
+ */
+static void foc_current_limit_init(void) {
+    const app_software_params_t* params = app_software_params_current();
+
+    s_i_limit_continuous_a = params->i_q_continuous_a;
+    s_i_limit_boost_a = params->control.limits.i_q_max_a;
+    s_i_limit_boost_time_s = params->i_q_boost_time_s;
+    s_i_limit_recover_time_s = params->i_q_boost_recover_time_s;
+    s_i_limit_recover_ratio = params->i_q_boost_recover_ratio;
+
+    if (!foc_finite(s_i_limit_continuous_a) || (s_i_limit_continuous_a < 0.0f)) {
+        s_i_limit_continuous_a = 0.0f;
+    }
+    if (!foc_finite(s_i_limit_boost_a) || (s_i_limit_boost_a < s_i_limit_continuous_a)) {
+        s_i_limit_boost_a = s_i_limit_continuous_a;
+    }
+    if (!foc_finite(s_i_limit_boost_time_s) || (s_i_limit_boost_time_s < 0.0f)) {
+        s_i_limit_boost_time_s = 0.0f;
+    }
+    if (!foc_finite(s_i_limit_recover_time_s) || (s_i_limit_recover_time_s < 0.0f)) {
+        s_i_limit_recover_time_s = 0.0f;
+    }
+    if (!foc_finite(s_i_limit_recover_ratio) || (s_i_limit_recover_ratio < 0.0f)) {
+        s_i_limit_recover_ratio = 0.0f;
+    } else if (s_i_limit_recover_ratio > 1.0f) {
+        s_i_limit_recover_ratio = 1.0f;
+    }
+
+    s_i_limit_credit = 1.0f;
+    s_i_limit_ready = true;
+}
+
 static id_rl_sample_t s_identify_samples[APP_FOC_IDENTIFY_SAMPLES];
 static volatile uint16_t s_identify_count;
 static bool s_identify_capture_active;
@@ -175,6 +223,7 @@ void app_foc_current_init(void) {
     foc_current_cfg_t cfg;
 
     s_motor_params = motor;
+    foc_current_limit_init();
 
     cfg.kp = software->control.current_loop.kp;
     cfg.ki = software->control.current_loop.ki;
@@ -182,7 +231,12 @@ void app_foc_current_init(void) {
     cfg.decoupling_en = software->control.current_loop.decoupling_en;
     cfg.l_d = motor->ls_h;
     cfg.l_q = motor->ls_h;
-    cfg.lambda = motor->flux_linkage_wb; /* 磁链（电角度·相峰值口径；勿用机械角·线 RMS 的 ke） */
+    /* bEMF 与转矩共用 Kt_peak 口径：λ = Kt_peak/(1.5·p)。
+     * 不直接读 motor.flux_linkage_wb，避免旧 MPRM 中 λ/Kt 双源不一致。 */
+    cfg.lambda = (motor->pole_pairs > 0U && foc_finite(motor->kt_nm_per_a)
+                  && (motor->kt_nm_per_a > 0.0f))
+                     ? motor->kt_nm_per_a / (1.5f * (float)motor->pole_pairs)
+                     : 0.0f;
     cfg.r_ohm = (foc_finite(motor->rs_ohm) && (motor->rs_ohm > 0.0f)) ? motor->rs_ohm : 0.0f;
     cfg.r_ff_en = (software->current_ff.r_en != 0U && cfg.r_ohm > 0.0f) ? 1U : 0U;
     cfg.wl_ff_en = software->current_ff.wl_en;
@@ -202,6 +256,50 @@ void app_foc_current_init(void) {
     }
     g_foc_current_snapshot = (app_foc_current_snapshot_t){0};
     (void)app_foc_effective_duty_max(software); /* 记录有效上限（init 即可观测） */
+}
+
+void app_foc_current_limit_update(float current_a, float dt_s) {
+    if (!s_i_limit_ready || !foc_finite(current_a) || !foc_finite(dt_s) || (dt_s <= 0.0f)) {
+        return;
+    }
+    if (current_a < 0.0f) {
+        current_a = -current_a;
+    }
+    if ((s_i_limit_boost_time_s <= 0.0f) || (s_i_limit_boost_a <= s_i_limit_continuous_a)) {
+        return;
+    }
+
+    if (current_a > s_i_limit_continuous_a) {
+        float denominator =
+            s_i_limit_boost_a * s_i_limit_boost_a - s_i_limit_continuous_a * s_i_limit_continuous_a;
+
+        if (denominator > 0.0f) {
+            float excess =
+                (current_a * current_a - s_i_limit_continuous_a * s_i_limit_continuous_a)
+                / denominator;
+
+            if (excess > 0.0f) {
+                s_i_limit_credit -= (dt_s / s_i_limit_boost_time_s) * excess;
+                s_i_limit_credit = s_i_limit_clamp01(s_i_limit_credit);
+            }
+        }
+    } else if ((s_i_limit_recover_time_s > 0.0f)
+               && (current_a <= s_i_limit_continuous_a * s_i_limit_recover_ratio)) {
+        s_i_limit_credit += dt_s / s_i_limit_recover_time_s;
+        s_i_limit_credit = s_i_limit_clamp01(s_i_limit_credit);
+    }
+}
+
+APP_ATTR_RAMFUNC
+float app_foc_current_get_i_limit(void) {
+    if (!s_i_limit_ready) {
+        return 0.0f;
+    }
+    if ((s_i_limit_boost_time_s > 0.0f) && (s_i_limit_boost_a > s_i_limit_continuous_a)
+        && (s_i_limit_credit > 0.0f)) {
+        return s_i_limit_boost_a;
+    }
+    return s_i_limit_continuous_a;
 }
 
 void app_foc_current_reset(void) {
@@ -552,7 +650,15 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     /* 圆形电压限幅：与 foc_modulation 的 span 限幅严格一致
      * A_max = (2·duty_max − 1)·v_bus / √3（旧实现 /1.5 偏大 15.5%） */
     in.v_max = foc_modulation_vmax(duty_max, v_bus);
-    in.i_max = software->control.limits.i_q_max_a;
+    /* 动态 boost 限幅 + live 的绝对上限取较小值（绝对上限可被调试/测试临时收紧）。 */
+    in.i_max = app_foc_current_get_i_limit();
+    {
+        float hard_limit = software->control.limits.i_q_max_a;
+
+        if (foc_finite(hard_limit) && (hard_limit >= 0.0f) && (hard_limit < in.i_max)) {
+            in.i_max = hard_limit;
+        }
+    }
     in.omega_e_rad_s = omega_e_rad_s;
 
     bool identify_open = s_identify_voltage_cycles > 0

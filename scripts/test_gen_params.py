@@ -125,6 +125,29 @@ def test_production_config_check(root: Path) -> None:
     expect("production-config-check", rc == 0 and "校验通过" in so, f"rc={rc} se={se!r}")
 
 
+def test_motor_kt_flux_consistency(root: Path) -> None:
+    cfg = fresh_copy(root)
+    rc, so, se = run(cfg, check=False)
+    values = {}
+    for line in (cfg / "out" / "params_report.txt").read_text(encoding="utf-8").splitlines():
+        if " = " not in line or line.startswith("#"):
+            continue
+        key, raw = line.split(" = ", 1)
+        try:
+            values[key] = float(raw.split("#", 1)[0].strip())
+        except ValueError:
+            continue  # 仅文档字段（如 motor.name）
+    pole_pairs = values["motor.pole_pairs"]
+    kt = values["motor.kt_nm_per_a"]
+    flux = values["motor.flux_linkage_wb"]
+    expected = kt / (1.5 * pole_pairs)
+    expect(
+        "motor-kt-flux-consistency",
+        rc == 0 and abs(flux - expected) < 1e-6,
+        f"rc={rc} flux={flux} kt={kt} expected={expected} se={se!r}",
+    )
+
+
 def test_unknown_key(root: Path) -> None:
     cfg = fresh_copy(root)
     append(cfg / "motor.yaml", "bogus_key: 1\n")
@@ -320,6 +343,7 @@ def test_meta_deterministic(root: Path) -> None:
 CASES = (
     test_normal,
     test_production_config_check,
+    test_motor_kt_flux_consistency,
     test_unknown_key,
     test_missing_required,
     test_undefined_symbol,

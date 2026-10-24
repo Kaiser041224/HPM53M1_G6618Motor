@@ -4,6 +4,7 @@
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
  */
+#include "algo_motion.h"
 #include "app_foc.h"
 #include "app_motion.h"
 #include "app_motor_params.h"
@@ -588,7 +589,7 @@ void test_motion_params(void) {
         g_mock_rotor_rad += .01f;
         if (g_mock_rotor_rad >= 6.2831853f)
             g_mock_rotor_rad -= 6.2831853f;
-        mock_advance_cycle(48000);
+        mock_advance_cycle(48000U);
         g_mock_output_timestamp_cycles += 48000U;
         app_foc_isr_step();
         app_motion_step();
@@ -634,7 +635,7 @@ void test_motion_output_direction(void) {
     app_motion_step();
     CHECK(app_motion_position_gains(1.0f, 0.0f) == 0);
     CHECK(app_motion_position(.5f, 0, 0) == 0);
-    app_motion_position_step();
+    app_motion_tick();
     app_motion_get_snapshot(&snap);
     CHECK(snap.vel_cmd_rad_s < 0);
     CHECK(app_motion_stop() == 0);
@@ -719,7 +720,7 @@ void test_motion_speed_rotor_only(void) {
     CHECK(!snapshot.feedback_valid);
 }
 
-/* ===== 位置环（ODrive 级联：5kHz CH0 拍 + 10kHz 速度拍）===== */
+/* ===== 位置环（ODrive 级联：单一 15kHz 拍内 position→velocity）===== */
 #define POS_TWO_PI (6.283185307179586)
 static double s_pos_plant_rotor_abs_rad; /* 绝对转子角（游标原码单圈建模） */
 
@@ -752,7 +753,9 @@ static void pos_plant_step(float dt_s) {
     pos_plant_sensor_update();
 }
 
-static void pos_setup(float speed_limit_rad_s) {
+static void pos_setup_ex(
+    float speed_limit_rad_s, float filter_bw, float traj_vel, float traj_accel,
+    float speed_limit_gain, float torque_ramp_rate) {
     extern void mock_param_store_reset(void);
     extern void mock_params_reset(void);
     extern bool g_mock_output_timestamp_override;
@@ -760,8 +763,12 @@ static void pos_setup(float speed_limit_rad_s) {
     mock_param_store_reset();
     mock_params_reset();
     app_software_params_mutable()->control.limits.motion_speed_limit_rad_s = speed_limit_rad_s;
+    app_software_params_mutable()->motion_speed_limit_gain = speed_limit_gain;
     app_software_params_mutable()->control.limits.motion_iq_max_a =
         25.0f;         /* mock零值会落到1.0A兜底 */
+    app_software_params_mutable()->motion_input.torque_ramp_rate = torque_ramp_rate;
+    app_software_params_mutable()->position_traj.trajectory_vel_limit = traj_vel;
+    app_software_params_mutable()->position_traj.trajectory_accel_limit = traj_accel;
     app_foc_init();
     app_motion_init();
     app_motor_params_mutable()->kt_nm_per_a = .117f;
@@ -770,7 +777,7 @@ static void pos_setup(float speed_limit_rad_s) {
     g_mock_output_timestamp_override = true;
     g_mock_output_timestamp_cycles = 0;
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
-    CHECK(app_motion_position_gains(20, 10) == 0);
+    CHECK(app_motion_position_gains(20, filter_bw) == 0);
     CHECK(app_motion_calibrate() == 0);
     for (unsigned i = 0; i < 1000; ++i)
         app_motion_step();
@@ -779,16 +786,17 @@ static void pos_setup(float speed_limit_rad_s) {
     CHECK(app_foc_enable() == 0);
 }
 
-/** @brief 仿真 ticks 拍：位置/速度均按 10kHz 模拟（位置先于速度，驱动分发序 CH0→CH1） */
+static void pos_setup(float speed_limit_rad_s) { pos_setup_ex(speed_limit_rad_s, 10, 0, 0, 0, 0); }
+
+/** @brief 仿真 ticks 拍：单 15kHz 拍内 position → velocity */
 static void pos_run_ticks(unsigned ticks) {
     extern void mock_advance_cycle(uint32_t cycles);
     extern uint32_t g_mock_output_timestamp_cycles;
     for (unsigned i = 0; i < ticks; ++i) {
-        pos_plant_step(1e-4f);
-        mock_advance_cycle(48000);
-        g_mock_output_timestamp_cycles += 48000U;
-        app_motion_position_step();
-        app_motion_step();
+        pos_plant_step(1.0f / 15000.0f);
+        mock_advance_cycle(32000U);
+        g_mock_output_timestamp_cycles += 32000U;
+        app_motion_tick();
     }
 }
 
@@ -879,7 +887,7 @@ void test_motion_position_cascade(void) {
     pos_setup(0);
     CHECK(app_motion_gains(2, 50, 0.6f, 0.2f) == 0); /* 摩擦FF=植物：保持精度来源 */
     CHECK(app_motion_position(0.5f, 0, 0) == 0);
-    pos_run_ticks(6000);
+    pos_run_ticks(9000);
     app_motion_snapshot_t snapshot;
     app_motion_get_snapshot(&snapshot);
     CHECK(snapshot.active);
@@ -897,12 +905,12 @@ void test_motion_position_circular(void) {
     CHECK(app_motion_gains(2, 50, 0.6f, 0.2f) == 0);
     float target = 350.0f * (float)POS_TWO_PI / 360.0f; /* 6.1086 rad */
     CHECK(app_motion_position(target, 0, 0) == 0);
-    pos_run_ticks(200);
+    pos_run_ticks(300);
     app_motion_snapshot_t snapshot;
     app_motion_get_snapshot(&snapshot);
     /* 短路径钉：vel_cmd 为负（倒着跨零点走-10°）；+340°长路径必为正——符号即判据 */
     CHECK(snapshot.vel_cmd_rad_s < 0);
-    pos_run_ticks(8000);
+    pos_run_ticks(12000);
     app_motion_get_snapshot(&snapshot);
     float error = snapshot.shaft_rad - target;
     if (error > 3.1416f)
@@ -920,7 +928,7 @@ void test_motion_position_circular(void) {
 void test_motion_position_ff(void) {
     pos_setup(0);
     CHECK(app_motion_position(0, 0.3f, 0.6f) == 0);
-    pos_run_ticks(6000);
+    pos_run_ticks(9000);
     app_motion_snapshot_t snapshot;
     app_motion_get_snapshot(&snapshot);
     /* input_vel=0.3 失配静态：pos_sp 静差=2*vin/bw=0.06（实测0.0589）；
@@ -929,6 +937,99 @@ void test_motion_position_ff(void) {
     CHECK_NEAR(snapshot.vel_cmd_rad_s, 0, 0.05f);
     /* torque_ff=0.6 平衡植物库仑摩擦 → 稳态力矩 ≈ 0.6 */
     CHECK_NEAR(snapshot.torque_nm, 0.6f, 0.1f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 目标斜坡与连续速度限幅纯算法 */
+void test_motion_ramp_and_limit(void) {
+    bool limited = false;
+
+    CHECK_NEAR(algo_motion_ramp(0.0f, 1.0f, 10.0f, 0.01f), 0.1f, 1e-6f);
+    CHECK_NEAR(algo_motion_ramp(0.0f, -1.0f, 10.0f, 0.01f), -0.1f, 1e-6f);
+    CHECK_NEAR(algo_motion_ramp(0.0f, 1.0f, 0.0f, 0.01f), 1.0f, 1e-6f);
+    CHECK_NEAR(algo_motion_ramp(0.0f, 1.0f, 10.0f, 0.0f), 0.0f, 1e-6f);
+    CHECK_NEAR(algo_motion_ramp(0.0f, 1.0f, 10.0f, NAN), 0.0f, 1e-6f);
+
+    /* 高速正转：只允许逐渐制动，不能继续加速 */
+    CHECK_NEAR(algo_motion_limit_vel(5.0f, 1.2f, 1.0f, 10.0f, &limited), -2.0f, 1e-6f);
+    CHECK(limited);
+    /* 限速内：不干预 */
+    CHECK_NEAR(algo_motion_limit_vel(0.5f, 0.5f, 1.0f, 10.0f, &limited), 0.5f, 1e-6f);
+    CHECK(!limited);
+    /* 接近限速：正转矩按剩余速度余量线性收紧 */
+    CHECK_NEAR(algo_motion_limit_vel(10.0f, 0.5f, 1.0f, 10.0f, &limited), 5.0f, 1e-6f);
+    CHECK(limited);
+    /* 正转超速时正转矩必须被压到制动侧 */
+    CHECK_NEAR(algo_motion_limit_vel(10.0f, 1.5f, 1.0f, 10.0f, &limited), -5.0f, 1e-6f);
+    CHECK(limited);
+    /* 高速反转：负转矩必须被压到制动侧 */
+    CHECK_NEAR(algo_motion_limit_vel(-5.0f, -1.2f, 1.0f, 10.0f, &limited), 2.0f, 1e-6f);
+    CHECK(limited);
+    /* 0 限速/0 增益/非有限速度：直通 */
+    CHECK_NEAR(algo_motion_limit_vel(5.0f, 1.2f, 0.0f, 10.0f, &limited), 5.0f, 1e-6f);
+    CHECK(!limited);
+    CHECK_NEAR(algo_motion_limit_vel(5.0f, 1.2f, 1.0f, 0.0f, &limited), 5.0f, 1e-6f);
+    CHECK(!limited);
+    CHECK_NEAR(algo_motion_limit_vel(5.0f, NAN, 1.0f, 10.0f, &limited), 5.0f, 1e-6f);
+    CHECK(!limited);
+}
+
+/** @brief 位置输入梯形轨迹：新目标不得立即跳到输入值，且轨迹限速/加速度来自 YAML */
+void test_motion_position_trajectory(void) {
+    pos_setup_ex(0, 0, 1.0f, 10.0f, 0, 0); /* filter=0：无轨迹时 pos_sp 会立刻等于 input */
+    CHECK(app_motion_position(0.2f, 0, 0) == 0);
+    app_motion_tick();
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.pos_setpoint_rad > 0.0f);
+    CHECK(snapshot.pos_setpoint_rad < 0.05f);
+
+    /* 轨迹应逐步收敛到目标 */
+    pos_run_ticks(4500);
+    app_motion_get_snapshot(&snapshot);
+    CHECK_NEAR(snapshot.shaft_rad, 0.2f, 0.03f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 轴端连续限速接线：超速时正转矩被改写成制动转矩，并置 speed_limited */
+void test_motion_speed_limit_app(void) {
+    extern volatile float g_foc_speed_out_rad_s;
+    extern volatile bool g_foc_speed_out_valid;
+    extern void mock_advance_cycle(uint32_t cycles);
+
+    pos_setup_ex(1.0f, 0, 0, 0, 10.0f, 0);
+    g_foc_speed_out_rad_s = 1.2f;
+    g_foc_speed_out_valid = true;
+    mock_advance_cycle(3200U); /* 15kHz 拍 */
+    CHECK(app_motion_torque(1.0f) == 0);
+    app_motion_step();
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.speed_limited);
+    CHECK_NEAR(snapshot.speed_rad_s, 1.2f, 1e-5f);
+    CHECK_NEAR(snapshot.torque_nm, -2.0f, 1e-4f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    g_foc_speed_out_valid = false;
+    pos_teardown();
+}
+
+/** @brief 力矩目标斜坡接线：YAML 斜率生效，首个 15kHz 拍不得直接给满力矩 */
+void test_motion_torque_ramp_app(void) {
+    extern void mock_advance_cycle(uint32_t cycles);
+
+    pos_setup_ex(0, 0, 0, 0, 0, 1000.0f); /* 1000 Nm/s */
+    mock_advance_cycle(3200U);            /* 15kHz → 约 6.67us */
+    CHECK(app_motion_torque(1.0f) == 0);
+    app_motion_step();
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.torque_nm > 0.0f);
+    CHECK(snapshot.torque_nm < 0.02f);
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
     pos_teardown();

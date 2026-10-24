@@ -67,6 +67,62 @@ float algo_motion_speed(
 }
 
 FOC_ATTR_RAMFUNC
+float algo_motion_ramp(float current, float target, float rate, float dt) {
+    if (!foc_finite(current) || !foc_finite(target)) {
+        return 0.0f;
+    }
+    if (!foc_finite(rate) || rate <= 0.0f) {
+        return target;
+    }
+    if (!foc_finite(dt) || dt <= 0.0f) {
+        return current;
+    }
+
+    float step = rate * dt;
+    if (!foc_finite(step) || step <= 0.0f) {
+        return current;
+    }
+    float error = target - current;
+    if (error > step) {
+        return current + step;
+    }
+    if (error < -step) {
+        return current - step;
+    }
+    return target;
+}
+
+FOC_ATTR_RAMFUNC
+float algo_motion_limit_vel(float torque, float speed, float vel_limit, float gain, bool* limited) {
+    if (limited != NULL) {
+        *limited = false;
+    }
+    if (!foc_finite(torque) || !foc_finite(speed) || !foc_finite(vel_limit)
+        || !foc_finite(gain) || (vel_limit <= 0.0f) || (gain <= 0.0f)) {
+        return torque;
+    }
+
+    float torque_max = (vel_limit - speed) * gain;
+    float torque_min = (-vel_limit - speed) * gain;
+    if (!foc_finite(torque_max) || !foc_finite(torque_min)) {
+        return torque;
+    }
+    if (torque > torque_max) {
+        if (limited != NULL) {
+            *limited = true;
+        }
+        return torque_max;
+    }
+    if (torque < torque_min) {
+        if (limited != NULL) {
+            *limited = true;
+        }
+        return torque_min;
+    }
+    return torque;
+}
+
+FOC_ATTR_RAMFUNC
 void algo_motion_pos_filter_step(
     algo_motion_pos_filter_t* f, float input_pos, float input_vel, float bandwidth_rad_s,
     float dt) {

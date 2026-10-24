@@ -147,17 +147,26 @@ static int foc_current_step(foc_current_t* self, const foc_current_in_t* in,
         iq_ref = 0.0f;
     }
 
-    /* 1) 电流矢量限幅（圆形，保角） */
+    /* 1) 电流矢量限幅：Id 优先 2-norm（ODrive Motor::update 语义）。
+     *   先给 d 轴占预算，再让 q 轴使用剩余预算；适合 motor id / 弱磁场景。 */
     imax = (foc_finite(in->i_max) && (in->i_max > 0.0f)) ? in->i_max : 0.0f;
-    {
-        float imag2 = id_ref * id_ref + iq_ref * iq_ref;
-        if (imag2 > imax * imax) {
-            float imag = foc_sqrtf(imag2); /* 硬件 fsqrt.s（-fno-builtin 下 sqrtf 为库调用） */
-            if (imag > 0.0f) {
-                float k = imax / imag;
-                id_ref *= k;
-                iq_ref *= k;
-            }
+    if (imax <= 0.0f) {
+        id_ref = 0.0f;
+        iq_ref = 0.0f;
+    } else {
+        float iq_limit;
+
+        if (id_ref > imax) {
+            id_ref = imax;
+        } else if (id_ref < -imax) {
+            id_ref = -imax;
+        }
+        iq_limit = imax * imax - id_ref * id_ref;
+        iq_limit = (iq_limit > 0.0f) ? foc_sqrtf(iq_limit) : 0.0f;
+        if (iq_ref > iq_limit) {
+            iq_ref = iq_limit;
+        } else if (iq_ref < -iq_limit) {
+            iq_ref = -iq_limit;
         }
     }
     out->i_d_ref_lim = id_ref;
@@ -180,9 +189,11 @@ static int foc_current_step(foc_current_t* self, const foc_current_in_t* in,
     if ((self->_wl_ff != 0U) || (self->_bemf_ff != 0U)) {
         float omega_e = foc_finite(in->omega_e_rad_s) ? in->omega_e_rad_s : 0.0f;
 
+        /* 交叉耦合前馈使用限幅后的给定电流：反馈电流含开关纹波且相对给定有
+         * 相位滞后，用作前馈会把噪声和延迟注入 vd/vq。 */
         if (self->_wl_ff != 0U) {
-            vd -= omega_e * self->_lq * iq_fb;
-            vq += omega_e * self->_ld * id_fb;
+            vd -= omega_e * self->_lq * out->i_q_ref_lim;
+            vq += omega_e * self->_ld * out->i_d_ref_lim;
         }
         if (self->_bemf_ff != 0U) {
             vq += omega_e * self->_lambda;

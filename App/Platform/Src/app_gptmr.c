@@ -20,8 +20,8 @@
 #define APP_GPTMR_INSTANCE 1U
 #define APP_GPTMR_CH_BASE  (APP_GPTMR_INSTANCE * 4U)
 
-#define APP_GPTMR_CH0_FREQ 10000U
-/* motion速度观测周期，与位置形成1.5:1频率关系 */
+#define APP_GPTMR_CH0_FREQ 15000U
+/* 预留 15kHz（motion 速度独立拍已合并至 CH0；motion timer 不启动本通道） */
 #define APP_GPTMR_CH1_FREQ 15000U
 #define APP_GPTMR_CH2_FREQ 10000U
 /* 编码器采样：25kHz 的一半，供 25kHz FOC 复用（用时间戳算 dt） */
@@ -48,7 +48,7 @@ void app_gptmr_init(void) {
     s_channel_frequency[2] = APP_GPTMR_CH2_FREQ;
     s_channel_frequency[3] = APP_GPTMR_CH3_FREQ;
 
-    /* CH0: motion位置观测10kHz */
+    /* CH0: motion 单控制拍 15kHz（position → velocity） */
     intf_gptmr_cfg_t cfg_voltage = {
         .mode = INTF_GPTMR_MODE_TIMER,
         .frequency_hz = APP_GPTMR_CH0_FREQ,
@@ -57,7 +57,7 @@ void app_gptmr_init(void) {
     };
     (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_0), &cfg_voltage);
 
-    /* CH1: motion速度观测10kHz */
+    /* CH1: 预留 15kHz（motion 速度独立拍已合并至 CH0，motion timer 不启动） */
     intf_gptmr_cfg_t cfg_power = {
         .mode = INTF_GPTMR_MODE_TIMER,
         .frequency_hz = APP_GPTMR_CH1_FREQ,

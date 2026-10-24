@@ -9,6 +9,7 @@
 
 #include "app_foc.h"
 
+#include "algo_motion.h"
 #include "algo_speed_observer.h"
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
@@ -26,8 +27,6 @@
 #include "intf_sys.h"
 
 #define APP_FOC_SPEED_LPF_HZ (100.0f) /**< ωe 估计低通截止 [Hz] */
-/* 限速滞环：超限切断，回落至 85% 才恢复（ωe 噪声/回摆不再造成转矩断续） */
-#define APP_FOC_SPEED_LIMIT_RESTORE (0.85f)
 
 /* 编码器同步采样节拍与新鲜度：与电流同拍（30kHz → 33.3µs，同一 PWM1 CMP10 触发）。
  * 新鲜度上限 = 采样周期 + 40µs 余量：最多容忍一拍丢样复用保持角。 */
@@ -69,7 +68,7 @@ static void app_foc_revoke_current(void) {
     s_current_request = (app_foc_current_request_t){0};
     s_current_request_expired = false;
 }
-static float s_i_q_ref;                  /**< 生效 q 轴给定 [A]（含转矩模式限速） */
+static float s_i_q_ref;                  /**< 生效 q 轴给定 [A]（FOC 内部限速在 ISR 对最终值处理） */
 static uint32_t s_rotor_seq_last;        /**< 上一接受样本序号（复用检测） */
 static bool s_rotor_seq_primed;          /**< 序号基准已建立 */
 static uint32_t s_enc_ts_last;           /**< 上一接受样本时间戳 [cycle]（速度 dt 基准） */
@@ -82,7 +81,6 @@ static bool s_initialized;               /**< app_foc_init 已执行 */
 static uint32_t s_last_cycle;            /**< 主循环上一拍时刻 [cycle]（实测 dt 用） */
 static bool s_dt_valid;                  /**< 主循环 dt 基准已建立 */
 static float s_dt_s;                     /**< 主循环实测间隔 [s]（0 = 首拍/异常） */
-static bool s_speed_limited;             /**< 限速滞环状态（避免阈值附近转矩断续） */
 static volatile bool s_isr_disabled;     /**< ISR 快路径超预算后停用（防止饿死主循环） */
 static volatile bool s_emergency_active; /**< ISR 紧急关桥已执行（避免重复开销） */
 static volatile bool s_isr_inhibited;    /**< ISR 输出抑制（故障锁存；仅 enable 清除） */
@@ -272,8 +270,6 @@ static bool app_foc_read_rotor_rad(float* theta_m_rad) {
  * @brief 30kHz 单拍主体（由 app_foc_run_once 计时包裹）
  */
 static void app_foc_run_body(void) {
-    float omega_e = 0.0f;
-
     if (!s_initialized) {
         return;
     }
@@ -335,33 +331,16 @@ static void app_foc_run_body(void) {
      * 本函数不感知校准算法（无调用点）。 */
 
     /* 角度/电流环已迁至 app_foc_isr_step（ADC 完成回调，固定 30kHz）；
-     * 此处只做状态机、限幅与激励编排。ωe 取 ISR 侧快照用于限速判据。 */
-    omega_e = g_foc_current_snapshot.omega_e_rad_s;
+     * 此处只做状态机、限幅与激励编排。 */
 
-    /* 转矩模式限速（保护，不锁存）：|ωe| 超限 → 生效给定置零；带 15% 滞环恢复
-     * （无滞环时 ωe 噪声/回摆会在阈值附近反复切断 → 机械顿挫、电流冲击）。
-     * CALIB 由辨识模块直接给激励（calib_set_excitation），不受限速影响。
-     * 注：不再做"电压饱和 → 给定置零"的 bang-bang（与 PI 抗饱和语义冲突且造成
-     * 转矩断续）；饱和信息由快照 saturated / v_scale 观测，必要时上层处理。 */
-    if (s_state != APP_FOC_STATE_CALIB) {
-        float speed_max = app_software_params_current()->control.limits.speed_max_rad_s;
-
-        if (s_current_source == APP_FOC_CURRENT_SOURCE_DIRECT || s_stop_pending)
-            s_i_q_ref = s_i_q_ref_cmd;
-        if (foc_finite(speed_max) && (speed_max > 0.0f)) {
-            if (s_speed_limited) {
-                if (fabsf(omega_e) < (speed_max * APP_FOC_SPEED_LIMIT_RESTORE)) {
-                    s_speed_limited = false;
-                }
-            } else if (fabsf(omega_e) > speed_max) {
-                s_speed_limited = true;
-            }
-            if (s_speed_limited) {
-                s_i_q_ref = 0.0f;
-            }
-        } else {
-            s_speed_limited = false;
-        }
+    /* 直接电流模式的 q 轴给定；FOC 内部连续限速在 ISR 内对最终 q 给定执行，
+     * 与 app_motion 的轴端连续限速互相独立。
+     * CALIB 期间 q 给定归校准端口所有：若此处再用 s_i_q_ref_cmd(0) 覆盖，
+     * verify 的 q 轴探针电流会被每 1kHz 清零，表现为“探针无行程”。 */
+    if (s_stop_pending
+        || ((s_current_source == APP_FOC_CURRENT_SOURCE_DIRECT)
+            && (s_state != APP_FOC_STATE_CALIB))) {
+        s_i_q_ref = s_i_q_ref_cmd;
     }
 
     if ((s_state == APP_FOC_STATE_READY) && ((s_i_d_ref != 0.0f) || (s_i_q_ref_cmd != 0.0f))) {
@@ -403,6 +382,7 @@ void app_foc_isr_step(void) {
     float i_u = 0.0f;
     float i_v = 0.0f;
     float i_w = 0.0f;
+    float iq_ref = 0.0f;
     float v_bus;
     uint16_t raw;
     bool fault = false;
@@ -577,16 +557,28 @@ void app_foc_isr_step(void) {
             request_expired = s_current_request_expired;
             s_i_d_ref =
                 s_current_request.valid && !request_expired ? s_current_request.id_ref_a : 0.0f;
-            s_i_q_ref = s_current_request.valid && !request_expired && !s_speed_limited
+            s_i_q_ref = s_current_request.valid && !request_expired
                           ? s_current_request.iq_ref_a
                           : 0.0f;
         }
+
+        /* FOC 内部连续限速（电角速度域、q 电流域），与 app_motion 的轴端
+         * limitVel 完全独立；CALIB 激励不受影响。 */
+        iq_ref = s_i_q_ref;
+        if (s_state != APP_FOC_STATE_CALIB) {
+            const app_software_params_t* software = app_software_params_current();
+
+            iq_ref = algo_motion_limit_vel(
+                iq_ref, omega_e, software->control.limits.speed_max_rad_s,
+                software->foc_speed_limit_gain, NULL);
+        }
+
         if (app_foc_current_vtest_active()) {
             /* vtest 独占执行（ADC ISR，本拍新鲜采样 + ADC 实测 dt） */
             (void)app_foc_current_vtest_step_fresh(i_u, i_v, i_w, v_bus, isr_dt_s);
         } else {
             executed = app_foc_current_run_fresh(
-                           theta_e, omega_e, s_i_d_ref, s_i_q_ref, i_u, i_v, i_w, v_bus, NULL, NULL)
+                           theta_e, omega_e, s_i_d_ref, iq_ref, i_u, i_v, i_w, v_bus, NULL, NULL)
                     == 0;
         }
         /* 过流跳闸（电流环或 vtest 内置）→ M1：只判断不动作 */
@@ -703,6 +695,19 @@ void app_foc_run_once(void) {
         app_foc_stop_step();
     }
     app_foc_run_body();
+    {
+        bool active = (s_state == APP_FOC_STATE_READY) || (s_state == APP_FOC_STATE_RUN)
+                   || (s_state == APP_FOC_STATE_CALIB);
+        float i_mag = 0.0f;
+        float dt = ((s_dt_s > 0.0f) && (s_dt_s < 0.1f)) ? s_dt_s : 1.0e-3f;
+
+        if (active && g_foc_current_snapshot.valid) {
+            i_mag = foc_sqrtf(
+                g_foc_current_snapshot.i_d_a * g_foc_current_snapshot.i_d_a
+                + g_foc_current_snapshot.i_q_a * g_foc_current_snapshot.i_q_a);
+        }
+        app_foc_current_limit_update(i_mag, dt);
+    }
     g_foc_loop_cycles = intf_clock_get_cycle() - t0;
 }
 
@@ -792,7 +797,6 @@ int app_foc_enable(void) {
         s_emergency_active = false;
         s_isr_inhibited = false;
         s_isr_disabled = false;
-        s_speed_limited = false;
         s_dt_valid = false;
         g_foc_fault_request = 0U;
         s_angle_src = APP_FOC_ANGLE_ENCODER;
@@ -825,7 +829,6 @@ void app_foc_disable(void) {
     s_isr_inhibited = false;
     s_emergency_active = false;
     s_isr_disabled = false;
-    s_speed_limited = false;
     s_dt_valid = false;
     s_isr_dt_valid = false;
     s_rotor_seq_primed = false;

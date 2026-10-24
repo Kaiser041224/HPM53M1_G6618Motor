@@ -48,12 +48,17 @@
                                                     * 带 50:1 减速器+输出负载时实测 12.85°；
                                                     * 10° 过紧。15° 仍拒绝 23°+ 的坏结果
                                                     * （44° 级必须重标，不得 apply）。 */
-#define APP_IDENTIFY_PROBE_A              (1.0f)  /**< 探针 i_q [A] */
-#define APP_IDENTIFY_PROBE_MS             (60U)   /**< 探针时长 [ms] */
-#define APP_IDENTIFY_PROBE_MIN_RAD        (0.05f) /**< 探针最小机械行程 [rad] */
-#define APP_IDENTIFY_ENDPOINT_MAX_DELTA_RAD (0.50f) /**< 终点与圆均值最大允许差 [rad]（≈28.6°；
-                                                     * 圆均值会被正/反向动态滞后拉偏，不能当权威；
-                                                     * 终点是静止保持点，优先作为 trial。 */
+#define APP_IDENTIFY_PROBE_A_LOW          (2.0f)  /**< 一级探针 q 电流 [A] */
+#define APP_IDENTIFY_PROBE_A_HIGH         (4.0f)  /**< 二级探针 q 电流 [A]（高静摩擦/摆线减速器） */
+#define APP_IDENTIFY_PROBE_RAMP_MS        (40U)   /**< 每方向电流斜坡 [ms]（减轻冲击/联轴打滑） */
+#define APP_IDENTIFY_PROBE_HOLD_MS        (120U)  /**< 每方向满流保持 [ms] */
+#define APP_IDENTIFY_PROBE_SEGMENT_MS \
+    (APP_IDENTIFY_PROBE_RAMP_MS + APP_IDENTIFY_PROBE_HOLD_MS)
+#define APP_IDENTIFY_PROBE_MIN_RAD (0.05f) /**< 单方向最小机械行程 [rad] */
+#define APP_IDENTIFY_ENDPOINT_MAX_DELTA_RAD (0.10f) /**< 终点与圆均值最大允许差 [rad]（≈5.7°；
+                                                     * 终点是静止保持点，但高摩擦/摆线减速器会
+                                                     * 停在齿槽/弹性死点，偏大时必须回退到
+                                                     * 正/反向合并圆均值（抵消对称摩擦滞后）。 */
 
 /* ---- 持久化记录（app_param 键 APP_PARAM_KEY_FOC_ENCODER） ---- */
 #define APP_IDENTIFY_RECORD_VERSION (1U)
@@ -101,8 +106,12 @@ static float s_verify_first_deg;
 static uint32_t s_verify_count;
 static bool s_verify_first_valid;
 static bool s_probe_active;
+static uint8_t s_probe_phase;       /**< 0=+low, 1=-low, 2=+high, 3=-high */
+static uint32_t s_probe_phase_ms;   /**< 当前方向段计时 */
+static float s_probe_current_target; /**< 当前档位 q 电流幅值 */
 static float s_probe_theta_prev;
-static float s_probe_travel;
+static float s_probe_fwd_travel;
+static float s_probe_rev_travel;
 
 /**
  * @brief 结束流程（成功/失败共用出口）：经端口退出 CALIB，状态回 IDLE
@@ -251,8 +260,8 @@ static void identify_step_run(const app_foc_current_snapshot_t* snap, float dt_s
         return;
     }
     if (out.done) {
-        /* 正/反向圆均值用于扫描诊断；verify trial 优先使用 REV 静止终点。
-         * 终点零点是转子在 0 命令下稳定后的实际位置，避免动态滞后把 trial 推偏。 */
+        /* 正/反向合并圆均值抵消对称摩擦滞后；REV 静止终点仅在与圆均值足够接近时采用。
+         * 50:1 摆线减速器静摩擦大，终点可能停在齿槽/弹性死点，不能无条件优先。 */
         float trial_offset = out.offset_end_rad;
 
         /* 终点与圆均值差过大时回退圆均值，避免用一个明显跑偏的终点做 trial。 */
@@ -280,7 +289,11 @@ static void identify_step_run(const app_foc_current_snapshot_t* snap, float dt_s
         s_verify_count = 0U;
         s_verify_first_valid = false;
         s_probe_active = false;
-        s_probe_travel = 0.0f;
+        s_probe_phase = 0U;
+        s_probe_phase_ms = 0U;
+        s_probe_current_target = APP_IDENTIFY_PROBE_A_LOW;
+        s_probe_fwd_travel = 0.0f;
+        s_probe_rev_travel = 0.0f;
         s_identify_state = APP_IDENTIFY_STATE_VERIFY;
         return;
     }
@@ -289,16 +302,66 @@ static void identify_step_run(const app_foc_current_snapshot_t* snap, float dt_s
     }
 }
 
+/** @brief 固化残差统计，保证通过/失败日志都能看到真实 resid */
+static void identify_verify_fill_resid(void) {
+    s_identify_result.verify_mean_deg =
+        (s_verify_count > 0U) ? (s_verify_sum_deg / (float)s_verify_count) : 0.0f;
+    s_identify_result.verify_max_deg = s_verify_max_deg;
+    s_identify_result.verify_drift_deg_s =
+        (s_verify_first_valid && (s_verify_count > 1U))
+            ? ((s_identify_result.verify_mean_deg - s_verify_first_deg)
+               / ((float)APP_IDENTIFY_VERIFY_RESID_MS / 1000.0f))
+            : 0.0f;
+}
+
+/** @brief 填充探针诊断并结束为成功 */
+static void identify_verify_pass(bool positive) {
+    (void)app_foc_calib_set_current(0.0f, 0.0f);
+    identify_verify_fill_resid();
+    s_identify_result.probe_fwd_rad = s_probe_fwd_travel;
+    s_identify_result.probe_rev_rad = s_probe_rev_travel;
+    s_identify_result.probe_current_a = s_probe_current_target;
+    s_identify_result.probe_travel_rad =
+        positive ? s_probe_fwd_travel : s_probe_rev_travel;
+    s_identify_result.done = true;
+    s_identify_result.failed = false;
+    s_identify_result.fail_reason = APP_IDENTIFY_REASON_NONE;
+    s_identify_result.progress = 1.0f;
+    s_identify_result_applied = false; /* 新结果待 apply */
+    identify_finish();
+}
+
+/** @brief 填充双向探针诊断并结束为失败 */
+static void identify_verify_fail(void) {
+    (void)app_foc_calib_set_current(0.0f, 0.0f);
+    identify_verify_fill_resid();
+    s_identify_result.probe_fwd_rad = s_probe_fwd_travel;
+    s_identify_result.probe_rev_rad = s_probe_rev_travel;
+    s_identify_result.probe_current_a = s_probe_current_target;
+    s_identify_result.probe_travel_rad =
+        (fabsf(s_probe_fwd_travel) >= fabsf(s_probe_rev_travel)) ? s_probe_fwd_travel
+                                                                  : s_probe_rev_travel;
+    identify_fail(APP_IDENTIFY_REASON_VERIFY);
+}
+
 /**
- * @brief VERIFY 阶段单拍：静默 → 残差采样 → 探针 → 判定
+ * @brief VERIFY 阶段单拍：静默 → 残差采样 → 自适应探针 → 判定
  * @param snap 本拍 FOC 电流快照
  */
 static void identify_step_verify(const app_foc_current_snapshot_t* snap) {
     const uint32_t resid_end = APP_IDENTIFY_VERIFY_SETTLE_MS + APP_IDENTIFY_VERIFY_RESID_MS;
-    const uint32_t probe_end = resid_end + APP_IDENTIFY_PROBE_MS;
+    const uint32_t probe_span = 4U * APP_IDENTIFY_PROBE_SEGMENT_MS;
+    bool probe_positive;
+    bool probe_ok;
+    float theta_m;
 
     s_verify_ms++;
-    s_identify_result.progress = 0.95f + 0.05f * ((float)s_verify_ms / (float)probe_end);
+    uint32_t progress_span = resid_end + probe_span;
+    float progress = (float)s_verify_ms / (float)progress_span;
+    if (progress > 1.0f) {
+        progress = 1.0f;
+    }
+    s_identify_result.progress = 0.95f + 0.05f * progress;
 
     /* 段 1：静默（i_d 锁定，排除扫描残余速度） */
     if (s_verify_ms <= APP_IDENTIFY_VERIFY_SETTLE_MS) {
@@ -324,56 +387,91 @@ static void identify_step_verify(const app_foc_current_snapshot_t* snap) {
         return;
     }
 
-    /* 段 3：探针起点（解除 i_d 锁定，给 i_q） */
+    /* 段 3：自适应双向探针。每个档位先做正向再做反向；先 2A，失败后升到 4A。
+     * 每段包含 40ms 电流斜坡 + 120ms 满流保持，减轻静摩擦/联轴冲击。 */
     if (!s_probe_active) {
+        if (s_verify_max_deg > APP_IDENTIFY_VERIFY_RESID_MAX_DEG) {
+            identify_verify_fill_resid();
+            s_identify_result.probe_current_a = 0.0f;
+            identify_fail(APP_IDENTIFY_REASON_VERIFY);
+            return;
+        }
         if (!identify_read_theta_m(&s_probe_theta_prev)) {
             identify_fail(APP_IDENTIFY_REASON_ENCODER);
             return;
         }
-        s_probe_travel = 0.0f;
+        s_probe_fwd_travel = 0.0f;
+        s_probe_rev_travel = 0.0f;
+        s_probe_phase = 0U; /* +low */
+        s_probe_phase_ms = 0U;
+        s_probe_current_target = APP_IDENTIFY_PROBE_A_LOW;
         s_probe_active = true;
-        if (app_foc_calib_set_current(0.0f, APP_IDENTIFY_PROBE_A) != 0) {
-            identify_fail(APP_IDENTIFY_REASON_STATE);
-        }
+        (void)app_foc_calib_set_current(0.0f, 0.0f);
         return;
     }
 
-    /* 探针段：累计机械行程（wrap-safe） */
+    s_probe_phase_ms++;
+    probe_positive = ((s_probe_phase & 1U) == 0U);
     {
-        float theta_m;
-
-        if (identify_read_theta_m(&theta_m)) {
-            s_probe_travel += foc_wrap_pm_pi(theta_m - s_probe_theta_prev);
-            s_probe_theta_prev = theta_m;
+        float scale = (float)s_probe_phase_ms / (float)APP_IDENTIFY_PROBE_RAMP_MS;
+        float iq;
+        if (scale > 1.0f) {
+            scale = 1.0f;
+        }
+        iq = s_probe_current_target * scale;
+        if (!probe_positive) {
+            iq = -iq;
+        }
+        if (app_foc_calib_set_current(0.0f, iq) != 0) {
+            identify_fail(APP_IDENTIFY_REASON_STATE);
+            return;
         }
     }
-    if (s_verify_ms < probe_end) {
+
+    if (identify_read_theta_m(&theta_m)) {
+        float delta = foc_wrap_pm_pi(theta_m - s_probe_theta_prev);
+        if (probe_positive) {
+            s_probe_fwd_travel += delta;
+        } else {
+            s_probe_rev_travel += delta;
+        }
+        s_probe_theta_prev = theta_m;
+    }
+
+    /* 本方向行程已够即停：避免自由轴在 2A/4A 下继续高速多圈旋转。 */
+    probe_ok = probe_positive
+                   ? ((s_probe_fwd_travel * s_identify_result.direction)
+                      >= APP_IDENTIFY_PROBE_MIN_RAD)
+                   : ((s_probe_rev_travel * s_identify_result.direction)
+                      <= -APP_IDENTIFY_PROBE_MIN_RAD);
+    if ((s_probe_phase_ms >= APP_IDENTIFY_PROBE_RAMP_MS) && probe_ok) {
+        identify_verify_pass(probe_positive);
         return;
     }
 
-    /* 判定 */
-    (void)app_foc_calib_set_current(0.0f, 0.0f);
-    s_identify_result.verify_mean_deg =
-        (s_verify_count > 0U) ? (s_verify_sum_deg / (float)s_verify_count) : 0.0f;
-    s_identify_result.verify_max_deg = s_verify_max_deg;
-    s_identify_result.verify_drift_deg_s =
-        (s_verify_first_valid && (s_verify_count > 1U))
-            ? ((s_identify_result.verify_mean_deg - s_verify_first_deg)
-               / ((float)APP_IDENTIFY_VERIFY_RESID_MS / 1000.0f))
-            : 0.0f;
-    s_identify_result.probe_travel_rad = s_probe_travel;
-
-    if (((s_probe_travel * s_identify_result.direction) >= APP_IDENTIFY_PROBE_MIN_RAD)
-        && (s_verify_max_deg <= APP_IDENTIFY_VERIFY_RESID_MAX_DEG)) {
-        s_identify_result.done = true;
-        s_identify_result.failed = false;
-        s_identify_result.fail_reason = APP_IDENTIFY_REASON_NONE;
-        s_identify_result.progress = 1.0f;
-        s_identify_result_applied = false; /* 新结果待 apply */
-        identify_finish();
-    } else {
-        identify_fail(APP_IDENTIFY_REASON_VERIFY);
+    if (s_probe_phase_ms < APP_IDENTIFY_PROBE_SEGMENT_MS) {
+        return;
     }
+
+    /* 本方向段结束仍未达到行程 → 切换下一个方向/档位；四段都失败才判 verify failed。 */
+    if (s_probe_phase == 0U) {
+        s_probe_phase = 1U; /* -low */
+        s_probe_phase_ms = 0U;
+        s_probe_rev_travel = 0.0f;
+    } else if (s_probe_phase == 1U) {
+        s_probe_phase = 2U; /* +high */
+        s_probe_phase_ms = 0U;
+        s_probe_current_target = APP_IDENTIFY_PROBE_A_HIGH;
+        s_probe_fwd_travel = 0.0f;
+    } else if (s_probe_phase == 2U) {
+        s_probe_phase = 3U; /* -high */
+        s_probe_phase_ms = 0U;
+        s_probe_rev_travel = 0.0f;
+    } else {
+        identify_verify_fail();
+        return;
+    }
+    (void)app_foc_calib_set_current(0.0f, 0.0f);
 }
 
 bool app_motor_identify_is_active(void) { return s_identify_result.active; }
@@ -401,13 +499,15 @@ int app_motor_identify_start(void) {
 
     cfg.pole_pairs = motor->pole_pairs;
     cfg.i_cal_a = APP_IDENTIFY_I_CAL_A;
-    cfg.lockin_ms = 800.0f;
-    cfg.dir_ms = 400.0f;
+    cfg.lockin_ms = 1000.0f;
+    cfg.dir_ms = 500.0f;
     cfg.dir_step_rad = FOC_PI_F / 3.0f;
     cfg.sweep_steps = 1080U;               /* 3 电周期 × 360 步 */
     cfg.sweep_turns = 3.0f;                /* 多圈：平均局部传动误差（编码器/齿轮偏心） */
-    cfg.sweep_step_ms = 8.0f;
-    cfg.sweep_settle_ms = 200.0f;
+    /* 50:1 摆线减速器静摩擦较大：延长每步驻留与起始静默，给机械跟随留时间。
+     * 总时长约 26s，仍低于 40s 超时。 */
+    cfg.sweep_step_ms = 10.0f;
+    cfg.sweep_settle_ms = 300.0f;
     cfg.hyst_max_rad = 0.5f;               /* 正/反向零点差 > 28.6° 电角 → 回差/打滑 */
     cfg.quality_min = APP_IDENTIFY_QUALITY_MIN;
     cfg.ratio_tol = 0.2f;
@@ -479,6 +579,7 @@ int app_motor_identify_apply(void) {
     motor = app_motor_params_mutable();
     motor->encoder.electrical_offset_rad = s_identify_result.offset_rad;
     motor->encoder.direction = s_identify_result.direction;
+    motor->encoder.electrical_offset_valid = 1U; /* cal encoder 已确认：仅用于告警状态 */
     s_identify_result_applied = true;
     return 0;
 }
@@ -502,7 +603,12 @@ int app_motor_identify_save(void) {
     record.pole_pairs = motor->pole_pairs;
     record.offset_rad = motor->encoder.electrical_offset_rad;
     record.direction = motor->encoder.direction;
-    return (app_param_store(APP_PARAM_KEY_FOC_ENCODER, &record, sizeof(record)) == 0) ? 0 : -1;
+    if (app_param_store(APP_PARAM_KEY_FOC_ENCODER, &record, sizeof(record)) != 0) {
+        return -1;
+    }
+    /* FENC 已成功落盘：运行期告警状态同步为“已确认”；不改变 FOC 控制路径 */
+    app_motor_params_mutable()->encoder.electrical_offset_valid = 1U;
+    return 0;
 }
 
 int app_motor_identify_restore(void) {
@@ -522,5 +628,6 @@ int app_motor_identify_restore(void) {
     }
     motor->encoder.electrical_offset_rad = foc_wrap_2pi(record.offset_rad);
     motor->encoder.direction = record.direction;
+    motor->encoder.electrical_offset_valid = 1U; /* FENC 有效：标定状态确认 */
     return 0;
 }

@@ -1,6 +1,6 @@
 /**
  * @file    app_motion_timer.h
- * @brief   Motion双周期编排平台（只读ADC缓存；可绑定速度实时回调）
+ * @brief   Motion 单 15kHz 实时拍编排平台（只读 ADC 缓存；位置→速度顺序执行）
  * @author  Kaiser
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -25,20 +25,21 @@ typedef struct {
     uint32_t feedback_age_cycles;
     bool feedback_valid;           /**< 转子快照有效；不是motion游标解算有效 */
 } app_motion_timer_channel_snapshot_t;
-/** @brief 两通道一致观测副本 */
+/** @brief 单 15kHz motion 控制拍观测副本 */
 typedef struct {
-    app_motion_timer_channel_snapshot_t position;
-    app_motion_timer_channel_snapshot_t velocity;
+    app_motion_timer_channel_snapshot_t tick;
 } app_motion_timer_snapshot_t;
-/** @brief 配置GPTMR1 CH0=10kHz CH1=15kHz；调用前app_gptmr_init，配置后停止 */
+/** @brief 配置 GPTMR1 CH0=15kHz；调用前 app_gptmr_init，配置后停止 */
 int app_motion_timer_init(void);
-/** @brief 启动纯10kHz/15kHz定时中断；不触发SPI，不等待PWM同步 */
+/** @brief 启动单个 15kHz motion 中断；不触发 SPI，不等待 PWM 同步 */
 int app_motion_timer_start(void);
-/** @brief 停止期间绑定速度实时消费者；回调必须有界无RTOS调用 */
-void app_motion_timer_bind_velocity(void (*callback)(void));
-/** @brief 停止期间绑定位置实时消费者（CH0 10kHz拍）；回调必须有界无RTOS调用 */
-void app_motion_timer_bind_position(void (*callback)(void));
-/** @brief 停止双通道 */
+/**
+ * @brief 绑定唯一 motion 拍回调（position→velocity 的编排由 app_motion_tick 完成）
+ * @param callback 回调；NULL = 解绑
+ * @note 回调必须有界、无阻塞 RTOS 调用；同一拍内先算位置再算速度。
+ */
+void app_motion_timer_bind_tick(void (*callback)(void));
+/** @brief 停止 motion 定时通道 */
 void app_motion_timer_stop(void);
 /** @brief 短临界区读取观测副本 */
 void app_motion_timer_get_snapshot(app_motion_timer_snapshot_t* out);

@@ -12,6 +12,7 @@
 int g_checks = 0;
 int g_fails = 0;
 
+void test_current_limit(void);
 void test_foc_current_integration(void);
 void test_foc_speed_observer(void);
 void test_algo_speed_observer(void);
@@ -23,7 +24,7 @@ void test_foc_stop(void);
 void test_voltage_limit(void);
 void test_foc_request(void);
 void test_motion_timer(void);
-void test_motion_timer_position_bind(void);
+void test_motion_timer_tick_bind(void);
 void test_motion_math(void);
 void test_motion_pos_filter(void);
 void test_motion_pos_filter_bw_clamp(void);
@@ -47,6 +48,10 @@ void test_motion_position_gains(void);
 void test_motion_position_cascade(void);
 void test_motion_position_circular(void);
 void test_motion_position_ff(void);
+void test_motion_position_trajectory(void);
+void test_motion_speed_limit_app(void);
+void test_motion_torque_ramp_app(void);
+void test_motion_ramp_and_limit(void);
 void test_friction_math(void);
 void test_friction_identify(void);
 void test_friction_identify_failure(void);
@@ -55,6 +60,7 @@ void test_friction_identify_diagnostics(void);
 
 int main(void) {
     printf("Control host tests\n");
+    test_current_limit();
     test_foc_current_integration();
     test_foc_speed_observer();
     test_algo_speed_observer();
@@ -66,7 +72,7 @@ int main(void) {
     test_voltage_limit();
     test_foc_request();
     test_motion_timer();
-    test_motion_timer_position_bind();
+    test_motion_timer_tick_bind();
     test_motion_math();
     test_motion_pos_filter();
     test_motion_pos_filter_bw_clamp();
@@ -90,6 +96,10 @@ int main(void) {
     test_motion_position_cascade();
     test_motion_position_circular();
     test_motion_position_ff();
+    test_motion_position_trajectory();
+    test_motion_speed_limit_app();
+    test_motion_torque_ramp_app();
+    test_motion_ramp_and_limit();
     test_friction_math();
     test_friction_identify();
     test_friction_identify_failure();

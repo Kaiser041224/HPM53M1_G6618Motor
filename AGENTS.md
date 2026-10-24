@@ -430,3 +430,110 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **若需调整**：先只调 `APP_3PHASE_GATE_OFF_SETTLE_MS`（当前 20ms）或
   `APP_FOC_STOP_SPEED_WAIT_TICKS`；若仍无效，再查 +12V/USB 地线、共模和母线回流，
   不要先改 USB 协议栈。
+
+### 位置/速度环同频 15kHz（2026-10-24）
+
+- **位置与速度共用 GPTMR1 CH0 的单个 15kHz 中断**；`app_motion_timer` 只绑定
+  `app_motion_tick`，不再分别启动 CH0/CH1。CH1 由 `app_gptmr` 初始化但 motion timer
+  不启动（预留）；CH2 通用通道仍为 10kHz。
+- `app_motion_tick` 的固定顺序是 **`app_motion_position_step()` → `app_motion_step()`**：
+  位置模式先产生速度给定，再由同拍速度环消费；速度/力矩模式完全跳过位置分支。
+  位置反馈仍来自上一拍的 `app_motion_step()` 快照，单拍延迟为 1/15000 s。
+- `APP_MOTION_POSITION_RATE_HZ`、`app_motion_timer` 预期周期、位置输入滤波和
+  梯形轨迹的 `step_time_s` 均为 15kHz。
+- 位置测试的仿真节拍改为 `1/15000 s`，并通过 `app_motion_tick` 驱动，按物理时长
+  等比例调整 tick 数。
+- 运行态以 `[MOTION] tick ...` 的 `period_max/late_count` 观测为准，不声称与 PWM 锁相。
+- `late_count` 是入口间隔超过标称 110% 的次数，**不是丢拍**：当前 ADC0/FOC ISR
+  优先级 3 高于 GPTMR1 的 2，FOC 重载时 motion tick 会被抢占，`late` 自然升高。
+  判断是否丢拍看累计 `n` 是否约 15k/s；判断 motion 自身负载看 `max`（且 `max`
+  含被高优先级 ISR 抢占的时间）。
+- **后续扩展点**：多圈位置、MIT 等新 motion 指令在 `app_motion_tick` 的模式分发处
+  接入；不要新增独立定时中断，也不要让速度/力矩模式承担位置解算开销。
+
+### FOC 电角度零点默认值（2026-10-24）
+
+- `config/motor.yaml` 的 `encoder.electrical_offset_rad` 是 **FENC 丢失时的兜底名义值**，
+  不是逐台校准的替代。本装配最近验证名义值为 **3.3527 rad（192.1°）**，`direction=+1`；
+  禁止再用 `0.0` 作为默认值（0 是合法角度，会造成约 180° q 轴反转且不报警）。
+- `cal encoder` 只写 FENC（电角度零点/方向）；`motion cal` 只写 MOTN（游标相位/零位），
+  两者不能互相替代。
+- `storage=reset` 在 boot 时先重置 MPRM、随后由 `app_motor_identify_restore()` 恢复 FENC；
+  `param reset motor` / `param reset` 只重置 RAM 中的 MPRM，**不会重新应用 FENC**。
+  执行这类 reset 后必须重启或重新 `cal encoder apply`，否则 FOC 会以 YAML 默认值运行。
+- 新装机/换编码器/重烧 flash 后，先 `cal encoder show` 确认
+  `foc(runtime)`、`params`、`dir` 一致，再做闭环。仅靠速度环调参无法纠正零点/方向错误。
+- `motor.encoder.electrical_offset_valid` 是“已确认标定”标志：YAML 默认 false；
+  `cal encoder apply`、`cal encoder save` 或成功恢复 FENC 置 1；`param reset`、
+  手动改零点/方向清 0。**当前只用于告警，不拒绝任何 FOC/param/motion 命令**；
+  `foc` 状态、`cal encoder show` 和启动日志会提示 `WARN`。
+- 多台量产时不要依赖单一 YAML 名义值；逐台执行 `cal encoder`，并在未来需要强制联锁时
+  再把该标志接入 FOC 使能拒绝逻辑（当前明确不做）。
+- `cal encoder` 的 verify 探针为 **自适应 2 A → 4 A q 轴**：每方向 40 ms 电流斜坡
+  + 120 ms 满流保持，先正/反向 2 A，失败后自动升到 4 A；`probe=+fwd/-rev rad (i=..A)`
+  记录两方向机械行程与最终档位。正向或反向任一方向达到 `0.05 rad` 且方向正确即通过，
+  并立即停机，避免自由轴在探针电流下继续多圈旋转；90° 错位两方向都无行程、
+  180° 错位两方向都反向，仍会失败。扫描每步驻留延长到 10 ms、起始静默 300 ms，
+  总时长约 26 s；残差判据保持 `verify_max ≤ 15°`，不要用放宽阈值掩盖机械问题。
+- trial 零点：REV 终点仅在距正/反向合并圆均值 ≤5.7° 时采用；高摩擦/摆线减速器
+  的终点可能停在齿槽/弹性死点，超出窗口必须回退圆均值，避免 endpoint 偏置。
+- verify 失败日志必须带上真实 `resid mean/max`、双向 `probe` 与探针档位；若在残差阶段
+  就失败，`i=0.0A` 表示探针未执行，不是探针电流丢失。
+- **CALIB 期间 `s_i_q_ref` 由校准端口独占**。`app_foc_run_body()` 的 DIRECT 分支
+  不得用 `s_i_q_ref_cmd` 覆盖它，否则 verify 的 q 探针电流会被 1kHz 编排清零，
+  日志表现为 `probe≈0`、resid 很小但始终 verify failed。该覆盖已修复，并有
+  `test_foc_calib_port.c` 回归用例。
+
+### Motion 命令整形与连续限速（2026-10-24）
+
+- **速度/力矩目标斜坡**（`config/software.yaml`）：
+  - `control.motion_input.vel_ramp_rate` [rad/s²]；0 = 直通。
+  - `control.motion_input.torque_ramp_rate` [Nm/s]；0 = 直通。
+  - `app_motion` 在 15kHz 速度拍用 `algo_motion_ramp()` 线性逼近目标；
+    首次进入/切换模式时，速度从当前反馈起算、力矩从 0 起算。
+- **位置梯形轨迹**：
+  - `control.position_loop.trajectory_vel_limit` [rad/s]；
+  - `control.position_loop.trajectory_accel_limit` [rad/s²]；
+  - 两者均 >0 时启用，使用 `algo_ramp` 梯形模式；否则沿用原二阶输入滤波。
+  - 轨迹模式由轨迹自身生成速度前馈，`input_vel_ff` 不再叠加；位置目标按
+    单圈最短路径规划。
+- **两套独立连续限速**（互不覆盖，各自可配置）：
+  - **motion 轴端限速**：`control.limits.motion_speed_limit_rad_s` [rad/s] +
+    `control.limits.motion_speed_limit_gain` [Nm/(rad/s)]；`app_motion` 在转矩层用
+    `algo_motion_limit_vel()` 连续限幅，超速只允许制动。
+  - **FOC 电角速度限速**：`control.limits.foc_speed_max_rad_s` [rad/s 电角] +
+    `control.limits.foc_speed_limit_gain` [A/(rad/s)]；`app_foc` 在 ADC ISR 对最终
+    q 轴给定做同样的连续限幅，属于 FOC 内部独立保护；CALIB 不生效。
+  - 两者均为 `0` 时关闭；正常 motion 可只启用 motion 限速，也允许同时启用两套
+    （各自作用在自己的物理域，不建议把两者当成同一个阈值使用）。
+- **电流限幅语义**：`foc_current` 改为 **Id 优先 2-norm**：先给 d 轴预算，
+  q 轴使用剩余预算；`R·I` 与 `ωL` 前馈均使用限幅后的给定电流（`ωL` 不再用反馈）。
+- 改这些 YAML 字段后需 `make artifacts` + 重新烧录；它们属于 init 期消费
+  （`APPLY_REBOOT`），运行期 `param set` 不立即生效。
+
+### 电流 boost 管理（2026-10-24）
+
+- **连续/瞬态分离**：`control.limits.i_q_continuous_a` 为连续限幅（24.3A），
+  `control.limits.i_q_max_a` 为 boost/绝对硬上限（30A）；不再把 30A 作为无限时静态限幅。
+- **预算**：`i_q_boost_time_s` 为 30A 满额持续时间；按
+  `(I²−I_cont²)/(I_boost²−I_cont²)` 消耗 I²t 预算。预算耗尽后 `app_foc_current_get_i_limit()`
+  回落到 `i_q_continuous_a`；`i_q_boost_recover_time_s` 从耗尽回满。
+- **回充滞环**：仅当实测电流 ≤ `i_q_continuous_a × i_q_boost_recover_ratio`
+  （默认 0.9）才回充，避免 24.3/30A 边界反复脉冲。
+- `app_foc_current` 的 `i_max` 和 `app_motion` 的转矩上限均使用动态限幅；
+  `i_q_max_a` 仍是 live 绝对上限，测试/调试可临时收紧。
+- 当前参数：`i_q_max=30A`、`i_q_continuous=24.3A`、`i_q_boost_time=2s`、
+  `recover=10s`、`recover_ratio=0.9`。30A 只用于瞬态，不改变 `motor.i_peak_10s_a`，
+  也不改变 `fault.oc_trip_a`。
+
+### Kt / flux 口径（2026-10-24）
+
+- **唯一运行时口径**：`motor.kt_nm_per_a` 为转子转矩 / 峰值 q 轴电流 [Nm/A_peak]；
+  `app_foc_current_init()` 由 `Kt/(1.5·pole_pairs)` 派生 bEMF 用的 λ，**不直接读**
+  `motor.flux_linkage_wb`，避免旧 MPRM 中 Kt/λ 双源不一致。
+- `config/motor.yaml` 的 `flux_linkage_wb` 由
+  `kt_nm_per_a / (1.5 * pole_pairs)` 派生；生成器 `cross_checks` 会拒绝
+  Kt/λ 不一致的配置。`ke_vs_per_rad` 仅作手册对照/文档，不参与 FOC。
+- 当前按峰值电流口径：`kt=0.117 Nm/A` 与 `torque_peak_10s/i_peak_10s≈0.115`
+  一致；对应的 λ≈0.0078 Wb，和手册 Ke 直接换算值有差异，后续以实测反电动势/
+  转矩为准；改 Kt 后 `bemf_ff` 与转矩命令会同步变化。

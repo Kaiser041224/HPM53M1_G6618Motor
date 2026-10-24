@@ -83,12 +83,16 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     {
         float enc_offset;
         float enc_dir;
+        const app_motor_params_t* motor = app_motor_params_current();
 
         app_foc_get_encoder_offset(&enc_offset, &enc_dir);
         csh_printf(
-            csh, "     enc: offset=%.4f rad (%.1f deg) dir=%+.0f  (cal encoder show)\r\n",
+            csh, "     enc: offset=%.4f rad (%.1f deg) dir=%+.0f valid=%u  (cal encoder show)\r\n",
             (double)enc_offset, (double)(enc_offset * APP_TERMINAL_FOC_DEG_PER_RAD),
-            (double)enc_dir);
+            (double)enc_dir, (unsigned)motor->encoder.electrical_offset_valid);
+        if (motor->encoder.electrical_offset_valid == 0U) {
+            csh_printf(csh, "     WARN: encoder offset uncalibrated; commands continue\r\n");
+        }
     }
     if (app_foc_get_state() == APP_FOC_STATE_FAULT) {
         csh_printf(csh, "     hint: run 'foc off' then 'foc on' to recover\r\n");
@@ -281,7 +285,7 @@ static int cmd_foc(int argc, char** argv) {
             software->fault.shutdown_en = on ? 0U : defaults->fault.shutdown_en;
         }
         csh_printf(
-            csh, "bench=%u: i_trip_a=%.1f A  speed_max=%.0f rad/s  fault.shutdown_en=%u\r\n",
+            csh, "bench=%u: i_trip_a=%.1f A  foc_speed_max=%.0f rad/s  fault.shutdown_en=%u\r\n",
             (unsigned)on, (double)software->control.limits.i_trip_a,
             (double)software->control.limits.speed_max_rad_s,
             (unsigned)software->fault.shutdown_en);

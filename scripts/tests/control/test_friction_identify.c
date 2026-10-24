@@ -72,7 +72,7 @@ static unsigned run_identify(unsigned max_ticks) {
         g_mock_output_timestamp_cycles += 48000U; /* 样本时间戳与仿真步长一致 */
         app_motion_step();
         app_foc_isr_step();
-        if (tick % 10 == 0)                       /* 1kHz 辨识节拍（motion 10kHz） */
+        if (tick % 10 == 0)                       /* 1kHz 辨识节拍（motion 15kHz） */
             app_friction_identify_run_once();
         app_friction_identify_get_snapshot(&snapshot);
         if (snapshot.state == APP_FRICTION_IDENTIFY_DONE

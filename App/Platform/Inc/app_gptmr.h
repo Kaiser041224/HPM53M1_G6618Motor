@@ -8,8 +8,8 @@
  * 通过 intf_gptmr 接口层访问驱动，不直接调用驱动层。
  *
  * 通道分配 (GPTMR1):
- *   CH0 — motion位置观测 5kHz
- *   CH1 — motion速度观测 10kHz
+ *   CH0 — motion 单控制拍 15kHz（position → velocity）
+ *   CH1 — 预留 15kHz（motion 速度独立拍已合并至 CH0）
  *   CH2 — 通用通道 10kHz
  *   CH3 — 预留（原 12.5kHz 编码器采样器，已由 ADC 同拍硬件同步采样替代）
  *
@@ -38,8 +38,8 @@ typedef void (*app_gptmr_callback_t)(void);
  * @brief GPTMR 通道标识
  */
 typedef enum {
-    APP_GPTMR_CH_0 = 0, /**< GPTMR1 CH0: motion位置 */
-    APP_GPTMR_CH_1 = 1, /**< GPTMR1 CH1: motion速度 */
+    APP_GPTMR_CH_0 = 0, /**< GPTMR1 CH0: motion 单控制拍 */
+    APP_GPTMR_CH_1 = 1, /**< GPTMR1 CH1: 预留（速度拍已合并至 CH0） */
     APP_GPTMR_CH_2 = 2, /**< GPTMR1 CH2: 通用通道 */
     APP_GPTMR_CH_3 = 3, /**< GPTMR1 CH3: 预留（原编码器采样器，已移除；全局 7） */
     APP_GPTMR_CH_COUNT,

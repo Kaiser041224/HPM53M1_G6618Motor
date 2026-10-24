@@ -73,6 +73,17 @@ void test_foc_calib_port(void) {
     CHECK(app_foc_calib_use_trial_offset(2.0f, 1.0f) == 0);
     CHECK(app_foc_calib_set_current(2.0f, 0.0f) == 0);
     CHECK_NEAR(isr_theta_e(), foc_wrap_2pi(1.0f - 2.0f), 1e-4f);
+
+    /* 2b) CALIB 的 q 给定必须由校准端口持有，不能让 DIRECT 的 1kHz 编排覆盖 */
+    {
+        app_foc_current_snapshot_t snap;
+
+        CHECK(app_foc_calib_set_current(0.0f, 2.0f) == 0);
+        app_foc_run_once();
+        app_foc_isr_step();
+        app_foc_get_snapshot(&snap);
+        CHECK_NEAR(snap.i_q_ref_a, 2.0f, 1e-3f);
+    }
     app_foc_get_encoder_offset(&offset, &dir);
     CHECK_NEAR(offset, 0.5f, 1e-6f);
     CHECK_NEAR(dir, -1.0f, 1e-6f);

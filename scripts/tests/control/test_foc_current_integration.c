@@ -86,14 +86,16 @@ void test_foc_current_integration(void) {
     mock_set_current_gains(0.0f, 0.0f);
     app_motor_params_mutable()->rs_ohm = 0.25f;
     app_motor_params_mutable()->ls_h = 1.0e-4f;
-    app_motor_params_mutable()->flux_linkage_wb = 0.1f;
+    /* 故意把旧 flux 字段置 0：FOC 必须从 Kt_peak/(1.5p) 派生 λ。 */
+    app_motor_params_mutable()->kt_nm_per_a = 1.5f;
+    app_motor_params_mutable()->flux_linkage_wb = 0.0f;
     app_software_params_mutable()->control.current_loop.decoupling_en = 0U;
     app_software_params_mutable()->current_ff.r_en = 0U;
     app_software_params_mutable()->current_ff.wl_en = 1U;
     app_software_params_mutable()->current_ff.bemf_en = 0U;
     app_foc_current_init();
     app_foc_current_reset();
-    rc = app_foc_current_run_fresh(0.0f, 100.0f, 0.0f, 0.0f, 2.0f, 1.5980762f, -3.5980762f,
+    rc = app_foc_current_run_fresh(0.0f, 100.0f, 2.0f, 3.0f, 2.0f, 1.5980762f, -3.5980762f,
                                   24.0f, duty, &sat);
     CHECK(rc == 0);
     app_foc_current_get_snapshot(&snap);
@@ -103,7 +105,7 @@ void test_foc_current_integration(void) {
     app_foc_current_reset();
     app_software_params_mutable()->current_ff.wl_en = 0U;
     app_software_params_mutable()->current_ff.bemf_en = 1U;
-    rc = app_foc_current_run_fresh(0.0f, 100.0f, 0.0f, 0.0f, 2.0f, 1.5980762f, -3.5980762f,
+    rc = app_foc_current_run_fresh(0.0f, 100.0f, 2.0f, 3.0f, 2.0f, 1.5980762f, -3.5980762f,
                                   24.0f, duty, &sat);
     CHECK(rc == 0);
     app_foc_current_get_snapshot(&snap);
@@ -226,6 +228,25 @@ void test_foc_speed_observer(void) {
     CHECK_NEAR(snap.omega_e_rad_s, 100.0f, 2.0f);
     CHECK_NEAR(snap.speed_out_rad_s, 0.5f, 0.05f);
     CHECK(snap.speed_out_valid);
+
+    /* FOC 内部连续限速独立生效：电角速度 100rad/s、上限 50、增益 0.1A/(rad/s)
+     * → q 电流上限 (50-100)*0.1=-5A；给 +10A 应被改写成 -5A 制动。 */
+    app_software_params_mutable()->control.limits.speed_max_rad_s = 50.0f;
+    app_software_params_mutable()->foc_speed_limit_gain = 0.1f;
+    CHECK(app_foc_set_iq_ref(10.0f) == 0);
+    app_foc_run_once();
+    app_foc_isr_step();
+    app_foc_get_snapshot(&snap);
+    /* 限速输出会再被 FOC 电流圆限幅截到 ±i_q_max；按当拍 ωe 计算期望值。 */
+    float expected_iq = (50.0f - snap.omega_e_rad_s) * 0.1f;
+    if (expected_iq > 10.0f)
+        expected_iq = 10.0f;
+    else if (expected_iq < -10.0f)
+        expected_iq = -10.0f;
+    CHECK(snap.i_q_ref_a < 0.0f); /* 超速时只允许制动方向 */
+    CHECK_NEAR(snap.i_q_ref_a, expected_iq, 0.2f);
+    app_software_params_mutable()->control.limits.speed_max_rad_s = 0.0f;
+    app_software_params_mutable()->foc_speed_limit_gain = 0.0f;
 
     /* 编码器坏帧：observer 速度失效，快照保持有限，不产生 NaN */
     g_mock_rotor_fail = 1;

@@ -194,11 +194,17 @@ void app_init(void) {
         const app_motor_params_t* motor = app_motor_params_current();
 
         app_debug_printf(
-            "[FOC] encoder offset: %s offset=%.4f rad dir=%+.0f\r\n",
+            "[FOC] encoder offset: %s offset=%.4f rad dir=%+.0f valid=%u\r\n",
             (restore_rc == 0)  ? "restored(flash)"
             : (restore_rc > 0) ? "default(yaml)"
                                : "REJECTED(flash record mismatch, yaml in use)",
-            (double)motor->encoder.electrical_offset_rad, (double)motor->encoder.direction);
+            (double)motor->encoder.electrical_offset_rad, (double)motor->encoder.direction,
+            (unsigned)motor->encoder.electrical_offset_valid);
+        if ((restore_rc != 0) || (motor->encoder.electrical_offset_valid == 0U)) {
+            /* 仅提醒：不改变 FOC 使能/命令路径 */
+            app_debug_printf(
+                "[FOC] WARN: encoder offset uncalibrated; using current value, commands not blocked\r\n");
+        }
     }
 
     /* 13. FOC（电流环编排；上电 OFF，不使能输出） */
@@ -238,15 +244,14 @@ void app_init(void) {
         int output_rc = app_encoder_output_start();
         app_debug_printf("[ENC] vernier sync: %s\r\n", output_rc == 0 ? "started" : "FAILED");
         if (output_rc == 0) {
-            /* 两回调都必须以游标输出链武装为前提（原守卫语义）：
-             * 未武装时 app_motion_step 会以 10kHz 空转拒绝路径搅动 FOC 请求 */
-            app_motion_timer_bind_position(app_motion_position_step);
-            app_motion_timer_bind_velocity(app_motion_step);
+            /* 单一 15kHz 拍：app_motion_tick 内部固定 position → velocity；
+             * 速度/力矩模式不进入位置分支。 */
+            app_motion_timer_bind_tick(app_motion_tick);
         }
         if (rc == 0)
             rc = app_motion_timer_start();
         app_debug_printf(
-            "[MOTION] timer observation: %s (position=10kHz velocity=15kHz)\r\n",
+            "[MOTION] timer observation: %s (single tick=15kHz, position->velocity)\r\n",
             rc == 0 ? "started" : "FAILED");
     }
 }
@@ -333,23 +338,17 @@ void app_diag_step(void) {
     app_motion_timer_snapshot_t motion_timer;
     app_motion_timer_take_window(&motion_timer);
     app_debug_printf(
-        "[MOTION] pos n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu | "
-        "vel n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu age=%lu valid=%u [cycles]\r\n",
-        (unsigned long)motion_timer.position.count,
-        (unsigned long)motion_timer.position.window_count,
-        (unsigned long)motion_timer.position.period_min_cycles,
-        (unsigned long)motion_timer.position.period_max_cycles,
-        (unsigned long)motion_timer.position.execution_max_cycles,
-        (unsigned long)motion_timer.position.window_late_count,
-        (unsigned long)motion_timer.position.late_count, (unsigned long)motion_timer.velocity.count,
-        (unsigned long)motion_timer.velocity.window_count,
-        (unsigned long)motion_timer.velocity.period_min_cycles,
-        (unsigned long)motion_timer.velocity.period_max_cycles,
-        (unsigned long)motion_timer.velocity.execution_max_cycles,
-        (unsigned long)motion_timer.velocity.window_late_count,
-        (unsigned long)motion_timer.velocity.late_count,
-        (unsigned long)motion_timer.velocity.feedback_age_cycles,
-        (unsigned)motion_timer.velocity.feedback_valid);
+        "[MOTION] tick n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu "
+        "age=%lu valid=%u [cycles]\r\n",
+        (unsigned long)motion_timer.tick.count,
+        (unsigned long)motion_timer.tick.window_count,
+        (unsigned long)motion_timer.tick.period_min_cycles,
+        (unsigned long)motion_timer.tick.period_max_cycles,
+        (unsigned long)motion_timer.tick.execution_max_cycles,
+        (unsigned long)motion_timer.tick.window_late_count,
+        (unsigned long)motion_timer.tick.late_count,
+        (unsigned long)motion_timer.tick.feedback_age_cycles,
+        (unsigned)motion_timer.tick.feedback_valid);
 }
 
 /**

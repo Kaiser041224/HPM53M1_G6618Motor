@@ -263,6 +263,12 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
     }
     }
 
+    if ((strcmp(name, "motor.encoder.electrical_offset_rad") == 0)
+        || (strcmp(name, "motor.encoder.direction") == 0)) {
+        /* 只维护告警状态，不拒绝命令；新零点在下一次 foc on 的角度链重建时生效 */
+        app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+        csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only\r\n");
+    }
     if (param_is_safety_related(name)) {
         csh_printf(csh, "WARN: safety-related parameter\r\n");
     }
@@ -289,12 +295,14 @@ static int cmd_param_reset(chry_shell_t* csh, const char* target) {
         *app_hardware_params_mutable() = *app_hardware_params_default();
         *app_software_params_mutable() = *app_software_params_default();
         csh_printf(csh, "OK  all parameters reset to factory defaults\r\n");
+        csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only, commands continue\r\n");
         return 0;
     }
 
     if (strcmp(target, "motor") == 0) {
         *app_motor_params_mutable() = *app_motor_params_default();
         csh_printf(csh, "OK  motor parameters reset to factory defaults\r\n");
+        csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only, commands continue\r\n");
         return 0;
     }
     if (strcmp(target, "hardware") == 0) {
@@ -316,6 +324,11 @@ static int cmd_param_reset(chry_shell_t* csh, const char* target) {
             return -1;
         }
         memcpy(param_data(meta), param_factory_data(meta), param_type_size(meta->type));
+        if ((strcmp(target, "motor.encoder.electrical_offset_rad") == 0)
+            || (strcmp(target, "motor.encoder.direction") == 0)) {
+            app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+            csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only\r\n");
+        }
         csh_printf(csh, "OK  %s reset to factory default\r\n", target);
     }
     return 0;

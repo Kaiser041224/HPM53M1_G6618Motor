@@ -59,13 +59,21 @@ typedef struct {
     uint32_t hold_count;        /**< 坏拍有界保持事件累计（active期间质量类坏拍进入保持的次数） */
     app_motion_reason_t reason; /**< 最近拒绝/输出撤销；成功新命令清零 */
     bool current_limited, voltage_saturated; /**< 最近FOC执行限幅状态（仅属本请求时有效） */
+    bool speed_limited; /**< 本拍轴端连续速度限幅生效 */
     bool calibrated, zero_valid, feedback_valid, active, calibrating, calibration_done;
     float output_direction; /**< 出轴正方向定义（+1/-1）；用户坐标=本值×内部物理坐标 */
 } app_motion_snapshot_t;
 /** @brief 初始化/恢复参数；采样计时回调停止期间调用，不使能 */
 void app_motion_init(void);
-/** @brief 15kHz速度拍入口：读双编码器/ observer 反馈，再估计与控制 */
+/** @brief 15kHz 速度/力矩拍入口：读双编码器/ observer 反馈，再估计与控制；由 app_motion_tick 调用 */
 void app_motion_step(void);
+/**
+ * @brief 单一 15kHz motion 控制拍：位置模式先算位置，再统一推进速度/力矩
+ *
+ * 顺序固定为 position_step → motion_step；速度/力矩模式不进入位置算法。
+ * 后续多圈位置、MIT 等指令只在位置分支上扩展，不改变底层速度/电流链。
+ */
+void app_motion_tick(void);
 /** @brief 静止OFF采1000组相位，期间不可移动 */
 int app_motion_calibrate(void);
 /** @brief OFF应用最近静止标定，旧机械零点失效 */
@@ -87,7 +95,10 @@ int app_motion_position(float position_rad, float vel_ff_rad_s, float torque_ff_
 /** @brief 位置环增益pos_gain[1/s]与输入滤波带宽[rad/s]（0=禁用/直通）；不驱动时可改，写透参数单例
  */
 int app_motion_position_gains(float pos_gain, float filter_bandwidth_rad_s);
-/** @brief 10kHz位置拍入口（CH0）：滤波+位置P；角度/速度取自15kHz反馈，零SPI */
+/**
+ * @brief 15kHz 位置控制入口：滤波 + 位置 P；由 app_motion_tick 在位置模式调用
+ * @note 角度/速度取自上一拍反馈快照，零 SPI；速度/力矩模式不调用。
+ */
 void app_motion_position_step(void);
 /** @brief 辨识期挂起/恢复摩擦前馈（速度模式FF置零，PI全权；不改参数） */
 void app_motion_friction_suspend(bool suspend);

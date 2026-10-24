@@ -67,12 +67,12 @@ typedef struct {
  * @brief 控制限幅参数（FOC 电流环消费）
  */
 typedef struct {
-    float i_q_max_a;                /**< 电流限幅 [A]（峰值口径 = 相电流峰值） */
+    float i_q_max_a;                /**< 电流 boost/绝对上限 [A_peak]（连续值见 i_q_continuous_a） */
     float duty_max;                 /**< 调制上限（有效域 (0.5, 1.0]；FOC 电流环消费） */
     float i_trip_a;                 /**< 快速过流跳闸 [A]（峰值口径；0 = 关闭） */
-    float speed_max_rad_s;          /**< 转矩模式限速 [rad/s 电角]（0 = 关闭） */
+    float speed_max_rad_s;          /**< FOC 内部连续限速上限 [rad/s 电角]（0 = 关闭；与 motion 限速独立） */
     float motion_iq_max_a;          /**< motion 命令电流硬限制 [A]（力矩命令与速度PI输出上限） */
-    float motion_speed_limit_rad_s; /**< 轴端速度命令限 [rad/s]（0 = 不限） */
+    float motion_speed_limit_rad_s; /**< 轴端实际速度上限 [rad/s]（0 = 不限；同时约束命令） */
 } app_software_limits_t;
 
 /**
@@ -120,6 +120,22 @@ typedef struct {
     uint8_t bemf_en; /**< 1 = 启用 bEMF（ωλ）前馈；默认 0 */
 } app_software_current_ff_t;
 
+/**
+ * @brief motion 输入整形参数（追加字段；app_motion init 期消费）
+ */
+typedef struct {
+    float vel_ramp_rate;    /**< 速度目标斜坡 [rad/s²]（0 = 直通） */
+    float torque_ramp_rate; /**< 力矩目标斜坡 [Nm/s]（0 = 直通） */
+} app_software_motion_input_t;
+
+/**
+ * @brief 位置梯形轨迹参数（追加字段；app_motion init 期消费）
+ */
+typedef struct {
+    float trajectory_vel_limit;   /**< 轨迹最大速度 [rad/s]（0 = 关闭轨迹） */
+    float trajectory_accel_limit; /**< 轨迹加速度/减速度 [rad/s²]（0 = 关闭轨迹） */
+} app_software_position_traj_t;
+
 /** @brief flash 参数加载策略 */
 typedef enum {
     APP_SW_STORAGE_KEEP = 0,     /**< 使用 flash 中已保存的参数 */
@@ -143,6 +159,14 @@ typedef struct {
     float current_loop_output_delay_s; /**< 反 Park 输出延迟补偿 [s]（追加字段；0=关闭） */
     app_software_motion_t motion;      /**< 运动用户坐标（追加字段） */
     app_software_current_ff_t current_ff; /**< 电流环前馈（追加字段） */
+    app_software_motion_input_t motion_input; /**< 速度/力矩目标斜坡（追加字段） */
+    app_software_position_traj_t position_traj; /**< 位置梯形轨迹（追加字段） */
+    float motion_speed_limit_gain; /**< 轴端连续速度限幅增益 [Nm/(rad/s)]（追加字段；0=关闭） */
+    float foc_speed_limit_gain; /**< FOC 内部连续限速增益 [A/(rad/s)]（追加字段；0=关闭） */
+    float i_q_continuous_a; /**< 电流连续限幅 [A_peak]（追加字段；i_q_max_a 为 boost/硬上限） */
+    float i_q_boost_time_s; /**< 30A/boost 满额可持续时间 [s]（追加字段；0=禁用 boost） */
+    float i_q_boost_recover_time_s; /**< boost 从耗尽回满时间 [s]（追加字段；0=不回充） */
+    float i_q_boost_recover_ratio; /**< 低于连续值×该比例才回充（追加字段，0~1） */
 } app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */

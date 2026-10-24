@@ -11,9 +11,9 @@ winding: star              # 仅文档：star | delta
 pole_pairs: 10             # 极对数（24N20P → 20 极 / 2）；电角度 = 机械角 × 10
 rs_ohm: 0.158              # 相电阻 [Ω]（线值 0.316 ÷ 2）
 ls_h: 1.185e-4             # 相电感 [H]（线值 0.237mH ÷ 2）
-ke_vs_per_rad: 0.125       # 反电动势系数 [V·s/rad]（KV70 手册值，**机械角·线电压 RMS** 口径；待离线辨识校核）
-flux_linkage_wb: "ke_vs_per_rad * sqrt(2) / (sqrt(3) * pole_pairs)"  # 磁链 [Wb]（FOC 口径：电角度·相电压峰值；≈0.0102）
-kt_nm_per_a: 0.117         # 转矩系数 [N·m/A]（手册值；SI 下理想 PMSM 应与 Ke 相等，差异待校核）
+ke_vs_per_rad: 0.125       # 反电动势系数 [V·s/rad]（KV70 手册值，机械角·线电压 RMS；仅文档/对照，不参与 FOC λ）
+flux_linkage_wb: "kt_nm_per_a / (1.5 * pole_pairs)"  # 磁链 [Wb]（FOC 口径：电角度·相电压峰值；由 Kt_peak 唯一派生，≈0.0078）
+kt_nm_per_a: 0.117         # 转子转矩系数 [N·m/A_peak]（手册值；torque_peak/i_peak≈0.115，按峰值电流口径）
 i_rated_a: 7.0             # 额定电流 [A]（RMS，105°C）
 i_peak_10s_a: 24.3         # 峰值电流 10s [A]（峰值）
 i_peak_2s_a: 48.6          # 峰值电流 2s [A]（峰值）
@@ -34,5 +34,6 @@ encoder:
   output_ratio: "rotor_ring_teeth / output_pinion_teeth"   # 出轴编码器转角/转子转角 → 0.98（实测确认）
   # 多圈解算使用顶层 reducer_ratio + 本处 output_ratio；两者须满足
   # reducer_ratio × (1 - output_ratio) = 1。修改后须重做 motion cal/apply/save。
-  electrical_offset_rad: 0.0    # 电角度零点 [rad]（出厂默认；cal encoder apply/save 覆盖，flash "FENC" 上电恢复优先）
+  electrical_offset_rad: 3.3527 # 电角度零点 [rad]（本装配最近一次验证值 192.1°；仅作 FENC 丢失兜底，逐台仍须 cal encoder；禁止用 0 代替标定）
   direction: 1.0                # FOC/编码器方向（仅 ±1；cal encoder 覆盖）；出轴方向见 software.motion.output_direction
+  electrical_offset_valid: false # 0=未确认标定（仅告警，不拒绝命令）；cal encoder apply/FENC 恢复置 1

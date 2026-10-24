@@ -41,6 +41,7 @@ float g_mock_off_true;
 float g_mock_dir_true;
 float g_mock_current_scale; /**< 实测电流 = 给定 × scale（过流注入） */
 bool g_mock_probe_stuck;    /**< 编码器模式下转子卡死（验证失败注入） */
+float g_mock_probe_min_a;   /**< q 探针最小起动力 [A]（自适应升流测试） */
 bool g_mock_snap_invalid;   /**< 电流快照 valid=false（电流环保护路径注入） */
 uint32_t g_mock_enc_errors;
 uint32_t g_mock_enc_jumps;
@@ -80,6 +81,7 @@ void mock_reset(float off_true, float dir_true) {
     g_mock_dir_true = dir_true;
     g_mock_current_scale = 1.0f;
     g_mock_probe_stuck = false;
+    g_mock_probe_min_a = 0.0f;
     g_mock_snap_invalid = false;
     g_mock_enc_errors = 0U;
     g_mock_enc_jumps = 0U;
@@ -98,6 +100,7 @@ void mock_reset(float off_true, float dir_true) {
     s_motor.pole_pairs = MOCK_POLE_PAIRS;
     s_motor.encoder.electrical_offset_rad = 0.0f;
     s_motor.encoder.direction = 1.0f;
+    s_motor.encoder.electrical_offset_valid = 0U;
 }
 
 void mock_store_reset(void) {
@@ -124,7 +127,9 @@ void mock_plant_step(void) {
 
             alpha = theta_e_est + atan2f(s_iq, s_id);
         }
-        if (!(g_mock_probe_stuck && !s_forced)) {
+        bool probe_too_weak =
+            !s_forced && (fabsf(s_id) < 0.1f) && (fabsf(s_iq) < g_mock_probe_min_a);
+        if (!(g_mock_probe_stuck && !s_forced) && !probe_too_weak) {
             s_beta += MOCK_PLANT_GAIN * sinf(foc_wrap_pm_pi(alpha - s_beta));
         }
     }

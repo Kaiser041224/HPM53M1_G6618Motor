@@ -13,8 +13,8 @@ pole_pairs: 10             # 极对数（24N20P → 20 极 / 2）；电角度 = 
 rs_ohm: 0.158              # 相电阻 [Ω]（线值 0.316 ÷ 2）
 ls_h: 1.185e-4             # 相电感 [H]（线值 0.237mH ÷ 2）
 ke_vs_per_rad: 0.125
-flux_linkage_wb: "ke_vs_per_rad * sqrt(2) / (sqrt(3) * pole_pairs)"       # 反电动势系数 [V·s/rad]（KV70 手册值；待离线辨识校核）
-kt_nm_per_a: 0.117         # 转矩系数 [N·m/A]（手册值；SI 下理想 PMSM 应与 Ke 相等，差异待校核）
+flux_linkage_wb: "kt_nm_per_a / (1.5 * pole_pairs)"  # [Wb] FOC λ = Kt_peak/(1.5p)
+kt_nm_per_a: 0.117         # [N·m/A_peak] 峰值电流口径
 i_rated_a: 7.0             # 额定电流 [A]（RMS，105°C）
 i_peak_10s_a: 24.3         # 峰值电流 10s [A]（峰值）
 i_peak_2s_a: 48.6          # 峰值电流 2s [A]（峰值）
@@ -37,3 +37,4 @@ encoder:
   # reducer_ratio × (1 - output_ratio) = 1。修改后须重做 motion cal/apply/save。
   electrical_offset_rad: 0.0    # 电角度零点 [rad]（cal encoder 写入；V1 RAM，flash V2）
   direction: 1.0                # 编码器方向（合法值仅 +1.0 / −1.0；cal encoder 写入）
+  electrical_offset_valid: false # 测试夹具：默认未确认标定
