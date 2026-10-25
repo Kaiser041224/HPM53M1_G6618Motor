@@ -36,6 +36,11 @@ fault:
   # settle_ticks: 50
 
 control:
+  cogging:
+    enable: false           # 测试夹具值
+    rotor_enable: true
+    output_enable: false
+    gain: 1.0
   motion_input:
     vel_ramp_rate: 0.0        # [rad/s²]（测试夹具值：0=直通）
     torque_ramp_rate: 0.0     # [Nm/s]（测试夹具值：0=直通）

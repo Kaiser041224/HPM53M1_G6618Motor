@@ -35,6 +35,12 @@ fault:
   # settle_ticks: 50
 
 control:
+  # 齿槽/传动补偿默认启用（boot 或 cal cogging apply 后消费）
+  cogging:
+    enable: true           # true=加载到有效角表后自动打开总开关；运行期可 cogging on/off
+    rotor_enable: true      # 总开关打开时默认启用转子角表
+    output_enable: true     # 默认启用两张表；若带载表现不稳，改为 false
+    gain: 1.0               # 补偿增益 0~2；运行期可用 cogging gain 改
   # 速度/力矩命令整形（app_motion init 期消费；0 = 直通）
   motion_input:
     vel_ramp_rate: 0.0        # [rad/s²] 速度目标斜坡；0=直通

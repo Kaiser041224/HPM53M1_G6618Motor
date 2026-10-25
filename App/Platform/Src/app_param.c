@@ -9,6 +9,7 @@
 
 #include "app_param.h"
 
+#include "app_cold_ram.h"
 #include "intf_flash.h"
 
 #include <string.h>
@@ -45,11 +46,13 @@ volatile uint32_t g_param_store_stage __attribute__((section(".noncacheable.bss"
 volatile uint32_t g_param_store_slot __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_param_store_error __attribute__((section(".noncacheable.bss")));
 
-/* 保存时的整扇区缓冲（仅 store 使用） */
-static app_param_slot_t s_slots[APP_PARAM_SLOT_MAX];
-static app_param_slot_t s_load_slot;   /**< load 读暂存（避免 256B 栈帧；load/store 分缓冲，
-                                        *  运行期 terminal(store)×diag/init(load) 交叉可重入） */
-static app_param_slot_t s_verify_slot; /**< store 回读校验暂存（同上） */
+/* 保存时的整扇区缓冲（仅 store 使用）；仅 flash 停机窗口访问，放 AHB SRAM。 */
+static app_param_slot_t s_slots[APP_PARAM_SLOT_MAX] APP_ATTR_AHB_SRAM;
+static app_param_slot_t s_load_slot APP_ATTR_AHB_SRAM;   /**< load 读暂存（避免 256B 栈帧；
+                                                          *  load/store 分缓冲，运行期
+                                                          *  terminal(store)×diag/init(load)
+                                                          *  交叉可重入） */
+static app_param_slot_t s_verify_slot APP_ATTR_AHB_SRAM; /**< store 回读校验暂存（同上） */
 
 /**
  * @brief CRC-32/ISO-HDLC 校验（反射多项式 0xEDB88320）

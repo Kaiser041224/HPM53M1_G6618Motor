@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "app_current_identify.h"
+#include "app_cold_ram.h"
 #include "app_encoder.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
@@ -41,7 +42,8 @@ static uint16_t s_ld_target_blocks;
 static double s_current_identify_sum, s_current_identify_q_sum, s_current_identify_voltage_sum;
 static double s_current_identify_first_half_sum;
 static float s_current_identify_voltage_base;
-static id_rl_sample_t s_current_identify_average[APP_FOC_IDENTIFY_SAMPLES];
+static id_rl_sample_t s_current_identify_average[APP_FOC_IDENTIFY_SAMPLES]
+    APP_ATTR_AHB_SRAM; /**< 电流辨识平均缓冲（仅 cal current 使用） */
 #define CURRENT_IDENTIFY_BLOCKS     20U
 #define CURRENT_IDENTIFY_REPEATS    16U
 #define CURRENT_IDENTIFY_LD_REPEATS 64U

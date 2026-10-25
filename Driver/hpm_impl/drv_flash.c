@@ -61,6 +61,20 @@ static bool flash_addr_in_range(uint32_t addr, uint32_t len)
     return (addr >= s_base) && ((addr + len) <= (s_base + s_size)) && (len > 0U);
 }
 
+/**
+ * @brief 按 L1 D-Cache line 对齐后失效
+ *
+ * l1c_dc_invalidate() 要求起始地址和长度都为 32B 对齐；flash 记录长度、
+ * 最后一块长度通常不是 32B 倍数，直接传入会触发 SDK assert。
+ */
+static void flash_dcache_invalidate_aligned(uint32_t addr, uint32_t len)
+{
+    uint32_t aligned_start = HPM_L1C_CACHELINE_ALIGN_DOWN(addr);
+    uint32_t aligned_end = HPM_L1C_CACHELINE_ALIGN_UP(addr + len);
+
+    l1c_dc_invalidate(aligned_start, aligned_end - aligned_start);
+}
+
 /* ============================================================================
  * 实现（单实例）
  * ============================================================================ */
@@ -185,8 +199,8 @@ static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
 
     if (status == status_success) {
         /* ROM 经 XPI 写 flash，CPU 侧 D-Cache 中的旧行必须失效，否则回读校验读到陈旧数据
-         * （L1C 已使能；XIP flash 区为可缓存区） */
-        l1c_dc_invalidate(addr, (uint32_t) len);
+         * （L1C 已使能；XIP flash 区为可缓存区）。长度/首址需按 cache line 对齐。 */
+        flash_dcache_invalidate_aligned(addr, (uint32_t) len);
         return 0;
     }
     return -1;
@@ -217,7 +231,7 @@ static int flash_erase_sector_impl(uint32_t addr)
 
     if (status == status_success) {
         /* 同上：擦除后整扇区内容变化，失效该扇区的缓存行 */
-        l1c_dc_invalidate(addr, s_sector_size);
+        flash_dcache_invalidate_aligned(addr, s_sector_size);
         return 0;
     }
     return -1;

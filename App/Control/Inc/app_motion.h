@@ -79,6 +79,16 @@ void app_motion_step(void);
  * 后续多圈位置、MIT 等指令只在位置分支上扩展，不改变底层速度/电流链。
  */
 void app_motion_tick(void);
+/**
+ * @brief 临时要求速度/力矩模式也维护输出轴角（齿槽标定用）
+ * @param enable true=读输出编码器 pair 并更新 shaft_rad；正常速度控制保持 false
+ */
+void app_motion_set_output_tracking(bool enable);
+/**
+ * @brief 输出角表启用时，要求速度/力矩模式也维护 shaft_rad
+ * @param required true=读输出 pair 并更新输出角；关闭输出表后恢复 false
+ */
+void app_motion_set_cogging_output_required(bool required);
 /** @brief 静止OFF采1000组相位，期间不可移动 */
 int app_motion_calibrate(void);
 /** @brief OFF应用最近静止标定，旧机械零点失效 */

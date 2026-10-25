@@ -136,6 +136,17 @@ typedef struct {
     float trajectory_accel_limit; /**< 轨迹加速度/减速度 [rad/s²]（0 = 关闭轨迹） */
 } app_software_position_traj_t;
 
+/**
+ * @brief 齿槽/传动补偿默认启用参数（追加字段；boot / cal apply 时消费）
+ */
+typedef struct {
+    uint8_t enable;        /**< 1 = boot 时默认打开补偿总开关（需有效表） */
+    uint8_t rotor_enable;  /**< 1 = 默认启用 rotor 表 */
+    uint8_t output_enable; /**< 1 = 默认启用 output 表 */
+    uint8_t reserved;      /**< 对齐保留 */
+    float gain;            /**< 默认补偿增益（0~2） */
+} app_software_cogging_t;
+
 /** @brief flash 参数加载策略 */
 typedef enum {
     APP_SW_STORAGE_KEEP = 0,     /**< 使用 flash 中已保存的参数 */
@@ -167,6 +178,7 @@ typedef struct {
     float i_q_boost_time_s; /**< 30A/boost 满额可持续时间 [s]（追加字段；0=禁用 boost） */
     float i_q_boost_recover_time_s; /**< boost 从耗尽回满时间 [s]（追加字段；0=不回充） */
     float i_q_boost_recover_ratio; /**< 低于连续值×该比例才回充（追加字段，0~1） */
+    app_software_cogging_t cogging; /**< 齿槽补偿默认启用/表选择/增益（追加字段） */
 } app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */

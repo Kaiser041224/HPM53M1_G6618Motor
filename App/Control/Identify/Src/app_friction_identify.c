@@ -8,6 +8,7 @@
  */
 #include "app_friction_identify.h"
 
+#include "app_cogging.h"
 #include "app_foc.h"
 #include "app_motion.h"
 #include "app_software_params.h"
@@ -75,6 +76,7 @@ int app_friction_identify_start(float tolerance) {
     memset(&s_identify, 0, sizeof(s_identify));
     s_identify.tolerance = tolerance;
     app_motion_friction_suspend(true); /* 辨识期挂起前馈：PI全权，起步无冲击 */
+    app_cogging_suspend(true);         /* 齿槽表会污染摩擦/速度辨识 */
     s_identify.command_pending = true; /* 首个目标由 run_once 落地（带重试） */
     s_identify.state = APP_FRICTION_IDENTIFY_SETTLING;
     return 0;
@@ -84,6 +86,7 @@ void app_friction_identify_abort(void) {
     if (app_friction_identify_busy()) {
         (void)app_motion_stop();
         app_motion_friction_suspend(false);
+        app_cogging_suspend(false);
         s_identify.state = APP_FRICTION_IDENTIFY_IDLE;
     }
 }
@@ -103,6 +106,7 @@ static void identify_fail(app_friction_identify_failure_t failure) {
     identify_capture_health();         /* 撤销前采集诊断（定位瞬时判死路径） */
     (void)app_motion_release_output(); /* 释放输出（幂等），FOC 保持（用户要求） */
     app_motion_friction_suspend(false);
+    app_cogging_suspend(false);
     s_identify.failure = failure;
     s_identify.result_valid = false;
     s_identify.state = APP_FRICTION_IDENTIFY_FAILED;
@@ -147,6 +151,7 @@ static void identify_fit(void) {
     s_identify.result_valid = true;
     s_identify.state = APP_FRICTION_IDENTIFY_DONE;
     app_motion_friction_suspend(false);
+    app_cogging_suspend(false);
     (void)app_motion_release_output(); /* 释放输出，FOC 保持（用户要求） */
 }
 

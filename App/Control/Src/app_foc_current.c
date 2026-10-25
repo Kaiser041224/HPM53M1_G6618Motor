@@ -107,6 +107,7 @@ static void foc_current_limit_init(void) {
     s_i_limit_ready = true;
 }
 
+/* cal current 激活时由 30kHz ISR 写入；保持 DLM，避免标定期 ISR 访问 AHB。 */
 static id_rl_sample_t s_identify_samples[APP_FOC_IDENTIFY_SAMPLES];
 static volatile uint16_t s_identify_count;
 static bool s_identify_capture_active;

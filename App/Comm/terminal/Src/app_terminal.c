@@ -22,6 +22,7 @@
 
 #include "app_terminal.h"
 
+#include "app_cold_ram.h"
 #include "app_debug_rtt.h"
 #include "app_terminal_job.h"
 
@@ -75,7 +76,8 @@ typedef int (*app_terminal_user_cb_t)(chry_readline_t*, uint8_t);
 
 static chry_shell_t s_csh;                      /**< CherrySH 实例 */
 static chry_ringbuffer_t s_tx_ring;               /**< TX 环（cherryrb） */
-static uint8_t s_tx_pool[APP_TERMINAL_TX_RING_SIZE]; /**< TX 环存储 */
+static uint8_t s_tx_pool[APP_TERMINAL_TX_RING_SIZE]
+    APP_ATTR_AHB_SRAM; /**< TX 环存储（1kHz 终端冷路径，放 AHB SRAM） */
 static uint32_t s_tx_drop_bytes;                  /**< 输出丢弃统计 [byte] */
 static uint32_t s_line_feeds;                     /**< 输出流换行计数（monitor 布局判定） */
 static bool s_ready;                              /**< 初始化完成 */

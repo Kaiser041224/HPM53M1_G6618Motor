@@ -47,6 +47,7 @@ typedef struct {
     bool speed_out_valid;         /**< speed_out 来自有效的 30kHz observer（非 foc_angle 回退） */
     float i_d_avg_a, i_q_avg_a;   /**< d/q 反馈慢平均 [A]（~32Hz 一阶低通，供终端观测） */
     float i_d_ref_a, i_q_ref_a;   /**< d/q 给定（限幅后）[A] */
+    float i_q_cogging_a;          /**< 本拍齿槽/传动补偿注入 q 电流 [A] */
     float v_d_v, v_q_v;           /**< d/q 电压 [V] */
     float duty_u, duty_v, duty_w; /**< 三相占空比 */
     float v_bus_v;                /**< 母线电压 [V] */

@@ -40,6 +40,9 @@
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_friction_identify.h"
+#include "app_cogging.h"
+#include "app_cogging_identify.h"
+#include "app_cogging_store.h"
 #include "app_inertia_identify.h"
 #include "app_gpio.h"
 #include "app_gptmr.h"
@@ -243,6 +246,26 @@ void app_init(void) {
         app_motion_init();
         app_friction_identify_init();
         app_inertia_identify_init();
+        app_cogging_init();
+        (void)app_cogging_store_load();
+        app_cogging_apply_defaults();
+        {
+            const app_software_params_t* software = app_software_params_current();
+            app_cogging_snapshot_t cogging;
+            app_cogging_get_snapshot(&cogging);
+            if (software->cogging.enable != 0U) {
+                if (cogging.master_enabled) {
+                    app_debug_printf(
+                        "[COGGING] default enabled: rotor=%u output=%u gain=%.2f\r\n",
+                        (unsigned)cogging.rotor_enabled, (unsigned)cogging.output_enabled,
+                        (double)cogging.gain);
+                } else {
+                    app_debug_printf(
+                        "[COGGING] YAML enable=1 but no valid table; kept OFF\r\n");
+                }
+            }
+        }
+        app_cogging_identify_init();
         int output_rc = app_encoder_output_start();
         app_debug_printf("[ENC] vernier sync: %s\r\n", output_rc == 0 ? "started" : "FAILED");
         if (output_rc == 0) {
@@ -317,6 +340,7 @@ void app_io_step(void) {
     app_friction_identify_run_once();
     app_inertia_identify_run_once();
     app_current_identify_run_once();
+    app_cogging_identify_run_once();
 
     /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */
     app_debug_foc_tick();

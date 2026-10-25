@@ -14,6 +14,7 @@
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_cogging.h"
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_hardware_params.h"
@@ -55,6 +56,8 @@ static app_foc_angle_source_t s_angle_src;
 static float s_forced_theta;
 static float s_i_d_ref;
 static float s_i_q_ref_cmd;               /**< 操作员 q 轴给定 [A]（未限速） */
+static float s_iq_ref_effective;          /**< 含齿槽补偿的 q 请求 [A]（限幅前） */
+static float s_iq_cogging;                /**< 本拍补偿 q 电流 [A] */
 static app_foc_current_source_t s_current_source;
 static app_foc_current_request_t s_current_request;
 static uint32_t s_current_epoch;
@@ -384,6 +387,8 @@ void app_foc_isr_step(void) {
     float i_w = 0.0f;
     float iq_ref = 0.0f;
     float v_bus;
+    s_iq_cogging = 0.0f;
+    s_iq_ref_effective = 0.0f;
     uint16_t raw;
     bool fault = false;
     bool degraded = false;
@@ -565,6 +570,16 @@ void app_foc_isr_step(void) {
         /* FOC 内部连续限速（电角速度域、q 电流域），与 app_motion 的轴端
          * limitVel 完全独立；CALIB 激励不受影响。 */
         iq_ref = s_i_q_ref;
+        /* 齿槽/传动补偿只在 MOTION 正常请求下注入；q 轴电流环入口。
+         * 标定、vtest、stop、故障和 direct 源均不叠加。 */
+        if ((s_current_source == APP_FOC_CURRENT_SOURCE_MOTION)
+            && (s_state == APP_FOC_STATE_READY || s_state == APP_FOC_STATE_RUN)
+            && !s_stop_pending && !app_foc_current_vtest_active()
+            && s_current_request.valid && !request_expired) {
+            s_iq_cogging = app_cogging_iq(enc.rad);
+            iq_ref += s_iq_cogging;
+        }
+        s_iq_ref_effective = iq_ref;
         if (s_state != APP_FOC_STATE_CALIB) {
             const app_software_params_t* software = app_software_params_current();
 
@@ -589,6 +604,7 @@ void app_foc_isr_step(void) {
     }
 
 isr_exit:
+    g_foc_current_snapshot.i_q_cogging_a = s_iq_cogging;
     s_execution.sample_sequence++;
     s_execution.timestamp_cycles = t_isr;
     s_execution.epoch = s_current_epoch;
@@ -601,7 +617,7 @@ isr_exit:
     s_execution.requested_id_a =
         s_current_source == APP_FOC_CURRENT_SOURCE_MOTION ? s_current_request.id_ref_a : s_i_d_ref;
     s_execution.requested_iq_a = s_current_source == APP_FOC_CURRENT_SOURCE_MOTION
-                                   ? s_current_request.iq_ref_a
+                                   ? s_iq_ref_effective
                                    : s_i_q_ref_cmd;
     s_execution.valid =
         executed && !fault && !degraded && s_execution.normal_owner && g_foc_current_snapshot.valid;

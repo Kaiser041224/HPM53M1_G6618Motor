@@ -213,7 +213,7 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   互不影响；器件驱动只依赖 `Interface/` 契约，不直接操作 HPM 寄存器）
 - `App/Platform/app_param.*`：**通用 flash 键值参数存储**（magic + key + CRC32；
   各模块在 `app_param.h` 登记 key 并自定义数据布局；`store` = 整扇区读-改-写 + 回读校验）
-- flash 布局：末尾 8KB 由链接脚本预留（倒数第 2 扇区 = 参数区，最后 1 扇区 = 自检用）
+- flash 布局：末尾 12KB 由链接脚本预留（倒数第 3 扇区 = 齿槽/传动角表，倒数第 2 扇区 = 参数区，最后 1 扇区 = 自检用）
 - 编码器零点用**软件方案**（存 flash），不消耗编码器 MTP（Z 寄存器寿命仅 1000 次）
 
 ### 驱动缺陷修复（2026-09-19）
@@ -585,3 +585,81 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   `test_inertia_identify.c`、`test_motion_position_replan_velocity`、
   `test_motion_inertia_feedforward`、`test_foc_model_apply.c`、
   `test_param_terminal_guard.c`、`test_motor_params_load_inertia_migration`。
+
+### DLM 冷数据分层（2026-10-25）
+
+- **控制热路径/FOC ISR 状态、USB/CAN DMA 缓冲、FreeRTOS heap、主栈继续留在 DLM**；
+  不为了腾空间把这些数据搬到 AHB SRAM。
+- 已迁移到 `.ahb_sram.bss` 的冷数据：
+  `s_tx_pool`（终端 TX 环）、`s_slots` / `s_load_slot` / `s_verify_slot`
+  （flash 参数停机暂存）、`s_current_identify_average`（仅 `cal current` 使用）。
+- `s_identify_samples` 虽只在 `cal current` 使用，但由 30kHz ISR 写入，
+  仍留在 DLM，避免标定时 ISR 访问 AHB。
+- `.ahb_sram` 为 `NOLOAD`，启动不会自动清零；各缓冲区必须在 init 或首次使用前
+  显式初始化，且不能直接改为 DMA 缓冲。
+- AHB_SRAM 为 32KB，MCAN 已占约 10KB；参数/终端/电流辨识冷数据约 26KB；
+  齿槽存储的记录/加载暂存再约 3.1KB，合计约 29.8KB，保留约 3KB 余量。
+  GCC 链接脚本已增加溢出 ASSERT。
+- `s_trace`、`s_rms_buf` 暂留 DLM：前者可能由 FOC ISR 调试写入，后者属于
+  故障 RMS 路径，不做无证据迁移。
+
+
+### 齿槽/传动角表补偿（2026-10-25）
+
+- **两张独立角表**：
+  - rotor：512 点 int16，按转子机械角索引，表值为**电机侧转矩** [Nm]；
+  - output：256 点 int16，按减速器输出轴角索引，表值为**输出侧转矩** [Nm]。
+- **注入点**：FOC 30kHz ISR，motion 正常请求解析后、FOC 速度限幅和
+  `app_foc_current` 电流/boost 限幅之前，换算为 q 轴电流：
+  `iq = T_rotor / kt + T_output / (reducer_ratio × kt)`。
+- **Gating**：仅 `READY/RUN + MOTION 源 + 请求有效 + motion active`；
+  `motion_speed_limited` 时暂停；`cal cogging` / `cal friction` 期间 suspend；
+  CALIB/vtest/stop/fault/direct 源不注入。
+- `execution.requested_iq_a` 必须包含齿槽补偿，否则 `current_limited` 会误判并冻结
+  速度环积分；`g_foc_current_snapshot.i_q_cogging_a` 为诊断值。
+- **自整定** `cal cogging [speed_rad_s] [revs]`：
+  - 不带宽参数：默认多点 `1.0/2.0/3.0 rad/s`，每点每方向 2 圈，总计约 50s；
+  - 带 `speed_rad_s`：单点快速检查，`revs=0` 时默认 4 圈；
+  - 只针对电机本体 + 减速器，不装外部负载；
+  - 每点正反扫，q 电流按转子角/输出角分箱，F/R 相加抵消恒定摩擦；
+  - 每个速度点记录 F/R 的 q 电流均值、RMS、样本数，用于观察速度依赖
+    和摩擦不对称；角表由全部速度点共同生成。
+- **速度模式输出角**：正常速度/力矩模式默认不读游标 pair，`shaft_rad` 不更新；
+  输出角表启用且 master=on 时通过 `app_motion_set_cogging_output_required(true)`
+  让 15kHz motion 维护输出角；`cal cogging` 另用临时 output-tracking 窗口。
+  标定结束/失败/中止必须恢复临时 tracking，但不得关闭输出角表所需的 required。
+- **默认启用配置**（`config/software.yaml`）：
+  ```yaml
+  control:
+    cogging:
+      enable: true         # true=有有效表时 boot 自动开总开关
+      rotor_enable: true   # 默认启用 rotor 表
+      output_enable: true  # 默认启用；若带载表现不稳可改 false
+      gain: 1.0
+  ```
+  boot 在 `app_cogging_store_load()` 后调用 `app_cogging_apply_defaults()`；
+  `cal cogging apply` 在复制表后也重新应用同一组默认值。
+  `enable=false` 时 master 保持关闭，但 rotor/output 表选择仍按 YAML 设置；
+  运行期可用 `cogging on/off` 覆盖，直到下次 boot/apply。
+  这些字段是 `APPLY_REBOOT` 参数；`storage: reset` 会按 YAML 重置。
+- `cal cogging show|apply|save|clear`；`apply` 要求 FOC OFF，复制表后按 YAML 默认值决定是否自动启用；
+  `save` 只写角表到独立闪存扇区（不保存 enable/gain，后者由 YAML/SPRM 管理）；
+  `clear` 清活动表并擦扇区（FOC OFF）。
+- `cogging on|off|rotor on|off|output on|off|gain <0..2>|show`：默认全关；
+  `cogging on` 在表选择为空时自动启用已有有效表；运动进行中禁止开启。
+- 角表存储：`app_cogging_store` 使用倒数第 3 个 4KB 扇区；记录含 magic、
+  version、点数、缩放、CRC，boot 加载到 DLM。`storage: reset` 不清除该表。
+- 资源：活动表约 1.5KB DLM；标定 bins/结果约 12KB DLM；
+  当前 DLM ~88.8%、AHB ~90.9%。`app_cogging_store` 的记录/加载暂存在
+  AHB SRAM，标定完成前不启用。
+- 回归：`test_algo_cogging`（含 `algo_cogging_finalize_bins`）、`test_app_cogging`、
+  `test_cogging_store`、`test_foc_cogging_injection`、`test_cogging_identify_start`。
+
+- **`cal cogging save` 的内容是 1596B 记录，必须按 256B page 分块 program**：
+  一次性提交大块会跨越 NOR page，已在台架表现为 `cal cogging save` 卡死；
+  `app_cogging_store_save()` 现在与 `app_param_store()` 一样按 256B 提交。
+- **D-Cache invalidate 必须按 32B cache line 对齐**：
+  `l1c_dc_invalidate(addr, len)` 要求 addr/len 均为 32B 对齐；flash 记录
+  1596B 或最后一块 60B 直接传入会触发 SDK assert。assert 经 newlib `_write`
+  走到未初始化的 debug console UART，最终表现为卡在 `uart_flush()`。
+  `drv_flash.c` 已统一将 invalidate 区间向下/向上取整到 cache line。

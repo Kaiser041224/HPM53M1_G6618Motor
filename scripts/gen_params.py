@@ -141,6 +141,10 @@ SCHEMA = {
         ("control.limits.motion_speed_limit_gain",
          "motion_speed_limit_gain", "f32", 0.0, None),
         ("motion.output_direction", "motion.output_direction", "f32", -1.0, 1.0),
+        ("control.cogging.enable", "cogging.enable", "u8", 0, 1),
+        ("control.cogging.rotor_enable", "cogging.rotor_enable", "u8", 0, 1),
+        ("control.cogging.output_enable", "cogging.output_enable", "u8", 0, 1),
+        ("control.cogging.gain", "cogging.gain", "f32", 0.0, 2.0),
         ("current_ff.r_en", "current_ff.r_en", "u8", 0, 1),
         ("current_ff.wl_en", "current_ff.wl_en", "u8", 0, 1),
         ("current_ff.bemf_en", "current_ff.bemf_en", "u8", 0, 1),
@@ -162,6 +166,9 @@ BOOL_FIELDS = {
     ("software", "current_ff.r_en"),
     ("software", "current_ff.wl_en"),
     ("software", "current_ff.bemf_en"),
+    ("software", "control.cogging.enable"),
+    ("software", "control.cogging.rotor_enable"),
+    ("software", "control.cogging.output_enable"),
     ("motor", "encoder.electrical_offset_valid"),
 }
 
@@ -241,6 +248,11 @@ APPLY_REBOOT = {
     "software.control.position_loop.trajectory_accel_limit",
     # 软件：motion 用户坐标方向（app_motion init 期缓存；改向需重启）
     "software.motion.output_direction",
+    # 齿槽补偿默认启用（boot 时在表加载后消费；运行期用 cogging on/off）
+    "software.control.cogging.enable",
+    "software.control.cogging.rotor_enable",
+    "software.control.cogging.output_enable",
+    "software.control.cogging.gain",
     # 持久化代次（boot 期比对；不属运行参数）
     "software.storage",
 }

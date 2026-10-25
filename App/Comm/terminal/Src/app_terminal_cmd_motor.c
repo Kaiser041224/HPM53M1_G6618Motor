@@ -15,6 +15,9 @@
  *   cal inertia apply  （FOC OFF 后写 motor.load_inertia_kgm2，RAM）
  *   cal inertia save   （FOC OFF 后写 MPRM flash；storage=reset 时重启会被 YAML 覆盖）
  *   cal inertia show   （最近结果 + 当前 load_inertia）
+ *   cal cogging        （齿槽/减速器角表自整定；无参数默认1/2/3rad/s、每向2圈）
+ *   cal cogging show/apply/save/clear
+ *   cogging on|off|rotor|output|gain|show（可由YAML默认启用）
  *
  * M1 裁剪（spec §1/§4）：V/F 开环（motor start/stop/freq/mod）、逆变桥逐相（inv）
  * 不接入；相关源文件不参与构建。
@@ -39,6 +42,10 @@
 #include "app_motor_identify.h"
 #include "app_current_identify.h"
 #include "app_inertia_identify.h"
+#include "app_motion.h"
+#include "app_cogging.h"
+#include "app_cogging_identify.h"
+#include "app_cogging_store.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
 #include "foc_math.h"
@@ -870,6 +877,303 @@ static int cmd_cal_inertia(chry_shell_t* csh, const char* sub, const char* curre
     return app_terminal_cmd_usage(csh, "cal inertia [max_current_a|show|apply|save]");
 }
 
+
+/* ============================================================================
+ * cal cogging：齿槽/减速器输出角表自整定
+ * ============================================================================ */
+static uint32_t s_cal_cogging_beat_ms;
+static uint32_t s_cal_cogging_start_ms;
+static bool s_cal_cogging_arm;
+
+static const char* cal_cogging_fail_name(app_cogging_identify_failure_t failure) {
+    switch (failure) {
+    case APP_COGGING_IDENTIFY_FAIL_STATE: return "FOC state changed";
+    case APP_COGGING_IDENTIFY_FAIL_MOTION: return "motion aborted/rejected";
+    case APP_COGGING_IDENTIFY_FAIL_FEEDBACK: return "encoder feedback invalid";
+    case APP_COGGING_IDENTIFY_FAIL_TIMEOUT: return "settle/stop timeout";
+    case APP_COGGING_IDENTIFY_FAIL_SAMPLE: return "speed/sample window invalid";
+    case APP_COGGING_IDENTIFY_FAIL_QUALITY: return "table quality/coverage rejected";
+    case APP_COGGING_IDENTIFY_FAIL_ABORTED: return "aborted";
+    case APP_COGGING_IDENTIFY_FAIL_BUSY: return "another identify active";
+    default: return "none";
+    }
+}
+
+static void cal_cogging_tick(uint32_t now_ms) {
+    app_cogging_identify_snapshot_t identify;
+
+    app_cogging_identify_get_snapshot(&identify);
+    if (identify.busy) {
+        if (!s_cal_cogging_arm) {
+            s_cal_cogging_start_ms = now_ms;
+            s_cal_cogging_arm = true;
+        }
+        /* 独立于状态机的 watchdog：状态机若未被调度，必须自动停止运动。 */
+        if (((identify.samples == 0U)
+             && ((uint32_t)(now_ms - s_cal_cogging_start_ms) > 10000U))
+            || ((uint32_t)(now_ms - s_cal_cogging_start_ms) > 300000U)) {
+            app_cogging_identify_abort();
+            app_terminal_cmd_emit("\r\nFAIL: cogging watchdog (no progress)\r\n");
+            app_terminal_job_abort();
+            return;
+        }
+        if ((uint32_t)(now_ms - s_cal_cogging_beat_ms) >= 200U) {
+            uint32_t pct = (uint32_t)(identify.progress * 100.0f);
+            char bar[21];
+
+            s_cal_cogging_beat_ms = now_ms;
+            if (pct > 100U) pct = 100U;
+            for (uint32_t i = 0U; i < 20U; i++) bar[i] = (i < (pct / 5U)) ? '#' : '-';
+            bar[20] = '\0';
+            app_terminal_cmd_emit(
+                "\rcal cogging [%s] %3u%%  %4.1fs  %u samples  v=%.2f  pt=%u/%u  "
+                "t=%.2f  state=%u  ",
+                bar, (unsigned)pct, (double)identify.elapsed_ms / 1000.0,
+                (unsigned)identify.samples, (double)identify.speed_rad_s,
+                (unsigned)(identify.point_index + 1U), (unsigned)identify.point_count,
+                (double)identify.travel_rad, (unsigned)identify.state);
+        }
+        return;
+    }
+
+    s_cal_cogging_arm = false;
+    app_terminal_cmd_emit("\r\n%s: cogging identify (%s)\r\n",
+                          identify.result_valid ? "OK" : "FAIL",
+                          cal_cogging_fail_name(identify.failure));
+    for (uint8_t i = 0U; i < identify.point_count; i++) {
+        const app_cogging_identify_point_t* point = &identify.points[i];
+        app_terminal_cmd_emit(
+            "    pt%u v=%.2f rad/s revs=%u | F mean=%.3f rms=%.3f n=%u | "
+            "R mean=%.3f rms=%.3f n=%u\r\n",
+            (unsigned)(i + 1U), (double)point->speed_rad_s, (unsigned)point->revs,
+            (double)point->fwd_iq_mean_a, (double)point->fwd_iq_rms_a,
+            (unsigned)point->fwd_samples, (double)point->rev_iq_mean_a,
+            (double)point->rev_iq_rms_a, (unsigned)point->rev_samples);
+    }
+    if (identify.result_valid) {
+        app_terminal_cmd_emit(
+            "    rotor: %s rms=%.5f Nm pp=%.5f bins=%u\r\n"
+            "    output: %s rms=%.5f Nm pp=%.5f bins=%u\r\n"
+            "    samples=%u  next: 'foc off' -> 'cal cogging apply' -> "
+            "'cal cogging save' -> 'cogging on' (or YAML default)\r\n",
+            identify.rotor_valid ? "OK" : "INVALID", (double)identify.rotor_stats.rms_nm,
+            (double)identify.rotor_stats.peak_to_peak_nm,
+            (unsigned)identify.rotor_stats.valid_bins, identify.output_valid ? "OK" : "INVALID",
+            (double)identify.output_stats.rms_nm,
+            (double)identify.output_stats.peak_to_peak_nm,
+            (unsigned)identify.output_stats.valid_bins, (unsigned)identify.samples);
+    } else {
+        app_terminal_cmd_emit("    active tables unchanged\r\n");
+    }
+    app_terminal_job_abort();
+}
+
+static void cal_cogging_abort(void) {
+    app_cogging_identify_abort();
+    app_terminal_cmd_emit("\r\n");
+    app_terminal_refresh();
+}
+
+static app_terminal_job_t s_cal_cogging_job = {
+    .name = "cal cogging",
+    .tick = cal_cogging_tick,
+    .abort = cal_cogging_abort,
+    .active = false,
+};
+
+static int cal_cogging_start(chry_shell_t* csh, float speed_rad_s, uint32_t revs) {
+    app_cogging_identify_snapshot_t identify;
+
+    if (!app_terminal_cmd_require_no_fault(csh)) return -1;
+    if (app_foc_get_state() != APP_FOC_STATE_READY
+        && app_foc_get_state() != APP_FOC_STATE_RUN) {
+        csh_printf(csh, "ERR: FOC must be READY/RUN (use 'foc on' first)\r\n");
+        return -1;
+    }
+    if (app_terminal_job_start(&s_cal_cogging_job) != 0) {
+        csh_printf(csh, "FAIL: job start\r\n");
+        return -1;
+    }
+    s_cal_cogging_beat_ms = 0U;
+    s_cal_cogging_start_ms = 0U;
+    s_cal_cogging_arm = false;
+    int rc = app_cogging_identify_start(speed_rad_s, (uint16_t)revs);
+    if (rc != 0) {
+        app_terminal_job_abort();
+        csh_printf(csh, "ERR: cogging identify rejected: %s\r\n",
+                   rc == -2 ? "FOC not READY/RUN"
+                   : rc == -3 ? "motion not calibrated/active"
+                   : rc == -4 ? "another identify active"
+                   : rc == -5 ? "motion command failed"
+                              : "parameter/busy");
+        return -1;
+    }
+    app_cogging_identify_get_snapshot(&identify);
+    csh_printf(csh,
+               "WARN: axis must be free; motor body + reducer only; no external load. "
+               "points=%u:", (unsigned)identify.point_count);
+    for (uint8_t i = 0U; i < identify.point_count; i++) {
+        csh_printf(csh, " %.2f@%u", (double)identify.points[i].speed_rad_s,
+                   (unsigned)identify.points[i].revs);
+    }
+    csh_printf(csh, " rad/s@revs; any key aborts; result not auto-enabled\r\n");
+    return 0;
+}
+
+static int cal_cogging_show(chry_shell_t* csh) {
+    app_cogging_identify_snapshot_t identify;
+    app_cogging_snapshot_t active;
+
+    app_cogging_identify_get_snapshot(&identify);
+    app_cogging_get_snapshot(&active);
+    csh_printf(csh,
+               "cogging identify: state=%u failure=%u valid=%u samples=%u\r\n"
+               "rotor: valid=%u rms=%.5f pp=%.5f bins=%u\r\n"
+               "output: valid=%u rms=%.5f pp=%.5f bins=%u\r\n"
+               "active: master=%u rotor=%u output=%u rvalid=%u ovalid=%u gain=%.3f\r\n"
+               "active rotor: rms=%.5f pp=%.5f bins=%u\r\n"
+               "active output: rms=%.5f pp=%.5f bins=%u\r\n",
+               (unsigned)identify.state, (unsigned)identify.failure,
+               (unsigned)identify.result_valid, (unsigned)identify.samples,
+               (unsigned)identify.rotor_valid, (double)identify.rotor_stats.rms_nm,
+               (double)identify.rotor_stats.peak_to_peak_nm,
+               (unsigned)identify.rotor_stats.valid_bins, (unsigned)identify.output_valid,
+               (double)identify.output_stats.rms_nm,
+               (double)identify.output_stats.peak_to_peak_nm,
+               (unsigned)identify.output_stats.valid_bins, (unsigned)active.master_enabled,
+               (unsigned)active.rotor_enabled, (unsigned)active.output_enabled,
+               (unsigned)active.rotor_valid, (unsigned)active.output_valid,
+               (double)active.gain, (double)active.rotor_stats.rms_nm,
+               (double)active.rotor_stats.peak_to_peak_nm,
+               (unsigned)active.rotor_stats.valid_bins, (double)active.output_stats.rms_nm,
+               (double)active.output_stats.peak_to_peak_nm,
+               (unsigned)active.output_stats.valid_bins);
+    for (uint8_t i = 0U; i < identify.point_count; i++) {
+        const app_cogging_identify_point_t* point = &identify.points[i];
+        csh_printf(csh,
+                   "point%u: v=%.2f revs=%u | F mean=%.3f rms=%.3f n=%u | "
+                   "R mean=%.3f rms=%.3f n=%u\r\n",
+                   (unsigned)(i + 1U), (double)point->speed_rad_s, (unsigned)point->revs,
+                   (double)point->fwd_iq_mean_a, (double)point->fwd_iq_rms_a,
+                   (unsigned)point->fwd_samples, (double)point->rev_iq_mean_a,
+                   (double)point->rev_iq_rms_a, (unsigned)point->rev_samples);
+    }
+    return 0;
+}
+
+static int cmd_cal_cogging(chry_shell_t* csh, const char* sub, const char* revs_text) {
+    if (sub == NULL) return cal_cogging_start(csh, 0.0f, 0U);
+
+    if (strcmp(sub, "show") == 0) return cal_cogging_show(csh);
+    if (strcmp(sub, "apply") == 0) {
+        int rc = app_cogging_identify_apply();
+        if (rc != 0) {
+            csh_printf(csh, "ERR: cogging apply rejected (need valid result + FOC OFF)\r\n");
+            return -1;
+        }
+        app_cogging_snapshot_t snapshot;
+        app_cogging_get_snapshot(&snapshot);
+        if (snapshot.master_enabled) {
+            csh_printf(csh,
+                       "OK: cogging tables applied; YAML default enabled "
+                       "(rotor=%u output=%u gain=%.3f)\r\n",
+                       (unsigned)snapshot.rotor_enabled, (unsigned)snapshot.output_enabled,
+                       (double)snapshot.gain);
+        } else {
+            csh_printf(csh,
+                       "OK: cogging tables applied; enable with 'cogging on' "
+                       "(default master off; rotor=%u output=%u)\r\n",
+                       (unsigned)snapshot.rotor_enabled, (unsigned)snapshot.output_enabled);
+        }
+        return 0;
+    }
+    if (strcmp(sub, "save") == 0) {
+        int rc = app_cogging_store_save();
+        if (rc != 0) {
+            csh_printf(csh, "ERR: cogging save rejected (need applied tables + FOC OFF)\r\n");
+            return -1;
+        }
+        csh_printf(csh, "OK: cogging tables saved to flash\r\n");
+        return 0;
+    }
+    if (strcmp(sub, "clear") == 0) {
+        int rc = app_cogging_store_clear();
+        if (rc != 0) {
+            csh_printf(csh, "ERR: cogging clear rejected (need FOC OFF)\r\n");
+            return -1;
+        }
+        csh_printf(csh, "OK: cogging tables cleared\r\n");
+        return 0;
+    }
+
+    float speed_rad_s = 0.0f;
+    uint32_t revs = 0U;
+    if (app_terminal_cmd_parse_float(sub, &speed_rad_s) != 0
+        || (revs_text != NULL && app_terminal_cmd_parse_u32(revs_text, &revs) != 0)) {
+        return app_terminal_cmd_usage(csh, "cal cogging [speed_rad_s] [revs]|show|apply|save|clear");
+    }
+    return cal_cogging_start(csh, speed_rad_s, revs);
+}
+
+/** @brief cogging 运行时使能/查询；默认全关 */
+static int cmd_cogging(int argc, char** argv) {
+    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    app_cogging_snapshot_t snapshot;
+
+    app_cogging_get_snapshot(&snapshot);
+    if (argc < 2 || strcmp(argv[1], "show") == 0) {
+        csh_printf(csh,
+                   "cogging: master=%u rotor=%u output=%u rvalid=%u ovalid=%u gain=%.3f "
+                   "suspended=%u speed_limited=%u\r\n",
+                   (unsigned)snapshot.master_enabled, (unsigned)snapshot.rotor_enabled,
+                   (unsigned)snapshot.output_enabled, (unsigned)snapshot.rotor_valid,
+                   (unsigned)snapshot.output_valid, (double)snapshot.gain,
+                   (unsigned)snapshot.suspended, (unsigned)snapshot.speed_limited);
+        csh_printf(csh, "usage: cogging on|off|rotor on|off|output on|off|gain <0..2>|show\r\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "off") == 0) {
+        bool enable = strcmp(argv[1], "on") == 0;
+        if (enable) {
+            app_motion_snapshot_t motion;
+            app_motion_get_snapshot(&motion);
+            if (motion.active || motion.calibrating) {
+                csh_printf(csh, "ERR: stop motion before enabling cogging\r\n");
+                return -1;
+            }
+        }
+        int rc = app_cogging_set_master(enable);
+        csh_printf(csh, "%s: master rc=%d\r\n", rc == 0 ? "OK" : "ERR", rc);
+        return rc;
+    }
+    if (argc >= 3 && (strcmp(argv[1], "rotor") == 0 || strcmp(argv[1], "output") == 0)
+        && (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
+        bool enable = strcmp(argv[2], "on") == 0;
+        if (enable) {
+            app_motion_snapshot_t motion;
+            app_motion_get_snapshot(&motion);
+            if (motion.active || motion.calibrating) {
+                csh_printf(csh, "ERR: stop motion before enabling cogging table\r\n");
+                return -1;
+            }
+        }
+        int rc = (argv[1][0] == 'r') ? app_cogging_set_rotor_enable(enable)
+                                     : app_cogging_set_output_enable(enable);
+        csh_printf(csh, "%s: %s rc=%d\r\n", rc == 0 ? "OK" : "ERR", argv[1], rc);
+        return rc;
+    }
+    if (argc >= 3 && strcmp(argv[1], "gain") == 0) {
+        float gain = 0.0f;
+        if (app_terminal_cmd_parse_float(argv[2], &gain) != 0) {
+            return app_terminal_cmd_usage(csh, "cogging gain <0..2>");
+        }
+        int rc = app_cogging_set_gain(gain);
+        csh_printf(csh, "%s: gain rc=%d\r\n", rc == 0 ? "OK" : "ERR", rc);
+        return rc;
+    }
+    return app_terminal_cmd_usage(csh, "cogging on|off|rotor on|off|output on|off|gain|show");
+}
+
 static int cmd_cal(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
 
@@ -883,10 +1187,15 @@ static int cmd_cal(int argc, char** argv) {
         return cmd_cal_inertia(csh, (argc >= 3) ? argv[2] : NULL,
                                 (argc >= 4) ? argv[3] : NULL);
     }
+    if ((argc >= 2) && (strcmp(argv[1], "cogging") == 0)) {
+        return cmd_cal_cogging(csh, (argc >= 3) ? argv[2] : NULL,
+                               (argc >= 4) ? argv[3] : NULL);
+    }
     if ((argc < 2) || (strcmp(argv[1], "current") != 0)) {
         return app_terminal_cmd_usage(csh,
                                       "cal current | cal encoder [apply|save|show] | "
                                       "cal inertia [max_current_a|apply|save|show] | "
+                                      "cal cogging [speed_rad_s] [revs]|apply|save|show|clear | "
                                       "cal rl [apply|save|show|clear]");
     }
     if (!app_terminal_cmd_require_motor_stopped(csh)) {
@@ -917,3 +1226,4 @@ static int cmd_cal(int argc, char** argv) {
 
 CSH_CMD_EXPORT_ALIAS(cmd_motor, motor, );
 CSH_CMD_EXPORT_ALIAS(cmd_cal, cal, );
+CSH_CMD_EXPORT_ALIAS(cmd_cogging, cogging, );
