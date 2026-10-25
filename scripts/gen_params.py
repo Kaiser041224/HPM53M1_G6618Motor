@@ -11,7 +11,8 @@
 
 - 表达式：引号字符串按计算式求值（构建期）；引用支持 同文件叶子名 / 节.字段 / 跨文件 域.路径
 - 校验：模式（必填/未知键/类型/范围）+ 跨域一致性；任一失败 → 非零退出 + 文件:行:键:原因
-- apply：启动期消费项在 APPLY_REBOOT 集合声明（缺省 live）；unit 从 YAML 行注释 [..] 尽力提取
+- apply：启动期消费项在 APPLY_REBOOT、FOC 停机期消费项在 APPLY_FOC_OFF 集合声明
+  （缺省 live）；unit 从 YAML 行注释 [..] 尽力提取
 """
 from __future__ import annotations
 
@@ -47,6 +48,7 @@ SCHEMA = {
         ("vbus_nom_v", "vbus_nom_v", "f32", 0.0, None),
         ("rpm_max", "rpm_max", "u16", 1, 65535),
         ("inertia_kgm2", "inertia_kgm2", "f32", 0.0, None),
+        ("load_inertia_kgm2", "load_inertia_kgm2", "f32", 0.0, None),
         ("torque_rated_nm", "torque_rated_nm", "f32", 0.0, None),
         ("torque_peak_10s_nm", "torque_peak_10s_nm", "f32", 0.0, None),
         ("reducer_ratio", "reducer_ratio", "f32", 0.0, None),
@@ -243,6 +245,17 @@ APPLY_REBOOT = {
     "software.storage",
 }
 
+# FOC 停机期消费项：param set 仅在 FOC OFF 接受，下一次 foc on 重载模型/角度链生效。
+# 与 APPLY_REBOOT 区分：不要求重启，但必须保证功率级无输出。
+APPLY_FOC_OFF = {
+    "motor.pole_pairs",
+    "motor.rs_ohm",
+    "motor.ls_h",
+    "motor.kt_nm_per_a",
+    "motor.encoder.electrical_offset_rad",
+    "motor.encoder.direction",
+}
+
 META_DOMAIN_ENUMS = {
     "motor": "PARAM_META_DOMAIN_MOTOR",
     "hardware": "PARAM_META_DOMAIN_HARDWARE",
@@ -256,6 +269,7 @@ META_TYPE_ENUMS = {
 }
 META_APPLY_LIVE = "PARAM_META_APPLY_LIVE"
 META_APPLY_REBOOT = "PARAM_META_APPLY_REBOOT"
+META_APPLY_FOC_OFF = "PARAM_META_APPLY_FOC_OFF"
 
 # YAML 行注释中的单位标记（如 "# ... [Ω]"）；取最后一个匹配
 _UNIT_RE = re.compile(r"\[([^\]\[]+)\]")
@@ -750,6 +764,7 @@ typedef enum {
 typedef enum {
     PARAM_META_APPLY_LIVE = 0, /**< set 立即生效（消费者实时读取） */
     PARAM_META_APPLY_REBOOT,   /**< set 仅改 RAM，重启后生效 */
+    PARAM_META_APPLY_FOC_OFF,  /**< set 仅在 FOC OFF 接受，下一次 foc on 生效 */
 } param_meta_apply_t;
 
 /**
@@ -791,7 +806,13 @@ def gen_meta_source(units) -> str:
     ]
     for d in DOMAINS:
         for path, cfield, ctype, lo, hi in SCHEMA[d]:
-            apply = META_APPLY_REBOOT if f"{d}.{path}" in APPLY_REBOOT else META_APPLY_LIVE
+            key = f"{d}.{path}"
+            if key in APPLY_FOC_OFF:
+                apply = META_APPLY_FOC_OFF
+            elif key in APPLY_REBOOT:
+                apply = META_APPLY_REBOOT
+            else:
+                apply = META_APPLY_LIVE
             unit = units[d].get(path)
             unit_lit = "NULL" if unit is None else c_string(unit)
             min_lit = _fmt_bound(lo, "-INFINITY")

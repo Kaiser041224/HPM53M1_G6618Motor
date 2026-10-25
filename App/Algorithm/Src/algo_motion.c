@@ -132,6 +132,7 @@ void algo_motion_pos_filter_step(
     if (bandwidth_rad_s <= 0) { /* 直通：滤波关闭 */
         f->pos_setpoint_rad = input_pos;
         f->vel_setpoint_rad_s = input_vel;
+        f->accel_setpoint_rad_s2 = 0.0f;
         return;
     }
     /* ODrive update_filter_gains：bw 钳位≤0.25/dt，ki=2bw，kp=0.25ki²=bw²（临界阻尼） */
@@ -139,6 +140,7 @@ void algo_motion_pos_filter_step(
     if (!foc_finite(f->pos_setpoint_rad) || !foc_finite(f->vel_setpoint_rad_s)) {
         f->pos_setpoint_rad = input_pos;
         f->vel_setpoint_rad_s = input_vel;
+        f->accel_setpoint_rad_s2 = 0.0f;
         return;
     }
     float ki = 2.0f * bandwidth;
@@ -146,6 +148,7 @@ void algo_motion_pos_filter_step(
     /* 单圈绝对模式：位置差取模最短路径（目标跨零点平滑，不绕大圈） */
     float delta_pos = foc_wrap_pm_pi(input_pos - f->pos_setpoint_rad);
     float accel = kp * delta_pos + ki * (input_vel - f->vel_setpoint_rad_s);
+    f->accel_setpoint_rad_s2 = accel;
     f->vel_setpoint_rad_s += dt * accel;
     f->pos_setpoint_rad += dt * f->vel_setpoint_rad_s;
 }

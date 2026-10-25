@@ -40,6 +40,7 @@
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_friction_identify.h"
+#include "app_inertia_identify.h"
 #include "app_gpio.h"
 #include "app_gptmr.h"
 #include "app_hardware_params.h"
@@ -241,6 +242,7 @@ void app_init(void) {
         int rc = app_motion_timer_init();
         app_motion_init();
         app_friction_identify_init();
+        app_inertia_identify_init();
         int output_rc = app_encoder_output_start();
         app_debug_printf("[ENC] vernier sync: %s\r\n", output_rc == 0 ? "started" : "FAILED");
         if (output_rc == 0) {
@@ -313,6 +315,7 @@ void app_io_step(void) {
     /* 电角度自校准（隔离模块；空闲时为空操作；进行中经校准端口借用电流环） */
     app_motor_identify_run_once();
     app_friction_identify_run_once();
+    app_inertia_identify_run_once();
     app_current_identify_run_once();
 
     /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */

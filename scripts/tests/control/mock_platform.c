@@ -112,3 +112,9 @@ bool app_analog_signal_read_all(app_analog_values_t* values) {
     *values = (app_analog_values_t){0};
     return true;
 }
+
+/** @brief inert identify 依赖的电机辨识活动替身 */
+bool app_motor_identify_is_active(void) { return false; }
+
+/** @brief inert identify save 依赖的电机参数持久化替身（测试不调用 save） */
+int app_motor_params_store(void) { return 0; }

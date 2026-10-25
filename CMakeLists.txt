@@ -165,6 +165,7 @@ sdk_app_src(App/Algorithm/Src/algo_hyst.c)
 sdk_app_src(App/Algorithm/Src/algo_pid.c)
 sdk_app_src(App/Algorithm/Src/algo_pll.c)
 sdk_app_src(App/Algorithm/Src/algo_ramp.c)
+sdk_app_src(App/Algorithm/Src/algo_inertia.c)
 sdk_app_src(App/Algorithm/Src/algo_rms.c)
 sdk_app_src(App/Algorithm/Src/algo_encoder_snapshot.c)
 sdk_app_src(App/Algorithm/Src/algo_motion.c)
@@ -212,6 +213,7 @@ sdk_app_src(App/Control/Src/app_motion.c)
 sdk_app_src(App/Control/Identify/Src/app_friction_identify.c)
 sdk_app_src(App/Control/Identify/Src/app_motor_identify.c)
 sdk_app_src(App/Control/Identify/Src/app_current_identify.c)
+sdk_app_src(App/Control/Identify/Src/app_inertia_identify.c)
 
 # ============================================================================
 # Comm Layer

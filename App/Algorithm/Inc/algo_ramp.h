@@ -17,7 +17,8 @@
  * Trapezoidal mode (velocity + acceleration limits):
  *   rate      = max velocity v_max (output-units / s)
  *   accel_max = max acceleration a_max (output-units / s²)
- *   Phases:  ACCEL → CRUISE → DECEL → DONE
+ *   支持有符号初速度；step() 输出位置，get_velocity()/get_acceleration()
+ *   输出本拍 Yd/Ydd，供惯量/加速度前馈使用。
  *
  * Smoothstep mode (S-curve via duration):
  *   rate      = total duration (seconds), 0 = use rate-derived duration
@@ -91,6 +92,15 @@ typedef int (*algo_ramp_set_target_fn)(algo_ramp_t* self, float target);
  */
 typedef int (*algo_ramp_set_current_fn)(algo_ramp_t* self, float current);
 /**
+ * @brief 重规划梯形轨迹（支持有符号初速度）
+ * @param target 目标位置
+ * @param current 当前位置
+ * @param velocity 当前速度（梯形模式；其他模式忽略并清零）
+ * @return 0 = 成功；负数 = 参数非法
+ * @note 非梯形模式语义等同 set_current(current) + set_target(target)。
+ */
+typedef int (*algo_ramp_plan_fn)(algo_ramp_t* self, float target, float current, float velocity);
+/**
  * @brief 读取当前值
  */
 typedef float (*algo_ramp_get_current_fn)(const algo_ramp_t* self);
@@ -98,6 +108,14 @@ typedef float (*algo_ramp_get_current_fn)(const algo_ramp_t* self);
  * @brief 读取目标值
  */
 typedef float (*algo_ramp_get_target_fn)(const algo_ramp_t* self);
+/**
+ * @brief 读取本拍速度 Yd（梯形模式为有符号速度；其他模式返回 0）
+ */
+typedef float (*algo_ramp_get_velocity_fn)(const algo_ramp_t* self);
+/**
+ * @brief 读取本拍加速度 Ydd（梯形模式为最近一步的加速度；其他模式返回 0）
+ */
+typedef float (*algo_ramp_get_acceleration_fn)(const algo_ramp_t* self);
 /**
  * @brief 查询是否到位
  */
@@ -111,11 +129,14 @@ struct algo_ramp {
         algo_ramp_init_fn init;               /**< 初始化 */
         algo_ramp_step_fn step;               /**< 单步计算 */
         algo_ramp_reset_fn reset;             /**< 复位 */
-        algo_ramp_set_target_fn set_target;   /**< 设置目标值 */
-        algo_ramp_set_current_fn set_current; /**< 设置当前值 */
-        algo_ramp_get_current_fn get_current; /**< 读取当前值 */
-        algo_ramp_get_target_fn get_target;   /**< 读取目标值 */
-        algo_ramp_is_done_fn is_done;         /**< 查询是否到位 */
+        algo_ramp_set_target_fn set_target;       /**< 设置目标值 */
+        algo_ramp_set_current_fn set_current;     /**< 设置当前值 */
+        algo_ramp_plan_fn plan;                   /**< 带初速度重规划（梯形模式） */
+        algo_ramp_get_current_fn get_current;     /**< 读取当前值 */
+        algo_ramp_get_target_fn get_target;       /**< 读取目标值 */
+        algo_ramp_get_velocity_fn get_velocity;   /**< 读取本拍 Yd */
+        algo_ramp_get_acceleration_fn get_acceleration; /**< 读取本拍 Ydd */
+        algo_ramp_is_done_fn is_done;             /**< 查询是否到位 */
     };
 
     algo_ramp_mode_t _mode;                   /**< 工作模式 */
@@ -127,10 +148,12 @@ struct algo_ramp {
     float _target;                            /**< 目标值 */
     float _initial;                           /**< 初始值 */
     float _current;                           /**< 当前值 */
-    float _velocity;                          /**< 当前速度（梯形模式） */
+    float _velocity;                          /**< 有符号速度（梯形模式 Yd） */
+    float _acceleration;                      /**< 最近一步加速度（梯形模式 Ydd） */
     float _elapsed;                           /**< 已用时长 [s] */
     float _duration;                          /**< 总时长 [s] */
     uint8_t _phase;                           /**< 梯形模式阶段 */
+    bool _done;                               /**< 梯形模式已到位 */
     bool _inited;                             /**< 初始化标志 */
 };
 

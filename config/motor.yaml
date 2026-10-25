@@ -19,7 +19,8 @@ i_peak_10s_a: 24.3         # 峰值电流 10s [A]（峰值）
 i_peak_2s_a: 48.6          # 峰值电流 2s [A]（峰值）
 vbus_nom_v: 48.0           # 母线额定电压 [V]（电机规格 12~48；当前测试系统母线 24V，保护门限见 software.yaml）
 rpm_max: 3300              # 最高转速 [rpm]
-inertia_kgm2: 2.3e-5       # 转动惯量 [kg·m²]
+inertia_kgm2: 2.3e-5       # 转子侧转动惯量 [kg·m²]；motion 前馈按 J×reducer² 反射到轴端
+load_inertia_kgm2: 0.064     # 轴端负载/减速器附加惯量 [kg·m²]；cal inertia 写入
 torque_rated_nm: 1.16      # 额定转矩 [N·m]（手册值；与 Kt×I 差异待校核）
 torque_peak_10s_nm: 2.8    # 峰值转矩 10s [N·m]（手册值；与 Kt×I 差异待校核）
 reducer_ratio: 50.0        # 减速比（出轴/转子）；多圈游标、转矩/速度换算统一使用本值；须满足 reducer_ratio × (1 - encoder.output_ratio) ≈ 1

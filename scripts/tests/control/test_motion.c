@@ -995,6 +995,86 @@ void test_motion_position_trajectory(void) {
     pos_teardown();
 }
 
+/** @brief 运动中改位置目标：轨迹保留当前速度，不先归零再起步 */
+void test_motion_position_replan_velocity(void) {
+    pos_setup_ex(0, 0, 1.0f, 10.0f, 0, 0);
+    CHECK(app_motion_position(0.2f, 0, 0) == 0);
+    pos_run_ticks(600);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.speed_rad_s > 0.05f);
+
+    /* 目标=当前实际位置：若轨迹重规划把初速度清零，vel_cmd 应立即为 0。
+     * 同时把测量速度注入为反向大值，验证重规划优先使用上一拍规划速度。 */
+    float planned_vel = snapshot.traj_vel_rad_s;
+    extern volatile float g_foc_speed_out_rad_s;
+    extern volatile bool g_foc_speed_out_valid;
+    g_foc_speed_out_rad_s = -planned_vel;
+    g_foc_speed_out_valid = true;
+    CHECK(app_motion_position(snapshot.shaft_rad, 0, 0) == 0);
+    pos_run_ticks(1);
+    app_motion_get_snapshot(&snapshot);
+    CHECK_NEAR(snapshot.replan_vel_rad_s, planned_vel, 1e-5f);
+    CHECK(snapshot.traj_vel_rad_s > 0.0f);
+    g_foc_speed_out_rad_s = 0.0f;
+    g_foc_speed_out_valid = false;
+
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 轨迹加速度前馈：J_out=转子惯量×减速比²，FF 与 Ydd 同号 */
+void test_motion_inertia_feedforward(void) {
+    pos_setup_ex(0, 0, 1.0f, 10.0f, 0, 0);
+    app_motor_params_mutable()->inertia_kgm2 = 1.0e-5f;
+    app_motor_params_mutable()->load_inertia_kgm2 = 0.02f;
+    CHECK(app_motion_position(0.2f, 0, 0) == 0);
+    pos_run_ticks(1);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.accel_cmd_rad_s2 > 5.0f);
+    float expected_j = 1.0e-5f * 50.0f * 50.0f + 0.02f;
+    CHECK_NEAR(snapshot.inertia_ff_raw_nm, expected_j * snapshot.accel_cmd_rad_s2, 1e-4f);
+    CHECK_NEAR(snapshot.inertia_ff_nm, snapshot.inertia_ff_raw_nm, 1e-4f);
+    CHECK(snapshot.inertia_ff_nm > 0.0f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 无轨迹（POS_FILTER）路径也消费滤波加速度做惯量前馈 */
+void test_motion_inertia_feedforward_filter(void) {
+    pos_setup_ex(0, 10.0f, 0, 0, 0, 0);
+    app_motor_params_mutable()->inertia_kgm2 = 1.0e-5f;
+    app_motor_params_mutable()->load_inertia_kgm2 = 0.02f;
+    CHECK(app_motion_position(0.2f, 0, 0) == 0);
+    pos_run_ticks(1);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.accel_cmd_rad_s2 > 0.0f);
+    float expected_j = 1.0e-5f * 50.0f * 50.0f + 0.02f;
+    CHECK_NEAR(snapshot.inertia_ff_raw_nm, expected_j * snapshot.accel_cmd_rad_s2, 1e-4f);
+    CHECK_NEAR(snapshot.inertia_ff_nm, snapshot.inertia_ff_raw_nm, 1e-4f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/** @brief 速度直通（vel_ramp_rate=0）不得把命令阶跃当受控加速度生成惯量脉冲 */
+void test_motion_speed_inertia_direct_no_ff(void) {
+    pos_setup_ex(0, 0, 0, 0, 0, 0);
+    app_motor_params_mutable()->inertia_kgm2 = 1.0e-5f;
+    CHECK(app_motion_speed(0.2f) == 0);
+    pos_run_ticks(1);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK_NEAR(snapshot.inertia_ff_nm, 0.0f, 1e-6f);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
 /** @brief 轴端连续限速接线：超速时正转矩被改写成制动转矩，并置 speed_limited */
 void test_motion_speed_limit_app(void) {
     extern volatile float g_foc_speed_out_rad_s;

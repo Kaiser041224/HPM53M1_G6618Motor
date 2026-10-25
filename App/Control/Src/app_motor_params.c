@@ -31,7 +31,9 @@ int app_motor_params_load(app_motor_params_t* out) {
         return -1;
     }
     *out = g_motor_params_factory;
-    return app_param_record_load(APP_PARAM_KEY_MOTOR_PARAMS, out, sizeof(*out), 1U);
+    /* load_inertia 追加在结构体末尾：旧记录按前缀迁移，新字段保持 YAML 出厂默认。 */
+    return app_param_record_load_prefix(
+        APP_PARAM_KEY_MOTOR_PARAMS, out, sizeof(*out), APP_MOTOR_PARAMS_V1_SIZE, 1U);
 }
 
 int app_motor_params_store(void) {

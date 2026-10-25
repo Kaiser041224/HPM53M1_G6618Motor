@@ -73,11 +73,19 @@ extern app_foc_current_snapshot_t g_foc_current_snapshot;
  *   - 每拍 live：kp/ki（set_gains）、decoupling_en（set_decoupling，兼容旧组合开关）、
  *     current_ff.r_en/wl_en/bemf_en（set_r_ff/set_wl_ff/set_bemf_ff）、duty_max、
  *     i_q_max_a（每拍经 app_*_params_current 读取）
- *   - init 期固定：sample_time_s（= 1/pwm_freq_hz）、l_d/l_q、r_ohm，以及由
- *     `Kt_peak/(1.5·pole_pairs)` 派生的 lambda（motor.flux_linkage_wb 不直接消费）；
- *     修改后需重新调用 app_foc_current_init()
+ *   - FOC OFF 期消费：l_d/l_q、r_ohm，以及由 `Kt_peak/(1.5·pole_pairs)` 派生的
+ *     lambda；`param set` 对应字段被标为 `foc_off`，下一次 `foc on` 通过
+ *     app_foc_current_reload_model() 生效（不重置积分器/boost）。
+ *   - sample_time_s（= 1/pwm_freq_hz）仍为 init 期固定。
  */
 void app_foc_current_init(void);
+
+/**
+ * @brief 从当前 motor/software 参数重载 R/L/λ 模型与增益（不重置积分器/boost）
+ * @return 0 = 成功；-1 = 电流环未就绪或模型参数非法（保留旧模型）
+ * @note 用于 param 修改后的 apply；调用方须保证 FOC OFF/未输出。
+ */
+int app_foc_current_reload_model(void);
 
 /**
  * @brief 复位算法状态（积分器）

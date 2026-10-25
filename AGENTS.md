@@ -537,3 +537,51 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - 当前按峰值电流口径：`kt=0.117 Nm/A` 与 `torque_peak_10s/i_peak_10s≈0.115`
   一致；对应的 λ≈0.0078 Wb，和手册 Ke 直接换算值有差异，后续以实测反电动势/
   转矩为准；改 Kt 后 `bemf_ff` 与转矩命令会同步变化。
+
+### 位置轨迹初速度、Yd/Ydd 与惯量前馈（2026-10-24）
+
+- **梯形轨迹必须支持有符号初速度**：`algo_ramp` 新增 `plan(target, current, velocity)`
+  与 `get_velocity()` / `get_acceleration()`；`app_motion_position_step()` 在每次新
+  位置命令时**优先使用上一拍规划速度** `get_velocity()`（首次进入才用测量速度兜底）。
+  这比直接使用 PLL 测量速度噪声更低、命令更连续；禁止再用 `set_current()` 把轨迹
+  速度清零后重新起步。
+- **Yd/Ydd 消费**：位置梯形轨迹的速度由 `get_velocity()` 直接给出，不再对位置做
+  差分；`get_acceleration()` 用于惯量前馈。`algo_motion_pos_filter_t` 同时输出
+  `accel_setpoint_rad_s2`。
+- **惯量模型与 cal inertia**：
+  - `motor.inertia_kgm2` = **转子侧**惯量；`motor.load_inertia_kgm2` = **轴端**
+    负载/减速器附加惯量；总轴端前馈 `J_out = inertia×reducer² + load_inertia`。
+  - `cal inertia [max_current_a]` 参考 `cal rl` 采用多点状态机：固定 6 个
+    `{电流, 起始速度, 截断速度}` 点位（0.6~2.0A，轴端 0.5~1.0rad/s），每个点位
+    再执行 **正转 F / 反转 R 两次采样**，共 12 次；逐次做驱动/制动窗口。单次
+    失败只作废该次，继续下一方向/点位。参数是**最大电流上限**（0=默认2.0A；
+    上限2A并受 `i_q_max` 裁）。
+  - 单次仍用 `J_total = 2τ/(α_drive−α_brake)` 抵消恒定摩擦；驱动窗口12ms，
+    制动窗口在速度降到该点 stop 速度时截断，避免过零。多点结果取中位数，
+    MAD/median ≤15% 且有效采样≥6（至少3点×双向）才置 valid；进度条按采样
+    数和相位显示。
+  - `cal inertia` 不自动生效；FOC OFF 后 `cal inertia apply` 写
+    `motor.load_inertia_kgm2`，再 `cal inertia save` 写 MPRM。
+  - **当前 `storage: reset` 时 `cal inertia save` 写出的 MPRM 会在下次启动被
+    YAML 默认值覆盖**；要持久化，应把值写入 `config/motor.yaml`（当前 `0.064`），
+    或切换 `storage: keep` 后再执行 save。
+  - 轴必须自由/负载随动且无外部卡滞；测得的负载含实际联轴器/负载。总惯量
+    小于转子反射时 `load_inertia` 钳0并在结果中标记 `clamped`。
+- **`inertia_ff` 语义**：
+  - `inertia_ff_raw_nm` = `J_out × accel`，转矩/速度限幅前的原始请求；
+  - `inertia_ff_nm` = 在相同转矩/速度限幅下，最终转矩相对无前馈基线的实际增量；
+  - 两者均在 `app_motion` 快照中可见，台架调参以 `inertia_ff_nm` 为准。
+- **模型参数 apply**：`motor.pole_pairs/rs_ohm/ls_h/kt_nm_per_a` 以及
+  `motor.encoder.electrical_offset_rad/direction` 在元数据中标记为 `foc_off`。
+  `param set` 在 FOC 非 OFF 时拒绝；下一次 `foc on` 通过
+  `app_foc_current_reload_model()` 重载 R/L/λ，并重建角度链。不再把这些字段
+  显示为 `live` 却只改 RAM。
+- **旧 MPRM 迁移**：`load_inertia_kgm2` 追加在 `app_motor_params_t` 末尾；
+  `app_motor_params_load()` 使用 `APP_MOTOR_PARAMS_V1_SIZE` 前缀迁移，旧记录
+  不丢其他电机参数，新字段保持 YAML 出厂默认（当前 `0.064`）。
+- **电流环模型重载不重置 boost/积分器**；`app_foc_current_init()` 仍用于完整
+  重初始化。`kp`/`ki` 增益仍为 live，`bandwidth_rad_s` 仅作 `cal rl` 目标。
+- 回归用例：`test_algo_ramp_plan.c`、`test_algo_inertia.c`、
+  `test_inertia_identify.c`、`test_motion_position_replan_velocity`、
+  `test_motion_inertia_feedforward`、`test_foc_model_apply.c`、
+  `test_param_terminal_guard.c`、`test_motor_params_load_inertia_migration`。

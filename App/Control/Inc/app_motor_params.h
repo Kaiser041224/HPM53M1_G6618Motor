@@ -12,6 +12,7 @@
 #ifndef APP_MOTOR_PARAMS_H
 #define APP_MOTOR_PARAMS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -48,12 +49,16 @@ typedef struct {
     float i_peak_2s_a;           /**< 峰值电流 2s [A]（峰值） */
     float vbus_nom_v;            /**< 母线额定电压 [V] */
     uint16_t rpm_max;            /**< 最高转速 [rpm] */
-    float inertia_kgm2;          /**< 转动惯量 [kg·m²] */
+    float inertia_kgm2;          /**< 转子侧转动惯量 [kg·m²]；轴端前馈按 J×reducer² 反射 */
     float torque_rated_nm;       /**< 额定转矩 [N·m] */
     float torque_peak_10s_nm;    /**< 峰值转矩 10s [N·m] */
     float reducer_ratio;         /**< 减速比（出轴/转子）；多圈游标、转矩/速度换算统一使用 */
     app_motor_encoder_t encoder; /**< 编码器齿系与电角度标定 */
+    float load_inertia_kgm2;     /**< 轴端负载/减速器附加惯量 [kg·m²]（cal inertia 写入，≥0） */
 } app_motor_params_t;
+
+/** @brief 增加 load_inertia 前的旧 MPRM 负载长度（前缀迁移用） */
+#define APP_MOTOR_PARAMS_V1_SIZE (offsetof(app_motor_params_t, load_inertia_kgm2))
 
 /**
  * @brief  工厂默认参数（只读，指向生成常量）

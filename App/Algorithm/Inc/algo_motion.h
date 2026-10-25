@@ -19,8 +19,9 @@ int algo_motion_vernier(float rotor, float vernier, float phase, float reducer_r
                         float output_ratio, float* shaft_rad);
 /** @brief ODrive POS_FILTER 二阶临界阻尼滤波状态（pos/vel 设定，ZOH 输入间平滑） */
 typedef struct {
-    float pos_setpoint_rad;   /**< 滤波后位置设定 [rad] */
-    float vel_setpoint_rad_s; /**< 滤波后速度设定 [rad/s]（含 input_vel 跟踪） */
+    float pos_setpoint_rad;       /**< 滤波后位置设定 [rad] */
+    float vel_setpoint_rad_s;     /**< 滤波后速度设定 [rad/s]（含 input_vel 跟踪） */
+    float accel_setpoint_rad_s2;  /**< 本拍滤波加速度 [rad/s²]（惯量前馈用） */
 } algo_motion_pos_filter_t;
 /** @brief ODrive POS_FILTER 单步：bw钳位≤0.25/dt；bw≤0直通；无效输入不更新 */
 void algo_motion_pos_filter_step(

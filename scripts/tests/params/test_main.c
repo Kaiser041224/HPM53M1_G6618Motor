@@ -29,6 +29,7 @@ static int g_fails;
     } while (0)
 
 void mock_flash_reset(void);
+int test_param_terminal_guard(void);
 
 /** @brief 记录读写：回读一致；代次/长度不符或非法入参整条忽略，不改内存 */
 static void test_param_record(void) {
@@ -184,11 +185,38 @@ static void test_observer_params_migration(void) {
     CHECK(out2.control.speed_loop.kp == 7.25f);
 }
 
+/** @brief 增加 load_inertia 后旧 MPRM 前缀迁移；新字段保持出厂默认 */
+static void test_motor_params_load_inertia_migration(void) {
+    mock_flash_reset();
+    const app_motor_params_t* def = app_motor_params_default();
+    app_motor_params_t legacy = *def;
+    legacy.reducer_ratio = 25.0f;
+    legacy.load_inertia_kgm2 = 9.9f; /* 旧记录长度之外，不得被读取 */
+    CHECK(APP_MOTOR_PARAMS_V1_SIZE > 0U);
+    CHECK(APP_MOTOR_PARAMS_V1_SIZE < sizeof(app_motor_params_t));
+    CHECK(
+        app_param_record_store(
+            APP_PARAM_KEY_MOTOR_PARAMS, &legacy, APP_MOTOR_PARAMS_V1_SIZE, 1U)
+        == 0);
+    app_motor_params_t out;
+    memset(&out, 0xA5, sizeof(out));
+    CHECK(app_motor_params_load(&out) == 0);
+    CHECK(out.reducer_ratio == 25.0f);
+    CHECK(out.load_inertia_kgm2 == def->load_inertia_kgm2);
+
+    app_motor_params_mutable()->load_inertia_kgm2 = 0.02f;
+    CHECK(app_motor_params_store() == 0);
+    CHECK(app_motor_params_load(&out) == 0);
+    CHECK(out.load_inertia_kgm2 == 0.02f);
+}
+
 int main(void) {
     printf("Params host tests\n");
     test_param_record();
     test_store_before_init();
+    CHECK(test_param_terminal_guard() == 0);
     test_observer_params_migration();
+    test_motor_params_load_inertia_migration();
     test_params_persistence();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

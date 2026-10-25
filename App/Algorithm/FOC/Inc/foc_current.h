@@ -82,6 +82,16 @@ typedef void (*foc_current_reset_fn)(foc_current_t* self);
  */
 typedef void (*foc_current_set_gains_fn)(foc_current_t* self, float kp, float ki);
 /**
+ * @brief 更新电机模型（R/L/λ），不重置积分器或 boost 状态
+ * @param r_ohm 相电阻 [Ω]
+ * @param l_d d 轴电感 [H]
+ * @param l_q q 轴电感 [H]
+ * @param lambda 永磁磁链 [Wb]
+ * @return 0 = 成功；-1 = 任一参数非有限或负
+ */
+typedef int (*foc_current_set_model_fn)(
+    foc_current_t* self, float r_ohm, float l_d, float l_q, float lambda);
+/**
  * @brief 运行中开关解耦前馈（兼容旧接口：同时开关 ωL + bEMF）
  * @param enable 0 = 关闭；非 0 = 开启
  */
@@ -112,6 +122,7 @@ struct foc_current {
         foc_current_step_fn step;           /**< 单步 */
         foc_current_reset_fn reset;         /**< 复位 */
         foc_current_set_gains_fn set_gains;             /**< 更新增益 */
+        foc_current_set_model_fn set_model;             /**< 更新 R/L/λ 模型（不重置状态） */
         foc_current_set_decoupling_fn set_decoupling;   /**< 兼容旧接口：同时开关 ωL+bEMF */
         foc_current_set_r_ff_fn set_r_ff;               /**< 开关 R·I 前馈 */
         foc_current_set_wl_ff_fn set_wl_ff;             /**< 开关 ωL 前馈 */

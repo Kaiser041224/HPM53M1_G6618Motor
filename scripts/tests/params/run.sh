@@ -14,16 +14,25 @@ python3 "$ROOT/scripts/gen_params.py" --config-dir "$ROOT/scripts/tests/fixtures
 INCLUDES=(
     "-I$ROOT/App/Platform/Inc"
     "-I$ROOT/App/Control/Inc"
+    "-I$ROOT/App/Algorithm/FOC/Inc"
+    "-I$ROOT/App/Algorithm/Inc"
+    "-I$ROOT/App/Comm/terminal/Inc"
+    "-I$ROOT/App/Comm/terminal/Src"
+    "-I$ROOT/config"
+    "-I${HPMDEV_SDK_DIR:-${HPM_SDK_BASE:-/workspace/sdk/hpm_sdk}}/middleware/cherrysh"
     "-I$OUT/gen"
 )
 BASE_FLAGS=(-std=c17 -Wall -Wextra -Werror)
 SRC=(
     "$HERE/test_main.c"
+    "$HERE/test_param_terminal_guard.c"
     "$HERE/mock_flash.c"
     "$ROOT/App/Platform/Src/app_param_record.c"
     "$ROOT/App/Platform/Src/app_software_params.c"
+    "$ROOT/App/Platform/Src/app_hardware_params.c"
     "$ROOT/App/Control/Src/app_motor_params.c"
     "$OUT/gen/params_generated.c"
+    "$OUT/gen/params_meta_generated.c"
 )
 
 echo "── pass 1: -O1（常规）"

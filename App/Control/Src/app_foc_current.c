@@ -258,6 +258,43 @@ void app_foc_current_init(void) {
     (void)app_foc_effective_duty_max(software); /* 记录有效上限（init 即可观测） */
 }
 
+int app_foc_current_reload_model(void) {
+    const app_software_params_t* software = app_software_params_current();
+    const app_motor_params_t* motor = app_motor_params_current();
+    float r_ohm;
+    float l_h;
+    float lambda;
+
+    if (!s_ready) {
+        return -1;
+    }
+    r_ohm = motor->rs_ohm;
+    l_h = motor->ls_h;
+    if (!foc_finite(r_ohm) || (r_ohm < 0.0f) || !foc_finite(l_h) || (l_h < 0.0f)
+        || !foc_finite(motor->kt_nm_per_a) || (motor->kt_nm_per_a < 0.0f)) {
+        return -1;
+    }
+    lambda = (motor->pole_pairs > 0U && (motor->kt_nm_per_a > 0.0f))
+                 ? motor->kt_nm_per_a / (1.5f * (float)motor->pole_pairs)
+                 : 0.0f;
+    if (s_current.set_model == NULL
+        || s_current.set_model(&s_current, r_ohm, l_h, l_h, lambda) != 0) {
+        return -1;
+    }
+    s_motor_params = motor;
+    s_current.set_gains(&s_current, software->control.current_loop.kp,
+                        software->control.current_loop.ki);
+    s_current.set_decoupling(&s_current, software->control.current_loop.decoupling_en);
+    s_current.set_wl_ff(&s_current,
+                        (software->control.current_loop.decoupling_en != 0U
+                         || software->current_ff.wl_en != 0U) ? 1U : 0U);
+    s_current.set_bemf_ff(&s_current,
+                          (software->control.current_loop.decoupling_en != 0U
+                           || software->current_ff.bemf_en != 0U) ? 1U : 0U);
+    s_current.set_r_ff(&s_current, (software->current_ff.r_en != 0U) ? 1U : 0U);
+    return 0;
+}
+
 void app_foc_current_limit_update(float current_a, float dt_s) {
     if (!s_i_limit_ready || !foc_finite(current_a) || !foc_finite(dt_s) || (dt_s <= 0.0f)) {
         return;
@@ -599,7 +636,9 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
                           (software->control.current_loop.decoupling_en != 0U
                            || software->current_ff.bemf_en != 0U) ? 1U : 0U);
     {
-        uint8_t r_ff = (software->current_ff.r_en != 0U && s_motor_params->rs_ohm > 0.0f) ? 1U : 0U;
+        /* 启用位只看用户开关；电阻值由 set_model 缓存，非法 param 不应把已验证模型
+         * 的 R·I 前馈静默关掉（reload 失败时保留旧模型）。 */
+        uint8_t r_ff = (software->current_ff.r_en != 0U) ? 1U : 0U;
 
         if (s_identify_r_ff_override_active) {
             r_ff = s_identify_r_ff_override ? 1U : 0U;

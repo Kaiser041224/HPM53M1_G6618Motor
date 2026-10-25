@@ -6,8 +6,9 @@
  * 名称空间：<域>.<路径>（域 = motor / hardware / software）
  *   例：hardware.current_sense.a_per_volt、software.control.current_loop.kp
  * 生效语义（元数据 apply 字段）：
- *   live   = 消费者逐次使用读取，set 立即生效
- *   reboot = init 期消费；v1 仅改 RAM 不持久化（flash 持久化见 v2）
+ *   live    = 消费者逐次使用读取，set 立即生效
+ *   reboot  = init 期消费；v1 仅改 RAM 不持久化（flash 持久化见 v2）
+ *   foc_off = FOC OFF 才接受 set；下一次 foc on 重载模型/角度链后生效
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -35,7 +36,11 @@ static const char* const s_safety_params[] = {
 
 /** @brief apply 字段文本 */
 static const char* param_apply_name(uint8_t apply) {
-    return (apply == PARAM_META_APPLY_REBOOT) ? "reboot" : "live";
+    switch (apply) {
+    case PARAM_META_APPLY_REBOOT: return "reboot";
+    case PARAM_META_APPLY_FOC_OFF: return "foc_off";
+    default: return "live";
+    }
 }
 
 /** @brief flash 存储策略文本 */
@@ -205,6 +210,14 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
         csh_printf(csh, "ERR: unknown parameter '%s' (try 'param list')\r\n", name);
         return -1;
     }
+    if ((meta->apply == PARAM_META_APPLY_FOC_OFF)
+        && (app_foc_get_state() != APP_FOC_STATE_OFF)) {
+        csh_printf(
+            csh,
+            "ERR: %s requires FOC OFF (current state=%d); 'foc off' first\r\n",
+            name, (int)app_foc_get_state());
+        return -1;
+    }
 
     data = param_data(meta);
     switch (meta->type) {
@@ -275,6 +288,8 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
     if (meta->apply == PARAM_META_APPLY_REBOOT) {
         csh_printf(
             csh, "OK  %s = %s (RAM; consumed at boot, not persistent - v2: save)\r\n", name, text);
+    } else if (meta->apply == PARAM_META_APPLY_FOC_OFF) {
+        csh_printf(csh, "OK  %s = %s (RAM; consumed at next 'foc on')\r\n", name, text);
     } else {
         csh_printf(csh, "OK  %s = %s (RAM, live)\r\n", name, text);
     }
@@ -290,6 +305,10 @@ out_of_range:
  * @brief param reset [name|domain]
  */
 static int cmd_param_reset(chry_shell_t* csh, const char* target) {
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        csh_printf(csh, "ERR: param reset requires FOC OFF; 'foc off' first\r\n");
+        return -1;
+    }
     if (target == NULL) {
         *app_motor_params_mutable() = *app_motor_params_default();
         *app_hardware_params_mutable() = *app_hardware_params_default();

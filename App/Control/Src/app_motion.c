@@ -79,7 +79,8 @@ static bool s_target_ramp_primed;        /**< 生效目标已从当前状态起�
 static algo_ramp_t s_position_traj;      /**< 位置梯形轨迹 */
 static bool s_position_traj_ready;       /**< 轨迹对象已初始化 */
 static volatile bool s_traj_reset;       /**< 新位置命令需要重规划轨迹（跨任务/ISR） */
-static float s_traj_prev_pos;            /**< 上一拍轨迹位置，用于差分测速 */
+static bool s_traj_primed;                /**< 轨迹已有上一拍规划速度，可作重规划初值 */
+static float s_accel_cmd_rad_s2;         /**< 位置轨迹/滤波本拍加速度（惯量前馈输入） */
 static float s_output_direction = 1.0f;  /**< 用户出轴正方向（+1/-1；仅 motion 边界） */
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_previous_motor_rad; /**< 上一拍转子机械角（测速基准；输出侧速度=转子速度/减速比） */
@@ -144,6 +145,33 @@ APP_ATTR_RAMFUNC
 static float motion_delta(float value) {
     return value > .5f ? value - 1.0f : value < -.5f ? value + 1.0f : value;
 }
+
+/**
+ * @brief 惯量前馈：轴端加速度 → 轴端转矩
+ * @param accel_rad_s2 轴端加速度 [rad/s²]
+ * @return J_out × accel [Nm]；J_out = 转子惯量×减速比² + 轴端 load_inertia
+ * @note motor.inertia_kgm2 为转子侧；motor.load_inertia_kgm2 由 cal inertia
+ *       标定为减速器/负载的轴端附加惯量。
+ */
+APP_ATTR_RAMFUNC
+static float motion_inertia_feedforward(float accel_rad_s2) {
+    const app_motor_params_t* motor = s_motion_motor_params;
+    float inertia;
+    float reducer;
+
+    if ((motor == NULL) || !foc_finite(accel_rad_s2)) {
+        return 0.0f;
+    }
+    inertia = motor->inertia_kgm2;
+    reducer = motor->reducer_ratio;
+    if (!foc_finite(inertia) || (inertia < 0.0f) || !foc_finite(reducer) || (reducer <= 0.0f)
+        || !foc_finite(motor->load_inertia_kgm2) || (motor->load_inertia_kgm2 < 0.0f)) {
+        return 0.0f;
+    }
+    float j_out = inertia * reducer * reducer + motor->load_inertia_kgm2;
+
+    return foc_finite(j_out) ? (j_out * accel_rad_s2) : 0.0f;
+}
 /** @brief 清理motion自身输出观测，不代表FOC缓降已经完成 */
 APP_ATTR_RAMFUNC
 static void motion_clear_output(app_motion_reason_t reason) {
@@ -151,11 +179,18 @@ static void motion_clear_output(app_motion_reason_t reason) {
     s_velocity_pi.integral = 0;
     s_motion.torque_nm = 0;
     s_motion.iq_a = 0;
+    s_motion.inertia_ff_raw_nm = 0;
+    s_motion.inertia_ff_nm = 0;
+    s_motion.replan_vel_rad_s = 0;
     s_motion.speed_limited = false;
     s_motion.reason = reason;
     s_target_effective = 0;
     s_target_ramp_primed = false;
     s_traj_reset = false;
+    s_traj_primed = false;
+    s_accel_cmd_rad_s2 = 0;
+    s_motion.traj_vel_rad_s = 0;
+    s_motion.accel_cmd_rad_s2 = 0;
     s_hold_samples = 0;
     s_velocity_gap = false;
 }
@@ -189,6 +224,8 @@ static void motion_reject(app_motion_reason_t reason) {
             s_motion.reason = reason;
             s_motion.torque_nm = 0;
             s_motion.iq_a = 0;
+            s_motion.inertia_ff_raw_nm = 0;
+            s_motion.inertia_ff_nm = 0;
             app_foc_current_request_t request = {0, 0, ++s_request_sequence, s_epoch, true};
             if (app_foc_submit_current(&request) != 0)
                 motion_clear_output(APP_MOTION_REASON_SUBMIT);
@@ -272,7 +309,8 @@ void app_motion_init(void) {
     s_target_effective = 0;
     s_target_ramp_primed = false;
     s_traj_reset = false;
-    s_traj_prev_pos = 0;
+    s_traj_primed = false;
+    s_accel_cmd_rad_s2 = 0;
     s_position_traj_ready = false;
     {
         float traj_vel = software->position_traj.trajectory_vel_limit;
@@ -337,6 +375,7 @@ int app_motion_calibrate(void) {
     s_motion.reason = APP_MOTION_REASON_NONE;
     s_calibration_sum = 0;
     s_primed = false;
+    s_traj_primed = false;
     s_have_nearest = false;                       /* 相位重标定：旧圈号基准失效 */
     intf_sys_irq_restore(st);
     return 0;
@@ -365,6 +404,7 @@ int app_motion_apply(void) {
     s_motion.calibration_done = false;
     s_motion.zero_valid = false;
     s_primed = false;
+    s_traj_primed = false;
     s_have_nearest = false;                       /* 新相位：旧圈号基准失效 */
     s_pos_filter = (algo_motion_pos_filter_t){0}; /* 位置坐标系随相位重建 */
     s_motion.feedback_valid = false;
@@ -382,6 +422,7 @@ int app_motion_zero(void) {
     }
     s_zero_rad = s_previous_angle;
     s_motion.zero_valid = true;
+    s_traj_primed = false;
     s_pos_filter = (algo_motion_pos_filter_t){0};
     s_motion.shaft_rad = 0;
     g_motion_shaft_angle_rad = 0;
@@ -781,6 +822,7 @@ void app_motion_step(void) {
     float torque_limit = reducer * kt * motion_iq_limit;
     float ramp_dt = (dt > 0.0f && dt <= 0.001f) ? dt : (1.0f / APP_MOTION_SPEED_RATE_HZ);
     float torque;
+    float inertia_ff_raw_nm = 0.0f;
     bool speed_limited = false;
 
     if (!s_target_ramp_primed) {
@@ -795,10 +837,19 @@ void app_motion_step(void) {
         float target;
         if (s_motion.mode == APP_MOTION_MODE_POSITION) {
             target = s_vel_cmd_rad_s;
+            inertia_ff_raw_nm = motion_inertia_feedforward(s_accel_cmd_rad_s2);
         } else {
+            float previous_target = s_target_effective;
+
             s_target_effective = algo_motion_ramp(
                 s_target_effective, s_target, s_velocity_ramp_rate, ramp_dt);
             target = s_target_effective;
+            /* 速度斜坡率为 0 表示命令直通，不是受控加速度；此时不得用
+             * (target-current)/dt 生成巨大的惯量脉冲。 */
+            if (s_velocity_ramp_rate > 0.0f) {
+                inertia_ff_raw_nm = motion_inertia_feedforward(
+                    (s_target_effective - previous_target) / ramp_dt);
+            }
         }
         torque = algo_motion_speed(
             &s_velocity_pi, target, s_motion.speed_rad_s, s_velocity_kp, s_velocity_ki, dt,
@@ -814,12 +865,27 @@ void app_motion_step(void) {
         torque = s_target_effective;
     }
 
-    torque = torque > torque_limit  ? torque_limit
-           : torque < -torque_limit ? -torque_limit
-                                    : torque;
+    /* 惯量前馈语义：
+     *   raw = J_out×accel，未限幅；
+     *   final - base = 在相同的转矩/速度限幅下，实际计入最终输出的增量。 */
+    float torque_base = torque;
+    float torque_base_limited = torque_base > torque_limit  ? torque_limit
+                              : torque_base < -torque_limit ? -torque_limit
+                                                            : torque_base;
+    float torque_ff = torque_base + inertia_ff_raw_nm;
+    float torque_ff_limited = torque_ff > torque_limit  ? torque_limit
+                            : torque_ff < -torque_limit ? -torque_limit
+                                                        : torque_ff;
+    bool base_speed_limited = false;
+    float torque_base_final = algo_motion_limit_vel(
+        torque_base_limited, s_motion.speed_rad_s, s_motion_speed_limit_rad_s,
+        s_motion_speed_limit_gain, &base_speed_limited);
     torque = algo_motion_limit_vel(
-        torque, s_motion.speed_rad_s, s_motion_speed_limit_rad_s, s_motion_speed_limit_gain,
-        &speed_limited);
+        torque_ff_limited, s_motion.speed_rad_s, s_motion_speed_limit_rad_s,
+        s_motion_speed_limit_gain, &speed_limited);
+    s_motion.inertia_ff_raw_nm = inertia_ff_raw_nm;
+    s_motion.inertia_ff_nm = torque - torque_base_final;
+    (void)base_speed_limited;
     if (speed_limited) {
         /* 限速正在干预：冻结速度积分，避免退出限速后积分突释。 */
         s_velocity_pi.saturated = true;
@@ -841,26 +907,39 @@ void app_motion_position_step(void) {
 
     float pos_setpoint;
     float vel_setpoint;
+    float accel_setpoint;
     if (s_position_traj_ready) {
-        /* 轨迹模式由梯形轨迹自己生成 vel；input_vel_ff 不再叠加，避免双计。 */
+        /* 轨迹模式由梯形轨迹自己生成 Yd/Ydd；input_vel_ff 不再叠加，避免双计。 */
         if (s_traj_reset) {
             float delta = foc_wrap_pm_pi(s_input_pos - s_motion.shaft_rad);
             float target = s_motion.shaft_rad + delta;
 
-            (void)s_position_traj.set_current(&s_position_traj, s_motion.shaft_rad);
-            (void)s_position_traj.set_target(&s_position_traj, target);
-            s_traj_prev_pos = s_motion.shaft_rad;
+            /* 初速度优先取上一拍规划速度（低噪声、命令连续）；首次进入才用
+             * 测量速度兜底。ODrive 的 move_to_pos 同样使用上一拍规划速度。 */
+            float replan_vel = s_traj_primed
+                                   ? s_position_traj.get_velocity(&s_position_traj)
+                                   : s_motion.speed_rad_s;
+            if (s_position_traj.plan(&s_position_traj, target, s_motion.shaft_rad, replan_vel)
+                != 0) {
+                (void)s_position_traj.set_current(&s_position_traj, s_motion.shaft_rad);
+                (void)s_position_traj.set_target(&s_position_traj, target);
+                replan_vel = 0.0f;
+            }
+            s_motion.replan_vel_rad_s = replan_vel;
+            s_traj_primed = true;
             s_traj_reset = false;
         }
         pos_setpoint = s_position_traj.step(&s_position_traj);
-        vel_setpoint = (pos_setpoint - s_traj_prev_pos) * APP_MOTION_POSITION_RATE_HZ;
-        s_traj_prev_pos = pos_setpoint;
+        vel_setpoint = s_position_traj.get_velocity(&s_position_traj);
+        accel_setpoint = s_position_traj.get_acceleration(&s_position_traj);
     } else {
         algo_motion_pos_filter_step(
             &s_pos_filter, s_input_pos, s_input_vel_ff, s_pos_filter_bw, 1.0f / APP_MOTION_POSITION_RATE_HZ);
         pos_setpoint = s_pos_filter.pos_setpoint_rad;
         vel_setpoint = s_pos_filter.vel_setpoint_rad_s;
+        accel_setpoint = s_pos_filter.accel_setpoint_rad_s2;
     }
+    s_accel_cmd_rad_s2 = accel_setpoint;
 
     float vel_cmd = algo_motion_position(pos_setpoint, s_motion.shaft_rad, s_pos_gain, vel_setpoint);
     if (s_motion_speed_limit_rad_s > 0)
@@ -870,6 +949,8 @@ void app_motion_position_step(void) {
     s_vel_cmd_rad_s = vel_cmd;
     s_motion.pos_setpoint_rad = foc_wrap_2pi(pos_setpoint); /* 显示取模单圈 */
     s_motion.vel_cmd_rad_s = vel_cmd;
+    s_motion.traj_vel_rad_s = vel_setpoint;
+    s_motion.accel_cmd_rad_s2 = accel_setpoint;
 }
 void app_motion_get_snapshot(app_motion_snapshot_t* out) {
     if (out) {

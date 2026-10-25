@@ -758,6 +758,11 @@ int app_foc_enable(void) {
     if (!s_angle_ready) {
         return -1;
     }
+    /* FOC 模型参数在 init/enable 期消费；这里重载 R/L/λ 与增益，保证
+     * param set（FOC OFF）后的修改在下一次 foc on 生效，不重置 boost 预算。 */
+    if (app_foc_current_reload_model() != 0) {
+        return -1;
+    }
 
     /* 注：app_3phase_inverter_enable() 内含 +12V 栅极供电稳定等待（约 10ms 阻塞）。
      * 该窗口内桥处于关闭态（PWM 未启动），无电流风险；但 30kHz 环与 L2/L3 保护暂停。

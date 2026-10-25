@@ -49,8 +49,13 @@ typedef struct {
     float torque_nm;        /**< motion模型转矩请求[Nm]（内部物理坐标）；不是实测轴端转矩 */
     float iq_a;             /**< motion电流请求[A]（FOC 物理坐标），不是FOC实测电流 */
     float iq_accepted_a;    /**< FOC最近确认执行的接受iq[A]（物理坐标），诊断非实测 */
-    float pos_setpoint_rad; /**< 位置滤波后设定[rad]（内部物理坐标），显示取模单圈 */
-    float vel_cmd_rad_s;    /**< 位置环输出速度命令[rad/s]（内部物理坐标） */
+    float pos_setpoint_rad;      /**< 位置滤波后设定[rad]（内部物理坐标），显示取模单圈 */
+    float vel_cmd_rad_s;         /**< 位置环输出速度命令[rad/s]（内部物理坐标） */
+    float traj_vel_rad_s;        /**< 位置轨迹/滤波器本拍速度[rad/s]（内部物理坐标；Yd诊断） */
+    float accel_cmd_rad_s2;      /**< 位置轨迹/滤波加速度[rad/s²]（内部物理坐标；FF诊断） */
+    float replan_vel_rad_s;      /**< 最近一次位置重规划采用的初速度[rad/s]（Yd；规划速度） */
+    float inertia_ff_raw_nm;     /**< J_out×accel 原始惯量前馈请求[Nm]（限幅前） */
+    float inertia_ff_nm;         /**< 计入最终转矩的惯量前馈增量[Nm]（限幅后实际值） */
     float phase_turns;      /**< 已应用游标安装相位[turn] */
     uint32_t good_count, bad_count, calibration_samples;
     uint32_t sample_failure_count, duplicate_count, vernier_failure_count;

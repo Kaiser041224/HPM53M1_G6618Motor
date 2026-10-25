@@ -77,6 +77,27 @@ static void foc_current_set_gains(foc_current_t* self, float kp, float ki) {
 }
 
 /**
+ * @brief 更新电机模型（R/L/λ），不重置积分器
+ * @return 0 = 成功；-1 = 非法值（保留旧模型）
+ */
+FOC_ATTR_RAMFUNC
+static int foc_current_set_model(foc_current_t* self, float r_ohm, float l_d, float l_q,
+                                 float lambda) {
+    if (self == NULL) {
+        return -1;
+    }
+    if (!foc_finite(r_ohm) || (r_ohm < 0.0f) || !foc_finite(l_d) || (l_d < 0.0f)
+        || !foc_finite(l_q) || (l_q < 0.0f) || !foc_finite(lambda) || (lambda < 0.0f)) {
+        return -1;
+    }
+    self->_r = r_ohm;
+    self->_ld = l_d;
+    self->_lq = l_q;
+    self->_lambda = lambda;
+    return 0;
+}
+
+/**
  * @brief 运行中开关解耦前馈（25kHz ISR 每拍调用 → ILM）
  */
 FOC_ATTR_RAMFUNC
@@ -263,6 +284,7 @@ void foc_current_ctor(foc_current_t* self) {
     self->step = foc_current_step;
     self->reset = foc_current_reset;
     self->set_gains = foc_current_set_gains;
+    self->set_model = foc_current_set_model;
     self->set_decoupling = foc_current_set_decoupling;
     self->set_r_ff = foc_current_set_r_ff;
     self->set_wl_ff = foc_current_set_wl_ff;

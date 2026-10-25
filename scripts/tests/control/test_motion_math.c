@@ -97,6 +97,19 @@ void test_motion_pos_filter(void) {
     CHECK_NEAR(h.vel_setpoint_rad_s, 0, 0.01f);
 }
 
+/** @brief POS_FILTER 同时输出本拍加速度，供惯量前馈使用 */
+void test_motion_pos_filter_accel(void) {
+    algo_motion_pos_filter_t f = {0};
+    float dt = 1.0f / 15000.0f;
+
+    algo_motion_pos_filter_step(&f, 1.0f, 0.0f, 10.0f, dt);
+    CHECK(f.accel_setpoint_rad_s2 > 0.0f);
+
+    algo_motion_pos_filter_t direct = {0};
+    algo_motion_pos_filter_step(&direct, 1.0f, 0.5f, 0.0f, dt);
+    CHECK_NEAR(direct.accel_setpoint_rad_s2, 0.0f, 1e-6f);
+}
+
 /** @brief 带宽钳位≤0.25/dt（ODrive 同源约束）与 bw≤0 直通 */
 void test_motion_pos_filter_bw_clamp(void) {
     algo_motion_pos_filter_t f = {0};
@@ -130,7 +143,7 @@ void test_motion_position_circular_p(void) {
 
 /** @brief 滤波环形：目标跨零点跳变按短路径平滑（不绕大圈） */
 void test_motion_pos_filter_circular(void) {
-    algo_motion_pos_filter_t f = {6.2f, 0};              /* 设定在 6.2 rad */
+    algo_motion_pos_filter_t f = {6.2f, 0, 0};           /* 设定在 6.2 rad */
     float dt = 2e-4f;
     algo_motion_pos_filter_step(&f, 0.1f, 0, 10.0f, dt); /* 目标跳到 0.1（短路径 +0.183） */
     CHECK(

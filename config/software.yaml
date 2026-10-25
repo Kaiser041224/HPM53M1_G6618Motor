@@ -12,8 +12,8 @@ motion:
   output_direction: 1.0      # 出轴正方向：+1/-1；仅翻转 motion 用户坐标（位置/速度/转矩），不改 FOC/编码器方向；重启生效
 
 current_ff:
-  r_en: true                # R·I 前馈；默认关闭，cal rl step 通过并验证后再开
-  wl_en: true               # ωL 交叉耦合前馈；默认关闭
+  r_en: true                # R·I 前馈；默认开启（cal rl step 通过后生效）
+  wl_en: true               # ωL 交叉耦合前馈；默认开启
   bemf_en: true            # bEMF（ωλ）前馈；默认关闭
 
 can:

@@ -263,18 +263,26 @@ def test_meta_apply(root: Path) -> None:
     cfg = fresh_copy(root)
     run(cfg, check=False)
     seen_reboot = set()
+    seen_foc_off = set()
     bad = ""
     for m in parse_meta(cfg):
         key = m["name"]
-        want = gen.META_APPLY_REBOOT if key in gen.APPLY_REBOOT else gen.META_APPLY_LIVE
+        if key in gen.APPLY_FOC_OFF:
+            want = gen.META_APPLY_FOC_OFF
+        elif key in gen.APPLY_REBOOT:
+            want = gen.META_APPLY_REBOOT
+        else:
+            want = gen.META_APPLY_LIVE
         if m["apply"] != want:
             bad = f"{key}: {m['apply']} != {want}"
             break
         if m["apply"] == gen.META_APPLY_REBOOT:
             seen_reboot.add(key)
+        if m["apply"] == gen.META_APPLY_FOC_OFF:
+            seen_foc_off.add(key)
     expect("meta-apply-mapping",
-           not bad and seen_reboot == gen.APPLY_REBOOT,
-           bad or f"reboot={sorted(seen_reboot)}")
+           not bad and seen_reboot == gen.APPLY_REBOOT and seen_foc_off == gen.APPLY_FOC_OFF,
+           bad or f"reboot={sorted(seen_reboot)} foc_off={sorted(seen_foc_off)}")
 
 
 def test_meta_unit(root: Path) -> None:

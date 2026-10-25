@@ -11,6 +11,10 @@
  *   cal encoder apply  （应用最近一次成功结果：电机运行参数 + FOC 运行零点，RAM）
  *   cal encoder save   （运行参数中的零点/方向写入 flash；须 foc off）
  *   cal encoder show   （最近结果 + 当前生效零点）
+ *   cal inertia        （轴端总/负载惯量辨识：默认2.0A，6点×正反转）
+ *   cal inertia apply  （FOC OFF 后写 motor.load_inertia_kgm2，RAM）
+ *   cal inertia save   （FOC OFF 后写 MPRM flash；storage=reset 时重启会被 YAML 覆盖）
+ *   cal inertia show   （最近结果 + 当前 load_inertia）
  *
  * M1 裁剪（spec §1/§4）：V/F 开环（motor start/stop/freq/mod）、逆变桥逐相（inv）
  * 不接入；相关源文件不参与构建。
@@ -34,6 +38,7 @@
 #include "app_foc.h"
 #include "app_motor_identify.h"
 #include "app_current_identify.h"
+#include "app_inertia_identify.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
 #include "foc_math.h"
@@ -660,6 +665,211 @@ static int cmd_cal_rl(chry_shell_t* csh, const char* sub) {
     } else csh_printf(csh, "%s: %s (save requires OFF and applied result)\r\n", sub, rc ? "FAIL" : "OK");
     return rc;
 }
+
+/* ============================================================================
+ * cal inertia：轴端负载惯量辨识（直接 q 电流双窗口；FOC READY/RUN）
+ * ============================================================================ */
+
+static uint32_t s_cal_inertia_beat_ms;
+
+/** @brief 惯量辨识失败原因文本 */
+static const char* cal_inertia_fail_name(app_inertia_identify_failure_t failure) {
+    switch (failure) {
+    case APP_INERTIA_IDENTIFY_FAIL_STATE: return "FOC state/source changed";
+    case APP_INERTIA_IDENTIFY_FAIL_FEEDBACK: return "speed feedback invalid";
+    case APP_INERTIA_IDENTIFY_FAIL_TIMEOUT: return "settle/accel timeout";
+    case APP_INERTIA_IDENTIFY_FAIL_SPEED: return "speed limit exceeded";
+    case APP_INERTIA_IDENTIFY_FAIL_WINDOW: return "speed crossed direction";
+    case APP_INERTIA_IDENTIFY_FAIL_CALC: return "calculation/range rejected";
+    case APP_INERTIA_IDENTIFY_FAIL_QUALITY: return "multi-point quality rejected";
+    case APP_INERTIA_IDENTIFY_FAIL_MOTION: return "motion became active";
+    case APP_INERTIA_IDENTIFY_FAIL_ABORTED: return "aborted";
+    default: return "none";
+    }
+}
+
+/** @brief cal inertia job：进度与结果 */
+static void cal_inertia_tick(uint32_t now_ms) {
+    app_inertia_identify_snapshot_t identify;
+
+    app_inertia_identify_get_snapshot(&identify);
+    if (identify.busy) {
+        if ((uint32_t)(now_ms - s_cal_inertia_beat_ms) >= 200U) {
+            uint32_t pct = (uint32_t)(identify.progress * 100.0f);
+            char bar[21];
+
+            s_cal_inertia_beat_ms = now_ms;
+            if (pct > 100U)
+                pct = 100U;
+            for (uint32_t i = 0U; i < 20U; i++)
+                bar[i] = (i < (pct / 5U)) ? '#' : '-';
+            bar[20] = '\0';
+            app_terminal_cmd_emit(
+                "\rcal inertia [%s] %3u%%  %4.1fs  run=%u/%u valid=%u  state=%u  |v|=%.2f  ",
+                bar, (unsigned)pct, (double)identify.elapsed_ms / 1000.0,
+                (unsigned)identify.run_index, (unsigned)identify.run_count,
+                (unsigned)identify.valid_runs, (unsigned)identify.state,
+                (double)identify.speed_peak_rad_s);
+        }
+        return;
+    }
+    app_terminal_cmd_emit("\r\n%s: inertia identify (%s)\r\n",
+                          identify.result_valid ? "OK" : "FAIL",
+                          cal_inertia_fail_name(identify.failure));
+    app_terminal_cmd_emit(
+        "    J_total(median)=%.5f kgm2  J_rotor_ref=%.5f  J_load=%.5f%s\r\n",
+        (double)identify.result.j_total_kgm2, (double)identify.result.j_rotor_reflected_kgm2,
+        (double)identify.result.j_load_kgm2, identify.result.clamped ? " (load clamped 0)" : "");
+    app_terminal_cmd_emit(
+        "    points=%u  runs=%u/%u valid (F=%u R=%u)  median=%.5f  MAD=%.5f  spread=%.1f%%\r\n",
+        (unsigned)identify.point_count, (unsigned)identify.valid_runs,
+        (unsigned)identify.run_count, (unsigned)identify.valid_forward_runs,
+        (unsigned)identify.valid_reverse_runs, (double)identify.median_j_total_kgm2,
+        (double)identify.mad_j_total_kgm2, (double)(identify.spread_ratio * 100.0f));
+    for (uint16_t i = 0U; i < identify.run_count; i++) {
+        bool valid = (identify.run_valid_mask & (uint16_t)(1U << i)) != 0U;
+
+        app_terminal_cmd_emit(
+            "    pt%u%c: I=%.2fA v=%.2f..%.2f  J_total=%s%.5f kgm2\r\n",
+            (unsigned)(i / 2U + 1U), identify.run_direction[i] > 0 ? 'F' : 'R',
+            (double)identify.run_current[i], (double)identify.run_start_speed[i],
+            (double)identify.run_stop_speed[i], valid ? "" : "INVALID ",
+            (double)identify.run_j_total[i]);
+    }
+    if (identify.result_valid) {
+        app_terminal_cmd_emit(
+            "    next: 'foc off' -> 'cal inertia apply' (RAM) -> 'cal inertia save' (flash)\r\n");
+        if (app_software_params_default()->storage == APP_SW_STORAGE_RESET) {
+            app_terminal_cmd_emit(
+                "    note: storage=reset -> 'save' is overwritten at boot; persist via "
+                "motor.yaml or storage:keep\r\n");
+        }
+    } else {
+        app_terminal_cmd_emit("    running motor.load_inertia unchanged\r\n");
+    }
+    app_terminal_job_abort();
+}
+
+/** @brief cal inertia job 中止回调 */
+static void cal_inertia_abort(void) {
+    app_inertia_identify_abort();
+    app_terminal_cmd_emit("\r\n");
+    app_terminal_refresh();
+}
+
+/** cal inertia job（静态生命周期） */
+static app_terminal_job_t s_cal_inertia_job = {
+    .name = "cal inertia",
+    .tick = cal_inertia_tick,
+    .abort = cal_inertia_abort,
+    .active = false,
+};
+
+/** @brief 启动 cal inertia；current_a<=0 使用模块默认值 */
+static int cal_inertia_start(chry_shell_t* csh, float current_a) {
+    app_inertia_identify_snapshot_t identify;
+
+    if (!app_terminal_cmd_require_no_fault(csh)) {
+        return -1;
+    }
+    if (app_foc_get_state() != APP_FOC_STATE_READY
+        && app_foc_get_state() != APP_FOC_STATE_RUN) {
+        csh_printf(csh, "ERR: FOC must be READY/RUN (use 'foc on' first)\r\n");
+        return -1;
+    }
+    if (app_terminal_job_start(&s_cal_inertia_job) != 0) {
+        csh_printf(csh, "FAIL: job start\r\n");
+        return -1;
+    }
+    s_cal_inertia_beat_ms = 0U;
+    int rc = app_inertia_identify_start(current_a);
+    if (rc != 0) {
+        app_terminal_job_abort();
+        csh_printf(csh, "ERR: inertia identify rejected: %s\r\n",
+                   rc == -2 ? "FOC not READY/RUN"
+                   : rc == -3 ? "motion active/calibrating"
+                   : rc == -4 ? "another identify/vtest active"
+                   : rc == -5 ? "cannot claim DIRECT current source"
+                              : "parameter/busy");
+        return -1;
+    }
+    app_inertia_identify_get_snapshot(&identify);
+    csh_printf(csh,
+               "WARN: axis must be free to rotate; load inertia is INCLUDED; "
+               "multi-point max I=%.2fA; %u points x 2 directions; any key aborts\r\n",
+               (double)identify.max_current_a, (unsigned)identify.point_count);
+    return 0;
+}
+
+/** @brief cal inertia 子命令 */
+static int cmd_cal_inertia(chry_shell_t* csh, const char* sub, const char* current_text) {
+    app_inertia_identify_snapshot_t identify;
+
+    if (sub == NULL) {
+        return cal_inertia_start(csh, 0.0f);
+    }
+    if ((strcmp(sub, "show") != 0) && (strcmp(sub, "apply") != 0)
+        && (strcmp(sub, "save") != 0)) {
+        float current_a = 0.0f;
+
+        if ((current_text != NULL) || (app_terminal_cmd_parse_float(sub, &current_a) != 0)) {
+            return app_terminal_cmd_usage(csh, "cal inertia [max_current_a|show|apply|save]");
+        }
+        return cal_inertia_start(csh, current_a);
+    }
+
+    if (strcmp(sub, "show") == 0) {
+        app_inertia_identify_get_snapshot(&identify);
+        csh_printf(csh,
+                   "inertia: state=%u failure=%u valid=%u applied=%u runs=%u/%u\r\n"
+                   "result: J_total=%.5f kgm2 J_rotor_ref=%.5f J_load=%.5f clamped=%u\r\n"
+                   "quality: F=%u R=%u median=%.5f MAD=%.5f spread=%.1f%%\r\n"
+                   "params: load_inertia=%.5f kgm2\r\n",
+                   (unsigned)identify.state, (unsigned)identify.failure,
+                   (unsigned)identify.result_valid, (unsigned)identify.applied,
+                   (unsigned)identify.valid_runs, (unsigned)identify.run_count,
+                   (double)identify.result.j_total_kgm2,
+                   (double)identify.result.j_rotor_reflected_kgm2,
+                   (double)identify.result.j_load_kgm2,
+                   (unsigned)identify.result.clamped,
+                   (unsigned)identify.valid_forward_runs,
+                   (unsigned)identify.valid_reverse_runs,
+                   (double)identify.median_j_total_kgm2,
+                   (double)identify.mad_j_total_kgm2,
+                   (double)(identify.spread_ratio * 100.0f),
+                   (double)app_motor_params_current()->load_inertia_kgm2);
+        return 0;
+    }
+    if (strcmp(sub, "apply") == 0) {
+        int rc = app_inertia_identify_apply();
+        if (rc != 0) {
+            csh_printf(csh, "ERR: inertia apply rejected: %s\r\n",
+                       rc == -2 ? "FOC not OFF (run 'foc off')" : "no valid result");
+            return -1;
+        }
+        if (app_software_params_default()->storage == APP_SW_STORAGE_RESET) {
+            csh_printf(
+                csh,
+                "OK: applied load_inertia=%.5f kgm2 (RAM; storage=reset -> update motor.yaml to persist)\r\n",
+                (double)app_motor_params_current()->load_inertia_kgm2);
+        } else {
+            csh_printf(csh, "OK: applied load_inertia=%.5f kgm2 (RAM; save to persist)\r\n",
+                       (double)app_motor_params_current()->load_inertia_kgm2);
+        }
+        return 0;
+    }
+    if (strcmp(sub, "save") == 0) {
+        int rc = app_inertia_identify_save();
+        if (rc != 0) {
+            csh_printf(csh, "ERR: inertia save rejected: need applied result and FOC OFF\r\n");
+            return -1;
+        }
+        csh_printf(csh, "OK: load_inertia saved to flash\r\n");
+        return 0;
+    }
+    return app_terminal_cmd_usage(csh, "cal inertia [max_current_a|show|apply|save]");
+}
+
 static int cmd_cal(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
 
@@ -669,8 +879,15 @@ static int cmd_cal(int argc, char** argv) {
     if ((argc >= 2) && (strcmp(argv[1], "encoder") == 0)) {
         return cmd_cal_encoder(csh, (argc >= 3) ? argv[2] : NULL);
     }
+    if ((argc >= 2) && (strcmp(argv[1], "inertia") == 0)) {
+        return cmd_cal_inertia(csh, (argc >= 3) ? argv[2] : NULL,
+                                (argc >= 4) ? argv[3] : NULL);
+    }
     if ((argc < 2) || (strcmp(argv[1], "current") != 0)) {
-        return app_terminal_cmd_usage(csh, "cal current | cal encoder [apply|save|show] | cal rl [apply|save|show|clear]");
+        return app_terminal_cmd_usage(csh,
+                                      "cal current | cal encoder [apply|save|show] | "
+                                      "cal inertia [max_current_a|apply|save|show] | "
+                                      "cal rl [apply|save|show|clear]");
     }
     if (!app_terminal_cmd_require_motor_stopped(csh)) {
         return -1;
