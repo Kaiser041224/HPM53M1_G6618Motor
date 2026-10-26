@@ -34,6 +34,19 @@ static float s_output_delay_s;
 /* init 期缓存的参数单例地址：ISR 内读字段不再调用 Flash 访问器 */
 static const app_motor_params_t* s_motor_params;
 
+/* ── 逆变器死区补偿 ────────────────────────────────────────────────────
+ * 死区+管压降造成的相电压畸变正比于 sign(i_phase)，幅值 Δduty = t_eq·f_pwm。
+ * 按相电流极性在占空比上做常量偏移（符号带滞回，避免过零抖动）。
+ * 量由 hardware.inverter.deadtime_comp_ns 折算（init/reload 期），0 = 关闭。 */
+#define APP_FOC_DT_COMP_SIGN_THRESH_A (0.3f) /**< 相电流符号判定阈值 [A]（带内保持上一符号） */
+#define APP_FOC_DT_COMP_DUTY_MAX      (0.02f) /**< 补偿占空比上限（2%；防误配置大幅偏移） */
+static float s_dt_comp_duty;                 /**< 折算后的补偿占空比幅值 [duty] */
+static int8_t s_i_sign_u;                    /**< U 相电流符号（-1/0/+1；带内保持） */
+static int8_t s_i_sign_v;                    /**< V 相电流符号 */
+static int8_t s_i_sign_w;                    /**< W 相电流符号 */
+/** 死区补偿折算占空比（Ozone/终端观测；0 = 关闭） */
+volatile float g_foc_dt_comp_duty __attribute__((section(".noncacheable.bss")));
+
 void app_foc_current_set_output_delay(float delay_s) {
     if (foc_finite(delay_s) && (delay_s >= 0.0f) && (delay_s <= 1.0e-3f)) {
         s_output_delay_s = delay_s;
@@ -218,6 +231,42 @@ static float app_foc_effective_duty_max(const app_software_params_t* software) {
 
 float app_foc_current_duty_max(void) { return g_foc_duty_max_effective; }
 
+/**
+ * @brief 相电流符号更新（滞回：阈值带内保持上一符号，避免过零抖动）
+ */
+APP_ATTR_RAMFUNC
+static int8_t foc_dt_comp_sign(int8_t prev, float i_a) {
+    if (i_a > APP_FOC_DT_COMP_SIGN_THRESH_A) {
+        return 1;
+    }
+    if (i_a < -APP_FOC_DT_COMP_SIGN_THRESH_A) {
+        return -1;
+    }
+    return prev;
+}
+
+/**
+ * @brief 从 hardware 参数折算死区补偿占空比（init 与 reload_model 均调用；
+ *        param set + foc off/on 即可热更改，无需重烧）
+ */
+static void foc_dt_comp_reload(void) {
+    const app_hardware_inverter_t* inverter = &app_hardware_params_current()->inverter;
+    float duty = (float)inverter->deadtime_comp_ns * 1.0e-9f * (float)inverter->pwm_freq_hz;
+
+    if (!foc_finite(duty) || (duty < 0.0f)) {
+        duty = 0.0f;
+    } else if (duty > APP_FOC_DT_COMP_DUTY_MAX) {
+        duty = APP_FOC_DT_COMP_DUTY_MAX;
+    }
+    s_dt_comp_duty = duty;
+    g_foc_dt_comp_duty = duty;
+    s_i_sign_u = 0;
+    s_i_sign_v = 0;
+    s_i_sign_w = 0;
+}
+
+float app_foc_current_dt_comp_duty(void) { return g_foc_dt_comp_duty; }
+
 void app_foc_current_init(void) {
     const app_software_params_t* software = app_software_params_current();
     const app_motor_params_t* motor = app_motor_params_current();
@@ -246,6 +295,7 @@ void app_foc_current_init(void) {
 
     foc_current_ctor(&s_current);
     s_ready = (s_current.init(&s_current, &cfg) == 0);
+    foc_dt_comp_reload();
     /* 输出延迟：YAML init 期消费；非法值退回 0（关闭），不阻断电流环 */
     s_output_delay_s = 0.0f;
     {
@@ -282,6 +332,8 @@ int app_foc_current_reload_model(void) {
         || s_current.set_model(&s_current, r_ohm, l_h, l_h, lambda) != 0) {
         return -1;
     }
+    /* 死区补偿量同模型一起在 foc on 期重载（param set 后 foc off/on 生效） */
+    foc_dt_comp_reload();
     s_motor_params = motor;
     s_current.set_gains(&s_current, software->control.current_loop.kp,
                         software->control.current_loop.ki);
@@ -359,6 +411,9 @@ void app_foc_current_reset(void) {
     s_vtest_left_s = 0.0f;
     s_i_d_avg = 0.0f; /* 慢平均清零：避免上次运行的陈旧值 */
     s_i_q_avg = 0.0f;
+    s_i_sign_u = 0; /* 相电流符号状态清零（补偿幅值不变，仅符号重判） */
+    s_i_sign_v = 0;
+    s_i_sign_w = 0;
 }
 
 int app_foc_current_vtest_start(float volts, float theta_e_rad, float duration_s) {
@@ -730,10 +785,34 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
     foc_inv_park_sc(out.v_d, out.v_q, s_out, c_out, &v_alpha, &v_beta);
     mod_cfg.duty_max = duty_max;
     mod_cfg.v_bus_min = APP_FOC_V_BUS_MIN_V;
-    if (foc_modulation_step(&mod_cfg, v_alpha, v_beta, v_bus, duty, &v_scale) != 0) {
-        app_foc_current_protect_reason(APP_FOC_PROT_MOD);
-        app_foc_current_protect();
-        return -1;
+    /* 死区补偿（>0 启用）：按本拍相电流极性注入每相占空比偏移。
+     * 符号带内保持上一拍，避免过零抖动。
+     * CALIB（cal rl / cal encoder / motor id）挂起：辨识守卫与 q 零偏基线
+     * 按无补偿工厂标定——固定符号模式的补偿矢量会注入直流 q 轴电压，
+     * 触发 Q_CURRENT 误判（实测 150ns 即偏移 ~0.8A）。
+     * vtest/诊断路径不走此处。 */
+    {
+        int mod_rc;
+
+        if ((s_dt_comp_duty > 0.0f) && (app_foc_get_state() != APP_FOC_STATE_CALIB)) {
+            float duty_comp[3];
+
+            s_i_sign_u = foc_dt_comp_sign(s_i_sign_u, i_u_a);
+            s_i_sign_v = foc_dt_comp_sign(s_i_sign_v, i_v_a);
+            s_i_sign_w = foc_dt_comp_sign(s_i_sign_w, i_w_a);
+            duty_comp[0] = (float)s_i_sign_u * s_dt_comp_duty;
+            duty_comp[1] = (float)s_i_sign_v * s_dt_comp_duty;
+            duty_comp[2] = (float)s_i_sign_w * s_dt_comp_duty;
+            mod_rc = foc_modulation_step_comp(&mod_cfg, v_alpha, v_beta, v_bus, duty_comp, duty,
+                                              &v_scale);
+        } else {
+            mod_rc = foc_modulation_step(&mod_cfg, v_alpha, v_beta, v_bus, duty, &v_scale);
+        }
+        if (mod_rc != 0) {
+            app_foc_current_protect_reason(APP_FOC_PROT_MOD);
+            app_foc_current_protect();
+            return -1;
+        }
     }
 
     g_foc_cyc_mod = intf_clock_get_cycle() - t_pi - g_foc_cyc_pi;

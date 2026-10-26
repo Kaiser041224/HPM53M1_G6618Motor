@@ -6,7 +6,7 @@
 # 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
 # ============================================================================
 
-storage: reset               # flash 参数策略：keep=使用flash保存值；reset=SPRM/MPRM回YAML并清除FCUR；override=本次启动用YAML但不写flash；编译期值，改后需重新烧录
+storage: keep               # flash 参数策略：keep=使用flash保存值；reset=SPRM/MPRM回YAML并清除FCUR；override=本次启动用YAML但不写flash；编译期值，改后需重新烧录
 
 motion:
   output_direction: 1.0      # 出轴正方向：+1/-1；仅翻转 motion 用户坐标（位置/速度/转矩），不改 FOC/编码器方向；重启生效

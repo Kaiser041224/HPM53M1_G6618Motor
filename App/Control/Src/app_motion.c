@@ -734,6 +734,7 @@ void app_motion_step(void) {
         return;
     }
     float angle;
+    bool angle_valid = pair_ok; /* 游标角有效性：解算或兜底成功才发布 */
     if (!s_motion.calibrated) {
         s_motion.feedback_valid = false;
         g_motion_shaft_angle_valid = 0;
@@ -749,15 +750,33 @@ void app_motion_step(void) {
     } else {
         /* 游标失配（齿隙/扭振瞬态或低力矩松垂）：转子角+最近圈号兜底测速。
          * 失配偏移≤齿隙（输出轴≤0.15°），对速度环无感；零力矩保持会在松垂区
-         * 自我强化拒帧导致停死，故兜底优先。持续超限才判真失效。 */
+         * 自我强化拒帧导致停死，故兜底优先。 */
         s_motion.vernier_failure_count++;
-        if (!s_motion.calibrated || !s_have_nearest
-            || ++s_vernier_fallback_samples > APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES) {
+        /* 游标是反馈/标定数据（标定中、位置模式、output-tracking 窗口）才判真失效；
+         * 速度/力矩与空闲态它只是前馈/诊断输入：持续失配降级为"游标角无效"
+         * （齿槽输出表自动停注入），速度环继续走 observer，不得阻断命令入口。
+         * （2026-10-26 实测：静止落在游标失配区 → 旧逻辑每拍 VERNIER 拒绝 →
+         *   feedback 永久 stale → 一切 motion 命令被拒，仅重启可恢复。） */
+        bool vernier_feedback = s_motion.calibrating
+                                || (s_motion.active
+                                    && (s_motion.mode == APP_MOTION_MODE_POSITION
+                                        || s_output_tracking));
+        bool fallback_ok = s_motion.calibrated && s_have_nearest
+                           && ++s_vernier_fallback_samples
+                                  <= APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES;
+        if (fallback_ok) {
+            s_motion.vernier_fallback_count++;
+            angle = (s_nearest_turn + u) * (FOC_TWO_PI_F / reducer);
+        } else if (vernier_feedback) {
             motion_reject(APP_MOTION_REASON_VERNIER);
             return;
+        } else {
+            /* 非致命降级：角保持上一拍（仅诊断显示）并发布无效；
+             * 未使用兜底（无基准或预算耗尽），不计入兜底样本统计 */
+            s_vernier_fallback_samples = APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES;
+            angle = s_previous_angle;
+            angle_valid = false;
         }
-        s_motion.vernier_fallback_count++;
-        angle = (s_nearest_turn + u) * (FOC_TWO_PI_F / reducer);
     }
     float direction = s_motion_motor_params->encoder.direction;
     if ((direction != 1 && direction != -1) || direction != s_calibrated_direction) {
@@ -798,10 +817,11 @@ void app_motion_step(void) {
     s_primed = true;
     g_motion_shaft_angle_rad = s_motion.shaft_rad;
     g_motion_shaft_angle_deg = s_motion.shaft_rad * (360.0f / FOC_TWO_PI_F);
-    g_motion_shaft_angle_valid = 1;
-    app_cogging_set_output_angle(s_motion.shaft_rad, true);
+    g_motion_shaft_angle_valid = angle_valid ? 1 : 0;
+    app_cogging_set_output_angle(s_motion.shaft_rad, angle_valid);
     app_cogging_set_motion_active(s_motion.active);
     s_motion.feedback_valid = true;
+    s_motion.angle_valid = angle_valid;
     s_motion.good_count++;
     s_hold_samples = 0;
     if (!s_motion.active)

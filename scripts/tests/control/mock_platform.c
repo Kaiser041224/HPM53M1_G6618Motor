@@ -82,6 +82,7 @@ void mock_set_current_gains(float kp, float ki) {
 
 void mock_set_i_trip(float a) { s_sw.control.limits.i_trip_a = a; }
 void mock_set_pwm_hz(uint32_t hz) { s_hw.inverter.pwm_freq_hz = hz; }
+void mock_set_deadtime_comp_ns(uint32_t ns) { s_hw.inverter.deadtime_comp_ns = ns; }
 
 const app_hardware_params_t* app_hardware_params_current(void) { return &s_hw; }
 const app_software_params_t* app_software_params_current(void) { return &s_sw; }

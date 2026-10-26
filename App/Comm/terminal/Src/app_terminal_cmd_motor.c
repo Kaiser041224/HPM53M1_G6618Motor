@@ -15,7 +15,7 @@
  *   cal inertia apply  （FOC OFF 后写 motor.load_inertia_kgm2，RAM）
  *   cal inertia save   （FOC OFF 后写 MPRM flash；storage=reset 时重启会被 YAML 覆盖）
  *   cal inertia show   （最近结果 + 当前 load_inertia）
- *   cal cogging        （齿槽/减速器角表自整定；无参数默认1/2/3rad/s、每向2圈）
+ *   cal cogging        （齿槽/减速器角表自整定；无参数默认0.5/1/2/3rad/s、每向2圈）
  *   cal cogging show/apply/save/clear
  *   cogging on|off|rotor|output|gain|show（可由YAML默认启用）
  *

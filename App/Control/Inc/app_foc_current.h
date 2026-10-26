@@ -154,6 +154,13 @@ float app_foc_current_get_v_scale(void);
 float app_foc_current_duty_max(void);
 
 /**
+ * @brief 死区补偿折算占空比幅值（hardware.inverter.deadtime_comp_ns × pwm_freq；0 = 关闭）
+ * @return 补偿占空比 [duty]（0 ~ 0.02）
+ * @note init / foc on（reload_model）期折算；vtest 诊断路径不注入。
+ */
+float app_foc_current_dt_comp_duty(void);
+
+/**
  * @brief 开环电压矢量诊断（vtest）：不经电流环，按给定电压/角度直接调制输出。
  *        用于核实电流采样符号/相序映射/标度与电机直流增益（I ≈ v/R）。
  * @param volts 相电压峰值 [V]（内部限幅 0~2V）

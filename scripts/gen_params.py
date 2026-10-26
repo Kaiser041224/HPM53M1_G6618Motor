@@ -80,6 +80,7 @@ SCHEMA = {
         ("adc.trigger_delay_ns", "adc.trigger_delay_ns", "u32", 0, None),
         ("inverter.pwm_freq_hz", "inverter.pwm_freq_hz", "u32", 1, None),
         ("inverter.deadtime_ns", "inverter.deadtime_ns", "u32", 0, None),
+        ("inverter.deadtime_comp_ns", "inverter.deadtime_comp_ns", "u32", 0, 5000),
     ],
     "software": [
         ("can.baudrate", "can.baudrate", "u32", 1, None),
@@ -260,6 +261,8 @@ APPLY_REBOOT = {
 # FOC 停机期消费项：param set 仅在 FOC OFF 接受，下一次 foc on 重载模型/角度链生效。
 # 与 APPLY_REBOOT 区分：不要求重启，但必须保证功率级无输出。
 APPLY_FOC_OFF = {
+    # 硬件：逆变器死区补偿（foc on 时 reload_model 折算为占空比偏移）
+    "hardware.inverter.deadtime_comp_ns",
     "motor.pole_pairs",
     "motor.rs_ohm",
     "motor.ls_h",

@@ -68,8 +68,10 @@ typedef struct {
  * @brief 逆变器参数
  */
 typedef struct {
-    uint32_t pwm_freq_hz; /**< 开关频率 [Hz] */
-    uint32_t deadtime_ns; /**< HPM 侧死区 [ns] */
+    uint32_t pwm_freq_hz;     /**< 开关频率 [Hz] */
+    uint32_t deadtime_ns;     /**< HPM 侧死区 [ns] */
+    uint32_t deadtime_comp_ns; /**< 死区补偿等效时间 [ns]（0=关闭；含预驱/管压折算，
+                                    等效占空比偏移 = deadtime_comp_ns·pwm_freq；foc off 期可改） */
 } app_hardware_inverter_t;
 
 /**

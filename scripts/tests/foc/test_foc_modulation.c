@@ -107,4 +107,47 @@ void test_foc_modulation(void) {
                foc_modulation_vmax(0.885f, 24.0f) * (sqrtf(3.0f) / 1.5f), 1e-4f);
     CHECK(foc_modulation_vmax(NAN, 24.0f) == 0.0f);
     CHECK(foc_modulation_vmax(0.885f, INFINITY) == 0.0f);
+
+    /* 死区补偿入口：每相占空比偏移叠加在零序注入之后、逐相钳位之前 */
+    {
+        float comp[3] = {0.01f, -0.02f, 0.0f};
+        float zero_comp[3] = {0.0f, 0.0f, 0.0f};
+        float dc[3];
+        float dc2[3];
+        float d_ref[3];
+        float scale_c;
+
+        /* 零矢量 + 每相异号补偿 → 偏移独立叠加 */
+        CHECK(foc_modulation_step_comp(&cfg, 0.0f, 0.0f, 24.0f, comp, dc, &scale_c) == 0);
+        CHECK_NEAR(dc[0], 0.5f + 0.01f, 1e-5f);
+        CHECK_NEAR(dc[1], 0.5f - 0.02f, 1e-5f);
+        CHECK_NEAR(dc[2], 0.5f, 1e-5f);
+        CHECK_NEAR(scale_c, 1.0f, 1e-6f);
+
+        /* comp=0 与旧入口严格一致 */
+        CHECK(foc_modulation_step(&cfg, 3.0f, 1.0f, 24.0f, d_ref, NULL) == 0);
+        CHECK(foc_modulation_step_comp(&cfg, 3.0f, 1.0f, 24.0f, zero_comp, dc2, NULL) == 0);
+        for (int i = 0; i < 3; i++) {
+            CHECK_NEAR(dc2[i], d_ref[i], 1e-6f);
+        }
+
+        /* 补偿后仍受占空比窗口钳位 */
+        {
+            float big[3] = {0.9f, 0.9f, 0.9f};
+            CHECK(foc_modulation_step_comp(&cfg, 0.0f, 0.0f, 24.0f, big, dc, &scale_c) == 0);
+            for (int i = 0; i < 3; i++) {
+                CHECK(dc[i] <= cfg.duty_max + 1e-6f);
+                CHECK(dc[i] >= 1.0f - cfg.duty_max - 1e-6f);
+            }
+        }
+
+        /* 补偿非有限 / NULL cfg → 拒绝（调用方应零矢量） */
+        {
+            float bad[3] = {NAN, 0.0f, 0.0f};
+            CHECK(foc_modulation_step_comp(&cfg, 0.0f, 0.0f, 24.0f, bad, dc, &scale_c) == -1);
+            CHECK(foc_modulation_step_comp(NULL, 0.0f, 0.0f, 24.0f, zero_comp, dc, &scale_c)
+                  == -1);
+            CHECK(foc_modulation_step_comp(&cfg, 0.0f, 0.0f, 8.0f, zero_comp, dc, &scale_c) == -1);
+        }
+    }
 }

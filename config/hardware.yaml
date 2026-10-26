@@ -38,3 +38,4 @@ adc:
 inverter:
   pwm_freq_hz: 30000                      # 开关频率 [Hz]
   deadtime_ns: 50                         # HPM 侧死区 [ns]（预驱自带 50~250ns）
+  deadtime_comp_ns: 0                     # 死区补偿等效时间 [ns]（0=关闭；含预驱死区+管压降折算，30kHz 下 150ns≈0.45% duty；param set 后 foc off/on 生效）

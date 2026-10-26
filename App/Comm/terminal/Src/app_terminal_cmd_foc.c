@@ -68,6 +68,9 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
         (double)app_foc_current_duty_max(), (double)snap.voltage_max_v,
         (double)(snap.voltage_utilization * 100), (unsigned)snap.saturated_count,
         (unsigned)snap.run_count);
+    csh_printf(csh, "     deadtime comp: %.4f duty (%.4fV @ vbus)  vtest: uncompensated\r\n",
+               (double)app_foc_current_dt_comp_duty(),
+               (double)(app_foc_current_dt_comp_duty() * snap.v_bus_v));
     csh_printf(
         csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u  dt=%u us\r\n",
         (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w, (unsigned)snap.valid,
@@ -560,17 +563,17 @@ static int cmd_motion(int argc, char** argv) {
             (unsigned long)state.vernier_failure_count, (unsigned long)state.timing_failure_count);
         csh_printf(
             csh,
-            "motion: mode=%u cal=%u zero=%u valid=%u active=%u calibrating=%u samples=%lu "
-            "reason=%u\r\n"
+            "motion: mode=%u cal=%u zero=%u valid=%u angle=%u active=%u calibrating=%u "
+            "samples=%lu reason=%u\r\n"
             "shaft=%.6frad speed=%.6frad/s (%.3frpm) phase=%.8fturn torque=%.4fNm iq=%.4fA "
             "good/bad=%lu/%lu\r\n"
             "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n"
             "position: sp=%.6frad vel_cmd=%.6frad/s err=%.6frad\r\n",
             (unsigned)state.mode, state.calibrated, state.zero_valid, state.feedback_valid,
-            state.active, state.calibrating, (unsigned long)state.calibration_samples,
-            (unsigned)state.reason, (double)shaft_user, (double)speed_user,
-            (double)(speed_user * 60.0f / 6.28318530718f), (double)state.phase_turns,
-            (double)torque_user, (double)state.iq_a,
+            (unsigned)state.angle_valid, state.active, state.calibrating,
+            (unsigned long)state.calibration_samples, (unsigned)state.reason, (double)shaft_user,
+            (double)speed_user, (double)(speed_user * 60.0f / 6.28318530718f),
+            (double)state.phase_turns, (double)torque_user, (double)state.iq_a,
             (unsigned long)state.good_count, (unsigned long)state.bad_count,
             (double)state.iq_accepted_a, (unsigned long)state.hold_count,
             (unsigned)state.current_limited, (unsigned)state.voltage_saturated,

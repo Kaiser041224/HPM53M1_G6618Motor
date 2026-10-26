@@ -36,8 +36,9 @@ static inline float foc_max3(float a, float b, float c) {
 }
 
 FOC_ATTR_RAMFUNC
-int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta, float v_bus_v,
-                        float duty_abc[3], float* v_scale_out) {
+static int foc_modulation_step_impl(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta,
+                                    float v_bus_v, const float duty_comp_abc[3],
+                                    float duty_abc[3], float* v_scale_out) {
     float vu, vv, vw, vmax, vmin, span, span_max, scale = 1.0f, offset, inv_vbus;
 
     if ((cfg == NULL) || (duty_abc == NULL)) {
@@ -54,6 +55,13 @@ int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_
     }
     if (v_bus_v < cfg->v_bus_min) {
         return -1;
+    }
+    if (duty_comp_abc != NULL) {
+        for (uint8_t i = 0U; i < 3U; i++) {
+            if (!foc_finite(duty_comp_abc[i])) {
+                return -1;
+            }
+        }
     }
 
     foc_inv_clarke(v_alpha, v_beta, &vu, &vv, &vw);
@@ -76,6 +84,12 @@ int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_
     duty_abc[0] = 0.5f + (vu + offset) * inv_vbus;
     duty_abc[1] = 0.5f + (vv + offset) * inv_vbus;
     duty_abc[2] = 0.5f + (vw + offset) * inv_vbus;
+    /* 每相补偿（死区等硬件修正）叠加在占空比上、逐相钳位之前 */
+    if (duty_comp_abc != NULL) {
+        duty_abc[0] += duty_comp_abc[0];
+        duty_abc[1] += duty_comp_abc[1];
+        duty_abc[2] += duty_comp_abc[2];
+    }
 
     for (uint8_t i = 0U; i < 3U; i++) {
         if (duty_abc[i] > cfg->duty_max) {
@@ -89,4 +103,18 @@ int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_
         *v_scale_out = scale;
     }
     return 0;
+}
+
+FOC_ATTR_RAMFUNC
+int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta,
+                        float v_bus_v, float duty_abc[3], float* v_scale_out) {
+    return foc_modulation_step_impl(cfg, v_alpha, v_beta, v_bus_v, NULL, duty_abc, v_scale_out);
+}
+
+FOC_ATTR_RAMFUNC
+int foc_modulation_step_comp(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta,
+                             float v_bus_v, const float duty_comp_abc[3], float duty_abc[3],
+                             float* v_scale_out) {
+    return foc_modulation_step_impl(cfg, v_alpha, v_beta, v_bus_v, duty_comp_abc, duty_abc,
+                                    v_scale_out);
 }

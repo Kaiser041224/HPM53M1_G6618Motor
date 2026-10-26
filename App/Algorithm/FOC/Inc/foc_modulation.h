@@ -42,6 +42,20 @@ int foc_modulation_step(const foc_modulation_cfg_t* cfg, float v_alpha, float v_
                         float duty_abc[3], float* v_scale_out);
 
 /**
+ * @brief 单步调制（带每相占空比补偿）：αβ 电压 + 相补偿 → 三相占空比
+ * @param cfg 配置（同 foc_modulation_step）
+ * @param duty_comp_abc 每相占空比补偿（叠加在调制结果上、逐相钳位之前）；
+ *                      典型用途为逆变器死区补偿，调用方按相电流极性给出
+ *                      sign(i)·Δduty；元素须有限，否则拒绝
+ * @note 补偿在零序注入之后叠加，故 max+min=1 的注入性质不再严格成立
+ *       （补偿是物理硬件修正量，不是调制性质）；逐相钳位仍保证占空比窗口。
+ * @return 0 = 成功；-1 = 输入/配置/补偿非法（调用方应输出零矢量）
+ */
+int foc_modulation_step_comp(const foc_modulation_cfg_t* cfg, float v_alpha, float v_beta,
+                             float v_bus_v, const float duty_comp_abc[3], float duty_abc[3],
+                             float* v_scale_out);
+
+/**
  * @brief 线性区相电压峰值上限（与 foc_modulation_step 的 span 限幅严格一致）
  *
  * 推导：min-max 注入下 span_max = (2·duty_max − 1)·v_bus；

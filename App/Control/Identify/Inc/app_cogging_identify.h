@@ -4,7 +4,7 @@
  * @author  Kaiser
  *
  * 标定边界：电机本体 + 减速器，不装外部负载。
- * 无参数时默认多点 1.0/2.0/3.0 rad/s，每点每方向 2 圈；
+ * 无参数时默认多点 0.5/1.0/2.0/3.0 rad/s，每点每方向 2 圈；
  * 指定 speed 时为单点，默认每方向 4 圈。结果不自动使能。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -92,7 +92,7 @@ typedef struct {
 void app_cogging_identify_init(void);
 /**
  * @brief 启动标定
- * @param speed_rad_s 输出轴速度幅值 [rad/s]；<=0 使用默认多点 1.0/2.0/3.0 rad/s
+ * @param speed_rad_s 输出轴速度幅值 [rad/s]；<=0 使用默认多点 0.5/1.0/2.0/3.0 rad/s
  * @param revs 每个速度点每方向输出圈数（0 用默认值）
  * @return 0 = 启动；-1 参数/忙；-2 FOC 非 READY/RUN；-3 motion 未标定/活动；
  *         -4 其他辨识运行；-5 motion 命令失败

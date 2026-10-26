@@ -184,13 +184,15 @@ int app_cogging_identify_start(float speed_rad_s, uint16_t revs) {
     uint16_t revs_schedule[APP_COGGING_IDENTIFY_MAX_POINTS];
     uint8_t point_count;
 
-    /* speed>0：单点快速检查；speed<=0：默认多点 1.0/2.0/3.0 rad/s。
-     * 每点正反各 revs 圈，用于观察不同速度下的 q 电流/摩擦差异。 */
+    /* speed>0：单点快速检查；speed<=0：默认多点 0.5/1.0/2.0/3.0 rad/s。
+     * 低速点圈时长、采样多，等效加权低速段（齿槽在低速最可见）；
+     * 高速点用于观察速度依赖与摩擦不对称。每点正反各 revs 圈。 */
     if (!cogging_finite(speed_rad_s) || (speed_rad_s <= 0.0f)) {
-        point_count = 3U;
-        speed_schedule[0] = 1.0f;
-        speed_schedule[1] = 2.0f;
-        speed_schedule[2] = 3.0f;
+        point_count = 4U;
+        speed_schedule[0] = 0.5f;
+        speed_schedule[1] = 1.0f;
+        speed_schedule[2] = 2.0f;
+        speed_schedule[3] = 3.0f;
         uint16_t point_revs = (revs == 0U) ? APP_COGGING_IDENTIFY_MULTI_REVS : revs;
         if (point_revs > COGGING_MAX_REVS) {
             point_revs = COGGING_MAX_REVS;
@@ -198,6 +200,7 @@ int app_cogging_identify_start(float speed_rad_s, uint16_t revs) {
         revs_schedule[0] = point_revs;
         revs_schedule[1] = point_revs;
         revs_schedule[2] = point_revs;
+        revs_schedule[3] = point_revs;
     } else {
         point_count = 1U;
         speed_schedule[0] = (speed_rad_s > COGGING_MAX_SPEED_RAD_S)

@@ -618,7 +618,8 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - `execution.requested_iq_a` 必须包含齿槽补偿，否则 `current_limited` 会误判并冻结
   速度环积分；`g_foc_current_snapshot.i_q_cogging_a` 为诊断值。
 - **自整定** `cal cogging [speed_rad_s] [revs]`：
-  - 不带宽参数：默认多点 `1.0/2.0/3.0 rad/s`，每点每方向 2 圈，总计约 50s；
+  - 不带宽参数：默认多点 `0.5/1.0/2.0/3.0 rad/s`，每点每方向 2 圈，总计约 100s；
+    低速点圈时长大、采样多，等效加权低速段（齿槽低速最可见）；扫掠超时按速度点动态计算；
   - 带 `speed_rad_s`：单点快速检查，`revs=0` 时默认 4 圈；
   - 只针对电机本体 + 减速器，不装外部负载；
   - 每点正反扫，q 电流按转子角/输出角分箱，F/R 相加抵消恒定摩擦；
@@ -654,6 +655,50 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   AHB SRAM，标定完成前不启用。
 - 回归：`test_algo_cogging`（含 `algo_cogging_finalize_bins`）、`test_app_cogging`、
   `test_cogging_store`、`test_foc_cogging_injection`、`test_cogging_identify_start`。
+
+### 逆变器死区补偿（2026-10-26）
+
+- **原理**：死区+管压降的相电压畸变 ∝ `sign(i_phase)`，幅值 `Δduty = t_eq·f_pwm`
+  （duty 域自适配 Vbus）。补偿在 `foc_modulation_step_comp()` 于零序注入之后、
+  逐相钳位之前按相叠加；符号由 `app_foc_current` 按相电流极性判定，
+  **阈值 0.3A 带内保持上一符号**（避免过零抖动）。
+- **参数**：`hardware.inverter.deadtime_comp_ns`（0=关闭，默认 0；上限 5000ns，
+  折算 duty 钳 2%）。`APPLY_FOC_OFF`：`param set`（FOC OFF 时）→ 下次
+  `foc on` 经 `app_foc_current_reload_model()` 折算生效，**无需重烧**。
+- **覆盖范围**：正常电流环（READY/RUN）；**CALIB 全程挂起**（cal rl /
+  cal encoder / motor id——辨识 q 零偏基线与 Q_CURRENT 守卫按无补偿工厂
+  标定；固定符号模式的补偿矢量会注入直流 q 轴电压，150ns 实测偏移 ~0.8A
+  直接触发误判，也据此推得本桥物理等效死区 ≲60ns）；
+  **vtest 诊断路径不补偿**（保持原始电压响应语义）。
+- **标定建议**：从 50ns 起步（守卫反推上限 ~60ns），A/B 看 `cal cogging`
+  低速点 q RMS；过补偿会向齿槽表注入人工角表项。
+- 观测：`foc` 命令打印 `deadtime comp: x.xxxx duty`；Ozone 直读
+  `g_foc_dt_comp_duty`（.noncacheable）。
+- 效果预期：低速小电流电压保真提升 → `cal cogging` 低速点 q RMS 下降、
+  `cal rl` 的 R 估计更接近真实值（死区畸变原本被计入 R）。
+- 回归：`test_foc_modulation`（comp 入口）、`test_foc_dt_comp`（折算/滞回/关闭语义）。
+
+### 游标失配降级语义（2026-10-26）
+
+- **缺陷**：静止落在游标失配区（pair 代数不一致 >0.25/50=1.8° 出轴）时，
+  旧逻辑每拍 `VERNIER` 拒绝 → `feedback_valid` 永久 false → 一切 motion
+  命令被拒（"feedback stale"），仅重启可恢复。速度/力矩模式根本不消费
+  游标角（速度走 30kHz observer），却被它阻断——可用性缺陷。
+- **修复**（`app_motion_step` 游标失配分支）：游标仅在作为**反馈/标定数据**
+  （标定中、位置模式、output-tracking 窗口）时才判真失效（保持 20ms→撤销）；
+  空闲态与速度/力矩态持续失配降级为 `angle_valid=0`
+  （`app_cogging_set_output_angle(…,false)` → 齿槽输出表自动停注入，
+  rotor 表不受影响），速度环继续走 observer。
+- 观测：`motion show` 新增 `angle=%u`（游标角有效性，与 `valid=`（速度反馈）
+  分离）；`vernier=` 计数仍每失配拍递增。
+- 回归：`test_motion_vernier_degradation`（降级不阻断命令/不进坏拍统计/
+  位置模式仍硬撤销）；`test_motion` 中"apply 后失配"用例同步为新语义。
+- **遗留疑点（待台架诊断）**：本次会话游标 pair 大面积失配（59s 扫掠期间
+  ~87% 拍失配、静止后持续失配），但前一日同流程正常。判定路径：
+  ① `motion cal`（FOC OFF、静止）重推相位——若新相位与 flash MOTN 的
+  0.000129 差 >0.005 turn，则是相位问题（`motion apply`+`motion zero save` 修复）；
+  ② 若相位一致仍失配，是游标 pair 传感器/机械（装配、磁环、温度漂移）问题，
+  用 `enc` debug 看 pair 统计（output fail/valid 计数）分段定位。
 
 - **`cal cogging save` 的内容是 1596B 记录，必须按 256B page 分块 program**：
   一次性提交大块会跨越 NOR page，已在台架表现为 `cal cogging save` 卡死；

@@ -704,7 +704,8 @@ void test_motion_speed_rotor_only(void) {
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
 
-    /* apply 后旧圈号基准失效：被动/位置路径的拒帧不得走兜底 */
+    /* apply 后旧圈号基准失效：被动路径的失配不得走兜底（也不产生兜底样本）；
+     * 2026-10-26 语义更新：失配降级为"游标角无效"，速度反馈保持有效 */
     CHECK(app_motion_calibrate() == 0);
     for (unsigned i = 0; i < 1000; ++i)
         app_motion_step();
@@ -717,7 +718,8 @@ void test_motion_speed_rotor_only(void) {
     g_mock_output_raw_override = false;
     app_motion_get_snapshot(&snapshot);
     CHECK(snapshot.vernier_fallback_count == fallback_after_apply);
-    CHECK(!snapshot.feedback_valid);
+    CHECK(snapshot.feedback_valid);
+    CHECK(!snapshot.angle_valid);
 }
 
 /* ===== 位置环（ODrive 级联：单一 15kHz 拍内 position→velocity）===== */
@@ -1113,4 +1115,67 @@ void test_motion_torque_ramp_app(void) {
     CHECK(app_motion_stop() == 0);
     app_foc_disable();
     pos_teardown();
+}
+
+/* 游标失配降级语义（2026-10-26 修复回归）：
+ * 空闲/速度/力矩态游标只是前馈/诊断输入——持续失配只降级游标角
+ * （angle_valid=0，齿槽输出表自动停注入），不得把 feedback 打成 stale
+ * 阻断一切 motion 命令（旧缺陷：静止落在游标失配区 → 每拍 VERNIER 拒绝，
+ * 仅重启可恢复）；位置模式仍把游标当反馈数据，失配超兜底预算 → 硬撤销。 */
+void test_motion_vernier_degradation(void) {
+    extern bool g_mock_output_raw_override;
+    extern uint16_t g_mock_output_raw;
+
+    mock_params_reset();
+    app_foc_init();
+    app_motion_init();
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 1100; ++i)
+        app_motion_step();
+    CHECK(app_motion_apply() == 0);
+    app_motion_step();
+    CHECK(app_motion_zero() == 0);
+    app_motion_snapshot_t snapshot;
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.angle_valid); /* 正常解算：角有效 */
+
+    /* 游标 raw 偏移 0.01 turn → 估值偏 50×0.01 = 0.5 > 0.25 阈值：全程失配 */
+    g_mock_output_raw_override = true;
+    g_mock_output_raw = 655U;
+    for (unsigned i = 0; i < 20000; ++i) /* 500ms 兜底预算 ×2 以上 */
+        app_motion_step();
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.feedback_valid); /* 速度反馈不受游标影响 */
+    CHECK(!snapshot.angle_valid);   /* 游标角降级为无效 */
+    CHECK(g_motion_shaft_angle_valid == 0);
+    CHECK(snapshot.bad_count == 0); /* 降级不是拒绝：不进坏拍统计 */
+
+    /* 命令入口不被阻断：速度命令（observer 反馈）正常接受 */
+    CHECK(app_motion_gains(.05f, .1f, 0, 0) == 0);
+    CHECK(app_foc_enable() == 0);
+    app_motion_step();
+    CHECK(app_motion_speed(.1f) == 0);
+    for (unsigned i = 0; i < 200; ++i) { /* 速度环持续运行不因游标失配撤销 */
+        app_motion_step();
+    }
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.active && snapshot.feedback_valid);
+    CHECK(!snapshot.angle_valid);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable(); /* stop 窗口内命令被拒是正确语义；重开后再测位置模式 */
+    CHECK(app_foc_enable() == 0);
+    app_motion_step();
+
+    /* 位置模式：游标是反馈数据 → 失配（兜底预算已耗尽）→ 保持窗口 → 硬撤销 */
+    CHECK(app_motion_position_gains(20, 10) == 0);
+    CHECK(app_motion_position(1.0f, 0.0f, 0.0f) == 0);
+    for (unsigned i = 0; i < 1000; ++i)
+        app_motion_step();
+    app_motion_get_snapshot(&snapshot);
+    CHECK(!snapshot.active);
+    CHECK(snapshot.reason == APP_MOTION_REASON_VERNIER);
+
+    g_mock_output_raw_override = false;
+    app_foc_disable();
 }
