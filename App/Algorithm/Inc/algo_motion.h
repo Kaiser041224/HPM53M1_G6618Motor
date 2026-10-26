@@ -14,9 +14,12 @@ typedef struct {
     float integral;
     bool saturated; /**< 外部执行限幅（FOC限流/电压饱和/请求过期）；饱和时仅误差反向允许积分 */
 } algo_motion_pi_t;
-/** @brief 游标多圈解算；rotor/vernier在[0,1)，reducer/output_ratio 来自 motor.yaml */
+/** @brief 游标多圈解算；rotor/vernier在[0,1)，reducer/output_ratio 来自 motor.yaml
+ * @param residual_out 可空；输出解算残差 |estimate−nearest| [0,0.25]（健康余量观测：
+ *                    接近 0.25 表示 pair 一致性边际，提示相位漂移/装配变化）
+ */
 int algo_motion_vernier(float rotor, float vernier, float phase, float reducer_ratio,
-                        float output_ratio, float* shaft_rad);
+                        float output_ratio, float* shaft_rad, float* residual_out);
 /** @brief ODrive POS_FILTER 二阶临界阻尼滤波状态（pos/vel 设定，ZOH 输入间平滑） */
 typedef struct {
     float pos_setpoint_rad;       /**< 滤波后位置设定 [rad] */

@@ -10,7 +10,10 @@
 static inline float motion_wrap(float value) { return value < 0 ? value + 1.0f : value; }
 FOC_ATTR_RAMFUNC
 int algo_motion_vernier(float rotor, float vernier, float phase, float reducer_ratio,
-                        float output_ratio, float* shaft_rad) {
+                        float output_ratio, float* shaft_rad, float* residual_out) {
+    if (residual_out != NULL) {
+        *residual_out = 0.25f;
+    }
     if (!shaft_rad || !foc_finite(rotor) || !foc_finite(vernier) || !foc_finite(phase)
         || !foc_finite(reducer_ratio) || !foc_finite(output_ratio) || (reducer_ratio < 1.0f)
         || (output_ratio <= 0.0f) || (output_ratio >= 1.0f) || (phase < 0.0f)
@@ -28,8 +31,12 @@ int algo_motion_vernier(float rotor, float vernier, float phase, float reducer_r
     if (!foc_finite(estimate))
         return -1;
     float nearest = (float)(uint32_t)(estimate + .5f);
-    if (estimate - nearest > .25f || nearest - estimate > .25f)
+    float residual = estimate - nearest;
+    if (residual > .25f || residual < -.25f)
         return -1;
+    if (residual_out != NULL) {
+        *residual_out = residual < 0.0f ? -residual : residual;
+    }
     if (nearest >= reducer_ratio)
         nearest = 0;
     *shaft_rad = (nearest + rotor) * (FOC_TWO_PI_F / reducer_ratio);

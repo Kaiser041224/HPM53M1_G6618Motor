@@ -73,6 +73,8 @@ typedef struct {
     float excitation_theta_rad; /**< 实际固定激励角 */
     float rs_window_drift_a; /**< 后半窗口均值减前半窗口均值 */
     uint8_t ld_extra_batches; /**< 残差过大时追加64块次数，最多每种脉宽一次 */
+    uint8_t capture_retries;  /**< PI 阶段捕获无效样本重试次数（瞬态保护拍恢复） */
+    uint8_t age_runs;         /**< 保留结果的代龄：其后失败运行的次数（0=最新一轮） */
 } app_current_identify_result_t;
 /** @brief READY启动，要求编码器零点已应用；返回0或-1 */
 int app_current_identify_start(void);
@@ -84,6 +86,11 @@ void app_current_identify_run_once(void);
 bool app_current_identify_is_active(void);
 /** @brief 任务上下文读取结果 */
 void app_current_identify_get_result(app_current_identify_result_t* out);
+/** @brief 最近一轮完整 PASS 结果的保留副本（新 run 失败不清空；重启清空）
+ * @return true = 存在保留结果并已拷贝到 out */
+bool app_current_identify_get_retained(app_current_identify_result_t* out);
+/** @brief 最近一次 apply 是否回落使用了保留结果（终端提示用） */
+bool app_current_identify_applied_retained(void);
 /** @brief OFF时应用最近结果；0成功，-1非OFF，-2无结果，-3活动，-4硬件参数变更，
  *         -5动态step未通过（拒绝应用） */
 int app_current_identify_apply(void);

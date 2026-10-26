@@ -22,6 +22,7 @@ void test_current_identify(void) {
     mock_params_reset();
     mock_param_store_reset();
     app_foc_init();
+    CHECK(app_current_identify_clear() == 0); /* 丢弃前序测试的 RAM 保留结果 */
     CHECK(app_current_identify_start() != 0);
     CHECK(app_current_identify_apply() == -2);          /* OFF但无完成结果，必须明确区别 */
     CHECK(app_foc_enable() == 0);
@@ -185,7 +186,7 @@ void test_current_identify(void) {
     CHECK_NEAR(result.trial_bandwidth_hz, 200, 0.1f);
     CHECK(result.trial_kp > 0 && result.trial_ki > 0);
     app_foc_disable();
-    CHECK(app_current_identify_apply() == -5); /* step 未通过：不得应用 */
+    CHECK(app_current_identify_apply() == -5); /* step 未通过且保留已被 clear：拒绝 */
     CHECK_NEAR(app_software_params_current()->control.current_loop.kp, 0.3f, 1e-6f);
     app_foc_init();
     CHECK(app_foc_enable() == 0);
@@ -248,4 +249,95 @@ void test_current_identify(void) {
     CHECK(result.bandwidth_hz >= 200.0f);
     app_foc_disable();
     CHECK(app_current_identify_apply() == 0);
+}
+
+/* 保留 PASS 结果语义（2026-10-26 修复回归）：
+ * ① 无保留时 step 未通过 → apply -5 拒绝且参数不动；
+ * ② 正常通过 → 建立保留结果（live 应用）；
+ * ③ 后续失败 run 不清空保留 → apply 自动回落，参数/save 均以保留结果为准。 */
+void test_current_identify_retained(void) {
+    app_current_identify_result_t result;
+    mock_params_reset();
+    mock_param_store_reset();
+    app_foc_init();
+    CHECK(app_foc_enable() == 0);
+
+    /* ① 完成但 step 未通过（PI 段恒 3.2A 反馈，跟踪误差超限） */
+    CHECK(app_current_identify_start() == 0);
+    float current = 0;
+    for (unsigned tick = 0; tick < 90000 && app_current_identify_is_active(); ++tick) {
+        app_current_identify_result_t live;
+        app_current_identify_get_result(&live);
+        for (unsigned i = 0; i < 25; ++i) {
+            float v = g_foc_current_snapshot.v_d_v;
+            current = (current - v / 0.2f) * expf(-0.2f * 40e-6f / 120e-6f) + v / 0.2f;
+            float feedback = live.state == APP_CURRENT_IDENTIFY_PI ? 3.2f : current;
+            CHECK(
+                app_foc_current_run_fresh(0, 0, live.current_ref_a, 0, feedback,
+                                          -0.5f * feedback, -0.5f * feedback, 24, NULL, NULL)
+                == 0);
+        }
+        app_current_identify_run_once();
+    }
+    app_current_identify_get_result(&result);
+    CHECK(result.done && !result.step.passed);
+    app_foc_disable();
+    CHECK(app_current_identify_apply() == -5);
+    CHECK_NEAR(app_software_params_current()->control.current_loop.kp, 0.3f, 1e-6f);
+    app_foc_disable();
+
+    /* ② 正常通过（跟随对象）→ live 应用，非回落 */
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_current_identify_start() == 0);
+    current = 0;
+    for (unsigned tick = 0; tick < 90000 && app_current_identify_is_active(); ++tick) {
+        app_current_identify_result_t live;
+        app_current_identify_get_result(&live);
+        for (unsigned i = 0; i < 25; ++i) {
+            float v = g_foc_current_snapshot.v_d_v;
+            current = (current - v / 0.2f) * expf(-0.2f * 40e-6f / 120e-6f) + v / 0.2f;
+            CHECK(
+                app_foc_current_run_fresh(0, 0, live.current_ref_a, 0, current,
+                                          -0.5f * current, -0.5f * current, 24, NULL, NULL)
+                == 0);
+        }
+        app_current_identify_run_once();
+    }
+    app_current_identify_get_result(&result);
+    CHECK(result.done && result.step.passed);
+    app_foc_disable();
+    CHECK(app_current_identify_apply() == 0);
+    CHECK(!app_current_identify_applied_retained());
+    float pass_kp = app_software_params_current()->control.current_loop.kp;
+    float pass_rs = app_motor_params_current()->rs_ohm;
+    app_foc_disable();
+
+    /* ③ 失败 run（Rs 阶段 q 偏置拒绝）→ 保留结果存活，apply 回落 */
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_current_identify_start() == 0);
+    for (unsigned tick = 0; tick < 2000 && app_current_identify_is_active(); ++tick) {
+        app_current_identify_result_t live;
+        app_current_identify_get_result(&live);
+        bool inject_q = live.state == APP_CURRENT_IDENTIFY_RS;
+        float feedback = inject_q ? 1.0f : 0.0f;
+        float feedback_v = inject_q ? -0.2401924f : 0.0f;
+        float feedback_w = inject_q ? -0.7598076f : 0.0f;
+        for (unsigned i = 0; i < 25; ++i)
+            app_foc_current_run_fresh(0, 0, live.current_ref_a, 0, feedback, feedback_v,
+                                      feedback_w, 24, NULL, NULL);
+        app_current_identify_run_once();
+    }
+    app_current_identify_get_result(&result);
+    CHECK(result.failed && result.failure_stage == APP_CURRENT_IDENTIFY_RS);
+    app_foc_disable();
+    app_current_identify_result_t retained;
+    CHECK(app_current_identify_get_retained(&retained));
+    CHECK(retained.step.passed && retained.age_runs >= 1U);
+    CHECK(app_current_identify_apply() == 0);
+    CHECK(app_current_identify_applied_retained());
+    CHECK_NEAR(app_software_params_current()->control.current_loop.kp, pass_kp, 1e-6f);
+    CHECK_NEAR(app_motor_params_current()->rs_ohm, pass_rs, 1e-6f);
+    CHECK(app_current_identify_save() == 0);
+    CHECK(app_current_identify_clear() == 0); /* 清理：后续测试从零状态开始 */
+    mock_param_store_reset();
 }

@@ -558,9 +558,10 @@ static int cmd_motion(int argc, char** argv) {
         csh_printf(csh, "phase trial done=%u (apply required) out_dir=%+.0f\r\n",
                    state.calibration_done, (double)out_dir);
         csh_printf(
-            csh, "reject: sample=%lu duplicate=%lu vernier=%lu timing=%lu\r\n",
+            csh, "reject: sample=%lu duplicate=%lu vernier=%lu timing=%lu margin=%.3f\r\n",
             (unsigned long)state.sample_failure_count, (unsigned long)state.duplicate_count,
-            (unsigned long)state.vernier_failure_count, (unsigned long)state.timing_failure_count);
+            (unsigned long)state.vernier_failure_count, (unsigned long)state.timing_failure_count,
+            (double)state.vernier_margin);
         csh_printf(
             csh,
             "motion: mode=%u cal=%u zero=%u valid=%u angle=%u active=%u calibrating=%u "

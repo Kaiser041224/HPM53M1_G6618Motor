@@ -98,7 +98,7 @@ void test_friction_identify(void) {
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -152,7 +152,7 @@ void test_friction_identify_failure(void) {
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -212,7 +212,7 @@ void test_friction_identify_tolerance(void) {
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -278,7 +278,7 @@ void test_friction_identify_diagnostics(void) {
     CHECK(app_motion_gains(2, 50, 1.0f, -101.0f) == APP_MOTION_CMD_BAD_PARAM);
     CHECK(app_motion_gains(2, 50, 1.0f, 0.3f) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();

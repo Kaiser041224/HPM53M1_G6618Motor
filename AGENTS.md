@@ -700,6 +700,42 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   ② 若相位一致仍失配，是游标 pair 传感器/机械（装配、磁环、温度漂移）问题，
   用 `enc` debug 看 pair 统计（output fail/valid 计数）分段定位。
 
+### 标定链鲁棒性（2026-10-26）
+
+- **output 表零点解耦**：齿槽 output 表索引/查询改为物理输出角
+  （`shaft_raw_rad`，不含方向与用户零点；identify 分箱同源）。re-zero /
+  方向翻转不再失效表相位。本装配 direction=+1 且 zero invalid，切换为
+  等价变换，flash 旧表不受影响。
+- **motion cal 静止门**：相位采样前先过 20ms 收敛窗（逐拍位移
+  <0.0002 turn），3s 不收敛判 `REASON_CALIBRATION` 失败。背景：相位对
+  刚性旋转不变，但轴爬行（软停末段）经减速器回差污染 1000 样本平均
+  相位（实测差 0.0041 turn → 解算余量 0.25→0.21）。
+- **游标余量观测**：`motion show` 新增 `margin=`（|estimate−nearest| 的
+  LPF，τ≈13ms）。健康 <0.1；接近 0.25 提示 pair 一致性边际
+  （相位漂移/装配变化，重跑 motion cal）。`algo_motion_vernier` 增加
+  可空残差输出参数（旧调用补 NULL）。
+- **cal rl PASS 保留**：新 run 失败不再清空最近一轮 PASS（RAM 保留，
+  重启清空）；`cal rl apply` 自动回落并显式提示；`cal rl show` 打印
+  "retained PASS" 行（含代龄）；`cal rl clear` 同时丢弃 RAM 保留。
+
+### RL 自整定带宽阶梯细化（2026-10-26）
+
+- 阶梯 0.7×3 → **0.85×6**（2000→1700→1445→1228→1044→887→754Hz），
+  "最高可通过带宽"定位精度 ±30%→±15%；超时 60→90s。
+- **PI 阶段捕获无效样本重试 ×2**：瞬态保护拍（编码器坏帧/vbus 抖动）
+  不再单拍否决整轮（此前两轮在 2000/1400Hz 首试即死于
+  `detail=5 capture-invalid`）。
+- **实测上限（2026-10-26 台架）**：细阶梯下 2kHz 满档可通过
+  （超调 13~15%，容差 20%），阶梯落点由当轮 Ld 质量决定
+  （半周期差 18.5% 的离群轮下探 1228Hz，干净轮 retry=0 满档）。
+  此前 686Hz 落点=粗阶梯跳过+捕获毛刺瞬死的复合结果。
+  曾按 50µs 环延迟推"上限 1.2~1.6kHz"——实测推翻，延迟估计偏保守。
+  Ld 离散（114~137µH）是落点波动主因；候选改进：把半周期差
+  纳入 Ld 接受度，离群轮重测 Ld 而非降带宽。
+- 回归：`test_current_identify_retained`（保留/回落/clear 语义全程）、
+  `test_motion_cal_settle`、`test_motion_vernier_residual`；
+  `test_current_identify` 的阶梯与 -4/-5 断言同步。
+
 - **`cal cogging save` 的内容是 1596B 记录，必须按 256B page 分块 program**：
   一次性提交大块会跨越 NOR page，已在台架表现为 `cal cogging save` 卡死；
   `app_cogging_store_save()` 现在与 `app_param_store()` 一样按 256B 提交。

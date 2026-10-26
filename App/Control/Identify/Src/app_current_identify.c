@@ -20,6 +20,14 @@
 #include <string.h>
 
 static app_current_identify_result_t s_current_identify_result;
+/* 最近一轮完整 PASS 结果的保留副本：新 run 失败不再清空（2026-10-26 台架：
+ * PASS 后连跑 FAIL 会把 RAM 结果抹掉，apply 报 "no completed RAM result"）。
+ * 重启清空（RAM）；仅 finish(0) 且 step.passed 时覆盖。 */
+static app_current_identify_result_t s_retained_pass;
+static bool s_retained_pass_valid;
+static uint32_t s_retained_pwm_hz, s_retained_pole_pairs;
+static app_current_identify_result_t s_applied_result; /* apply 时冻结的参数来源 */
+static bool s_applied_retained;
 static uint16_t s_current_identify_ticks;
 static uint8_t s_current_identify_index;
 static float s_current_identify_currents[5], s_current_identify_voltages[5];
@@ -32,6 +40,7 @@ static uint32_t s_identify_pwm_hz, s_identify_pole_pairs;
 #define APP_CURRENT_IDENTIFY_MOVEMENT_MAX_RAD (0.5f)
 static float s_current_identify_origin_rotor;
 static bool s_pi_baseline_armed;
+static uint8_t s_pi_capture_retries; /**< PI 阶段捕获无效样本重试计数（每带宽级/RI 相位独立） */
 static double s_phase_sum[3];
 static double s_pi_baseline_sum, s_pi_baseline_variance_sum;
 static const float s_current_identify_targets[] = {2, 3, 4, 3, 2};
@@ -47,13 +56,19 @@ static id_rl_sample_t s_current_identify_average[APP_FOC_IDENTIFY_SAMPLES]
 #define CURRENT_IDENTIFY_BLOCKS     20U
 #define CURRENT_IDENTIFY_REPEATS    16U
 #define CURRENT_IDENTIFY_LD_REPEATS 64U
-/* step 未通过时自动降带宽重试：2kHz 在 30kHz/一拍输出延迟下相位裕度不足，
- * 实测阶跃超调会超过 20%。只降低 trial 带宽，不改用户配置；最多三次。 */
-#define CURRENT_IDENTIFY_BW_RETRY_FACTOR (0.7f)
-#define CURRENT_IDENTIFY_BW_RETRY_MAX    (3U)
+/* step 未通过时自动降带宽重试：细阶梯（0.85）×6 级，从目标带宽起逐级下探
+ * （2000→1700→1445→1228→1044→887→754Hz），把"最高可通过带宽"定位精度
+ * 从 ±30% 提到 ±15%。只降低 trial 带宽，不改用户配置。
+ * 实测（2026-10-26 台架）：2kHz 满档可通过（超调 13~15%），
+ * 落点由当轮 Ld 质量决定，离群轮自动下探。 */
+#define CURRENT_IDENTIFY_BW_RETRY_FACTOR (0.85f)
+#define CURRENT_IDENTIFY_BW_RETRY_MAX    (6U)
 #define CURRENT_IDENTIFY_BW_MIN_HZ       (200.0f)
-/* 正常流程在 29~30s 附近，原 30s 超时会与正常完成竞争。 */
-#define CURRENT_IDENTIFY_TIMEOUT_MS      (60000U)
+/* PI 阶段捕获样本无效（瞬态保护拍：编码器坏帧/vbus 抖动）时先重试捕获，
+ * 不让单拍毛刺否决整轮（2026-10-26 台架：两轮在 2000/1400Hz 首试即死）。 */
+#define CURRENT_IDENTIFY_PI_CAPTURE_RETRY_MAX (2U)
+/* 细阶梯最坏路径（6 级×PI 周期 + RI A/B）超过原 60s，放宽到 90s。 */
+#define CURRENT_IDENTIFY_TIMEOUT_MS      (90000U)
 
 /** @brief 复用固定缓冲累加重复响应，任务上下文执行 */
 static void current_identify_average_clear(void) {
@@ -101,6 +116,15 @@ static void current_identify_finish(int reason) {
     s_current_identify_result.reason = reason;
     s_current_identify_result.state = APP_CURRENT_IDENTIFY_IDLE;
     s_current_identify_result.current_ref_a = 0;
+    if (reason == 0 && s_current_identify_result.step.passed) {
+        s_current_identify_result.age_runs = 0;
+        s_retained_pass = s_current_identify_result;
+        s_retained_pass_valid = true;
+        s_retained_pwm_hz = s_identify_pwm_hz;
+        s_retained_pole_pairs = s_identify_pole_pairs;
+    } else if (s_retained_pass_valid) {
+        s_retained_pass.age_runs++;
+    }
 }
 /** @brief 发布状态与给定 */
 static void current_identify_stage(app_current_identify_state_t state, float ref) {
@@ -144,6 +168,7 @@ int app_current_identify_start(void) {
     s_identify_pwm_hz=pwm_hz;
     s_identify_pole_pairs=app_motor_params_current()->pole_pairs;
     s_pi_baseline_armed = false;
+    s_pi_capture_retries = 0;
     s_pi_baseline_sum = s_pi_baseline_variance_sum = 0;
     s_current_identify_index = 0;
     s_current_identify_voltage_base = app_motor_params_current()->rs_ohm * 2.0f;
@@ -166,6 +191,18 @@ bool app_current_identify_is_active(void) { return s_current_identify_result.act
 void app_current_identify_get_result(app_current_identify_result_t* out) {
     if (out)
         *out = s_current_identify_result;
+}
+
+bool app_current_identify_get_retained(app_current_identify_result_t* out) {
+    if (!s_retained_pass_valid || out == NULL) {
+        return false;
+    }
+    *out = s_retained_pass;
+    return true;
+}
+
+bool app_current_identify_applied_retained(void) {
+    return s_current_identify_applied && s_applied_retained;
 }
 /** @brief 冻结缓冲的平台质量与均值检查 */
 static int current_identify_mean(const id_rl_sample_t* data, float* current, float* voltage) {
@@ -507,14 +544,27 @@ void app_current_identify_run_once(void) {
         if (count != APP_FOC_IDENTIFY_SAMPLES)
             break;
         double sum = 0, square = 0;
+        bool capture_ok = true;
         for (unsigned i = 0; i < count; ++i) {
             if (!data[i].valid || !foc_finite(data[i].i_d_a)) {
-                result->detail = APP_CURRENT_IDENTIFY_DETAIL_CAPTURE_INVALID;
-                current_identify_finish(2);
-                return;
+                capture_ok = false;
+                break;
             }
             sum += data[i].i_d_a;
             square += (double)data[i].i_d_a * data[i].i_d_a;
+        }
+        if (!capture_ok) {
+            /* 捕获无效（瞬态保护拍：编码器坏帧/vbus 抖动等）：先重试重新捕获，
+             * 不让单拍毛刺否决整轮；重试耗尽才按数据失败退出。 */
+            if (s_pi_capture_retries < CURRENT_IDENTIFY_PI_CAPTURE_RETRY_MAX) {
+                s_pi_capture_retries++;
+                result->capture_retries = s_pi_capture_retries;
+                s_pi_baseline_armed = false; /* 下一拍重新武装基线捕获 */
+                break;
+            }
+            result->detail = APP_CURRENT_IDENTIFY_DETAIL_CAPTURE_INVALID;
+            current_identify_finish(2);
+            return;
         }
         double mean = sum / count;
         s_pi_baseline_sum += mean;
@@ -538,15 +588,35 @@ void app_current_identify_run_once(void) {
         if (count != APP_FOC_IDENTIFY_SAMPLES)
             break;
         id_rl_step_result_t step;
-        for (unsigned i = 0; i < count; ++i) {
-            if (!data[i].valid) {
+        {
+            bool capture_ok = true;
+            for (unsigned i = 0; i < count; ++i) {
+                if (!data[i].valid) {
+                    capture_ok = false;
+                    break;
+                }
+                s_current_identify_average[i].i_d_a += data[i].i_d_a / CURRENT_IDENTIFY_REPEATS;
+                s_current_identify_average[i].i_q_a += data[i].i_q_a / CURRENT_IDENTIFY_REPEATS;
+                s_current_identify_average[i].valid = true;
+            }
+            if (!capture_ok) {
+                /* 阶跃捕获含无效样本（瞬态保护拍）：重试整个 16 拍阶跃周期
+                 * （平均/基线清零重跑）；重试耗尽才按数据失败退出。
+                 * RI 相位同样适用（s_ri_test_phase 保持，重跑该相位）。 */
+                if (s_pi_capture_retries < CURRENT_IDENTIFY_PI_CAPTURE_RETRY_MAX) {
+                    s_pi_capture_retries++;
+                    result->capture_retries = s_pi_capture_retries;
+                    current_identify_average_clear();
+                    s_pi_baseline_sum = 0;
+                    s_pi_baseline_variance_sum = 0;
+                    s_pi_baseline_armed = false;
+                    current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+                    break;
+                }
                 result->detail = APP_CURRENT_IDENTIFY_DETAIL_CAPTURE_INVALID;
                 current_identify_finish(2);
                 return;
             }
-            s_current_identify_average[i].i_d_a += data[i].i_d_a / CURRENT_IDENTIFY_REPEATS;
-            s_current_identify_average[i].i_q_a += data[i].i_q_a / CURRENT_IDENTIFY_REPEATS;
-            s_current_identify_average[i].valid = true;
         }
         if (++s_current_identify_repeats < CURRENT_IDENTIFY_REPEATS) {
             current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
@@ -572,6 +642,8 @@ void app_current_identify_run_once(void) {
             if (next_hz >= CURRENT_IDENTIFY_BW_MIN_HZ) {
                 result->trial_bandwidth_hz = next_hz;
                 result->bandwidth_retries++;
+                result->capture_retries = 0;
+                s_pi_capture_retries = 0;
                 current_identify_average_clear();
                 s_pi_baseline_sum = 0;
                 s_pi_baseline_variance_sum = 0;
@@ -591,6 +663,8 @@ void app_current_identify_run_once(void) {
             }
             s_ri_test_phase = true;
             result->r_ff_tested = false;
+            result->capture_retries = 0;
+            s_pi_capture_retries = 0;
             current_identify_average_clear();
             s_pi_baseline_sum = 0;
             s_pi_baseline_variance_sum = 0;
@@ -621,42 +695,69 @@ void app_current_identify_run_once(void) {
     default: current_identify_finish(2); break;
     }
 }
+/** @brief 选择可应用的结果：本轮 PASS 优先，否则回落到保留的最近 PASS
+ *         （新 run 失败不清空历史结果；两者均要求 pwm/极对数与当前匹配） */
+static const app_current_identify_result_t* current_identify_applicable(bool* retained) {
+    if (s_current_identify_result.done && s_current_identify_result.step.passed
+        && s_identify_pwm_hz == app_hardware_params_current()->inverter.pwm_freq_hz
+        && s_identify_pole_pairs == app_motor_params_current()->pole_pairs) {
+        if (retained != NULL) {
+            *retained = false;
+        }
+        return &s_current_identify_result;
+    }
+    if (s_retained_pass_valid && s_retained_pass.step.passed
+        && s_retained_pwm_hz == app_hardware_params_current()->inverter.pwm_freq_hz
+        && s_retained_pole_pairs == app_motor_params_current()->pole_pairs) {
+        if (retained != NULL) {
+            *retained = true;
+        }
+        return &s_retained_pass;
+    }
+    return NULL;
+}
+
 int app_current_identify_apply(void) {
     if (s_current_identify_result.active)
         return -3;
     if (app_foc_get_state() != APP_FOC_STATE_OFF)
         return -1;
-    if (!s_current_identify_result.done)
+    bool retained = false;
+    const app_current_identify_result_t* source = current_identify_applicable(&retained);
+    if (source == NULL) {
+        if (s_current_identify_result.done && s_current_identify_result.step.passed
+            && (s_identify_pwm_hz != app_hardware_params_current()->inverter.pwm_freq_hz
+                || s_identify_pole_pairs != app_motor_params_current()->pole_pairs))
+            return -4; /* 结果与当前 PWM/极对数不匹配：需重新标定 */
+        if (s_current_identify_result.done && !s_current_identify_result.step.passed)
+            return -5; /* 动态 step 未通过且无保留结果：不应用模型/增益，也不允许 save */
         return -2;
-    if (!s_current_identify_result.step.passed)
-        return -5; /* 动态 step 未通过：不应用模型/增益，也不允许后续 save */
-    if (s_identify_pwm_hz!=app_hardware_params_current()->inverter.pwm_freq_hz
-        || s_identify_pole_pairs!=app_motor_params_current()->pole_pairs) return -4;
+    }
     app_motor_params_t* motor = app_motor_params_mutable();
     app_software_params_t* software = app_software_params_mutable();
-    motor->rs_ohm = s_current_identify_result.rs_ohm;
-    motor->ls_h = s_current_identify_result.ld_h;
-    software->control.current_loop.kp = s_current_identify_result.kp;
-    software->control.current_loop.ki = s_current_identify_result.ki;
-    software->control.current_loop.bandwidth_rad_s =
-        s_current_identify_result.bandwidth_hz * 6.283185307f;
+    motor->rs_ohm = source->rs_ohm;
+    motor->ls_h = source->ld_h;
+    software->control.current_loop.kp = source->kp;
+    software->control.current_loop.ki = source->ki;
+    software->control.current_loop.bandwidth_rad_s = source->bandwidth_hz * 6.283185307f;
     app_foc_current_init(); /* 同步解耦模型的电感 */
     s_current_identify_applied = true;
+    s_applied_result = *source;
+    s_applied_retained = retained;
     return 0;
 }
 int app_current_identify_save(void) {
     if ((app_foc_get_state() != APP_FOC_STATE_OFF) || app_foc_stop_pending()
-        || !s_current_identify_applied || !s_current_identify_result.done)
+        || !s_current_identify_applied)
         return -1;
     const app_motor_params_t* motor = app_motor_params_current();
     const app_software_params_t* software = app_software_params_current();
-    if (s_identify_pwm_hz!=app_hardware_params_current()->inverter.pwm_freq_hz
-        || s_identify_pole_pairs!=motor->pole_pairs
-        || motor->rs_ohm!=s_current_identify_result.rs_ohm
-        || motor->ls_h!=s_current_identify_result.ld_h
-        || software->control.current_loop.kp!=s_current_identify_result.kp
-        || software->control.current_loop.ki!=s_current_identify_result.ki
-        || software->control.current_loop.bandwidth_rad_s!=s_current_identify_result.bandwidth_hz*6.283185307f)
+    if (motor->rs_ohm != s_applied_result.rs_ohm
+        || motor->ls_h != s_applied_result.ld_h
+        || software->control.current_loop.kp != s_applied_result.kp
+        || software->control.current_loop.ki != s_applied_result.ki
+        || software->control.current_loop.bandwidth_rad_s
+               != s_applied_result.bandwidth_hz * 6.283185307f)
         return -1; /* 不保存被后续param编辑的未验证参数 */
     current_identify_record_t record = {
         1,
@@ -712,5 +813,9 @@ int app_current_identify_clear(void) {
     if (app_foc_get_state() != APP_FOC_STATE_OFF || s_current_identify_result.active) {
         return -1;
     }
+    /* 同时丢弃 RAM 保留结果与已应用标记：clear = 彻底遗忘本轮整定 */
+    s_retained_pass_valid = false;
+    s_current_identify_applied = false;
+    s_applied_retained = false;
     return app_param_erase(APP_PARAM_KEY_FOC_CURRENT);
 }

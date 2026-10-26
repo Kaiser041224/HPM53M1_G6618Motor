@@ -649,13 +649,28 @@ static int cmd_cal_rl(chry_shell_t* csh, const char* sub) {
     }
     if (!strcmp(sub, "show")) {
         app_current_identify_result_t result;
+        app_current_identify_result_t retained;
         app_current_identify_get_result(&result);
         cal_rl_emit(&result);
+        /* 保留的最近 PASS：新 run 失败不清空，apply 自动回落（重启清空） */
+        if (app_current_identify_get_retained(&retained)) {
+            app_terminal_cmd_emit(
+                "retained PASS: bw=%.0fHz kp=%.5f ki=%.3f rs=%.5f ld=%.2fuH "
+                "(age %u run(s) after; apply falls back to this)\r\n",
+                (double)retained.bandwidth_hz, (double)retained.kp, (double)retained.ki,
+                (double)retained.rs_ohm, (double)(retained.ld_h * 1e6f),
+                (unsigned)retained.age_runs);
+        }
         return 0;
     }
     int rc;
     if (!strcmp(sub, "apply")) {
         rc = app_current_identify_apply();
+        if (rc == 0 && app_current_identify_applied_retained()) {
+            csh_printf(csh,
+                       "apply: OK (retained PASS result; latest run did not pass)\r\n");
+            return 0;
+        }
     }
     else if (!strcmp(sub, "save")) rc = app_current_identify_save();
     else if (!strcmp(sub, "clear")) rc = app_current_identify_clear();
@@ -667,7 +682,7 @@ static int cmd_cal_rl(chry_shell_t* csh, const char* sub) {
             : rc==-5 ? "dynamic step NOT PASSED; refuse to apply tuning/feedforward"
                      : "calibration still active");
     } else if (!strcmp(sub, "clear")) {
-        csh_printf(csh, "clear: %s (FCUR removed; reboot restores YAML)\r\n",
+        csh_printf(csh, "clear: %s (FCUR removed; RAM retained result dropped)\r\n",
                    rc ? "FAIL (FOC must be OFF and idle)" : "OK");
     } else csh_printf(csh, "%s: %s (save requires OFF and applied result)\r\n", sub, rc ? "FAIL" : "OK");
     return rc;

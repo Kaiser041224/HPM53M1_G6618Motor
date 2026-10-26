@@ -11,7 +11,7 @@ void test_motion_math(void) {
         float x = n + 0.37f;
         float u = 0.37f, v = fmodf(.98f * x + .007f, 1);
         float q;
-        CHECK(algo_motion_vernier(u, v, .007f, 50.0f, .98f, &q) == 0);
+        CHECK(algo_motion_vernier(u, v, .007f, 50.0f, .98f, &q, NULL) == 0);
         CHECK_NEAR(q, x * 6.283185307f / 50, 1e-5f);
     }
     /* 参数化：20 圈 / 0.95 输出比（20×(1-0.95)=1），不得依赖硬编码 50/0.98 */
@@ -19,17 +19,17 @@ void test_motion_math(void) {
         float x = n + 0.37f;
         float u = 0.37f, v = fmodf(.95f * x + .013f, 1);
         float q2;
-        CHECK(algo_motion_vernier(u, v, .013f, 20.0f, .95f, &q2) == 0);
+        CHECK(algo_motion_vernier(u, v, .013f, 20.0f, .95f, &q2, NULL) == 0);
         CHECK_NEAR(q2, x * 6.283185307f / 20, 1e-5f);
     }
     /* 非法 reducer/output_ratio */
     float q;
-    CHECK(algo_motion_vernier(.2f, .213f, .007f, 0.0f, .98f, &q) != 0);
-    CHECK(algo_motion_vernier(.2f, .213f, .007f, 50.0f, 0.0f, &q) != 0);
-    CHECK(algo_motion_vernier(.2f, .213f, .007f, NAN, .98f, &q) != 0);
-    CHECK(algo_motion_vernier(.2f, .213f, .007f, 50.0f, NAN, &q) != 0);
-    CHECK(algo_motion_vernier(.2f, .213f, .007f, 20.0f, .96f, &q) != 0); /* 游标不一致 */
-    CHECK(algo_motion_vernier(.2f, .213f, .007f, 50.0f, .98f, &q) != 0);
+    CHECK(algo_motion_vernier(.2f, .213f, .007f, 0.0f, .98f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(.2f, .213f, .007f, 50.0f, 0.0f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(.2f, .213f, .007f, NAN, .98f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(.2f, .213f, .007f, 50.0f, NAN, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(.2f, .213f, .007f, 20.0f, .96f, &q, NULL) != 0); /* 游标不一致 */
+    CHECK(algo_motion_vernier(.2f, .213f, .007f, 50.0f, .98f, &q, NULL) != 0);
     algo_motion_pi_t pi = {0};
     CHECK_NEAR(algo_motion_speed(&pi, 1, 0, 2, 10, .0001f, 1), 1, 1e-6f);
     CHECK_NEAR(pi.integral, 0, 1e-6f);
@@ -37,18 +37,18 @@ void test_motion_math(void) {
     pi.integral = NAN;
     CHECK_NEAR(algo_motion_speed(&pi, 0, 0, 1, 1, .0001f, 1), 0, 1e-6f);
     CHECK_NEAR(pi.integral, 0, 1e-6f);
-    CHECK(algo_motion_vernier(.2f, .226f, .03f, 50.0f, .98f, &q) != 0);
-    CHECK(algo_motion_vernier(.2f, INFINITY, .01f, 50.0f, .98f, &q) != 0);
-    CHECK(algo_motion_vernier(NAN, .1f, .01f, 50.0f, .98f, &q) != 0);
+    CHECK(algo_motion_vernier(.2f, .226f, .03f, 50.0f, .98f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(.2f, INFINITY, .01f, 50.0f, .98f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(NAN, .1f, .01f, 50.0f, .98f, &q, NULL) != 0);
     pi.integral = 0;
     CHECK_NEAR(algo_motion_speed(&pi, 1e30f, 0, 1e30f, 0, .0001f, 1), 0, 1e-6f);
-    CHECK(algo_motion_vernier(1e20f, .1f, .01f, 50.0f, .98f, &q) != 0);
-    CHECK(algo_motion_vernier(.1f, -.1f, .01f, 50.0f, .98f, &q) != 0);
-    CHECK(algo_motion_vernier(1.37f, .3696f, .007f, 50.0f, .98f, &q) != 0);
+    CHECK(algo_motion_vernier(1e20f, .1f, .01f, 50.0f, .98f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(.1f, -.1f, .01f, 50.0f, .98f, &q, NULL) != 0);
+    CHECK(algo_motion_vernier(1.37f, .3696f, .007f, 50.0f, .98f, &q, NULL) != 0);
     const float turns[] = {0.0f, .9999f, 1.0001f, 49.9999f};
     for (unsigned i = 0; i < 4; ++i) {
         float u = fmodf(turns[i], 1), v = fmodf(.98f * turns[i] + .007f, 1);
-        CHECK(algo_motion_vernier(u, v, .007f, 50.0f, .98f, &q) == 0);
+        CHECK(algo_motion_vernier(u, v, .007f, 50.0f, .98f, &q, NULL) == 0);
         CHECK_NEAR(q, turns[i] * 6.283185307f / 50, 1e-5f);
     }
 }
@@ -149,4 +149,25 @@ void test_motion_pos_filter_circular(void) {
     CHECK(
         f.vel_setpoint_rad_s > 0
         && f.vel_setpoint_rad_s < 0.01f);                /* 正向小速度，不是 -122 的大摆 */
+}
+
+/* 解算残差输出：成功时 |estimate−nearest| ∈ [0, 0.25)；失败保持最差值 0.25 */
+void test_motion_vernier_residual(void) {
+    float angle;
+    float residual = -1.0f;
+    /* 理想游标关系（v = 0.98u + 常量）：残差接近 0 */
+    CHECK(algo_motion_vernier(0.30f, 0.98f * 0.30f, 0.0f, 50.0f, 0.98f, &angle, &residual) == 0);
+    CHECK(residual >= 0.0f && residual < 0.05f);
+    /* v 偏移 0.002 turn → estimate 偏 0.1 → 残差 ≈ 0.1（解算仍成功） */
+    residual = -1.0f;
+    CHECK(algo_motion_vernier(0.30f, 0.98f * 0.30f + 0.002f, 0.0f, 50.0f, 0.98f, &angle,
+                              &residual)
+          == 0);
+    CHECK(residual > 0.05f && residual < 0.15f);
+    /* v 偏移 0.01 turn → 残差 0.5 > 0.25 → 解算失败且残差为最差值 */
+    residual = -1.0f;
+    CHECK(algo_motion_vernier(0.30f, 0.98f * 0.30f + 0.01f, 0.0f, 50.0f, 0.98f, &angle,
+                              &residual)
+          != 0);
+    CHECK_NEAR(residual, 0.25f, 1e-6f);
 }

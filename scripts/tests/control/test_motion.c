@@ -31,7 +31,7 @@ void test_motion(void) {
     CHECK(app_motion_calibrate() != 0);
     app_motor_params_mutable()->reducer_ratio = 50.0f;
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1100; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     app_motion_snapshot_t snapshot;
     app_motion_get_snapshot(&snapshot);
@@ -65,7 +65,7 @@ void test_motion(void) {
     CHECK(app_motion_calibrate() == 0);
     app_motion_get_snapshot(&snapshot);
     CHECK(!snapshot.feedback_valid);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -150,7 +150,7 @@ void test_motion_sample_time(void) {
         app_motion_init();
         g_mock_rotor_rad = 0;
         CHECK(app_motion_calibrate() == 0);
-        for (unsigned j = 0; j < 1000; ++j) {
+        for (unsigned j = 0; j < 1400; ++j) {
             mock_advance_cycle(48000);
             app_foc_isr_step();
             app_motion_step();
@@ -271,7 +271,7 @@ void test_motion_hold(void) {
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -386,7 +386,7 @@ void test_motion_anti_windup(void) {
     app_motion_init();
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -454,7 +454,7 @@ void test_motion_cmd_status(void) {
     CHECK(app_motion_torque(.1f) == APP_MOTION_CMD_NOT_CALIBRATED);
     CHECK(app_motion_gains(-1, 1, 0, 0) == APP_MOTION_CMD_BAD_PARAM);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -486,7 +486,7 @@ void test_motion_friction_feedforward(void) {
     CHECK(app_motion_gains(.02f, 5, -.5f, 0) == APP_MOTION_CMD_BAD_PARAM);
     CHECK(app_motion_gains(.02f, 5, .5f, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -548,7 +548,7 @@ void test_motion_params(void) {
     app_foc_init();
     app_motion_init();
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -614,7 +614,7 @@ void test_motion_output_direction(void) {
     app_motion_get_snapshot(&snap);
     CHECK(snap.output_direction == -1.0f);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -658,7 +658,7 @@ void test_motion_speed_rotor_only(void) {
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -707,7 +707,7 @@ void test_motion_speed_rotor_only(void) {
     /* apply 后旧圈号基准失效：被动路径的失配不得走兜底（也不产生兜底样本）；
      * 2026-10-26 语义更新：失配降级为"游标角无效"，速度反馈保持有效 */
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_get_snapshot(&snapshot);
@@ -781,7 +781,7 @@ static void pos_setup_ex(
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_position_gains(20, filter_bw) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step(); /* priming：反馈新鲜后命令才可接受 */
@@ -821,7 +821,7 @@ void test_motion_position_command(void) {
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_position_gains(0, 10) == 0); /* 0=禁用位置模式 */
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -872,7 +872,7 @@ void test_motion_position_gains(void) {
         app_software_params_current()->control.position_loop.input_filter_bandwidth, 15, 1e-6f);
     CHECK(app_motion_gains(2, 50, 0, 0) == 0);
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -1131,7 +1131,7 @@ void test_motion_vernier_degradation(void) {
     app_motion_init();
     app_motor_params_mutable()->kt_nm_per_a = .117f;
     CHECK(app_motion_calibrate() == 0);
-    for (unsigned i = 0; i < 1100; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     CHECK(app_motion_apply() == 0);
     app_motion_step();
@@ -1170,7 +1170,7 @@ void test_motion_vernier_degradation(void) {
     /* 位置模式：游标是反馈数据 → 失配（兜底预算已耗尽）→ 保持窗口 → 硬撤销 */
     CHECK(app_motion_position_gains(20, 10) == 0);
     CHECK(app_motion_position(1.0f, 0.0f, 0.0f) == 0);
-    for (unsigned i = 0; i < 1000; ++i)
+    for (unsigned i = 0; i < 1400; ++i)
         app_motion_step();
     app_motion_get_snapshot(&snapshot);
     CHECK(!snapshot.active);
@@ -1178,4 +1178,47 @@ void test_motion_vernier_degradation(void) {
 
     g_mock_output_raw_override = false;
     app_foc_disable();
+}
+
+/* motion cal 静止门（2026-10-26 修复回归）：
+ * 相位对刚性旋转不变，但采样期间轴爬行经减速器回差污染平均相位
+ * （实测 0.0041 turn）。门语义：爬行只等待不采样；持续爬行超时判失败。 */
+void test_motion_cal_settle(void) {
+    extern float g_mock_rotor_rad;
+    app_motion_snapshot_t snapshot;
+
+    mock_params_reset();
+    app_foc_init();
+    app_motion_init();
+    app_motor_params_mutable()->kt_nm_per_a = .117f;
+
+    /* ① 轴持续爬行（>0.0002 turn/tick）：静置等待不推进采样，3s 超时失败 */
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 50000; ++i) {
+        g_mock_rotor_rad += 0.0003f * 6.283185307f; /* 每拍 0.0003 turn：超过阈值 */
+        if (g_mock_rotor_rad >= 6.283185307f)
+            g_mock_rotor_rad -= 6.283185307f;
+        app_motion_step();
+    }
+    app_motion_get_snapshot(&snapshot);
+    CHECK(!snapshot.calibrating && !snapshot.calibration_done);
+    CHECK(snapshot.reason == APP_MOTION_REASON_CALIBRATION);
+    CHECK(snapshot.calibration_samples == 0); /* 爬行期间不采样 */
+
+    /* ② 静止后重测：等待 20ms 收敛窗 + 1000 样本 → 完成 */
+    g_mock_rotor_rad = 0.4f * 6.283185307f;
+    CHECK(app_motion_calibrate() == 0);
+    for (unsigned i = 0; i < 20000; ++i)
+        app_motion_step();
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.calibration_done && !snapshot.calibrating);
+
+    /* ③ 解算余量观测：健康 pair → margin 远小于 0.25 */
+    CHECK(app_motion_apply() == 0);
+    for (unsigned i = 0; i < 200; ++i)
+        app_motion_step();
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.angle_valid);
+    CHECK(snapshot.vernier_margin < 0.05f);
+    CHECK(snapshot.vernier_margin >= 0.0f);
 }

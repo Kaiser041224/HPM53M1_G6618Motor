@@ -67,6 +67,8 @@ typedef struct {
     bool speed_limited; /**< 本拍轴端连续速度限幅生效 */
     bool calibrated, zero_valid, feedback_valid, active, calibrating, calibration_done;
     bool angle_valid; /**< 游标解算角有效（速度反馈独立有效；失配降级时为 0，位置模式/输出表不可用） */
+    float vernier_margin; /**< 游标解算余量 LPF [0,0.25]（健康观测；>0.15 提示重跑 motion cal） */
+    float shaft_raw_rad; /**< 物理轴端单圈角（未应用方向/用户零点；齿槽 output 表索引基准） */
     float output_direction; /**< 出轴正方向定义（+1/-1）；用户坐标=本值×内部物理坐标 */
 } app_motion_snapshot_t;
 /** @brief 初始化/恢复参数；采样计时回调停止期间调用，不使能 */

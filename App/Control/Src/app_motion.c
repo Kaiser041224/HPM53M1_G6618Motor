@@ -88,6 +88,10 @@ static float s_output_direction = 1.0f;  /**< 用户出轴正方向（+1/-1；�
 static float s_previous_angle, s_zero_rad, s_previous_rotor;
 static float s_previous_motor_rad; /**< 上一拍转子机械角（测速基准；输出侧速度=转子速度/减速比） */
 static float s_calibration_sum, s_calibration_first;
+static bool s_calibration_settled;      /**< 静止门已通过（采样开始） */
+static uint16_t s_calibration_settle_ticks;  /**< 连续静止拍数 */
+static uint32_t s_calibration_wait_ticks;    /**< 静止等待累计（超时判失败） */
+static float s_calibration_prev_u;      /**< 静止门逐拍位移基准 [turn] */
 static float s_calibration_phase;
 static float s_calibration_reducer, s_calibration_output_ratio;
 static uint32_t s_previous_cycle, s_previous_sequence, s_epoch, s_request_sequence;
@@ -106,6 +110,14 @@ static float s_nearest_turn;                  /**< 最近解析的游标整数�
 static bool s_have_nearest;
 static uint32_t s_vernier_fallback_samples;   /**< 连续兜底样本数（超限判真失效） */
 #define APP_MOTION_VERNIER_FALLBACK_MAX_SAMPLES (7500U) /**< 兜底上限500ms@15kHz */
+/* ── motion cal 静止门 ──────────────────────────────────────────────
+ * 相位对刚性旋转不变，但采样期间轴仍在爬行（软停末段/外扰）时，减速器回差
+ * 会污染 1000 样本的平均相位（2026-10-26 实测差 0.0041 turn，解算余量
+ * 0.25→0.21）。采样前先确认逐拍位移收敛，未收敛只等待。 */
+#define APP_MOTION_CAL_SETTLE_TICKS        (300U)    /**< 静止确认窗 20ms@15kHz */
+#define APP_MOTION_CAL_SETTLE_WAIT_MAX     (45000U)  /**< 静止等待上限 3s */
+#define APP_MOTION_CAL_MOVEMENT_MAX_TURN   (0.0002f) /**< 逐拍位移阈值 [turn]（≈13LSB） */
+#define APP_MOTION_MARGIN_ALPHA            (0.005f)  /**< 解算余量 LPF 系数（τ≈13ms@15kHz） */
 static const app_motor_params_t* s_motion_motor_params; /**< init解析，仅读RAM参数对象 */
 
 /** @brief 游标多圈解算参数是否可用（reducer 圈数 + 出轴/转子比） */
@@ -384,6 +396,10 @@ int app_motion_calibrate(void) {
     s_motion.calibration_done = false;
     s_motion.reason = APP_MOTION_REASON_NONE;
     s_calibration_sum = 0;
+    s_calibration_settled = false;
+    s_calibration_settle_ticks = 0;
+    s_calibration_wait_ticks = 0;
+    s_calibration_prev_u = 0.0f;
     s_primed = false;
     s_traj_primed = false;
     s_have_nearest = false;                       /* 相位重标定：旧圈号基准失效 */
@@ -702,6 +718,28 @@ void app_motion_step(void) {
             s_motion.reason = APP_MOTION_REASON_FOC_STATE;
             return;
         }
+        /* 静止门：1000 样本平均前先确认轴收敛（相位对刚性旋转不变，
+         * 但爬行经减速器回差会污染平均相位）。门内只等待不采样。 */
+        if (!s_calibration_settled) {
+            float settle_delta = motion_delta(u - s_calibration_prev_u);
+            if (s_calibration_wait_ticks == 0U) {
+                settle_delta = 0.0f; /* 首拍建立基准 */
+            }
+            s_calibration_prev_u = u;
+            if ((settle_delta > APP_MOTION_CAL_MOVEMENT_MAX_TURN)
+                || (settle_delta < -APP_MOTION_CAL_MOVEMENT_MAX_TURN)) {
+                s_calibration_settle_ticks = 0U;
+            } else if (++s_calibration_settle_ticks >= APP_MOTION_CAL_SETTLE_TICKS) {
+                s_calibration_settled = true;
+                s_motion.calibration_samples = 0;
+                s_calibration_sum = 0;
+            }
+            if (++s_calibration_wait_ticks > APP_MOTION_CAL_SETTLE_WAIT_MAX) {
+                s_motion.calibrating = false;
+                s_motion.reason = APP_MOTION_REASON_CALIBRATION;
+            }
+            return;
+        }
         float scaled_phase = (v - output_ratio * u) * reducer;
         int32_t phase_whole = (int32_t)scaled_phase;
         if ((float)phase_whole > scaled_phase)
@@ -714,7 +752,9 @@ void app_motion_step(void) {
         }
         float difference = motion_delta((phase - s_calibration_first) * reducer) / reducer;
         float movement = motion_delta(u - s_previous_rotor);
-        if (movement > .001f || movement < -.001f || difference > .002f || difference < -.002f) {
+        if (movement > APP_MOTION_CAL_MOVEMENT_MAX_TURN
+            || movement < -APP_MOTION_CAL_MOVEMENT_MAX_TURN
+            || difference > .002f || difference < -.002f) {
             s_motion.calibrating = false;
             s_motion.reason = APP_MOTION_REASON_CALIBRATION;
             return;
@@ -734,6 +774,8 @@ void app_motion_step(void) {
         return;
     }
     float angle;
+    float vernier_residual = 0.25f; /* 解算残差（失败保持最差值，供余量观测） */
+    bool vernier_decoded = false;   /* 本拍解算成功（余量统计只采信真实解算） */
     bool angle_valid = pair_ok; /* 游标角有效性：解算或兜底成功才发布 */
     if (!s_motion.calibrated) {
         s_motion.feedback_valid = false;
@@ -742,11 +784,13 @@ void app_motion_step(void) {
     }
     if (!pair_ok) {
         angle = s_previous_angle; /* 速度/力矩：保持最后游标角，仅诊断；速度由 observer 提供 */
-    } else if (algo_motion_vernier(u, v, s_motion.phase_turns, reducer, output_ratio, &angle)
+    } else if (algo_motion_vernier(u, v, s_motion.phase_turns, reducer, output_ratio, &angle,
+                                   &vernier_residual)
                == 0) {
         s_vernier_fallback_samples = 0;
         s_nearest_turn = angle * (reducer / FOC_TWO_PI_F) - u;
         s_have_nearest = true;
+        vernier_decoded = true;
     } else {
         /* 游标失配（齿隙/扭振瞬态或低力矩松垂）：转子角+最近圈号兜底测速。
          * 失配偏移≤齿隙（输出轴≤0.15°），对速度环无感；零力矩保持会在松垂区
@@ -779,6 +823,10 @@ void app_motion_step(void) {
         }
     }
     float direction = s_motion_motor_params->encoder.direction;
+    /* 齿槽 output 表索引基准：物理输出角（未应用方向/用户零点）。
+     * 解码角与相位取值无关（相位只选择圈号），故零点/方向变化不改变角值本身；
+     * 用 raw 角可保证 re-zero / 方向翻转后表相位不失效（2026-10-26 解耦）。 */
+    float output_angle_raw = foc_wrap_2pi(angle);
     if ((direction != 1 && direction != -1) || direction != s_calibrated_direction) {
         motion_reject(APP_MOTION_REASON_PARAMETER);
         return;
@@ -814,11 +862,17 @@ void app_motion_step(void) {
     s_previous_cycle = now;
     s_previous_sample_cycle = rotor.timestamp_cycles;
     s_motion.shaft_rad = foc_wrap_2pi(angle - (s_motion.zero_valid ? s_zero_rad : 0));
+    s_motion.shaft_raw_rad = output_angle_raw;
     s_primed = true;
     g_motion_shaft_angle_rad = s_motion.shaft_rad;
     g_motion_shaft_angle_deg = s_motion.shaft_rad * (360.0f / FOC_TWO_PI_F);
     g_motion_shaft_angle_valid = angle_valid ? 1 : 0;
-    app_cogging_set_output_angle(s_motion.shaft_rad, angle_valid);
+    app_cogging_set_output_angle(output_angle_raw, angle_valid);
+    /* 解算余量 LPF（健康观测）：接近 0.25 = pair 一致性边际（相位漂移/装配变化） */
+    if (vernier_decoded) {
+        s_motion.vernier_margin +=
+            APP_MOTION_MARGIN_ALPHA * (vernier_residual - s_motion.vernier_margin);
+    }
     app_cogging_set_motion_active(s_motion.active);
     s_motion.feedback_valid = true;
     s_motion.angle_valid = angle_valid;

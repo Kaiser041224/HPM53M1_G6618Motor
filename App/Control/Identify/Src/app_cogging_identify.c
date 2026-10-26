@@ -346,7 +346,9 @@ void app_cogging_identify_run_once(void) {
         float delta = foc_wrap_pm_pi(motion.shaft_rad - s_identify.prev_shaft_rad);
         s_identify.prev_shaft_rad = motion.shaft_rad;
         s_identify.travel_rad += fabsf(delta);
-        cogging_sample(rotor.rad, motion.shaft_rad, foc.i_q_a, s_identify.direction);
+        /* 分箱用物理输出角（未应用零点/方向）：与运行期注入的索引基准一致
+         * （app_motion_step 传 raw 角给 app_cogging），re-zero 不失效表相位。 */
+        cogging_sample(rotor.rad, motion.shaft_raw_rad, foc.i_q_a, s_identify.direction);
         if (s_identify.travel_rad >= (COGGING_TWO_PI * (float)s_identify.revs)) {
             (void)app_motion_speed(0.0f);
             s_identify.state_ms = 0U;
