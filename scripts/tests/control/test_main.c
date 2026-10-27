@@ -26,6 +26,7 @@ void test_current_identify(void);
 void test_foc_stop(void);
 void test_voltage_limit(void);
 void test_foc_dt_comp(void);
+void test_foc_vbus_fast_source(void);
 void test_foc_request(void);
 void test_motion_timer(void);
 void test_motion_timer_tick_bind(void);
@@ -96,6 +97,7 @@ int main(void) {
     test_foc_stop();
     test_voltage_limit();
     test_foc_dt_comp();
+    test_foc_vbus_fast_source();
     test_foc_request();
     test_motion_timer();
     test_motion_timer_tick_bind();

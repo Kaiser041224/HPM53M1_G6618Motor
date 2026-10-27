@@ -321,12 +321,16 @@ static void app_fast_step_hook(void) {
 
 void app_io_step(void) {
     /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：单次处理有界（≤200µs 约束不变）。
-     * 顺序：观测刷新 → 模拟量换算 → 故障 RMS → 状态机编排 → 通讯轮询。 */
+     * 顺序：观测刷新 → 慢通道取样 → 模拟量换算 → 故障 RMS → 状态机编排 → 通讯轮询。 */
 
     /* 双编码器观测变量刷新（只读ADC缓存，零SPI成本） */
     app_debug_encoder_sample();
 
-    /* 模拟量：ADC 缓存 → 物理量换算 + 滤波（FOC 的 v_bus 亦取自本模块缓存） */
+    /* ADC1 慢速通道（VBUS/NTC/CANID 原始码生产者）——必须**先于**模拟量换算：
+     * 原顺序把本调用放在末尾，导致慢通道物理量恒定落后 1 拍（1ms）。 */
+    app_adc_slow_process();
+
+    /* 模拟量：ADC 缓存 → 物理量换算 + 滤波（1kHz 路径的 v_bus/NTC/CANID 取本模块缓存） */
     app_analog_signal_process();
 
     /* 故障保护 L2/L3：RMS 累加 + 去抖判断（M1 动作全关、仅检测/告警，spec §6） */
@@ -344,9 +348,6 @@ void app_io_step(void) {
 
     /* Ozone 命令消费 + 状态域刷新（有界：≤2 条命令/拍） */
     app_debug_foc_tick();
-
-    /* ADC1 慢速通道（VBUS/NTC/CANID 原始码生产者） */
-    app_adc_slow_process();
 
     /* Ozone 观测变量刷新（.noncacheable，1ms 刷新，容忍撕裂） */
     app_debug_adc_update();

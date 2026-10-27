@@ -700,6 +700,69 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   ② 若相位一致仍失配，是游标 pair 传感器/机械（装配、磁环、温度漂移）问题，
   用 `enc` debug 看 pair 统计（output fail/valid 计数）分段定位。
 
+### 母线（vbus）采样与电流同源同步（2026-10-26）
+
+- **机理**：vbus 原由 GPTMR0 CH2 1kHz **自由相位**链触发，与 PWM 载波无相位关系。
+  PWM 实际频率是整数截断值（`reload = clk/f - 1`，本板 ≈30001.87Hz），与
+  1000.000Hz 不成整比 → 采样点相对载波每 ms 前移 0.062µs，约 535ms 扫满一个开关
+  周期（≈1.9Hz 拍频）→ 开关纹波被读成"母线波动"，并污染 `cal rl` 的电压重建
+  （Rs 辨识用 `v_bus × duty` 反推绕组电压）。
+- **修法**：ADC1 SEQ 改由 **PWM1_CH10REF 与 ADC0 PMT 同源触发**（TRGM 扇出，每个
+  输出独立选源），序列重排 `[V_VBUS, NTC0, NTC1, CANID, V_VBUS]`。**ADC0 的 PMT
+  队列不动**——每触发 ≤4 槽是硬件上限（`ADC_SOC_MAX_TRIG_CH_LEN=4`）且"首槽=队尾
+  副本"规则必须保留，vbus 无法进入同一队列。
+- **vbus 必须在序列首项**：触发后 ≈1.15µs 完成，早于 ADC0 PMT（4 槽 ≈4.6µs），
+  故 PMT ISR 每拍都能读到本帧值；相位与电流完全相同，最大陈旧 1 帧（pwm 周期）。
+- **保护节拍红线**：ADC1 SEQ 完成回调按 `pwm_freq/1000` **分频**后驱动
+  `app_fault_tick()` → fault tick 仍 1kHz、去抖 5 次 = 5ms，逐位不变。ADC1 的 SEQ
+  中断一直是使能的（spec §9.2 "无 ISR" 的表述有误，已更正）。
+- **快通道口径**：`app_adc` 在 PMT ISR 内锁存 `PRD_RESULT[VBUS]`
+  （`intf_adc_get_prd_result`，直读寄存器，ILM 常驻）+ 用 `intf_adc_get_seq_frames`
+  判新鲜（帧计数未推进 = 链停摆 → 保持旧值并计 `stale`，不采信结果寄存器）。
+  `app_analog_signal_vbus_fast()` 做换算 + 一阶 IIR（**截止 2kHz、采样率必须取
+  `inverter.pwm_freq_hz`**；沿用 `APP_ANALOG_PROCESS_RATE_HZ=1kHz` 会把 α 从
+  0.295 抬到 0.926）。FOC ISR 优先快通道，`foc_finite` 失败才回退 1kHz 缓存值。
+- **ILM 纪律**：PMT ISR 调用链上的函数必须在 `.fast`（本批：`adc_get_prd_result`、
+  `intf_adc_get_prd_result`、`adc_get_seq_frames`、`intf_adc_get_seq_frames`、
+  `app_adc_get_vbus_fast(…sequence)`、`app_analog_signal_vbus_fast`、`adc_slow_adapter`）。
+  改完用 `nm` 核对地址应为 `0x0000xxxx`；不要经 `intf_adc_read`（模式分支 + SDK
+  包装会回到 XIP）。
+- **`app_io_step` 顺序**：`app_adc_slow_process()` 必须在 `app_analog_signal_process()`
+  **之前**（原顺序使慢通道物理量恒定落后 1 拍）。
+- **驱动卫生**：抢占队列清理循环上界必须覆盖 `0..ADC_SOC_MAX_TRIG_CH_NUM(11)`
+  （原 `t < ADC_PMT_MAX_TRIG(11)` 漏掉索引 11，复位残留 QUEUE_EN 会随共享 PTRGI
+  启动垃圾队列）。
+- **测试纪律**：`scripts/tests/adc/`、`scripts/tests/analog/` 为新增主机套件；
+  pass 2 用 `-O2 -ffast-math` 编译 → **测试里禁止用 `isnan()/isfinite()`**（该档隐含
+  `-ffinite-math-only`，会被常量折叠为 false）；改用位模式判定（同 `foc_finite`）。
+- 回归：`test_adc_*`（队列形态/触发扇出/分频/快通道锁存与陈旧）、
+  `test_analog_vbus_fast_*`（换算/滤波采样率/路径隔离）、`test_foc_vbus_fast_source`。
+- **快通道供 duty 已定案（2026-10-26 配对 A/B，同固件同热态 3+3 轮）**：
+  开关 1 → `cal rl` **887/1445/1044Hz 全 PASS**、RI A/B recommend=YES、raw 超调 22.3~26.9%；
+  开关 0 → **754/754/754Hz 全 NOT PASSED**、raw 超调 28.6~31.1%。故
+  `g_foc_vbus_fast_en` **默认 1**（保留 1 字节开关作现场 A/B 与回退手段）。
+  机理：`duty = v_cmd/v_bus`，慢值在阶跃期间给的是阶跃前母线 → 缩放系统性错误。
+  **教训**：首轮单臂观测（快通道硬连线）的 754Hz 曾被误归因为"快通道供 duty"；
+  无对照组的单臂观测不足以归因，必须配对 A/B。
+- **cal rl 剩余差异：结案（vbus 通路已排除，2026-10-26）**：相对改动前会话 `Rs_eff`
+  0.162→0.1705（+5.3%）、`Ld` 121.5→108µH（−10%）、落点 1228~2000→887~1445Hz；
+  而 Rs 散布由 ±4.3% 收到 ±0.7%。**排除项**：热漂移（台架确认电机室温）；vbus 读数偏置
+  （万用表与外部电源表头一致）；**vbus 通路本身**（配对两臂 Rs/Ld 一致到 +0.83%/+0.50%）。
+  **分工结论**：vbus 通路只影响**瞬态电压重建**（落点差 1~2 档、raw 超调差 3~5 点），
+  **不影响 Rs/Ld 慢测量**；故 Rs/Ld 的会话间差异与 vbus 无关。剩余候选=「两臂共有的
+  ADC1 30kHz 活动」与「会话间工况差异（停机位/接线/接触电阻）」；**非阻塞**。
+  判别实验 = 下一项的方案 A（见下），复测后若不回归即结案。
+- **采样链精简方案**（`docs/superpowers/plans/2026-10-26-sampling-chain-slimming.md`）：
+  需求=快环路只留 FOC/motion。硬约束：每触发 ≤4 槽 + 一实例一模式一速率 → vbus 无法进
+  ADC0 队列，且**只要 vbus 要 30kHz 同步，同实例的 NTC/CANID 就会同样高频转换**（软件
+  只低频读，现状已如此）。方案 A=ADC1 `seq_cb=NULL`（30kHz ISR 消失）+ fault tick 移入
+  1kHz 任务（**唯一触碰保护红线处，需显式确认**）；方案 B3=SEQ 只留 VBUS + NTC/CANID 走
+  BUS_RESULT oneshot（需先做寄存器可行性实验）。
+- **终端观测（勿再误传）**：`profiler dump`（逐 ISR 频率/耗时/outliers，快环路盘点）、
+  `adc diag`（SEQ 帧率 + `vbus_fast` 活性）、`adc dump`、`adc delay <ns>`（运行期改触发延时）、
+  `foc`（含 `vbus src=… fast/slow/Δ/seq/stale`）。`p`/`k`/`d`/`n` 是 **UART0** 单字符调试
+  命令，USB 终端用上面的等价命令——**给台架指令前先查 `CSH_CMD_EXPORT_ALIAS` 清单**。
+
 ### 标定链鲁棒性（2026-10-26）
 
 - **output 表零点解耦**：齿槽 output 表索引/查询改为物理输出角

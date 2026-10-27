@@ -3,19 +3,26 @@
  * @brief   M1 采样链（PWM1 触发 → TRGM → 双 ADC PMT）
  * @author  Kaiser
  *
- * 采样链（2026-09-19 定稿）：
- *   PWM1 CMP10（计数谷底 + trigger_delay_ns）
- *     → CHCFG[10] → PWM1_CH10REF → TRGM0 PTRGI0A
- *     → ADC0 PMT：I_W(IN2) → I_U(IN3) → I_V(IN4) → I_W(IN2)   电流（首槽=队尾副本）
- *   GPTMR0 CH2（1kHz 方波）→ TRGM0 → ADC1_STRGI
- *     → ADC1 SEQ：CANID(IN15) → V_VBUS(IN6) → NTC0(IN11) → NTC1(IN1) → CANID(IN15)
- *                 慢速（首项=队尾副本），结果同步到 PRD_RESULTx
- *   ADC0 结果由内部 DMA 写入缓冲、ISR 回调刷新 raw 缓存；
- *   ADC1 结果由 1kHz 慢任务从 PRD_RESULTx 纯寄存器读取（无中断）。
+ * 采样链（2026-09-19 定稿；2026-10-26 vbus 同源同步修订）：
+ *   PWM1 CMP10（计数谷底 + trigger_delay_ns）→ CHCFG[10] → PWM1_CH10REF
+ *     ├─→ TRGM0 PTRGI0A → ADC0 PMT：I_W(IN2) → I_U(IN3) → I_V(IN4) → I_W(IN2)
+ *     │                     电流（首槽=队尾副本）；DMA → ISR 刷新 raw 缓存 + FOC 电流环
+ *     │                     + **vbus 快通道锁存**（同拍读 ADC1 结果寄存器）
+ *     └─→ TRGM0 ADC1_STRGI → ADC1 SEQ：V_VBUS(IN6) → NTC0(IN11) → NTC1(IN1)
+ *                             → CANID(IN15) → V_VBUS(IN6)（首末同通道=自吸收）
+ *            结果同步到 PRD_RESULTx；1kHz 慢任务纯寄存器读取（NTC/CANID/1kHz vbus）
+ *            SEQ 完成 ISR 只承载保护 fault tick，并按 pwm_freq/1000 分频保持 1kHz
  *
- * 时序（按当前默认配置：25kHz / MOT 160MHz / ADC 40MHz，16bit + sample_cycle=25）：
- *   单通道 ≈1.15µs（25 采样 + 21 转换 个 ADC 时钟）；4 槽队列 ≈4.6µs；
- *   低侧导通窗口半宽 = (1−占空比)×20µs（更高调制区由后续 FOC 用两相重构处理）。
+ * 关键不变量（改动前必读）：
+ *   · PMT 每触发 ≤4 槽（ADC_SOC_MAX_TRIG_CH_LEN=4）；ADC0 队列已满 → vbus 无法进同队列
+ *   · 两个队列的首槽都会被"上一帧最后一个通道"污染 → 首槽通道必须 == 队尾通道
+ *   · vbus 置于 SEQ 首项：其转换早于 ADC0 PMT 完成，故 PMT ISR 同拍可读到本帧值
+ *   · 不要缩短 SEQ 序列：5 项的完成时刻(≈5.8µs)晚于 PMT(≈4.6µs)，在不可抢占 ISR 构建下
+ *     这保证 ADC1 的 IRQ 总排在 FOC ISR 之后（缩短会让 ADC1 先跑并阻塞控制环）
+ *
+ * 时序（按当前默认配置：30kHz / MOT 160MHz / ADC 40MHz，16bit + sample_cycle=10）：
+ *   单通道 ≈1.15µs（25 采样 + 21 转换 个 ADC 时钟）；4 槽队列 ≈4.6µs；SEQ 5 项 ≈5.8µs；
+ *   低侧导通窗口半宽 = (1−占空比)×16.7µs（更高调制区由后续 FOC 用两相重构处理）。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -43,11 +50,11 @@ typedef enum {
     ADC_CH_V_VBUS,  /**< ADC1_IN6  PB14  母线电压（73.3K/3.3K 分压 + 内部运放 B） */
     ADC_CH_NTC0,    /**< ADC1_IN11 PB08  NTC0（10K 上拉，温度换算待型号确定） */
     ADC_CH_NTC1,    /**< ADC1_IN1  PB09  NTC1 */
-    ADC_CH_V_CANID, /**< ADC1_IN15 PB00  CANID DIP 电阻网络（随 ADC1 1kHz 序列采样） */
+    ADC_CH_V_CANID, /**< ADC1_IN15 PB00  CANID DIP 电阻网络（随 ADC1 序列采样，读取在 1kHz 任务） */
     ADC_CH_COUNT,
 } adc_channel_t;
 
-/* CANID 为静态慢变量：随 ADC1 序列（1kHz）一起采样 */
+/* CANID 为静态慢变量：随 ADC1 序列（= pwm_freq）一起转换，但读取在 1kHz 任务 */
 _Static_assert(ADC_CH_V_CANID == (ADC_CH_COUNT - 1), "CANID must be the last channel");
 
 /* 默认配置来源：config/hardware.yaml（app_hardware_params.adc） */
@@ -69,12 +76,14 @@ typedef struct {
     uint16_t wdog_thshd_low;   /**< WDOG 低阈值原始码 */
     app_adc_wdog_cb_t wdog_cb; /**< WDOG 回调 */
     void* wdog_cb_user;        /**< WDOG 回调用户上下文 */
-    /* ADC1 序列完成回调（1kHz，ISR 上下文；NULL = 不启用） */
-    void (*slow_cb)(void); /**< 慢速序列完成回调 */
+    /* ADC1 序列完成回调：**目标 1kHz**（ISR 上下文）。ADC1 SEQ 与电流同源触发 =
+     * pwm_freq，故实现内部按 pwm_freq/1000 分频后调用，使保护 fault tick 的节拍与
+     * 去抖语义（5 次 = 5ms）保持不变。NULL = 不使能 SEQ 完成中断。 */
+    void (*slow_cb)(void); /**< 慢速序列完成回调（分频后 1kHz，ISR 上下文） */
 } app_adc_cfg_t;
 
 /**
- * @brief 初始化采样链：双 ADC PMT + TRGM 路由 + PWM1 触发比较器，
+ * @brief 初始化采样链：ADC0 PMT + ADC1 SEQ + TRGM 扇出路由 + PWM1 触发比较器，
  *        并启动 PWM1 计数器（仅计数、输出保持关闭；PMT 触发依赖计数器运行）。
  * @note 应在 app_hrpwm/逆变桥初始化之后调用（需要 PWM 时钟与实例信息）。
  * @param cfg 配置；NULL = 默认（trigger_delay/sample_cycle 取自
@@ -108,9 +117,27 @@ bool app_adc_get_raw(adc_channel_t ch, uint16_t* raw);
 uint32_t app_adc_get_sequence(void);
 
 /**
+ * @brief 快通道母线原始码（ADC1 SEQ 与电流**同源触发**，PMT ISR 内锁存）
+ *
+ * vbus 是 ADC1 序列首项 → 触发后 ≈1.15µs 完成，早于 ADC0 PMT（4 槽 ≈4.6µs），
+ * 故 ADC0 的 PMT ISR 每拍都能读到"本帧"值；相对电流最大陈旧 1 帧（pwm 周期），
+ * 且采样相位与电流完全相同。
+ *
+ * @param raw 输出：ADC1_IN6 原始码
+ * @return true = 已收到首帧且至少有一次有效锁存；false = 尚无（调用方应回退 1kHz 缓存）
+ */
+bool app_adc_get_vbus_fast(uint16_t* raw);
+
+/** @brief 快通道母线锁存序号（每次有效锁存 +1；供消费者判定"是否为本拍新值"） */
+uint32_t app_adc_get_vbus_fast_sequence(void);
+
+/** @brief 快通道母线陈旧拍数（SEQ 帧计数未推进 = ADC1 链未产出新帧） */
+uint32_t app_adc_get_vbus_fast_stale_count(void);
+
+/**
  * @brief 慢速通道采样（建议 1kHz 调用）。
  *        覆盖 V_VBUS / NTC0 / NTC1 / V_CANID：直接读取 ADC1 序列转换的
- *        PRD_RESULTx（GPTMR0 1kHz 硬件触发，每轮 5 项），写入 raw 缓存。
+ *        PRD_RESULTx（与电流同源硬件触发 = pwm_freq，每轮 5 项），写入 raw 缓存。
  */
 void app_adc_slow_process(void);
 

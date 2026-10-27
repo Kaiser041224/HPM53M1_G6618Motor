@@ -12,7 +12,6 @@
 #include "app_hardware_params.h"
 #include "app_hrpwm.h"
 #include "app_ramfunc.h"
-#include "intf_gptmr.h"
 #include "intf_hrpwm.h"
 #include "intf_trgm.h"
 
@@ -22,7 +21,6 @@
 extern void hpm_adc_driver_register(void);
 extern void hpm_trgm_driver_register(void);
 extern void hpm_hrpwm_driver_register(void);
-extern void hpm_gptmr_driver_register(void);
 
 /* ============================================================================
  * 通道映射（板级，与 pinmux.c 一致）
@@ -47,13 +45,24 @@ static const app_adc_map_t s_adc_map[ADC_CH_COUNT] = {
 #define APP_ADC_CURRENT_COUNT (3U)
 #define APP_ADC_PMT_TRIG_CH   (0U) /* ADC16_CONFIG_TRG0A（PWM1 CMP10 触发，仅 ADC0） */
 
-/* 慢速通道（ADC1 序列转换 @1kHz：GPTMR0 CH2 → TRGM → ADC1_STRGI，硬件自主、无 ISR）：
- * 序列 [CANID, V_VBUS, NTC0, NTC1, CANID]——首项为队尾副本（首转换 S/H 残留自吸收），
- * 真实数据取 seq1..4；结果由硬件同步到 PRD_RESULTx，1kHz 慢任务纯寄存器读取。 */
-#define APP_ADC_SLOW_CH_COUNT      (4U)
-#define APP_ADC_SLOW_RATE_HZ       (1000U)
-#define APP_ADC_SLOW_SEQ_COUNT     (5U)
-#define APP_ADC_SLOW_TRIG_GPTMR_CH (2U) /* GPTMR0 CH2 → TRGM 输入 GPTMR0_OUT2 */
+/* 慢速通道（ADC1 序列转换，**与电流同源触发**：PWM1_CH10REF → TRGM → ADC1_STRGI）：
+ * 序列 [V_VBUS, NTC0, NTC1, CANID, V_VBUS]——首项为队尾副本（首转换 S/H 残留自吸收），
+ * 真实数据取 seq1..4；结果由硬件同步到 PRD_RESULTx。
+ *
+ * 2026-10-26 变更（vbus 与电流采样同源同步）：
+ *   - 旧方案由 GPTMR0 CH2 1kHz 自由相位触发，与 PWM 载波无关。PWM=160MHz/5333=
+ *     30001.87Hz 与 GPTMR 1000.000Hz 非整比 → 采样点相对载波每 ms 前移 0.062µs，
+ *     约 535ms 扫满一个开关周期（≈1.9Hz 拍频）→ 开关纹波被误读成"母线波动"，
+ *     并污染 cal rl 的电压重建。现改为与电流同一触发沿 → 相位每拍相同。
+ *   - vbus 置于**首项**：触发后 ≈1.15µs 完成，早于 ADC0 PMT（4 槽 ≈4.6µs），
+ *     故 ADC0 的 PMT ISR 可同拍读到本帧 vbus（≤1 帧 = 33µs 陈旧，相位相同）。
+ *   - NTC0/NTC1/CANID 为慢变量/静态量，相位钉死无副作用。
+ *   - 该链的 SEQ 完成中断由 seq_cb 是否为空决定；本工程 slow_cb = 保护 fault tick，
+ *     故中断**使能**，并在 adc_slow_adapter 内按 pwm_freq/1000 分频，使 fault tick
+ *     仍为 1kHz（保护去抖语义不变）。 */
+#define APP_ADC_SLOW_CH_COUNT  (4U)
+#define APP_ADC_SLOW_RATE_HZ   (1000U) /* 慢回调目标频率（保护 fault tick 节拍） */
+#define APP_ADC_SLOW_SEQ_COUNT (5U)
 static const adc_channel_t s_slow_channels[APP_ADC_SLOW_CH_COUNT] = {
     ADC_CH_V_VBUS,
     ADC_CH_NTC0,
@@ -102,6 +111,23 @@ static bool s_initialized;
 static uint16_t s_full_scale_code = 65535U;
 static app_adc_cfg_t s_adc_cfg;
 static void (*s_current_hook)(void); /**< 电流环钩子（ADC0 PMT ISR 内调用） */
+static uint16_t s_slow_cb_divisor = 1U; /**< 慢回调分频比 = pwm_freq_hz / 1000 */
+static uint16_t s_slow_cb_counter;      /**< 慢回调分频计数 */
+
+/* 快通道母线状态（PMT ISR 写入、任务/ISR 读取）
+ * 2026-10-26：vbus 由 ADC1 SEQ 与电流同源触发（PWM1_CH10REF 扇出），vbus 位于序列
+ * 首项 → 本帧 vbus 转换早于 ADC0 PMT 完成，故 PMT ISR 每拍可读到"本帧"值。
+ * 新鲜度握手：ADC1 SEQ 帧计数（PRD_RESULTx 无 VALID 位/无 cycle-bit/无序号，
+ * 帧计数是唯一可用信号）；帧计数未推进 = ADC1 链停摆 → 保持旧值并计陈旧。
+ * 注意：frame_cnt 由中断服务例程递增，被 FOC ISR（不可抢占）延迟一拍时会出现
+ * 偶发 stale +1；该计数是诊断量，不构成故障判据，值路径不受影响。 */
+static volatile uint16_t s_vbus_fast_raw;      /**< 最近一次有效锁存原始码 */
+static volatile uint32_t s_vbus_fast_sequence; /**< 锁存序号（仅有效锁存递增） */
+static volatile uint32_t s_vbus_fast_stale;    /**< 陈旧拍数（帧计数未推进） */
+static uint32_t s_vbus_fast_frames;            /**< 上次观察到的 ADC1 SEQ 帧计数 */
+static bool s_vbus_fast_valid;                 /**< 已收到首个有效锁存 */
+static uint8_t s_vbus_fast_inst = 1U;          /**< vbus 所属 ADC 实例 */
+static uint8_t s_vbus_fast_hw_ch;              /**< vbus 硬件通道 */
 
 void app_adc_register_current_hook(void (*hook)(void)) {
     s_current_hook = hook;
@@ -129,13 +155,24 @@ static void adc_wdog_adapter(intf_adc_ch_t ch, uint16_t value, void* user) {
 }
 
 /**
- * @brief 驱动 SEQ 完成回调 → 用户慢帧回调适配（1kHz，ISR）
+ * @brief 驱动 SEQ 完成回调 → 用户慢帧回调适配（含分频）
  * @param ch 驱动通道编码（未使用）
  * @param user 用户上下文（未使用）
+ *
+ * 分频依据：ADC1 SEQ 现与电流同源触发（= pwm_freq，30kHz），而 fault tick 必须保持
+ * 1kHz（保护去抖语义 5 次 = 5ms 不可变）。分频比 = pwm_freq_hz / 1000，PWM ≤1kHz 时
+ * 退化为逐帧（向后兼容）。
  */
+APP_ATTR_RAMFUNC /* ADC1 SEQ ISR 每帧调用（与电流同源触发 = pwm_freq） */
 static void adc_slow_adapter(intf_adc_ch_t ch, void* user) {
     (void)ch;
     (void)user;
+    if (s_slow_cb_divisor > 1U) {
+        if (++s_slow_cb_counter < s_slow_cb_divisor) {
+            return;
+        }
+        s_slow_cb_counter = 0U;
+    }
     if (s_adc_cfg.slow_cb != NULL) {
         s_adc_cfg.slow_cb();
     }
@@ -165,6 +202,31 @@ static void adc_current_pmt_cb(
         s_raw_codes[ch] = values[i + 1U];
         s_valid_mask |= (1UL << ch);
     }
+
+    /* 快通道母线：与三相电流同一 ISR、同一触发沿。ADC1 序列首项即 vbus，其转换在
+     * 本帧 PMT 完成（4 槽 ≈4.6µs）之前结束，故此处读到的是本帧值（最坏 1 帧陈旧，
+     * 但采样相位与电流完全相同）。帧计数未推进 = ADC1 链未产出新帧 → 不采信结果
+     * 寄存器（可能是上一次遗留值），仅计陈旧（诊断量；见上方帧计数说明）。 */
+    {
+        uint32_t frames = 0U;
+
+        if (intf_adc_get_seq_frames(s_vbus_fast_inst, &frames) == 0) {
+            if (frames != s_vbus_fast_frames) {
+                uint16_t vbus_raw = 0U;
+
+                s_vbus_fast_frames = frames;
+                if (intf_adc_get_prd_result(s_vbus_fast_inst, s_vbus_fast_hw_ch, &vbus_raw)
+                    == 0) {
+                    s_vbus_fast_raw = vbus_raw;
+                    s_vbus_fast_sequence++;
+                    s_vbus_fast_valid = true;
+                }
+            } else {
+                s_vbus_fast_stale++;
+            }
+        }
+    }
+
     s_sequence++;
 
     /* 电流环钩子：紧随原始码锁存（同一 ISR，采样到输出的延迟最小） */
@@ -208,9 +270,17 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
     hpm_adc_driver_register();
     hpm_trgm_driver_register();
     hpm_hrpwm_driver_register();         /* 触发比较器依赖 PWM 实例信息（幂等） */
-    hpm_gptmr_driver_register();         /* 慢速触发源（幂等） */
 
     /* ---- ADC0：三路相电流（PMT 顺序转换） ---- */
+    /* 快通道母线状态：vbus 归属实例/硬件通道（本帧由 ADC0 PMT ISR 锁存） */
+    s_vbus_fast_inst = s_adc_map[ADC_CH_V_VBUS].inst;
+    s_vbus_fast_hw_ch = s_adc_map[ADC_CH_V_VBUS].hw_ch;
+    s_vbus_fast_raw = 0U;
+    s_vbus_fast_sequence = 0U;
+    s_vbus_fast_stale = 0U;
+    s_vbus_fast_frames = 0U;
+    s_vbus_fast_valid = false;
+
     memset(&adc0_cfg, 0, sizeof(adc0_cfg));
     adc0_cfg.resolution = (intf_adc_resolution_t)s_adc_cfg.resolution;
     adc0_cfg.mode = INTF_ADC_MODE_PMT;
@@ -233,11 +303,12 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
     }
     rc0 = intf_adc_init(INTF_ADC_CH(s_adc_map[ADC_CH_I_U].inst, 0U), &adc0_cfg);
 
-    /* ---- ADC1：慢速通道 —— 序列转换 @1kHz（GPTMR0 CH2 → TRGM → ADC1_STRGI） ----
-     * 与 25kHz PWM 触发完全解耦（不再占用 PTRGI0A/抢占队列），硬件自主、无 ISR。
-     * 序列 [CANID, V_VBUS, NTC0, NTC1, CANID]：首项 = 队尾副本（首转换 S/H 残留
-     * 自吸收），真实数据取 seq1..4；结果由硬件同步到 PRD_RESULTx（实测任意转换
-     * 模式都会更新该寄存器 —— 手册 §53.2.4），1kHz 慢任务纯寄存器读取。 */
+    /* ---- ADC1：慢速通道 —— 序列转换（**与电流同源触发**：PWM1_CH10REF → TRGM →
+     *      ADC1_STRGI）。序列 [V_VBUS, NTC0, NTC1, CANID, V_VBUS]：
+     *        · 首末同为 VBUS → 首转换 S/H 残留自吸收（被污染时内容仍是 vbus 自身）；
+     *        · VBUS 在首项 → 触发后最早完成，供 ADC0 PMT ISR 同拍读取；
+     *        · 真实数据取 PRD_RESULTx（末项为 vbus 本帧新鲜值）。
+     *      慢回调按 pwm_freq/1000 分频后驱动 1kHz fault tick（保护节拍不变）。 */
     memset(&adc1_cfg, 0, sizeof(adc1_cfg));
     adc1_cfg.resolution = (intf_adc_resolution_t)s_adc_cfg.resolution;
     adc1_cfg.mode = INTF_ADC_MODE_SEQ;
@@ -246,29 +317,30 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
     adc1_cfg.vref_mv = INTF_ADC_DEFAULT_VREF_MV;
     adc1_cfg.seq_hw_trig = true;
     adc1_cfg.seq_ch_count = APP_ADC_SLOW_SEQ_COUNT;
-    adc1_cfg.seq_ch_list[0] = s_adc_map[ADC_CH_V_CANID].hw_ch;
-    adc1_cfg.seq_ch_list[1] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
-    adc1_cfg.seq_ch_list[2] = s_adc_map[ADC_CH_NTC0].hw_ch;
-    adc1_cfg.seq_ch_list[3] = s_adc_map[ADC_CH_NTC1].hw_ch;
-    adc1_cfg.seq_ch_list[4] = s_adc_map[ADC_CH_V_CANID].hw_ch;
+    adc1_cfg.seq_ch_list[0] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
+    adc1_cfg.seq_ch_list[1] = s_adc_map[ADC_CH_NTC0].hw_ch;
+    adc1_cfg.seq_ch_list[2] = s_adc_map[ADC_CH_NTC1].hw_ch;
+    adc1_cfg.seq_ch_list[3] = s_adc_map[ADC_CH_V_CANID].hw_ch;
+    adc1_cfg.seq_ch_list[4] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
     adc1_cfg.seq_cb = (s_adc_cfg.slow_cb != NULL) ? adc_slow_adapter : NULL;
     rc1 = intf_adc_init(INTF_ADC_CH(1U, 0U), &adc1_cfg);
 
-    /* ---- 慢速触发链：GPTMR0 CH2（1kHz 方波，50%）→ TRGM0 → ADC1_STRGI ---- */
+    /* 慢回调分频比：ADC1 序列速率 = pwm_freq（同源触发），fault tick 目标 1kHz */
     {
-        intf_gptmr_cfg_t slow_trig;
+        uint32_t divisor = hardware->inverter.pwm_freq_hz / APP_ADC_SLOW_RATE_HZ;
 
-        memset(&slow_trig, 0, sizeof(slow_trig));
-        slow_trig.mode = INTF_GPTMR_MODE_PWM;
-        slow_trig.frequency_hz = APP_ADC_SLOW_RATE_HZ;
-        slow_trig.duty = 0.5f;
-        rc1 |= intf_gptmr_init(APP_ADC_SLOW_TRIG_GPTMR_CH, &slow_trig);
-        rc1 |= intf_gptmr_start(APP_ADC_SLOW_TRIG_GPTMR_CH);
+        s_slow_cb_divisor = (divisor > 0U) ? (uint16_t)divisor : 1U;
+        s_slow_cb_counter = 0U;
     }
-    (void)intf_trgm_connect(INTF_TRGM_SRC_GPTMR0_OUT2, INTF_TRGM_DST_ADC1_STRGI);
 
-    /* ---- ADC0 触发链：PWM1 CMP10 → CH10REF → TRGM PTRGI0A ---- */
+    /* ---- 触发链：PWM1 CMP10 一个沿同时启动两路 ADC ----
+     *   ADC0 PTRGI0A → PMT 三相电流（与电流环同拍）
+     *   ADC1 STRGI   → SEQ  vbus/NTC/CANID（vbus 因此与电流同相位、同拍）
+     * 两路 TRGM 输出各有独立输入选择器 → 同一 PWM 比较沿可扇出（drv_trgm.c 逐输出配置）。
+     * 旧 GPTMR0 CH2 1kHz 自由相位链已移除：与 PWM 载波无相位关系。 */
     (void)intf_trgm_connect(INTF_TRGM_SRC_PWM1_CH10REF, INTF_TRGM_DST_ADC_PTRGI0A);
+    (void)intf_trgm_connect(INTF_TRGM_SRC_PWM1_CH10REF, INTF_TRGM_DST_ADC1_STRGI);
+
     (void)intf_hrpwm_config_trigger_cmp(
         HRPWM_INST_1, APP_ADC_TRIGGER_CMP_INDEX, s_adc_cfg.trigger_delay_ns);
 
@@ -295,6 +367,20 @@ bool app_adc_get_raw(adc_channel_t ch, uint16_t* raw) {
 }
 
 uint32_t app_adc_get_sequence(void) { return s_sequence; }
+
+APP_ATTR_RAMFUNC /* FOC 30kHz ISR 调用链（app_analog_signal_vbus_fast） */
+bool app_adc_get_vbus_fast(uint16_t* raw) {
+    if ((raw == NULL) || !s_vbus_fast_valid) {
+        return false;
+    }
+    *raw = s_vbus_fast_raw;
+    return true;
+}
+
+APP_ATTR_RAMFUNC /* FOC 30kHz ISR 调用链 */
+uint32_t app_adc_get_vbus_fast_sequence(void) { return s_vbus_fast_sequence; }
+
+uint32_t app_adc_get_vbus_fast_stale_count(void) { return s_vbus_fast_stale; }
 
 bool app_adc_is_valid(void) {
     /* 仅三路电流参与实时有效性判定（慢速通道按自己的节拍更新） */

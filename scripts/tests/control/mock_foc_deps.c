@@ -22,6 +22,7 @@
 #include "intf_sys.h"
 
 #include "foc_math.h"
+#include <math.h>
 #include <string.h>
 
 float g_mock_rotor_rad;      /**< 编码器替身机械角 [rad] */
@@ -44,6 +45,14 @@ float app_analog_signal_read(adc_channel_t ch) {
     (void)ch;
     return 24.0f;
 }
+
+/* 快通道母线替身（与电流同源触发的 30kHz 路径）：NAN = 不可用 → FOC 回退 1kHz 缓存。
+ * 默认 NAN，保证既有用例的 v_bus 语义不变（24V 慢通道值）。 */
+float g_mock_vbus_fast = NAN;
+
+float app_analog_signal_vbus_fast(void) { return g_mock_vbus_fast; }
+
+void mock_vbus_fast_reset(void) { g_mock_vbus_fast = NAN; }
 
 /* ---- 编码器 ---- */
 static void mock_fill_rotor(app_encoder_rotor_snapshot_t* out) {

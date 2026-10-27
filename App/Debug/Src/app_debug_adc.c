@@ -99,6 +99,7 @@ void app_debug_adc_dump_channels(void) {
 void app_debug_adc_dump_diag(void) {
     static intf_adc_diag_snapshot_t s_last;
     static uint32_t s_last_cycle;
+    static uint32_t s_last_seq_frames;
     static bool s_initialized;
 
     intf_adc_diag_snapshot_t now;
@@ -134,6 +135,31 @@ void app_debug_adc_dump_diag(void) {
             (unsigned)now.pmt_invalid_trig[inst], (unsigned)now.pmt_invalid_channel[inst],
             (unsigned)now.pmt_cycle_fallback[inst], (unsigned)now.isr_cycles_max[inst],
             (unsigned)(isr_permille / 10U), (unsigned)(isr_permille % 10U), (unsigned)rate);
+    }
+
+    /* ADC1 SEQ 速率与快通道母线活性（2026-10-26：vbus 与三相电流同源触发，
+     * 故 SEQ 速率应 ≈ pwm_freq；stale 增长 = ADC1 链未产出新帧 → 电流环回退 1kHz） */
+    {
+        uint32_t seq_frames = 0U;
+        uint32_t seq_rate = 0U;
+        uint16_t vbus_raw = 0U;
+        bool vbus_have = app_adc_get_vbus_fast(&vbus_raw);
+
+        if (intf_adc_get_seq_frames(1U, &seq_frames) == 0) {
+            if (dt_cycles > 0U) {
+                uint32_t delta = seq_frames - s_last_seq_frames;
+
+                seq_rate = (uint32_t)(((uint64_t)delta * (uint64_t)intf_clock_get_cpu_freq())
+                                      / dt_cycles);
+            }
+            s_last_seq_frames = seq_frames;
+        }
+        app_debug_printf(
+            "[ADC] ADC1 SEQ: frames=%u rate=%u Hz (expect ~pwm_freq) | "
+            "vbus_fast: valid=%u raw=%u seq=%u stale=%u\r\n",
+            (unsigned)seq_frames, (unsigned)seq_rate, (unsigned)(vbus_have ? 1U : 0U),
+            (unsigned)vbus_raw, (unsigned)app_adc_get_vbus_fast_sequence(),
+            (unsigned)app_adc_get_vbus_fast_stale_count());
     }
 
     /* 关键寄存器状态（配置核对） */

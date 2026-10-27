@@ -63,6 +63,19 @@ static app_analog_filter_t s_filters[ADC_CH_COUNT] = {
     [ADC_CH_V_CANID] = {.type = APP_ANALOG_FILTER_NONE},
 };
 
+/* 快通道母线（与三相电流同源触发，30kHz）：
+ * 独立 LPF 实例 —— **系数必须按真实采样率 = inverter.pwm_freq_hz 标定**，不得沿用
+ * APP_ANALOG_PROCESS_RATE_HZ(1kHz)：按 1kHz 算出的 α=0.926 与 30kHz 的 α=0.295
+ * 相差 3 倍以上，会把开关纹波/帧间纪元抖动直接放大进 duty（2026-10-18 spec §4.7
+ * 已记录同源缺陷）。截止 2kHz：τ≈80µs，平滑逐帧纪元抖动，对母线阶跃仍足够快。 */
+#define APP_ANALOG_VBUS_FAST_LPF_HZ (2000.0f)
+
+static algo_lpf_t s_vbus_fast_lpf;         /**< 快通道母线一阶低通 */
+static float s_vbus_fast_value;            /**< 快通道母线滤波值 [V] */
+static uint32_t s_vbus_fast_last_seq;      /**< 已消费的锁存序号 */
+static bool s_vbus_fast_ready;             /**< 已产出首个有效值 */
+static bool s_vbus_fast_inited;            /**< 滤波器已初始化（pwm_freq 合法） */
+
 /* ============================================================================
  * State
  * ============================================================================ */
@@ -178,6 +191,51 @@ void app_analog_signal_init(void) {
     }
 
     s_valid = false;
+
+    /* 快通道母线：独立 LPF，采样率取真实 PWM 频率（同源触发速率） */
+    s_vbus_fast_ready = false;
+    s_vbus_fast_value = 0.0f;
+    s_vbus_fast_last_seq = 0U;
+    {
+        float pwm_hz = (float)app_hardware_params_current()->inverter.pwm_freq_hz;
+
+        if (pwm_hz > 0.0f) {
+            algo_lpf_cfg_t fast_cfg = {
+                .cutoff_hz = APP_ANALOG_VBUS_FAST_LPF_HZ,
+                .sample_rate_hz = pwm_hz,
+            };
+
+            algo_lpf_ctor(&s_vbus_fast_lpf);
+            s_vbus_fast_inited = (s_vbus_fast_lpf.init(&s_vbus_fast_lpf, &fast_cfg) == 0);
+        } else {
+            s_vbus_fast_inited = false;
+        }
+    }
+}
+
+APP_ATTR_RAMFUNC /* FOC 30kHz ISR 调用 */
+float app_analog_signal_vbus_fast(void) {
+    uint16_t raw;
+    uint32_t seq;
+
+    if (!s_vbus_fast_inited) {
+        return NAN;
+    }
+    if (!app_adc_get_vbus_fast(&raw)) {
+        return NAN; /* 快通道尚无首帧：调用方回退 1kHz 缓存（保留原有启动语义） */
+    }
+
+    seq = app_adc_get_vbus_fast_sequence();
+    if (seq != s_vbus_fast_last_seq) {
+        const app_hardware_params_t* hardware = app_hardware_params_current();
+
+        s_vbus_fast_last_seq = seq;
+        s_vbus_fast_value = algo_lpf_step_fast(
+            &s_vbus_fast_lpf, app_adc_code_to_volts(raw) * hardware->vbus_sense.v_per_volt);
+        s_vbus_fast_ready = true;
+    }
+    /* 无新锁存时不重复灌同一样本（保持上次输出） */
+    return s_vbus_fast_ready ? s_vbus_fast_value : NAN;
 }
 
 void app_analog_signal_process(void) {

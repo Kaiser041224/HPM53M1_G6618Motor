@@ -258,6 +258,33 @@ int intf_adc_stop(intf_adc_ch_t ch);
  * @param snapshot 输出诊断快照
  * @return 0 = 成功；-1 = 失败
  */
+/**
+ * @brief 读取实例的 SEQ 帧完成计数（每帧 SEQ_CMPT 递增，与是否启用回调无关）
+ *
+ * 用途：SEQ 与 PMT 同源触发时，PMT ISR 借此判断"本实例序列链是否存活/本帧是否已写入
+ * 结果寄存器"。PRD_RESULTx 无 VALID 位、无 cycle-bit、无序号（RO 纯结果域），
+ * 帧计数是唯一可用的新鲜度握手信号。
+ *
+ * @param inst 实例号（0 = ADC0，1 = ADC1）
+ * @param frames 输出：累计帧数
+ * @return 0 = 成功；-1 = 参数非法
+ */
+int intf_adc_get_seq_frames(uint8_t inst, uint32_t* frames);
+
+/**
+ * @brief 直读通道结果寄存器 PRD_RESULTx（**ISR 快速路径**，不做模式分支）
+ *
+ * 专供 ADC0 PMT ISR 调用链（ILM 常驻）：手册 §53.2.4 —— 任意转换模式都会更新该寄存器，
+ * 因此序列转换（SEQ）结果可纯寄存器读取。与 intf_adc_read 的差别：无模式分支、
+ * 无 SDK 包装、无通道配置检查，只做边界判断 + 一次 16 位读。
+ *
+ * @param inst 实例号（0/1）
+ * @param hw_ch 硬件通道号（0..15）
+ * @param raw 输出：最近一次转换结果原始码
+ * @return 0 = 成功；-1 = 参数非法或实例未初始化
+ */
+int intf_adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t* raw);
+
 int intf_adc_get_diag_snapshot(intf_adc_diag_snapshot_t* snapshot);
 
 /**

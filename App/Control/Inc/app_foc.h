@@ -92,6 +92,22 @@ typedef enum {
 extern volatile uint32_t g_foc_loop_cycles;
 /** Ozone 观测：FOC 调用间隔 [µs]（30kHz 标称；明显大于 34 = 节拍抖动/丢拍） */
 extern volatile uint32_t g_foc_loop_dt_us;
+
+/**
+ * @brief 快通道母线使用开关（.noncacheable.bss，Ozone 可实时改写）
+ *
+ * 1（**默认**）= duty/电压重建使用与三相电流同源触发、同拍的 30kHz 快通道值；
+ * 0 = 退回 1kHz 缓存母线值（A/B 对照组 / 异常时的回退手段）。
+ *
+ * 定案依据（2026-10-26 配对 A/B，同固件同热态、3+3 轮）：
+ *   开关 1 → cal rl 887/1445/1044Hz 全 PASS，RI A/B recommend=YES，raw 超调 22.3~26.9%；
+ *   开关 0 → cal rl 754/754/754Hz 全 NOT PASSED，未进 RI A/B，raw 超调 28.6~31.1%。
+ * 机理：duty = v_cmd/v_bus，慢值在电流阶跃期间给的是阶跃前的母线 → duty 缩放系统性
+ * 错误；快值每拍用本拍母线。
+ *
+ * 保留本开关作为现场 A/B 与回退手段（1 字节，无运行开销）。
+ */
+extern volatile uint8_t g_foc_vbus_fast_en;
 /** Ozone 观测：30kHz ISR 单拍耗时 [cycle] / 历史最大 */
 extern volatile uint32_t g_foc_isr_cycles;
 extern volatile uint32_t g_foc_isr_cycles_max;

@@ -13,7 +13,8 @@
  *   CH2 — 通用通道 10kHz
  *   CH3 — 预留（原 12.5kHz 编码器采样器，已由 ADC 同拍硬件同步采样替代）
  *
- * 注：GPTMR0 CH2（全球通道 2）已被 ADC1 慢速序列触发占用，不得复用。
+ * 注：GPTMR0 CH2（全局通道 2）**现无使用者**（原 ADC1 慢速序列触发链已于 2026-10-26
+ * 移除，ADC1 SEQ 改由 PWM1_CH10REF 同源触发）→ 可复用。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause

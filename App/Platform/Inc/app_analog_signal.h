@@ -74,6 +74,19 @@ float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw);
 float app_analog_signal_read(adc_channel_t ch);
 
 /**
+ * @brief 快通道母线电压 [V]（30kHz 电流环同拍；raw → 换算 → 轻量 LPF）
+ *
+ * 数据源：app_adc 的 PMT ISR 锁存值（与三相电流同一触发沿）。
+ * 滤波：一阶 IIR，系数按**真实采样率 = hardware.inverter.pwm_freq_hz** 标定
+ *       （不得沿用 APP_ANALOG_PROCESS_RATE_HZ=1kHz，否则 α 差 3 倍以上）。
+ * 语义：仅在快通道出现**新序号**时推进一步（无新帧则保持上次输出，不重复灌同一
+ *       样本）；快通道尚无首帧时返回 NAN，调用方回退 1kHz 缓存值。
+ *
+ * @return 母线电压 [V]；NAN = 快通道不可用（未收到首帧或参数非法）
+ */
+float app_analog_signal_vbus_fast(void);
+
+/**
  * @brief 读取单通道原始码
  * @param ch 逻辑通道
  * @param raw 输出原始码

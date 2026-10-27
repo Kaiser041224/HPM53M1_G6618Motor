@@ -22,12 +22,15 @@ static uint32_t s_cycle;
 float g_mock_duty[3];
 int g_mock_duty_calls;
 
+extern void mock_vbus_fast_reset(void);
+
 void mock_params_reset(void) {
     memset(&s_hw, 0, sizeof(s_hw));
     memset(&s_sw, 0, sizeof(s_sw));
     memset(&s_motor, 0, sizeof(s_motor));
     s_cycle = 0U;
     g_mock_duty_calls = 0;
+    mock_vbus_fast_reset(); /* 快通道母线替身回 NAN（FOC 回退 1kHz 缓存） */
 
     s_hw.inverter.pwm_freq_hz = 25000U;
     s_hw.inverter.deadtime_ns = 100U;

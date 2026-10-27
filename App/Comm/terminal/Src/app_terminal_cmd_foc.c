@@ -13,8 +13,14 @@
 
 #include "app_terminal.h"
 #include "app_terminal_job.h"
+#include "foc_math.h"
+
+#include <math.h>
+#include <stdio.h>
 
 #include "app_3phase_inverter.h"
+#include "app_adc.h"
+#include "app_analog_signal.h"
 #include "app_foc.h"
 #include "app_friction_identify.h"
 #include "app_motion.h"
@@ -71,6 +77,40 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     csh_printf(csh, "     deadtime comp: %.4f duty (%.4fV @ vbus)  vtest: uncompensated\r\n",
                (double)app_foc_current_dt_comp_duty(),
                (double)(app_foc_current_dt_comp_duty() * snap.v_bus_v));
+    /* 母线来源诊断（2026-10-26）：快通道 = ADC1 SEQ 与三相电流同源触发的 30kHz 同拍值；
+     * 1kHz = 慢通道缓存。d 为两者之差，用于判定固定相位采样是否引入直流偏置。 */
+    {
+        uint16_t vbus_raw = 0U;
+        bool vbus_have = app_adc_get_vbus_fast(&vbus_raw);
+        float vbus_fast = vbus_have ? app_analog_signal_convert_raw(ADC_CH_V_VBUS, vbus_raw)
+                                    : NAN;
+        float vbus_slow = app_analog_signal_read(ADC_CH_V_VBUS);
+        char fast_text[16];
+        char slow_text[16];
+        char delta_text[16];
+
+        if (foc_finite(vbus_fast)) {
+            (void)snprintf(fast_text, sizeof(fast_text), "%.2f", (double)vbus_fast);
+        } else {
+            (void)snprintf(fast_text, sizeof(fast_text), "n/a");
+        }
+        if (foc_finite(vbus_slow)) {
+            (void)snprintf(slow_text, sizeof(slow_text), "%.2f", (double)vbus_slow);
+        } else {
+            (void)snprintf(slow_text, sizeof(slow_text), "n/a");
+        }
+        if (foc_finite(vbus_fast) && foc_finite(vbus_slow)) {
+            (void)snprintf(delta_text, sizeof(delta_text), "%+.2f",
+                           (double)(vbus_fast - vbus_slow));
+        } else {
+            (void)snprintf(delta_text, sizeof(delta_text), "n/a");
+        }
+        csh_printf(csh,
+                   "     vbus src=%s  fast=%sV slow=%sV d=%sV  seq=%lu stale=%lu\r\n",
+                   (g_foc_vbus_fast_en != 0U) ? "FAST(30k)" : "SLOW(1k)", fast_text, slow_text,
+                   delta_text, (unsigned long)app_adc_get_vbus_fast_sequence(),
+                   (unsigned long)app_adc_get_vbus_fast_stale_count());
+    }
     csh_printf(
         csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u  dt=%u us\r\n",
         (double)snap.duty_u, (double)snap.duty_v, (double)snap.duty_w, (unsigned)snap.valid,

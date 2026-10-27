@@ -410,6 +410,48 @@ int intf_adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapshot)
 }
 
 /**
+ * @brief 读取 ADC 实例 SEQ 帧计数（弱默认实现：无实现时返回 -1）
+ * @param inst 实例号
+ * @param frames 输出：累计 SEQ 完成帧数
+ * @return 0 = 成功；-1 = 未实现
+ */
+__attribute__((weak)) int adc_get_seq_frames(uint8_t inst, uint32_t *frames)
+{
+    (void) inst;
+    (void) frames;
+    return -1;
+}
+
+ATTR_RAMFUNC
+int intf_adc_get_seq_frames(uint8_t inst, uint32_t *frames)
+{
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    return adc_get_seq_frames(inst, frames);
+}
+
+/**
+ * @brief 直读通道结果寄存器（弱默认实现：无实现时返回 -1）
+ */
+__attribute__((weak)) int adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t *raw)
+{
+    (void) inst;
+    (void) hw_ch;
+    (void) raw;
+    return -1;
+}
+
+ATTR_RAMFUNC
+int intf_adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t *raw)
+{
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (raw == NULL)) {
+        return -1;
+    }
+    return adc_get_prd_result(inst, hw_ch, raw);
+}
+
+/**
  * @brief 清零 ADC 诊断最大值（弱默认实现，空操作）
  */
 __attribute__((weak)) void adc_reset_diag_max(void) { }

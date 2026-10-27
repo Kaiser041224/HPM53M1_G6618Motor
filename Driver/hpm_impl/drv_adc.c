@@ -83,6 +83,7 @@ typedef struct {
     /* Sequence */
     struct {
         bool hw_trig;                          /**< 是否硬件触发 */
+        uint32_t frame_cnt;                    /**< SEQ 完成帧计数（每帧递增，与回调无关） */
         uint8_t ch_count;                      /**< 序列通道数 */
         uint8_t ch_list[ADC_SEQ_MAX_LEN];      /**< 序列通道列表 */
         intf_adc_seq_cb_t cb;                  /**< 序列回调 */
@@ -422,6 +423,13 @@ static void adc_generic_isr(uint8_t inst) {
 
     /* Sequence full queue complete（每帧一次；CVC 为末通道单次完成，不单独回调） */
     if (ADC16_INT_STS_SEQ_CMPT_GET(status) && ai->mode == INTF_ADC_MODE_SEQ) {
+        /* 帧计数在 ISR 内递增 —— **前提是 SEQ 完成中断使能**（即 cfg->seq_cb != NULL；
+         * 上层可在回调内部再分频，但中断本身必须开）。它与"回调是否每帧调用"无关。
+         * 用途：SEQ 与 PMT 同源触发时，另一实例的 ISR 借此判断结果寄存器是否为新帧
+         * （PRD_RESULTx 无 VALID/cycle-bit/序号，帧计数是唯一握手信号）。
+         * 耦合提醒：若把 seq_cb 置 NULL，本计数停止递增 → 依赖它的新鲜度判定会
+         * 恒判"陈旧"（app_adc 的 vbus 快通道会静默退回 1kHz 缓存值）。 */
+        ai->seq.frame_cnt++;
         if (ai->seq.cb) {
             ai->seq.cb(INTF_ADC_CH(inst, 0), ai->seq.cb_user_data);
         }
@@ -464,6 +472,51 @@ void isr_adc1(void) {
     s_adc_diag.irq_entry[1]++;
     adc_generic_isr(1);
     irq_prof_nest_exit(); /* [TEMP DIAG] */
+}
+
+/**
+ * @brief 读取实例 SEQ 帧完成计数
+ * @param inst 实例号
+ * @param frames 输出：累计帧数
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+ATTR_RAMFUNC
+int adc_get_seq_frames(uint8_t inst, uint32_t *frames) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (frames == NULL)) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    *frames = s_adc_instances[inst].seq.frame_cnt;
+    return 0;
+}
+
+/**
+ * @brief 直读通道结果寄存器 PRD_RESULTx（ISR 快速路径，ILM 常驻）
+ *
+ * 不经过 adc_read 的模式分支与 SDK adc16_get_prd_result 包装：该函数位于 ADC0 PMT
+ * ISR 调用链（每拍锁存同源触发的 vbus 结果），必须避免 XIP 取指延迟。
+ * 依据：手册 §53.2.4（任意转换模式都会更新 PRD_RESULTx，纯 RO 结果域）。
+ *
+ * @param inst 实例号
+ * @param hw_ch 硬件通道号
+ * @param raw 输出：最近一次转换结果
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+ATTR_RAMFUNC
+int adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t *raw) {
+    adc_inst_t* ai;
+
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (hw_ch >= ADC_MAX_CHANNELS) || (raw == NULL)) {
+        return -1;
+    }
+    ai = &s_adc_instances[inst];
+    if (!ai->initialized || (ai->base == NULL)) {
+        return -1;
+    }
+    *raw = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(ai->base->PRD_CFG[hw_ch].PRD_RESULT);
+    return 0;
 }
 
 int adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapshot)
@@ -578,8 +631,12 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
         base->ANA_CTRL0 |= ADC16_ANA_CTRL0_ADC_CLK_ON_MASK;
 
-        /* 关闭全部抢占队列：防止复位残留的 QUEUE_EN 位造成误触发 */
-        for (uint8_t t = 0; t < ADC_PMT_MAX_TRIG; t++) {
+        /* 关闭全部抢占队列：防止复位残留的 QUEUE_EN 位造成误触发。
+         * 上界必须覆盖硬件全部 trigger 索引（ADC_SOC_MAX_TRIG_CH_NUM = 11 → 0..11）；
+         * 原循环 t < ADC_PMT_MAX_TRIG(=11) 漏掉索引 11：该队列驱动不会启用，但复位残留的
+         * QUEUE_EN 位若未清，仍会随共享 PTRGI 输入启动一次垃圾队列（"污染后续转换结果"
+         * 的已记录机理，见 PMT 分支注释）。 */
+        for (uint8_t t = 0; t <= ADC_SOC_MAX_TRIG_CH_NUM; t++) {
             adc16_disable_pmt_queue(base, t);
         }
 
@@ -658,7 +715,7 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
          * stale QUEUE_EN bits.  Without this, cross-triggering from shared
          * PTRGI inputs causes the PMT state machine to process garbage
          * channel lists, corrupting subsequent conversion results. */
-        for (uint8_t t = 0; t < ADC_PMT_MAX_TRIG; t++) {
+        for (uint8_t t = 0; t <= ADC_SOC_MAX_TRIG_CH_NUM; t++) {
             if (t != cfg->pmt_trig_ch) {
                 adc16_disable_pmt_queue(ai->base, t);
             }
@@ -722,6 +779,8 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
                 return -1;
             ai->channels[cfg->seq_ch_list[i]].configured = true;
         }
+
+        ai->seq.frame_cnt = 0U;
 
         adc16_seq_config_t seq_cfg;
         seq_cfg.seq_len = cfg->seq_ch_count;
