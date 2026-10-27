@@ -63,6 +63,15 @@ static const app_adc_map_t s_adc_map[ADC_CH_COUNT] = {
 #define APP_ADC_SLOW_CH_COUNT  (4U)
 #define APP_ADC_SLOW_RATE_HZ   (1000U) /* 慢回调目标频率（保护 fault tick 节拍） */
 #define APP_ADC_SLOW_SEQ_COUNT (5U)
+/* ADC1 SEQ 配置**已冻结**（2026-10-26 台架验证通过，勿在无重验证的情况下改动）：
+ *   · 速率 30kHz —— 由"与 ADC0 同一触发沿"结构性决定（= hardware.inverter.pwm_freq_hz
+ *     = 30000），**不可独立设定**；改 PWM 频率即同时改 ADC1 速率，须重跑 §9.5.2 的 A/B。
+ *   · 5 槽 · 唯一触发源 PWM1_CH10REF · 槽序 [V_VBUS, NTC0, NTC1, CANID, V_VBUS]。
+ *   · 首末同通道（V_VBUS）是 S/H 首槽污染自吸收的**必需项**，不要为省转换占空而缩槽。
+ * 改动其中任何一项 → 必须重跑 vbus 同步配对 A/B（spec 2026-09-19-adc-sampling-design
+ * §9.5.2）与 cal rl，否则 duty 缩放与 cal rl 落点的既有结论失效。 */
+_Static_assert(APP_ADC_SLOW_SEQ_COUNT == 5U,
+               "ADC1 SEQ 槽数已冻结为 5（台架验证配置）；如确需改动请先更新本文档与验证");
 static const adc_channel_t s_slow_channels[APP_ADC_SLOW_CH_COUNT] = {
     ADC_CH_V_VBUS,
     ADC_CH_NTC0,

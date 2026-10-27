@@ -116,11 +116,10 @@ static volatile uint32_t* s_estop_request;
 #define APP_FOC_STOP_SPEED_LOW_RAD_S (0.5f)
 #define APP_FOC_STOP_SPEED_WAIT_TICKS (2000U)
 
-/* 快通道母线使用开关：见 app_foc.h 说明（0 = 1kHz 缓存值，1 = 30kHz 同拍值）
- * 默认 1 —— 2026-10-26 配对 A/B 定案（同固件/同热态、3+3 轮）：
- *   FAST 臂 887/1445/1044Hz 全 PASS，raw 超调 22.3~26.9%；
- *   SLOW 臂 754/754/754Hz 全 NOT PASSED，raw 超调 28.6~31.1%。 */
-volatile uint8_t g_foc_vbus_fast_en __attribute__((section(".noncacheable.bss"))) = 1U;
+/* Ozone 观测：本拍实际采用的母线来源（1 = 30kHz 同拍快通道；0 = 回退 1kHz 缓存）。
+ * 快通道为**唯一正式来源**（2026-10-26 配对 A/B 定案，见 app_foc.h）；本变量只做观测，
+ * 反映"本拍是否发生了回退"，不再存在运行期开关。 */
+volatile uint8_t g_foc_vbus_src_used __attribute__((section(".noncacheable.bss")));
 
 /* Ozone 观测：ISR 超预算次数 */
 volatile uint32_t g_foc_isr_overruns __attribute__((section(".noncacheable.bss")));
@@ -549,19 +548,21 @@ void app_foc_isr_step(void) {
         }
     }
 
-    /* 母线电压：优先快通道（ADC1 SEQ 与三相电流**同源触发、同拍**，见 app_adc）；
-     * 快通道不可用（尚无首帧 / 参数非法 → NAN）时回退 1kHz 缓存值，保持启动期与
-     * ADC1 序列异常时的原有语义。合法性（有限、≥ v_bus_min）由 run_fresh/vtest
-     * 统一判断，此处不新增保护动作。 */
-    /* 快通道值每拍都推进（保持滤波器状态热、便于台架观测与运行时切换无瞬态），
-     * 但仅在开关打开且取值有限时采用；否则用 1kHz 缓存值（等同改动前行为）。 */
+    /* 母线电压：**固定使用快通道**（ADC1 SEQ 与三相电流同源触发、同拍，见 app_adc）。
+     * 快通道为唯一正式来源（2026-10-26 配对 A/B 定案）；仅当它不可用
+     * （尚无首帧 / ADC1 序列异常 / 参数非法 → NAN）时回退 1kHz 缓存值——这是启动期与
+     * 异常期的安全网，不是可选项。合法性（有限、≥ v_bus_min）由 run_fresh/vtest
+     * 统一判断，此处不新增保护动作。
+     * g_foc_vbus_src_used 记录本拍实际来源，供终端 `foc` 与 Ozone 判"是否发生回退"。 */
     {
         float v_bus_fast = app_analog_signal_vbus_fast();
 
-        if ((g_foc_vbus_fast_en != 0U) && foc_finite(v_bus_fast)) {
+        if (foc_finite(v_bus_fast)) {
             v_bus = v_bus_fast;
+            g_foc_vbus_src_used = 1U;
         } else {
             v_bus = app_analog_signal_read(ADC_CH_V_VBUS);
+            g_foc_vbus_src_used = 0U;
         }
     }
 

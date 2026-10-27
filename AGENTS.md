@@ -739,11 +739,18 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   `test_analog_vbus_fast_*`（换算/滤波采样率/路径隔离）、`test_foc_vbus_fast_source`。
 - **快通道供 duty 已定案（2026-10-26 配对 A/B，同固件同热态 3+3 轮）**：
   开关 1 → `cal rl` **887/1445/1044Hz 全 PASS**、RI A/B recommend=YES、raw 超调 22.3~26.9%；
-  开关 0 → **754/754/754Hz 全 NOT PASSED**、raw 超调 28.6~31.1%。故
-  `g_foc_vbus_fast_en` **默认 1**（保留 1 字节开关作现场 A/B 与回退手段）。
+  开关 0 → **754/754/754Hz 全 NOT PASSED**、raw 超调 28.6~31.1%。故快通道为
+  **唯一正式来源**：原 A/B 开关 `g_foc_vbus_fast_en` 已于 2026-10-27 收尾**移除**，
+  改为固定采用快通道 + 仅在 NAN 时回退 1kHz 缓存；`g_foc_vbus_src_used`（1=快/0=回退）
+  只做观测，终端 `foc` 的 `vbus src=` 行据此显示（为 0 即代表数据链异常）。
   机理：`duty = v_cmd/v_bus`，慢值在阶跃期间给的是阶跃前母线 → 缩放系统性错误。
   **教训**：首轮单臂观测（快通道硬连线）的 754Hz 曾被误归因为"快通道供 duty"；
   无对照组的单臂观测不足以归因，必须配对 A/B。
+- **ADC1 SEQ 配置冻结（2026-10-27）**：速率 **30kHz 由"与 ADC0 同一触发沿"结构性决定**
+  （= `hardware.inverter.pwm_freq_hz` = 30000），不可独立设定；5 槽 · 唯一触发源
+  PWM1_CH10REF · 槽序 `[V_VBUS, NTC0, NTC1, CANID, V_VBUS]`（首末同通道是 S/H 首槽
+  污染自吸收的必需项）。`app_adc.c` 有 `_Static_assert` 守住槽数；改速率或槽序
+  必须重跑 §9.5.2 配对 A/B 与 `cal rl`。
 - **cal rl 剩余差异：结案（vbus 通路已排除，2026-10-26）**：相对改动前会话 `Rs_eff`
   0.162→0.1705（+5.3%）、`Ld` 121.5→108µH（−10%）、落点 1228~2000→887~1445Hz；
   而 Rs 散布由 ±4.3% 收到 ±0.7%。**排除项**：热漂移（台架确认电机室温）；vbus 读数偏置

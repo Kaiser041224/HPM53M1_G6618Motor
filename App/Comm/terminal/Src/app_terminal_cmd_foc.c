@@ -105,11 +105,24 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
         } else {
             (void)snprintf(delta_text, sizeof(delta_text), "n/a");
         }
-        csh_printf(csh,
-                   "     vbus src=%s  fast=%sV slow=%sV d=%sV  seq=%lu stale=%lu\r\n",
-                   (g_foc_vbus_fast_en != 0U) ? "FAST(30k)" : "SLOW(1k)", fast_text, slow_text,
-                   delta_text, (unsigned long)app_adc_get_vbus_fast_sequence(),
-                   (unsigned long)app_adc_get_vbus_fast_stale_count());
+        {
+            const char* src_text;
+
+            /* OFF/FAULT 下 ISR 在母线选择分支之前早退 → g_foc_vbus_src_used 不代表本拍决策，
+             * 按"未评估"显示，避免误读成发生回退。 */
+            app_foc_state_t st = app_foc_get_state();
+
+            if ((st == APP_FOC_STATE_OFF) || (st == APP_FOC_STATE_FAULT)) {
+                src_text = "idle";
+            } else {
+                src_text = (g_foc_vbus_src_used != 0U) ? "FAST(30k)" : "SLOW(1k)";
+            }
+            csh_printf(csh,
+                       "     vbus src=%s  fast=%sV slow=%sV d=%sV  seq=%lu stale=%lu\r\n",
+                       src_text, fast_text, slow_text, delta_text,
+                       (unsigned long)app_adc_get_vbus_fast_sequence(),
+                       (unsigned long)app_adc_get_vbus_fast_stale_count());
+        }
     }
     csh_printf(
         csh, "     duty=%.3f/%.3f/%.3f  valid=%u  ok=%u  protect=%u  trip=%u  dt=%u us\r\n",
