@@ -168,7 +168,7 @@ void test_foc_current_integration(void) {
         app_motor_params_mutable()->encoder.direction = 1.0f;
     }
 
-    /* 5) vtest 过流判断：M1 保护动作全关（app_protect_policy.h APP_PROTECT_ACTION_EN=0）
+    /* 5) vtest 过流判断：M1 保护动作全关（software.fault.actions_enable=0）
      *     —— 只判断（rc=-1 + 本拍零矢量回退 + 计数），不锁存跳闸、不停 vtest。
      *     动作加回（开关置 1）后本组断言应恢复为：tripped==true / vtest_active==false。 */
     mock_set_current_gains(0.3f, 100.0f);

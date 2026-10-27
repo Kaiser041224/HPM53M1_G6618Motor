@@ -129,4 +129,16 @@ void app_terminal_cmd_emit(const char* format, ...);
 }
 #endif
 
+
+/**
+ * @brief fault policy / fault inject 子命令（终端 `fault` 分发）
+ * @return 0 = 已处理
+ */
+int app_terminal_cmd_fault_action_cmd(chry_shell_t* csh, int argc, char** argv);
+
+/** @brief 动作级别名（warn/derate/stop/trip） */
+/* 刻意用 uint8_t 而非 app_fault_action_t：避免本头文件引入 app_fault.h →
+ * app_adc.h → intf_adc.h 的 include 链（会污染不依赖 Interface 的测试套件） */
+const char* app_terminal_cmd_fault_action_name(uint8_t act);
+
 #endif /* APP_TERMINAL_CMD_H */

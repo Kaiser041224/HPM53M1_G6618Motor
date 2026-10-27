@@ -34,7 +34,7 @@ typedef struct {
  * @brief 故障保护阈值
  */
 typedef struct {
-    uint8_t shutdown_en; /**< 1=故障触发停机；0=台架模式：过流/健康类仅告警（母线 OV/UV 仍停机） */
+    uint8_t actions_enable; /**< 1 = 启用保护动作（按逐故障 policy 表）；0 = 仅警告（不改写任何输出，台架默认） */
     float oc_trip_a;     /**< 过流阈值 [A] */
     float vbus_ov_v;     /**< 母线过压 [V] */
     float vbus_uv_v;     /**< 母线欠压 [V] */

@@ -28,12 +28,14 @@ intf_adc_cfg_t g_mock_adc_cfg[INTF_ADC_INSTANCE_COUNT];
 int g_mock_adc_init_count[INTF_ADC_INSTANCE_COUNT];
 uint16_t g_mock_prd_raw[INTF_ADC_INSTANCE_COUNT][16]; /**< 按实例+硬件通道可编程 */
 uint32_t g_mock_seq_frames[INTF_ADC_INSTANCE_COUNT];  /**< ADC1 SEQ 帧计数替身 */
+uint32_t g_mock_seq_progress[INTF_ADC_INSTANCE_COUNT]; /**< ADC16.SEQ_WR_ADDR 替身 */
 
 void mock_adc_reset(void) {
     memset(g_mock_adc_cfg, 0, sizeof(g_mock_adc_cfg));
     memset(g_mock_adc_init_count, 0, sizeof(g_mock_adc_init_count));
     memset(g_mock_prd_raw, 0, sizeof(g_mock_prd_raw));
     memset(g_mock_seq_frames, 0, sizeof(g_mock_seq_frames));
+    memset(g_mock_seq_progress, 0, sizeof(g_mock_seq_progress));
 }
 
 int intf_adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
@@ -71,6 +73,23 @@ int intf_adc_get_seq_frames(uint8_t inst, uint32_t* frames) {
         return -1;
     }
     *frames = g_mock_seq_frames[inst];
+    return 0;
+}
+
+int g_mock_clear_status_calls;
+int intf_adc_clear_status(uint8_t inst) {
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    g_mock_clear_status_calls++;
+    return 0;
+}
+
+int intf_adc_get_seq_progress(uint8_t inst, uint32_t* wr_addr) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (wr_addr == NULL)) {
+        return -1;
+    }
+    *wr_addr = g_mock_seq_progress[inst];
     return 0;
 }
 

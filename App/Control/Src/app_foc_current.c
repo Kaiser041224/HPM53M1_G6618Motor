@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "app_fault.h"
 #include "app_foc_current.h"
 #include "app_foc.h"
 
@@ -17,7 +18,6 @@
 #include "app_analog_signal.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
-#include "app_protect_policy.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
 #include "foc_angle.h"
@@ -382,14 +382,19 @@ void app_foc_current_limit_update(float current_a, float dt_s) {
 
 APP_ATTR_RAMFUNC
 float app_foc_current_get_i_limit(void) {
+    /* 保护动作层的 DERATE 倍率在此乘入 → 经既有路径自动传播到 FOC 电流矢量限幅
+     * 与 motion 转矩上限（两者都读本函数），无需各自改动。无 DERATE 时 = 1.0。 */
+    float scale;
+
     if (!s_i_limit_ready) {
         return 0.0f;
     }
+    scale = app_fault_get_limit_scale();
     if ((s_i_limit_boost_time_s > 0.0f) && (s_i_limit_boost_a > s_i_limit_continuous_a)
         && (s_i_limit_credit > 0.0f)) {
-        return s_i_limit_boost_a;
+        return s_i_limit_boost_a * scale;
     }
-    return s_i_limit_continuous_a;
+    return s_i_limit_continuous_a * scale;
 }
 
 void app_foc_current_reset(void) {
@@ -511,7 +516,7 @@ int app_foc_current_vtest_step_fresh(float i_u_a, float i_v_a, float i_w_a, floa
                          + (g_foc_current_snapshot.i_q_a * g_foc_current_snapshot.i_q_a);
 
             if (foc_finite(i_trip) && (i_trip > 0.0f) && (mag2 > (i_trip * i_trip))) {
-                if (APP_PROTECT_ACTION_EN) {
+                if (app_fault_actions_enabled()) {
                     s_tripped = true; /* 跳闸锁存 + 停 vtest：M1 只判断不动作 */
                     g_foc_current_snapshot.tripped = true;
                     app_foc_current_vtest_stop();
@@ -726,7 +731,7 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
             && ((in.i_d_a * in.i_d_a + in.i_q_a * in.i_q_a) > (i_trip * i_trip))) {
             s_trip_count++;
             if (s_trip_count >= 2U) {
-                if (APP_PROTECT_ACTION_EN) {
+                if (app_fault_actions_enabled()) {
                     s_tripped = true; /* 跳闸锁存：M1 只判断不锁存 */
                     g_foc_current_snapshot.tripped = true;
                 }

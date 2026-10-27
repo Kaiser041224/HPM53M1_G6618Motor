@@ -76,10 +76,9 @@ typedef struct {
     uint16_t wdog_thshd_low;   /**< WDOG 低阈值原始码 */
     app_adc_wdog_cb_t wdog_cb; /**< WDOG 回调 */
     void* wdog_cb_user;        /**< WDOG 回调用户上下文 */
-    /* ADC1 序列完成回调：**目标 1kHz**（ISR 上下文）。ADC1 SEQ 与电流同源触发 =
-     * pwm_freq，故实现内部按 pwm_freq/1000 分频后调用，使保护 fault tick 的节拍与
-     * 去抖语义（5 次 = 5ms）保持不变。NULL = 不使能 SEQ 完成中断。 */
-    void (*slow_cb)(void); /**< 慢速序列完成回调（分频后 1kHz，ISR 上下文） */
+    /* 注意：ADC1 SEQ **没有完成回调**（2026-10-27 起）：seq_cb 恒为 NULL →
+     * 不使能 SEQ 完成中断，ADC1 无周期 ISR。慢保护节拍由 1kHz 任务承载
+     * （app_io_step → app_fault_process/app_fault_tick）。 */
 } app_adc_cfg_t;
 
 /**

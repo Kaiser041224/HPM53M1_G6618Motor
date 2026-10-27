@@ -21,6 +21,13 @@
 #ifndef ALGO_RMS_H
 #define ALGO_RMS_H
 
+/* 热路径段属性（ILM / .fast）：保护链 RMS 累加与取值在 1kHz 保护节拍内调用，
+ * 且经函数指针间接调用（无法内联）→ 必须 ILM 常驻，避免 XIP 取指风暴。
+ * 非热路径（ctor/init/reset）不标注。 */
+#ifndef ALGO_RMS_ATTR_RAMFUNC
+#  define ALGO_RMS_ATTR_RAMFUNC __attribute__((section(".fast")))
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>

@@ -88,7 +88,7 @@ SCHEMA = {
         # CAN ID 暂限标准帧（11-bit ≤0x7FF）；扩展帧待协议定义帧格式字段后放宽
         ("can.rx_control_id", "can.rx_control_id", "u32", 0, 0x7FF),
         ("can.tx_report_id", "can.tx_report_id", "u32", 0, 0x7FF),
-        ("fault.shutdown_en", "fault.shutdown_en", "u8", 0, 1),
+        ("fault.actions_enable", "fault.actions_enable", "u8", 0, 1),
         ("fault.oc_trip_a", "fault.oc_trip_a", "f32", 0.0, None),
         ("fault.vbus_ov_v", "fault.vbus_ov_v", "f32", 0.0, None),
         ("fault.vbus_uv_v", "fault.vbus_uv_v", "f32", 0.0, None),
@@ -161,7 +161,7 @@ ENUM_FIELDS = {
 # 布尔字段：YAML 接受 true/false、on/off、yes/no、1/0；生成 C 时写 u8 0/1
 BOOL_FIELDS = {
     ("hardware", "current_sense.invert"),
-    ("software", "fault.shutdown_en"),
+    ("software", "fault.actions_enable"),
     ("software", "control.current_loop.decoupling_en"),
     ("software", "control.speed_observer.enable"),
     ("software", "current_ff.r_en"),

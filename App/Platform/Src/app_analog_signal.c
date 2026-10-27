@@ -262,6 +262,7 @@ float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw) {
     return channel_to_physical(ch, raw);
 }
 
+APP_ATTR_RAMFUNC
 bool app_analog_signal_read_all(app_analog_values_t* values) {
     if ((values == NULL) || !s_valid) {
         return false;

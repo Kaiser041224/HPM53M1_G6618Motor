@@ -177,6 +177,16 @@ int app_foc_request_stop(void);
 bool app_foc_wait_off(uint32_t timeout_ms);
 /** @brief 正常关闭尚未完成，期间拒绝新给定/校准 */
 bool app_foc_stop_pending(void);
+
+/**
+ * @brief 保护动作层请求"受控停机"（policy = STOP）
+ * @param code 触发故障码（仅记录/诊断）
+ * @return 0 = 已发起（复用既有软停机状态机：卸转矩 → 缓降 → 软关断）；
+ *         -1 = 当前状态无软停机可言（OFF-但桥可能使能 / CALIB / vtest）
+ *              → 调用方须降级为 TRIP（`app_fault_note_stop_rejected()`）
+ * @note 不由本函数阻塞等待；超时兜底由慢保护完成。
+ */
+int app_foc_request_fault_stop(uint32_t code);
 /** @brief OFF时设置占空比上限[0.70,0.98]，RAM；重启默认0.95；高值采样精度未验证 */
 int app_foc_set_duty_ceiling(float ceiling);
 

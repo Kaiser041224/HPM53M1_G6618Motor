@@ -24,7 +24,7 @@ can:
   tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
 
 fault:
-  shutdown_en: true
+  actions_enable: true
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）

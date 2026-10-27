@@ -97,7 +97,46 @@ int app_3phase_inverter_release(app_3phase_id_t phase) {
     return 0;
 }
 void app_3phase_inverter_emergency_stop(void) {}
+
+/* 桥使能状态替身：默认"未使能"（= 正常空闲）。用例可置 1 模拟"OFF 但桥仍带电"。 */
+int g_mock_inverter_enabled;
+bool app_3phase_inverter_is_enabled(void) { return g_mock_inverter_enabled != 0; }
 app_fault_state_t app_fault_get_state(void) { return APP_FAULT_STATE_NORMAL; }
+
+/* 动作层契约替身（2026-10-27 v2）：默认无阻塞码、快跳登记不触发动作。
+ * `g_mock_fault_blocking` 供用例注入"锁存了带动作码"的场景。 */
+uint32_t g_mock_fault_blocking;
+uint32_t g_mock_fault_raise_calls;
+uint32_t g_mock_fault_raise_last;
+
+uint32_t app_fault_get_blocking_latched(void) { return g_mock_fault_blocking; }
+void app_fault_raise(uint32_t code) {
+    g_mock_fault_raise_calls++;
+    g_mock_fault_raise_last = code;
+}
+
+uint32_t g_mock_fault_stop_request;
+uint32_t g_mock_fault_stop_rejected_calls;
+
+uint32_t app_fault_take_stop_request(void) {
+    uint32_t c = g_mock_fault_stop_request;
+
+    g_mock_fault_stop_request = 0U;
+    return c;
+}
+
+void app_fault_note_stop_rejected(void) { g_mock_fault_stop_rejected_calls++; }
+
+/* 保护动作总开关替身：默认 0（仅警告）= 台架默认，行为与改动前一致 */
+int g_mock_fault_actions_enabled;
+bool app_fault_actions_enabled(void) { return g_mock_fault_actions_enabled != 0; }
+
+uint32_t g_mock_fault_tick_calls;
+void app_fault_tick(void) { g_mock_fault_tick_calls++; }
+void app_fault_wdog_service(void) {}
+
+float g_mock_fault_limit_scale = 1.0f;
+float app_fault_get_limit_scale(void) { return g_mock_fault_limit_scale; }
 uint32_t intf_sys_irq_save(void) { return 0U; }
 void intf_sys_irq_restore(uint32_t state) { (void)state; }
 uint32_t intf_clock_get_cpu_freq(void) { return 480000000U; }

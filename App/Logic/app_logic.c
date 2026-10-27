@@ -178,7 +178,7 @@ void app_init(void) {
         adc_cfg.wdog_thshd_low = wdog_lo;
         adc_cfg.wdog_cb = app_fault_on_wdog;
         adc_cfg.wdog_cb_user = NULL;
-        adc_cfg.slow_cb = app_fault_tick;
+        /* 无 slow_cb：ADC1 不使能 SEQ 完成中断（无周期 ISR），慢保护节拍见 app_io_step */
         app_adc_init(&adc_cfg);
     }
     app_analog_signal_init();
@@ -321,7 +321,7 @@ static void app_fast_step_hook(void) {
 
 void app_io_step(void) {
     /* RTOS 后台 IO 单步（1ms，由 app_io 任务调用）：单次处理有界（≤200µs 约束不变）。
-     * 顺序：观测刷新 → 慢通道取样 → 模拟量换算 → 故障 RMS → 状态机编排 → 通讯轮询。 */
+     * 顺序：观测刷新 → 慢通道取样 → 模拟量换算 → 故障 RMS/判断 → 状态机编排 → 通讯轮询。 */
 
     /* 双编码器观测变量刷新（只读ADC缓存，零SPI成本） */
     app_debug_encoder_sample();
@@ -333,8 +333,14 @@ void app_io_step(void) {
     /* 模拟量：ADC 缓存 → 物理量换算 + 滤波（1kHz 路径的 v_bus/NTC/CANID 取本模块缓存） */
     app_analog_signal_process();
 
-    /* 故障保护 L2/L3：RMS 累加 + 去抖判断（M1 动作全关、仅检测/告警，spec §6） */
+    /* 故障保护 L2/L3：RMS 累加（本拍取样）+ 去抖判断（M1 动作全关、仅检测/告警）
+     * 2026-10-27：累加与判断均在本任务内完成（原判断寄生在 ADC1 SEQ 中断里，
+     * 该中断已移除）；两者必须在同一上下文相邻调用，否则判断会读到未更新的 RMS。 */
     app_fault_process();
+    app_fault_tick();
+
+    /* L1 WDOG 自动重臂服务（1kHz；消除"命中后该相硬件保护长期失效"） */
+    app_fault_wdog_service();
 
     /* FOC 状态机 / 给定编排（控制环在 ISR，见 app_foc_isr_step） */
     app_foc_run_once();

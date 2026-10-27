@@ -21,6 +21,7 @@
 #include "app_3phase_inverter.h"
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_fault.h"
 #include "app_foc.h"
 #include "app_friction_identify.h"
 #include "app_motion.h"
@@ -74,6 +75,11 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
         (double)app_foc_current_duty_max(), (double)snap.voltage_max_v,
         (double)(snap.voltage_utilization * 100), (unsigned)snap.saturated_count,
         (unsigned)snap.run_count);
+    csh_printf(csh,
+               "     i_limit=%.2f A (boost/连续 × DERATE 倍率) | fault action=%s  actions=%s\r\n",
+               (double)app_foc_current_get_i_limit(),
+               app_terminal_cmd_fault_action_name(app_fault_get_action()),
+               app_fault_actions_enabled() ? "ON" : "OFF(仅警告)");
     csh_printf(csh, "     deadtime comp: %.4f duty (%.4fV @ vbus)  vtest: uncompensated\r\n",
                (double)app_foc_current_dt_comp_duty(),
                (double)(app_foc_current_dt_comp_duty() * snap.v_bus_v));
@@ -338,17 +344,19 @@ static int cmd_foc(int argc, char** argv) {
             software->control.limits.i_trip_a = on ? 0.0f : defaults->control.limits.i_trip_a;
             software->control.limits.speed_max_rad_s =
                 on ? 0.0f : defaults->control.limits.speed_max_rad_s;
-            software->fault.shutdown_en = on ? 0U : defaults->fault.shutdown_en;
+            /* 台架总开关：`bench on` = 仅警告（actions_enable=0），`bench off` = 按 policy 执行 */
+            software->fault.actions_enable =
+                on ? 0U : defaults->fault.actions_enable;
+            app_fault_set_actions_enable(software->fault.actions_enable != 0U);
         }
         csh_printf(
-            csh, "bench=%u: i_trip_a=%.1f A  foc_speed_max=%.0f rad/s  fault.shutdown_en=%u\r\n",
+            csh, "bench=%u: i_trip_a=%.1f A  foc_speed_max=%.0f rad/s  actions_enable=%u\r\n",
             (unsigned)on, (double)software->control.limits.i_trip_a,
             (double)software->control.limits.speed_max_rad_s,
-            (unsigned)software->fault.shutdown_en);
+            (unsigned)software->fault.actions_enable);
         if (on != 0U) {
             csh_printf(
-                csh, "WARN: auto-stop protections OFF (incl. bus OV/UV) "
-                     "(use current-limited supply)\r\n");
+                csh, "WARN: actions disabled (warn-only; fault protect on to enable)\r\n");
         }
         return 0;
     }

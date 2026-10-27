@@ -132,67 +132,44 @@ void test_adc_trigger_fanout(void) {
 }
 
 /* ⑤ 慢回调分频：30kHz 下每 30 帧一次 → fault tick 仍 1kHz */
-static int s_slow_cb_calls;
 
-static void slow_cb_counter(void) { s_slow_cb_calls++; }
-
-void test_adc_slow_cb_decimation(void) {
-    app_adc_cfg_t cfg;
-    const intf_adc_cfg_t* adc1;
-    int i;
-
+/**
+ * @brief ADC1 无周期中断（2026-10-27）：seq_cb 必须为 NULL
+ *
+ * 实测该 30kHz 入口占 1.5~1.6% CPU，且其 XIP 慢链风暴（10.9µs）落在距下一拍仅
+ * 5.9µs 的窗口内。慢保护节拍改由 1kHz 任务承载 → ADC1 不应使能 SEQ 完成中断。
+ * 同时锁定已台架验证的 30kHz / 5 槽同源触发配置（不得无声改动）。
+ */
+void test_adc1_no_seq_interrupt(void) {
     mock_adc_reset();
     mock_hardware_reset();
     mock_hrpwm_reset();
     mock_trgm_reset();
-    app_hardware_params_mutable()->inverter.pwm_freq_hz = 30000U;
+    app_adc_init(NULL);
 
-    cfg = (app_adc_cfg_t){0};
-    cfg.sample_cycle = 10U;
-    cfg.trigger_delay_ns = 500U;
-    cfg.slow_cb = slow_cb_counter;
-    app_adc_init(&cfg);
+    const intf_adc_cfg_t* adc1 = &g_mock_adc_cfg[1];
 
-    adc1 = &g_mock_adc_cfg[1];
-    CHECK(adc1->seq_cb != NULL);
-
-    s_slow_cb_calls = 0;
-    /* 分频比 = 30000/1000 = 30：前 29 帧不回调 */
-    for (i = 0; i < 29; i++) {
-        adc1->seq_cb(INTF_ADC_CH(1U, 0U), NULL);
-    }
-    CHECK(s_slow_cb_calls == 0);
-    adc1->seq_cb(INTF_ADC_CH(1U, 0U), NULL);
-    CHECK(s_slow_cb_calls == 1);
-    /* 再 60 帧 = 2 次回调 */
-    for (i = 0; i < 60; i++) {
-        adc1->seq_cb(INTF_ADC_CH(1U, 0U), NULL);
-    }
-    CHECK(s_slow_cb_calls == 3);
+    CHECK(adc1->seq_cb == NULL);        /* 无完成回调 → 不使能 SEQ 完成中断 */
+    CHECK(adc1->seq_ch_count == 5U);    /* 槽数冻结（_Static_assert 同源） */
+    CHECK(adc1->seq_hw_trig);           /* 硬件触发 = PWM1_CH10REF（与电流同源） */
 }
 
-/* ⑥ 分频退化为 1：PWM=1kHz 时逐帧回调（向后兼容） */
-void test_adc_slow_cb_no_decimation(void) {
-    app_adc_cfg_t cfg;
-    const intf_adc_cfg_t* adc1;
-    int i;
+/**
+ * @brief 1kHz 慢处理必须清 ADC1 的 INT_STS
+ *
+ * ADC1 自 2026-10-27 去掉周期完成中断后，驱动 ISR 不再清它的状态标志 →
+ * 实测 INT_STS 恒为 0x01800000（SEQ_CMPT 等累积），诊断行失去判别力。
+ */
+void test_adc1_status_cleared_at_1khz(void) {
+    extern int g_mock_clear_status_calls;
 
     mock_adc_reset();
     mock_hardware_reset();
     mock_hrpwm_reset();
     mock_trgm_reset();
-    app_hardware_params_mutable()->inverter.pwm_freq_hz = 1000U;
+    app_adc_init(NULL);
 
-    cfg = (app_adc_cfg_t){0};
-    cfg.sample_cycle = 10U;
-    cfg.trigger_delay_ns = 500U;
-    cfg.slow_cb = slow_cb_counter;
-    app_adc_init(&cfg);
-
-    adc1 = &g_mock_adc_cfg[1];
-    s_slow_cb_calls = 0;
-    for (i = 0; i < 5; i++) {
-        adc1->seq_cb(INTF_ADC_CH(1U, 0U), NULL);
-    }
-    CHECK(s_slow_cb_calls == 5);
+    g_mock_clear_status_calls = 0;
+    app_adc_slow_process();
+    CHECK(g_mock_clear_status_calls == 1); /* 每拍清一次 ADC1 */
 }

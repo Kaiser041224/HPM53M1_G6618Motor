@@ -16,12 +16,18 @@
 #include <stdint.h>
 
 static int algo_rms_init_impl(algo_rms_t* self, const algo_rms_cfg_t* cfg);
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_step_impl(algo_rms_t* self, float x);
 static void algo_rms_reset_impl(algo_rms_t* self);
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_get_rms_impl(const algo_rms_t* self);
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_get_mean_sq_impl(const algo_rms_t* self);
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_update_sq_impl(algo_rms_t* self, float x);
+ALGO_RMS_ATTR_RAMFUNC
 static void algo_rms_rebuild_sum_sq(algo_rms_t* self);
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_calc_mean_sq(const algo_rms_t* self);
 
 /**
@@ -29,6 +35,7 @@ static float algo_rms_calc_mean_sq(const algo_rms_t* self);
  * @param self 对象
  * @return 均方值；未初始化时返回 0
  */
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_calc_mean_sq(const algo_rms_t* self) {
     if (self == NULL || !self->_inited)
         return 0.0f;
@@ -93,6 +100,7 @@ static int algo_rms_init_impl(algo_rms_t* self, const algo_rms_cfg_t* cfg) {
  * @brief 由缓冲重建线性和与平方和（数值异常时兜底）
  * @param self 对象
  */
+ALGO_RMS_ATTR_RAMFUNC
 static void algo_rms_rebuild_sum_sq(algo_rms_t* self) {
     self->_sum_sq = 0.0f;
     self->_sum = 0.0f;
@@ -124,6 +132,7 @@ static void algo_rms_rebuild_sum_sq(algo_rms_t* self) {
  * @param x 输入样本
  * @return 均方值
  */
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_update_sq_impl(algo_rms_t* self, float x) {
     if (self == NULL || !self->_inited)
         return 0.0f;
@@ -174,6 +183,7 @@ static float algo_rms_update_sq_impl(algo_rms_t* self, float x) {
  * @param x 输入样本
  * @return RMS
  */
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_step_impl(algo_rms_t* self, float x) {
     if (self == NULL || !self->_inited)
         return 0.0f;
@@ -212,6 +222,7 @@ static void algo_rms_reset_impl(algo_rms_t* self) {
  * @param self 对象
  * @return RMS
  */
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_get_rms_impl(const algo_rms_t* self) {
     if (self == NULL || !self->_inited)
         return 0.0f;
@@ -225,6 +236,7 @@ static float algo_rms_get_rms_impl(const algo_rms_t* self) {
  * @param self 对象
  * @return 均方值
  */
+ALGO_RMS_ATTR_RAMFUNC
 static float algo_rms_get_mean_sq_impl(const algo_rms_t* self) {
     if (self == NULL || !self->_inited)
         return 0.0f;

@@ -23,7 +23,7 @@ can:
   tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
 
 fault:
-  shutdown_en: false                       # true=故障触发停机（FAULT 锁存）；false=台架模式：过流/健康类仅告警不停机（母线过压/欠压仍停机，硬件风险）
+  actions_enable: false                    # true=启用保护动作（按逐故障 policy 表，fault policy show 可见）；false=仅警告，不改写任何输出（台架默认）。APPLY_REBOOT：改后 make artifacts + 重新烧录；运行期可用 fault protect on/off 覆盖
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）

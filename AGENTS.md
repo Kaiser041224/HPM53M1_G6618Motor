@@ -814,3 +814,56 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   1596B 或最后一块 60B 直接传入会触发 SDK assert。assert 经 newlib `_write`
   走到未初始化的 debug console UART，最终表现为卡在 `uart_flush()`。
   `drv_flash.c` 已统一将 invalidate 区间向下/向上取整到 cache line。
+
+### 保护链 v3：分层保护与动作层（2026-10-27，台架已验证）
+
+- **判据按物理时间尺度分层，不按代码归属**：L1 = ADC0 PMT 的**硬件 WDOG**（30kHz，
+  TRIP 同拍）+ 电流环快跳 `i_trip_a`；L2 = 相电流 RMS（1kHz，DERATE）；L3 = 母线
+  OV/UV（1kHz，读 30kHz 快通道值；一级 STOP / 二级 40V TRIP / UV STOP）；
+  健康项 = PMT 帧停滞（TRIP）/ 编码器增量（WARN）。
+- **ADC1 无周期中断**：`seq_cb = NULL`。实测其 30kHz 入口占 **1.5~1.6% CPU**，且 XIP
+  慢链风暴（10.9µs）落在距下一拍仅 5.9µs 的窗口内。慢保护节拍改由 **1kHz io 任务**
+  承载；`app_foc_wait_off()` 的 3s 自旋内加**保护泵**（否则减速/软关断窗口内停摆）。
+  **flash 保存窗口仍无泵**（任务自身被阻塞），已记账。
+- **动作总开关**：`config/software.yaml` 的 `fault.actions_enable`（**默认 false = 仅
+  警告**）。运行期 `fault protect on|off`（RAM 覆盖）。原编译期宏
+  `app_protect_policy.h` **已删除**。`fault.shutdown_en` 已退役并移除。
+- **policy 表即开关**：`fault policy show` 分 `design`/`live` 两列；
+  `fault policy <code> <warn|derate|stop|trip>` 运行期改表；`fault inject <code> on|off`
+  台架注入（不经物理阈值）。**代码名大小写不敏感**（`ci_equal`）。
+- **动作语义（不可回退）**：
+  - `state = FAULT` **仅当生效动作为 TRIP**。STOP 若也置 FAULT，会被 FOC 门控立即急停，
+    违背"受控停机"本意。
+  - STOP 以**边沿请求**（`app_fault_take_stop_request`）交 `app_foc_run_once` →
+    `app_foc_request_fault_stop()` 复用既有软停机。OFF-但桥使能 / CALIB / vtest 返回 −1
+    → 调用方 `app_fault_note_stop_rejected()` 升 TRIP。**OFF 且桥已断返回 0（不算失败）**，
+    否则空闲期一次越限会让此后所有 STOP 永久变 TRIP。
+  - 使能门禁（`app_terminal_cmd_require_no_fault` 与 `app_foc_enable`）**只拦"带动作码"
+    （STOP/TRIP）的锁存**；纯 WARN/DERATE 不阻塞（曾误用 `get_latched()` → 注入
+    `ENC_ERR` 也会拒绝 `foc on`）。
+- **L1 WDOG 契约**：状态评估在 `adc_generic_isr` 中**前移到 PMT/SEQ 分支之前**（否则同帧
+  先跑完 FOC、后处理 WDOG → 停机要等下一拍）。**上电静默期（`settle_ticks < 50`）内忽略
+  命中**——实测启动瞬态下 PMT 可能整帧为 0/全 1，否则每次开机假锁存三路 OC_FAST，
+  `actions on` 时直接进 FAULT 并拒绝 `foc on`。命中后驱动自动关该通道中断，由
+  `app_fault_wdog_service()`（1kHz）在 `wdog_rearm_ms` 且 raw 回窗后重臂；达
+  `wdog_rearm_max` 升 TRIP 锁存。`fault show` 打印 `wdog rearm: U/V/W`。
+- **vbus 快通道新鲜度**：ADC1 无中断，且 `ADC16.SEQ_WR_ADDR` **只随 DMA 写推进**
+  （ADC1 非 DMA）→ **任何 SEQ 侧计数器都不可用**。改用**结果合法性**判定（全 0/全 1
+  视为未写入 → 不采信 + 计 `stale`）。快通道健康看 `fault` 的 `vbus src=FAST(30k)`
+  与 `stale` 增量，不看 ADC1 的 frames/seq_wr。
+- **观测契约**：
+  - `adc diag` 的 `rate`/`isr_cpu` **带自校验**：占用率 >100% 或 ADC0 速率偏离 pwm_freq
+    ±20% 即判本窗无效并打印 `n/a`。根因：`intf_clock_get_cycle()` 是 **32 位**，
+    480MHz 下每 **8.94s 回绕** → 间隔超一个回绕期会少算整数倍周期。
+    **必须连续两次 `adc diag` 且间隔 <8.9s**。
+  - ADC1 行 `irq/pmt/rate` 与 `SEQ frames/seq_wr` 恒 0 属**预期**（无中断 + 非 DMA）；
+    ADC1 的 `INT_STS` 由 `app_adc_slow_process()` 每 1kHz 清一次（`INT_EN=0`，不影响中断）。
+- **台架已验证（2026-10-27）**：① 硬件 WDOG **确实触发**（此前自 2026-09-19 起从未验证）：
+  `cnt F_U/F_V/F_W` 各 1、快照带回越窗原始码；② `inject → policy → FAULT → force_low +
+  关 +12V` 全链成立，`driver power` 显示 `gate power: OFF` 为物理证据；③ **TRIP 在 READY
+  与带载下均不掉 USB、不复位**（曾误判为副作用，实为手动重启，已更正）；④ DERATE
+  `i_limit 30.00 → 15.00 → 30.00`（条件解除自动恢复）；⑤ WARN 锁存不阻塞 `foc on`。
+- **遗留**：① `ADC1 INT_STS` bit23 语义待识别（建议查 `SEQ_DMA_CFG` 是否残留 DMA 使能）；
+  ② 弱磁（`motion speed 40+` 实测 `use=100% sat=1`、`i_d` 被耦合推到 −4A）；③ NTC1 恒为
+  开路替代值（`adc diag ch1=65535`，硬件待查）；④ `vbus fast−slow` 差值 ±0.55V
+  （固定相位纹波，不阻塞）；⑤ EWDG 未做（CPU 挂死无兜底，G4 开放）。

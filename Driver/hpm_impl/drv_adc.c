@@ -297,6 +297,26 @@ static void adc_generic_isr(uint8_t inst) {
     uint32_t status = adc16_get_status_flags(base);
     adc16_clear_status_flags(base, status);
 
+    /* WDOG 状态评估**前移到 PMT/SEQ 分支之前**（2026-10-27）：否则同一帧内先跑完
+     * FOC 电流环、后处理 WDOG → 越限的停机动作要等下一拍（+33µs）才生效。
+     * 本块只读状态 + 调回调，命中由上层在本拍就地执行 TRIP。 */
+    /* Watchdog threshold violation */
+    uint32_t wdog_status = ADC16_INT_STS_WDOG_GET(status);
+    if (wdog_status) {
+        for (uint8_t ch = 0; ch < ADC_MAX_CHANNELS; ch++) {
+            if ((wdog_status & (1u << ch)) && ai->wdog.enabled[ch]) {
+                /* PRD_RESULTx 保存通道 x 最近一次转换结果（所有模式通用，PMT 已实测） */
+                uint16_t val = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(
+                    base->PRD_CFG[ch].PRD_RESULT);
+                if (ai->wdog.cb) {
+                    ai->wdog.cb(INTF_ADC_CH(inst, ch), val, ai->wdog.cb_user_data);
+                }
+                adc16_disable_interrupts(base, (uint32_t)(1u << ch));
+            }
+        }
+    }
+
+
     /* PMT trigger complete */
     if (ADC16_INT_STS_TRIG_CMPT_GET(status) && ai->mode == INTF_ADC_MODE_PMT) {
         s_adc_diag.pmt_complete[inst]++;
@@ -435,21 +455,6 @@ static void adc_generic_isr(uint8_t inst) {
         }
     }
 
-    /* Watchdog threshold violation */
-    uint32_t wdog_status = ADC16_INT_STS_WDOG_GET(status);
-    if (wdog_status) {
-        for (uint8_t ch = 0; ch < ADC_MAX_CHANNELS; ch++) {
-            if ((wdog_status & (1u << ch)) && ai->wdog.enabled[ch]) {
-                /* PRD_RESULTx 保存通道 x 最近一次转换结果（所有模式通用，PMT 已实测） */
-                uint16_t val = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(
-                    base->PRD_CFG[ch].PRD_RESULT);
-                if (ai->wdog.cb) {
-                    ai->wdog.cb(INTF_ADC_CH(inst, ch), val, ai->wdog.cb_user_data);
-                }
-                adc16_disable_interrupts(base, (uint32_t)(1u << ch));
-            }
-        }
-    }
 
     uint32_t elapsed = irq_prof_read_cycle() - t0;
     if (elapsed > s_adc_diag.isr_cycles_max[inst]) {
@@ -480,6 +485,32 @@ void isr_adc1(void) {
  * @param frames 输出：累计帧数
  * @return 0 = 成功；-1 = 参数非法或未初始化
  */
+int adc_clear_status(uint8_t inst) {
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    adc16_clear_status_flags(s_adc_instances[inst].base,
+                             adc16_get_status_flags(s_adc_instances[inst].base));
+    return 0;
+}
+
+ATTR_RAMFUNC /* ADC0 PMT ISR 每拍调用：vbus 快通道新鲜度证据 */
+int adc_get_seq_progress(uint8_t inst, uint32_t *wr_addr) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (wr_addr == NULL)) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    /* ADC16.SEQ_WR_ADDR：序列硬件写指针（RO）。ADC1 无周期中断后，本寄存器是
+     * "SEQ 仍在写入"的唯一硬件证据（帧计数只在完成中断内递增，已不适用）。 */
+    *wr_addr = s_adc_instances[inst].base->SEQ_WR_ADDR;
+    return 0;
+}
+
 ATTR_RAMFUNC
 int adc_get_seq_frames(uint8_t inst, uint32_t *frames) {
     if ((inst >= INTF_ADC_INSTANCE_COUNT) || (frames == NULL)) {

@@ -168,7 +168,10 @@ static int cmd_fault(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
 
     if (argc < 2) {
-        return app_terminal_cmd_usage(csh, "fault show|clear");
+        return app_terminal_cmd_usage(
+            csh,
+            "fault show|clear|protect [on|off]|policy [show|<code> <warn|derate|stop|trip>]|"
+            "inject <code> on|off");
     }
 
     if (strcmp(argv[1], "show") == 0) {
@@ -177,8 +180,12 @@ static int cmd_fault(int argc, char** argv) {
         app_terminal_cmd_capture_begin();
         app_debug_fault_clear();
         app_terminal_cmd_capture_end();
+    } else if ((strcmp(argv[1], "policy") == 0) || (strcmp(argv[1], "inject") == 0)
+               || (strcmp(argv[1], "protect") == 0)) {
+        return app_terminal_cmd_fault_action_cmd(csh, argc, argv);
     } else {
-        return app_terminal_cmd_usage(csh, "fault show|clear");
+        return app_terminal_cmd_usage(csh,
+                                      "fault show|clear|protect|policy|inject");
     }
 
     return 0;

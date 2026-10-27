@@ -14,6 +14,12 @@
 
 #include <stddef.h>
 
+static const char* const s_action_names[] = {"warn", "derate", "stop", "trip"};
+
+static const char* app_debug_fault_action_name(app_fault_action_t act) {
+    return (act <= APP_FLT_ACT_TRIP) ? s_action_names[(uint8_t)act] : "?";
+}
+
 static const char* const s_state_names[] = {
     "INIT",
     "NORMAL",
@@ -23,6 +29,10 @@ static const char* const s_state_names[] = {
 
 void app_debug_fault_dump(void) {
     uint16_t cnt[10] = {0};
+    uint16_t wdog_lo = 0U;
+    uint16_t wdog_hi = 0U;
+
+    app_fault_get_wdog_raw(&wdog_hi, &wdog_lo);
     app_fault_snapshot_t snap;
     uint32_t state = (uint32_t)app_fault_get_state();
 
@@ -36,6 +46,17 @@ void app_debug_fault_dump(void) {
         "[FLT] cnt: F_U=%u F_V=%u F_W=%u S_U=%u S_V=%u S_W=%u OV=%u UV=%u TO=%u ENC=%u\r\n",
         (unsigned)cnt[0], (unsigned)cnt[1], (unsigned)cnt[2], (unsigned)cnt[3], (unsigned)cnt[4],
         (unsigned)cnt[5], (unsigned)cnt[6], (unsigned)cnt[7], (unsigned)cnt[8], (unsigned)cnt[9]);
+
+    /* 自动重臂次数：命中后驱动会关该通道中断，重臂是否真的执行过只能从计数判断 */
+    app_debug_printf("[FLT] wdog rearm: U=%u V=%u W=%u | raw win=[%u,%u]\r\n",
+                     (unsigned)app_fault_get_wdog_rearm_count(0U),
+                     (unsigned)app_fault_get_wdog_rearm_count(1U),
+                     (unsigned)app_fault_get_wdog_rearm_count(2U), (unsigned)wdog_lo,
+                     (unsigned)wdog_hi);
+    app_debug_printf(
+        "[FLT] action=%s limit_scale=%.2f blocking=0x%08X injected=0x%08X\r\n",
+        app_debug_fault_action_name(app_fault_get_action()), (double)app_fault_get_limit_scale(),
+        (unsigned)app_fault_get_blocking_latched(), (unsigned)app_fault_get_injected());
 
     if (app_fault_get_snapshot(&snap)) {
         app_debug_printf(

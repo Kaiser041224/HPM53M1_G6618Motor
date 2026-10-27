@@ -272,6 +272,32 @@ int intf_adc_stop(intf_adc_ch_t ch);
 int intf_adc_get_seq_frames(uint8_t inst, uint32_t* frames);
 
 /**
+ * @brief 读实例 SEQ 硬件写指针（ADC16.SEQ_WR_ADDR，RO）
+ *
+ * 与 intf_adc_get_seq_frames 的区别：帧计数只在 SEQ 完成**中断**内递增，而 ADC1 已于
+ * 2026-10-27 去掉周期中断 → 帧计数恒不推进；本寄存器由硬件在写入序列时更新，无需中断
+ * 即可观测，因此是 ADC1 "序列链是否仍在推进"的唯一可用证据（vbus 快通道新鲜度握手）。
+ * 若该寄存器不按帧推进，`stale` 会增长并使电流环回退 1kHz —— 可见、安全，不静默。
+ *
+ * @param inst 实例号（0 = ADC0，1 = ADC1）
+ * @param wr_addr 输出：写指针当前值
+ * @return 0 = 成功；-1 = 参数非法或实例未初始化
+ */
+int intf_adc_get_seq_progress(uint8_t inst, uint32_t* wr_addr);
+
+/**
+ * @brief 清实例状态标志（INT_STS 写 1 清除）
+ *
+ * 用途：ADC1 自 2026-10-27 去掉周期完成中断后，驱动 ISR 不再清它的 INT_STS →
+ * SEQ_CMPT 等标志累积不变（实测恒 0x01800000），使该诊断行失去判别力。
+ * 由 1kHz 任务定期清一次；因 INT_EN=0，清标志不会影响任何中断行为。
+ *
+ * @param inst 实例号（0/1）
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+int intf_adc_clear_status(uint8_t inst);
+
+/**
  * @brief 直读通道结果寄存器 PRD_RESULTx（**ISR 快速路径**，不做模式分支）
  *
  * 专供 ADC0 PMT ISR 调用链（ILM 常驻）：手册 §53.2.4 —— 任意转换模式都会更新该寄存器，

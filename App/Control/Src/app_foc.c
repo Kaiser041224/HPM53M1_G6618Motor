@@ -19,7 +19,6 @@
 #include "app_fault.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
-#include "app_protect_policy.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
 #include "foc_angle.h"
@@ -287,7 +286,7 @@ static void app_foc_run_body(void) {
     if (s_state == APP_FOC_STATE_FAULT) {
         return;
     }
-    if (APP_PROTECT_ACTION_EN && (s_state != APP_FOC_STATE_OFF)
+    if (app_fault_actions_enabled() && (s_state != APP_FOC_STATE_OFF)
         && ((app_fault_get_state() == APP_FAULT_STATE_FAULT) || (g_foc_fault_request != 0U))) {
         app_foc_current_zero_vector();
         app_3phase_inverter_emergency_stop(); /* 幂等：ISR 侧可能已执行 */
@@ -295,7 +294,7 @@ static void app_foc_run_body(void) {
         return;
     }
     /* 快速过流跳闸（电流环内置）：零矢量已由保护路径输出，此处关桥并锁存 FAULT */
-    if (APP_PROTECT_ACTION_EN && (s_state != APP_FOC_STATE_OFF) && app_foc_current_is_tripped()) {
+    if (app_fault_actions_enabled() && (s_state != APP_FOC_STATE_OFF) && app_foc_current_is_tripped()) {
         app_3phase_inverter_emergency_stop();
         s_state = APP_FOC_STATE_FAULT;
         return;
@@ -501,7 +500,7 @@ void app_foc_isr_step(void) {
             if (s_enc_degraded_streak == APP_FOC_ENC_DEG_TRIP_STREAK) {
                 app_foc_current_protect_reason(APP_FOC_PROT_ENC); /* 判定事件：计数一次 */
             }
-            if (APP_PROTECT_ACTION_EN && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
+            if (app_fault_actions_enabled() && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
                 fault = true;                                     /* 动作开：确认真失效 → 停机 */
             }
         } else {
@@ -511,7 +510,7 @@ void app_foc_isr_step(void) {
             if (s_enc_degraded_streak == APP_FOC_ENC_DEG_TRIP_STREAK) {
                 app_foc_current_protect_reason(APP_FOC_PROT_ENC);
             }
-            if (APP_PROTECT_ACTION_EN && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
+            if (app_fault_actions_enabled() && (s_enc_degraded_streak >= APP_FOC_ENC_DEG_TRIP_STREAK)) {
                 fault = true;
             }
         }
@@ -568,7 +567,7 @@ void app_foc_isr_step(void) {
 
     if (fault) {
         app_foc_current_protect();
-        if (APP_PROTECT_ACTION_EN) {
+        if (app_fault_actions_enabled()) {
             app_foc_isr_emergency(); /* M1：只判断不动作（本拍零矢量回退，不停机） */
         }
     } else if (degraded) {
@@ -617,8 +616,13 @@ void app_foc_isr_step(void) {
                     == 0;
         }
         /* 过流跳闸（电流环或 vtest 内置）→ M1：只判断不动作 */
-        if (APP_PROTECT_ACTION_EN && app_foc_current_is_tripped()) {
-            app_foc_isr_emergency();
+        if (app_foc_current_is_tripped()) {
+            /* 快跳登记故障码（可观测 + 首故障快照）；是否关桥仍由动作层决定
+             * （policy=TRIP 时 fault_raise 会置 FAULT，下一拍 ISR 门控即执行）。 */
+            app_fault_raise(APP_FAULT_OC_TRIP);
+            if (app_fault_actions_enabled()) {
+                app_foc_isr_emergency();
+            }
         }
         g_foc_current_snapshot.speed_out_valid = s_speed_observer_valid;
     }
@@ -673,7 +677,7 @@ isr_exit:
             /* 孤立尖峰（冷 cache/总线尾延迟）不瞬杀：连续 32 拍超限才判快路径
              * 失控（真触发风暴 = 每拍超限，streak 快速打满）。 */
             s_overrun_streak++;
-            if (APP_PROTECT_ACTION_EN && (s_overrun_streak >= APP_FOC_OVR_TRIP_STREAK)) {
+            if (app_fault_actions_enabled() && (s_overrun_streak >= APP_FOC_OVR_TRIP_STREAK)) {
                 s_isr_disabled = true;
                 app_foc_isr_emergency();
             }
@@ -732,6 +736,15 @@ void app_foc_run_once(void) {
     }
     app_foc_run_body();
     {
+        /* 保护动作层（policy = STOP）：消费一次受控停机请求；状态不允许则降级 TRIP。
+         * 放在 run_body 之后：本拍先完成常规编排，再处理保护请求。 */
+        uint32_t stop_code = app_fault_take_stop_request();
+
+        if ((stop_code != 0U) && (app_foc_request_fault_stop(stop_code) != 0)) {
+            app_fault_note_stop_rejected();
+        }
+    }
+    {
         bool active = (s_state == APP_FOC_STATE_READY) || (s_state == APP_FOC_STATE_RUN)
                    || (s_state == APP_FOC_STATE_CALIB);
         float i_mag = 0.0f;
@@ -767,8 +780,10 @@ int app_foc_enable(void) {
     if (s_state != APP_FOC_STATE_OFF) {
         return 0;  /* 已使能：幂等 */
     }
-    if (APP_PROTECT_ACTION_EN && (app_fault_get_state() != APP_FAULT_STATE_NORMAL)) {
-        return -2; /* 故障模块非 NORMAL（M1：动作全关时不拦截） */
+    /* 仅"带动作码"（STOP/TRIP）的锁存阻塞使能；纯 WARN/DERATE 锁存不阻塞。
+     * 台架总保险 app_fault_actions_enabled()=0 时动作掩码为空 → 等同于不拦截（行为同 v1）。 */
+    if (app_fault_get_blocking_latched() != 0U) {
+        return -2;
     }
     if (!app_adc_is_valid()) {
         return -3; /* ADC 采样链无效 */
@@ -932,6 +947,25 @@ int app_foc_set_iq_ref(float i_q_a) {
 }
 
 FOC_ATTR_RAMFUNC
+int app_foc_request_fault_stop(uint32_t code) {
+    (void)code;
+
+    /* OFF-但桥使能（debug inverter 三相 50% 输出）/ CALIB / vtest：没有"受控停机"
+     * 可言，且这三态恰是最坏的反灌场景 → 返回 -1，让动作层降级为 TRIP。 */
+    if (s_state == APP_FOC_STATE_OFF) {
+        /* 桥已断（正常空闲）→ 无需停机，**不算失败**（否则空闲期的一次母线越限会把
+         * 此后所有 STOP 永久升级为 TRIP）。仅"OFF 但桥仍使能"才是真危险态。 */
+        return app_3phase_inverter_is_enabled() ? -1 : 0;
+    }
+    if ((s_state == APP_FOC_STATE_CALIB) || app_foc_current_vtest_active()) {
+        return -1;
+    }
+    if (s_stop_pending) {
+        return 0; /* 已在进行 */
+    }
+    return app_foc_request_stop();
+}
+
 bool app_foc_stop_pending(void) { return s_stop_pending; }
 int app_foc_set_current_source(app_foc_current_source_t source) {
     uint32_t st = intf_sys_irq_save();
@@ -1041,6 +1075,11 @@ bool app_foc_wait_off(uint32_t timeout_ms) {
     timeout_cycles = (intf_clock_get_cpu_freq() / 1000U) * timeout_ms;
     while (s_stop_pending) {
         app_foc_stop_step();
+        /* 保护泵（2026-10-27）：本函数在 io 任务内自旋最长 3s，而慢保护节拍就在同一
+         * 任务里 → 不泵则 L2/L3/健康在"减速 + 软关断"这段**最易反灌**的窗口内全部
+         * 停摆。泵是幂等的：STOP 走边沿请求、TRIP 靠锁存，重复调用安全。 */
+        app_fault_tick();
+        app_fault_wdog_service();
         if (!s_stop_pending) {
             break;
         }
