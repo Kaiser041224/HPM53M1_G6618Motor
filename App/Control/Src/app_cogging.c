@@ -31,6 +31,8 @@ static volatile bool s_output_angle_valid;
 static volatile float s_output_angle_rad;
 static volatile float s_gain;
 
+/** @brief 有限性判定（30kHz 齿槽注入路径每拍调用，须驻留 ILM） */
+APP_ATTR_RAMFUNC
 static bool cogging_finite(float value) { return isfinite(value); }
 
 static void cogging_update_output_tracking(void) {
@@ -146,9 +148,14 @@ int app_cogging_set_gain(float gain) {
 }
 
 void app_cogging_suspend(bool suspend) { s_suspended = suspend; }
+/* 三个 setter 由 15kHz app_motion_step 每拍调用：必须驻留 ILM，
+ * 否则 ILM 内的 motion 代码每拍跳回 XIP 取指。 */
+APP_ATTR_RAMFUNC
 void app_cogging_set_speed_limited(bool limited) { s_speed_limited = limited; }
+APP_ATTR_RAMFUNC
 void app_cogging_set_motion_active(bool active) { s_motion_active = active; }
 
+APP_ATTR_RAMFUNC
 void app_cogging_set_output_angle(float angle_rad, bool valid) {
     s_output_angle_rad = cogging_finite(angle_rad) ? angle_rad : 0.0f;
     s_output_angle_valid = valid && cogging_finite(angle_rad);

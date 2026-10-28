@@ -56,6 +56,8 @@ static inline void flash_exit_critical(uint32_t irq_state)
  * @param len 长度 [byte]
  * @return true = 在范围内
  */
+/** @brief 地址范围检查（read/program/erase 的 ILM 实现每拍调用，须同段） */
+ATTR_RAMFUNC
 static bool flash_addr_in_range(uint32_t addr, uint32_t len)
 {
     return (addr >= s_base) && ((addr + len) <= (s_base + s_size)) && (len > 0U);
@@ -67,6 +69,8 @@ static bool flash_addr_in_range(uint32_t addr, uint32_t len)
  * l1c_dc_invalidate() 要求起始地址和长度都为 32B 对齐；flash 记录长度、
  * 最后一块长度通常不是 32B 倍数，直接传入会触发 SDK assert。
  */
+/** @brief cache line 对齐后失效（program/erase 的 ILM 实现调用，须同段） */
+ATTR_RAMFUNC
 static void flash_dcache_invalidate_aligned(uint32_t addr, uint32_t len)
 {
     uint32_t aligned_start = HPM_L1C_CACHELINE_ALIGN_DOWN(addr);

@@ -384,6 +384,8 @@ int intf_adc_stop(intf_adc_ch_t ch)
 
 extern void adc_wdog_reenable(uint8_t inst, uint8_t ch);
 
+/** @brief 重臂 ADC 硬件 WDOG（1kHz 保护服务调用，须驻留 ILM） */
+ATTR_RAMFUNC
 void intf_adc_wdog_reenable(intf_adc_ch_t ch)
 {
     uint8_t inst   = INTF_ADC_CH_INST(ch);
@@ -537,6 +539,8 @@ int intf_gpio_init(const intf_gpio_cfg_t *cfg)
     return -1;
 }
 
+/** @brief 设置引脚电平（emergency_stop 关栅极供电路径，须驻留 ILM） */
+ATTR_RAMFUNC
 int intf_gpio_set_level(intf_gpio_pin_t pin, intf_gpio_level_t level)
 {
     if (s_gpio_ops && s_gpio_ops->set_level) return s_gpio_ops->set_level(pin, level);

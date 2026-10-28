@@ -339,6 +339,8 @@ bool app_adc_get_raw(adc_channel_t ch, uint16_t* raw) {
     return true;
 }
 
+/** @brief 序列计数（app_fault_tick 每拍读取，须驻留 ILM） */
+APP_ATTR_RAMFUNC
 uint32_t app_adc_get_sequence(void) { return s_sequence; }
 
 APP_ATTR_RAMFUNC /* FOC 30kHz ISR 调用链（app_analog_signal_vbus_fast） */
@@ -398,6 +400,8 @@ int app_adc_set_trigger_delay_ns(uint32_t delay_ns) {
     return rc;
 }
 
+/** @brief 重臂 ADC 硬件 WDOG（1kHz 保护服务调用） */
+APP_ATTR_RAMFUNC
 void app_adc_wdog_reenable(adc_channel_t ch) {
     if (ch >= ADC_CH_COUNT) {
         return;

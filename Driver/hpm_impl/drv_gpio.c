@@ -35,6 +35,8 @@
  * @param port 端口号
  * @return GPIO 控制器基地址
  */
+/** @brief GPIO 控制器基地址（emergency_stop 路径，须与调用者同段） */
+ATTR_RAMFUNC
 static GPIO_Type *get_gpio_base(uint8_t port)
 {
     (void)port;
@@ -46,6 +48,8 @@ static GPIO_Type *get_gpio_base(uint8_t port)
  * @param port 端口号
  * @return 端口寄存器索引
  */
+/** @brief GPIO 端口寄存器索引（emergency_stop 路径，须与调用者同段） */
+ATTR_RAMFUNC
 static uint32_t get_gpio_port_index(uint8_t port)
 {
     switch (port) {
@@ -192,6 +196,8 @@ static int hpm_gpio_init(const intf_gpio_cfg_t *cfg)
  * @param level 输出电平
  * @return 0 = 成功；-1 = 引脚越界
  */
+/** @brief 设置引脚电平（emergency_stop 关栅极供电路径，须驻留 ILM） */
+ATTR_RAMFUNC
 static int hpm_gpio_set_level(intf_gpio_pin_t pin, intf_gpio_level_t level)
 {
     if (pin >= GPIO_PIN_COUNT) {

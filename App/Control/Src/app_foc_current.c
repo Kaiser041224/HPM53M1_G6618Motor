@@ -779,8 +779,11 @@ int app_foc_current_run_fresh(float theta_e_rad, float omega_e_rad_s, float i_d_
                 + ((s_identify_count/s_identify_half_period)%2U ? -s_identify_amplitude
                                                                : s_identify_amplitude);
         out.v_q = 0;
-        out.saturated = fabsf(out.v_d) > in.v_max;
-        if (out.saturated) out.v_d = copysignf(in.v_max, out.v_d);
+        /* 显式比较/取符号代替 fabsf/copysignf：本函数在 30kHz 电流环上，
+         * libm 在 XIP，每次调用都会打断 ILM 取指连续性。 */
+        float abs_v_d = (out.v_d < 0.0f) ? -out.v_d : out.v_d;
+        out.saturated = abs_v_d > in.v_max;
+        if (out.saturated) out.v_d = (out.v_d < 0.0f) ? -in.v_max : in.v_max;
     }
     g_foc_cyc_pi = intf_clock_get_cycle() - t_pi;
 

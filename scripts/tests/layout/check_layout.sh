@@ -48,6 +48,35 @@ SYMBOLS=(
     algo_mit_step
     mit_finite
     mit_approach
+    # 2026-10-28 第二批：消除「ILM 内跳回 XIP」——30kHz/15kHz 热路径
+    algo_cogging_interp_i16
+    app_cogging_iq
+    app_cogging_set_output_angle
+    app_cogging_set_motion_active
+    app_cogging_set_speed_limited
+    app_foc_stop_pending
+    app_foc_request_stop
+    app_foc_revoke_current
+    # 2026-10-28 第二批：1kHz 保护链（fault/ADC/编码器/桥臂）
+    fault_finite
+    fault_snapshot_now
+    fault_conditions_ok
+    fault_reset_all
+    app_adc_get_sequence
+    app_adc_wdog_reenable
+    app_encoder_get_error_count
+    app_3phase_inverter_is_enabled
+    # 2026-10-28 第二批：故障停机路径 + flash ILM 实现的同段辅助
+    app_gpio_set
+    intf_gpio_set_level
+    intf_adc_wdog_reenable
+    hpm_gpio_set_level
+    get_gpio_base
+    get_gpio_port_index
+    adc_wdog_reenable
+    flash_addr_in_range
+    flash_dcache_invalidate_aligned
+    ntc_resistance_from_volts
 )
 
 if [[ ! -x "$NM" ]]; then

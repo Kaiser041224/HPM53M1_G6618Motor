@@ -95,6 +95,8 @@ static bool s_valid;
  * @param volts 分压点电压
  * @return NTC 阻值 [Ω]（越界时返回替代值）
  */
+/** @brief NTC 电压→电阻（channel_to_physical 在 ILM，须同段避免跨段） */
+APP_ATTR_RAMFUNC
 static float ntc_resistance_from_volts(float volts) {
     const float vref_volts = INTF_ADC_DEFAULT_VREF_MV / 1000.0f;
 

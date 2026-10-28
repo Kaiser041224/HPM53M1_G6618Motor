@@ -10,6 +10,8 @@
 #include "app_gpio.h"
 #include "intf_gpio.h"
 
+#include "app_ramfunc.h" /* APP_ATTR_RAMFUNC */
+
 #include <stddef.h>
 
 /* Driver registration */
@@ -29,6 +31,8 @@ void app_gpio_init(void) {
     intf_gpio_init(&gdrv_en_cfg);
 }
 
+/** @brief 设置 GPIO（emergency_stop 关栅极供电路径，须驻留 ILM） */
+APP_ATTR_RAMFUNC
 void app_gpio_set(uint16_t pin, uint8_t on) {
     intf_gpio_set_level(pin, on ? INTF_GPIO_LEVEL_HIGH : INTF_GPIO_LEVEL_LOW);
 }

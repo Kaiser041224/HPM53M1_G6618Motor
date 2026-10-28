@@ -13,6 +13,8 @@
 
 #include "app_cogging_identify.h"
 
+#include "app_ramfunc.h" /* APP_ATTR_RAMFUNC */
+
 #include "app_current_identify.h"
 #include "app_encoder.h"
 #include "app_foc.h"
@@ -73,6 +75,8 @@ static struct {
 static algo_cogging_bin_t s_rotor_bins[ALGO_COGGING_ROTOR_POINTS];
 static algo_cogging_bin_t s_output_bins[ALGO_COGGING_OUTPUT_POINTS];
 
+/** @brief 有限性判定（与实时注入路径同段，避免同一名字的副本散落两处） */
+APP_ATTR_RAMFUNC
 static bool cogging_finite(float value) { return isfinite(value); }
 
 static int8_t cogging_sign(float value) {

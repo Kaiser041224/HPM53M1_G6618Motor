@@ -546,6 +546,8 @@ int app_encoder_set_direction(app_encoder_id_t id, bool cw_increasing) {
 
 uint32_t app_encoder_get_rotor_jump_count(void) { return s_rotor_snap.jump_count; }
 
+/** @brief 编码器错误计数（app_fault_tick 每拍读取，须驻留 ILM） */
+APP_ATTR_RAMFUNC
 uint32_t app_encoder_get_error_count(app_encoder_id_t id) {
     if ((id >= APP_ENCODER_COUNT) || (s_encoder_dev[id] == NULL)) {
         return 0U;

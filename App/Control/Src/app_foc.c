@@ -65,6 +65,7 @@ static bool s_current_request_expired;    /**< 过期锁存，直到新请求/�
 static app_foc_execution_t s_execution;
 
 /** @brief 调用方已持有临界区，撤销旧正常请求 */
+APP_ATTR_RAMFUNC /* STOP 动作路径（1kHz） */
 static void app_foc_revoke_current(void) {
     ++s_current_epoch;
     s_current_request = (app_foc_current_request_t){0};
@@ -966,6 +967,8 @@ int app_foc_request_fault_stop(uint32_t code) {
     return app_foc_request_stop();
 }
 
+/** @brief 受控停机请求在途（15kHz motion 分支每拍查询，须驻留 ILM） */
+APP_ATTR_RAMFUNC
 bool app_foc_stop_pending(void) { return s_stop_pending; }
 int app_foc_set_current_source(app_foc_current_source_t source) {
     uint32_t st = intf_sys_irq_save();
@@ -1029,6 +1032,8 @@ int app_foc_set_duty_ceiling(float ceiling) {
     intf_sys_irq_restore(st);
     return rc;
 }
+/** @brief 受控停机请求（故障动作层 STOP 边沿，1kHz） */
+APP_ATTR_RAMFUNC
 int app_foc_request_stop(void) {
     uint32_t st = intf_sys_irq_save();
     if (s_state == APP_FOC_STATE_FAULT) {

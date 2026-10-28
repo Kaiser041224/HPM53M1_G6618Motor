@@ -591,6 +591,7 @@ void adc_reset_diag_max(void)
  * WDOG re-enable helper (public for App manual re-arm)
  * ============================================================================ */
 
+ATTR_RAMFUNC
 void adc_wdog_reenable(uint8_t inst, uint8_t ch) {
     if (inst >= INTF_ADC_INSTANCE_COUNT || ch >= ADC_MAX_CHANNELS)
         return;

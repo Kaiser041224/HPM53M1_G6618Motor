@@ -245,6 +245,8 @@ void app_3phase_inverter_emergency_stop(void) {
     s_gate_power_on = false;
 }
 
+/** @brief 桥臂使能状态（故障停机路径查询） */
+APP_ATTR_RAMFUNC
 bool app_3phase_inverter_is_enabled(void) { return s_enabled; }
 
 void app_3phase_inverter_get_duty_abc(float* duty_u, float* duty_v, float* duty_w) {

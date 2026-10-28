@@ -117,6 +117,8 @@ static void fault_reload_policy(void) {
 }
 
 /** @brief 有限性判定（位模式；与 foc_finite 同语义，避免依赖 Algorithm/FOC 头） */
+/** @brief 有限性判定（30kHz WDOG 回调 → fault_raise 链上） */
+APP_ATTR_RAMFUNC
 static bool fault_finite(float x) {
     union {
         float f;
@@ -193,6 +195,8 @@ static void fault_publish(void) {
 /**
  * @brief 采集当前物理量快照（模拟量未就绪则跳过）
  */
+/** @brief 立即刷新故障快照（fault_raise 在 30kHz WDOG 回调中调用） */
+APP_ATTR_RAMFUNC
 static void fault_snapshot_now(void) {
     app_analog_values_t v;
 
@@ -249,6 +253,8 @@ static void fault_raise(uint32_t code, uint16_t oc_fast_raw) {
  * @brief 条件复检：L2/L3 用当前值 + L1 用最新原始值（主循环与 tick 共用）
  * @return true = 故障条件均已恢复
  */
+/** @brief 判据全清检查（1kHz 保护节拍 / clear 路径） */
+APP_ATTR_RAMFUNC
 static bool fault_conditions_ok(void) {
     app_analog_values_t v;
 
@@ -279,6 +285,8 @@ static bool fault_conditions_ok(void) {
  * @brief 复位故障状态与去抖计数（清除路径；须在 ISR 上下文调用）。
  *        语义：F = 完整复位——状态/锁存/首故障/快照/事件计数全部归零。
  */
+/** @brief 全量复位故障状态（1kHz 保护节拍 / clear 路径） */
+APP_ATTR_RAMFUNC
 static void fault_reset_all(void) {
     s_fault_ctx.latched = 0U;
     s_fault_ctx.active = 0U;

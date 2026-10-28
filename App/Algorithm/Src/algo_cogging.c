@@ -9,12 +9,17 @@
 
 #include "algo_cogging.h"
 
+#include "app_ramfunc.h" /* APP_ATTR_RAMFUNC */
+#include "foc_math.h"     /* foc_wrap_2pi（ILM，替代 fmodf） */
+
 #include <float.h>
 #include <math.h>
 #include <stddef.h>
 
 #define ALGO_COGGING_TWO_PI (6.283185307179586f)
 
+/** @brief 有限性判定（30kHz 齿槽注入路径每拍调用，须驻留 ILM） */
+APP_ATTR_RAMFUNC
 static bool cogging_finite(float value) { return isfinite(value); }
 
 void algo_cogging_bin_reset(algo_cogging_bin_t* bin) {
@@ -56,6 +61,7 @@ int algo_cogging_bin_torque(const algo_cogging_bin_t* bin, float kt_nm_per_a,
     return 0;
 }
 
+APP_ATTR_RAMFUNC
 float algo_cogging_interp_i16(const int16_t* data, uint16_t points, float scale_nm,
                               float angle_rad) {
     if ((data == NULL) || (points < 2U) || !cogging_finite(scale_nm)
@@ -71,7 +77,9 @@ float algo_cogging_interp_i16(const int16_t* data, uint16_t points, float scale_
         wrapped -= ALGO_COGGING_TWO_PI;
     }
     if ((wrapped < 0.0f) || (wrapped >= ALGO_COGGING_TWO_PI)) {
-        wrapped = fmodf(angle_rad, ALGO_COGGING_TWO_PI);
+        /* 兜底归一化不用 fmodf：libm 在 XIP，30kHz ISR 内跳回 flash 取指。
+         * foc_wrap_2pi 是 ILM 纯函数，等价地把角折回 [0, 2π)。 */
+        wrapped = foc_wrap_2pi(angle_rad);
         if (wrapped < 0.0f) {
             wrapped += ALGO_COGGING_TWO_PI;
         }
