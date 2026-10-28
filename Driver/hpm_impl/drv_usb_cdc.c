@@ -351,7 +351,9 @@ static int hpm_usb_cdc_init(void)
     s_dtr = false;
     s_rx_cb = NULL;
 
-    intc_set_irq_priority(IRQn_USB0, 2);
+    /* USB 低于 ADC/控制类中断（ADC0/FOC=3、GPTMR1=2），避免枚举和
+     * CDC ISR 抢占控制链路。 */
+    intc_set_irq_priority(IRQn_USB0, 1);
 
     usbd_desc_register(USB_CDC_BUSID, &s_cdc_descriptor);
     usbd_add_interface(USB_CDC_BUSID, usbd_cdc_acm_init_intf(USB_CDC_BUSID, &s_cdc_intf0));

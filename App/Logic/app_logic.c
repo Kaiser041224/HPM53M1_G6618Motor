@@ -145,11 +145,7 @@ void app_init(void) {
     app_debug_can_init();
     app_can_service_init();
 
-    /* 6. USB 终端（USB0 CDC 虚拟串口；CherrySH Terminal，1kHz 慢任务轮询） */
-    app_usb_init();
-    app_terminal_init();
-
-    /* 7. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴）。
+    /* 6. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴）。
      *    flash 参数区已在 0b 就绪；app_encoder_init() 内重复调用 app_param_init() 为幂等。 */
     app_debug_encoder_init();
 
@@ -282,6 +278,15 @@ void app_init(void) {
             "[MOTION] timer observation: %s (single tick=15kHz, position->velocity)\r\n",
             rc == 0 ? "started" : "FAILED");
     }
+
+    /* 15. USB 终端最后连接（USB0 CDC 虚拟串口；CherrySH Terminal，1kHz 慢任务轮询）
+     *
+     * 必须放在所有启动自检之后：flash 破坏性读写、逆变桥输出自检等会长时间
+     * 关闭全局中断，若主机已开始枚举会被打断（表现为偶发"不枚举/设备描述符
+     * 请求失败"，只能重插）。USB 初始化后只进入任务循环，不再有 ms 级阻塞操作。
+     */
+    app_usb_init();
+    app_terminal_init();
 }
 
 /**
