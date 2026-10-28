@@ -20,6 +20,8 @@
 #include "app_terminal_cmd.h"
 
 #include "app_adc.h"
+#include "app_can.h"
+#include "app_can_service.h"
 #include "app_debug_adc.h"
 #include "app_debug_encoder.h"
 #include "app_debug_fault.h"
@@ -217,6 +219,42 @@ static int cmd_profiler(int argc, char** argv) {
     return 0;
 }
 
+/**
+ * @brief 命令 can：CAN 协议与看门狗状态
+ *
+ * 输出：节点号、看门狗（armed/suspended/fired）、总线统计、协议统计。
+ * 台架排查顺序：先看 wd armed（主机是否发过控制帧）→ 再看 proto.drop/bad（帧是否被丢）
+ * → 最后看 bus_off/tx 失败（物理层）。
+ */
+static int cmd_can(chry_shell_t* csh, int argc, const char** argv) {
+    (void)argc;
+    (void)argv;
+    app_can_service_stats_t proto;
+    app_can_stats_t bus;
+    intf_can_status_t st;
+    bool armed = false;
+    bool suspended = false;
+    bool fired = false;
+
+    app_can_service_get_stats(&proto);
+    (void)app_can_get_stats(&bus);
+    (void)app_can_get_status(&st);
+    app_can_service_get_watchdog(&armed, &suspended, &fired);
+
+    csh_printf(csh, "can: node=%u wd=%s susp=%u fired=%u | bus_off=%d\r\n",
+               (unsigned)app_can_service_get_node_id(), armed ? "armed" : "idle",
+               (unsigned)suspended, (unsigned)fired, st.bus_off);
+    csh_printf(csh, "     bus: tx_ok=%u tx_fail=%u rx=%u drop=%u\r\n",
+               (unsigned)bus.tx_ok_count, (unsigned)bus.tx_fail_count, (unsigned)bus.rx_count,
+               (unsigned)bus.rx_drop_count);
+    csh_printf(csh, "     proto: rx=%u drop=%u bad=%u unk=%u fmt=%u mit(ok=%u to=%u)\r\n",
+               (unsigned)proto.rx_frames, (unsigned)proto.rx_dropped, (unsigned)proto.bad_len,
+               (unsigned)proto.unknown_cmd, (unsigned)proto.format_mismatch,
+               (unsigned)proto.mit_pair_ok, (unsigned)proto.mit_pair_timeout);
+    return 0;
+}
+
+CSH_CMD_EXPORT_ALIAS(cmd_can, can, );
 CSH_CMD_EXPORT_ALIAS(cmd_adc, adc, );
 CSH_CMD_EXPORT_ALIAS(cmd_pwm, pwm, );
 CSH_CMD_EXPORT_ALIAS(cmd_enc, enc, );

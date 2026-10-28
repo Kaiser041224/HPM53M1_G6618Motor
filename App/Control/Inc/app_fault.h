@@ -34,9 +34,10 @@ extern "C" {
 #define APP_FAULT_ADC_TIMEOUT (1UL << 8) /* 健康：PMT 帧序号停滞 */
 #define APP_FAULT_ENC_READ    (1UL << 9)  /* 健康：编码器错误计数增量 */
 #define APP_FAULT_OC_TRIP     (1UL << 10) /* 快跳：电流环内置 i_trip_a 连续超限 */
+#define APP_FAULT_COMM_TIMEOUT (1UL << 11) /* CAN 通信看门狗超时（首帧后 arm） */
 
 /* 故障码位数（bit0..10）：policy 表与"带动作码掩码"的规模 */
-#define APP_FAULT_CODE_COUNT  (11U)
+#define APP_FAULT_CODE_COUNT  (12U)
 
 /* DERATE 生效时的 iq 限幅倍率（待接入 YAML；见计划 Task 7） */
 #define APP_FAULT_DERATE_SCALE_DEFAULT (0.5f)

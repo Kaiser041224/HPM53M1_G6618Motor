@@ -29,6 +29,7 @@
 #include "app_analog_signal.h"
 #include "app_current_identify.h"
 #include "app_debug_adc.h"
+#include "app_can_service.h"
 #include "app_debug_can.h"
 #include "app_debug_encoder.h"
 #include "app_debug_flash.h"
@@ -139,8 +140,10 @@ void app_init(void) {
     /* 4. UART0 自检（PA00/PA01，115200 8N1） */
     app_debug_uart_init();
 
-    /* 5. CAN 自检（MCAN3，经典 CAN） */
+    /* 5. CAN 自检（MCAN3，经典 CAN）+ 控制协议服务
+     *    自检负责环回验证与外设初始化；service 接管 RX 回调/ISR 钩子/过滤器。 */
     app_debug_can_init();
+    app_can_service_init();
 
     /* 6. USB 终端（USB0 CDC 虚拟串口；CherrySH Terminal，1kHz 慢任务轮询） */
     app_usb_init();
@@ -360,7 +363,8 @@ void app_io_step(void) {
 
     /* 调试与通讯轮询（各自内部 1Hz 打印门限） */
     app_debug_uart_run_once();
-    app_debug_can_run_once();
+    app_can_service_step();   /* CAN 协议：收帧/执行/看门狗/周期发送（每拍） */
+    app_debug_can_run_once(); /* CAN 统计打印（1Hz） */
     app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
 }
 

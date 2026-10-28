@@ -125,6 +125,24 @@ SCHEMA = {
          "position_traj.trajectory_vel_limit", "f32", 0.0, None),
         ("control.position_loop.trajectory_accel_limit",
          "position_traj.trajectory_accel_limit", "f32", 0.0, None),
+        # 多圈/增量行程保护（追加到 params 末尾，避免重排既有字段偏移）
+        ("control.position_loop.max_step_deg", "position_travel.max_step_deg", "f32", 0.0, None),
+        ("control.position_loop.max_travel_deg", "position_travel.max_travel_deg", "f32", 0.0, None),
+        ("control.position_loop.travel_min_deg", "position_travel.travel_min_deg", "f32", None, None),
+        ("control.position_loop.travel_max_deg", "position_travel.travel_max_deg", "f32", None, None),
+        # MIT 阻抗控制
+        ("control.mit.enable", "mit.enable", "u8", 0, 1),
+        ("control.mit.kp_max", "mit.kp_max", "f32", 0.0, 100.0),
+        ("control.mit.kd_max", "mit.kd_max", "f32", 0.0, 20.0),
+        ("control.mit.gain_ramp_rate", "mit.gain_ramp_rate", "f32", 0.0, None),
+        ("control.mit.pos_err_max_deg", "mit.pos_err_max_deg", "f32", 0.0, None),
+        ("control.mit.t_ff_max_ratio", "mit.t_ff_max_ratio", "f32", 0.0, 1.0),
+        ("control.mit.can_format", "mit.can_format", "u8", 0, 1),
+        ("control.mit.friction_ff_en", "mit.friction_ff_en", "u8", 0, 1),
+        ("control.mit.inertia_ff_en", "mit.inertia_ff_en", "u8", 0, 1),
+        # CAN 通信看门狗（追加到 params 末尾，避免重排既有字段偏移）
+        ("fault.comm_timeout_ms", "comm.comm_timeout_ms", "u16", 0, 65535),
+        ("fault.comm_wd_source", "comm.wd_source", "u8", 0, 2),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
         ("control.limits.i_q_continuous_a", "i_q_continuous_a", "f32", 0.0, None),
         ("control.limits.i_q_boost_time_s", "i_q_boost_time_s", "f32", 0.0, None),
@@ -156,6 +174,8 @@ SCHEMA = {
 # 字符串枚举字段：YAML 使用可读单词，生成 C 时转为数值
 ENUM_FIELDS = {
     ("software", "storage"): {"keep": 0, "reset": 1, "override": 2},
+    ("software", "control.mit.can_format"): {"compact": 0, "dual": 1},
+    ("software", "fault.comm_wd_source"): {"can": 0, "usb": 1, "both": 2},
 }
 
 # 布尔字段：YAML 接受 true/false、on/off、yes/no、1/0；生成 C 时写 u8 0/1
@@ -171,6 +191,9 @@ BOOL_FIELDS = {
     ("software", "control.cogging.rotor_enable"),
     ("software", "control.cogging.output_enable"),
     ("motor", "encoder.electrical_offset_valid"),
+    ("software", "control.mit.enable"),
+    ("software", "control.mit.friction_ff_en"),
+    ("software", "control.mit.inertia_ff_en"),
 }
 
 # 仅文档字段：(yaml 路径, 允许值集合或 None)；只校验，不生成 C 字段
@@ -256,6 +279,11 @@ APPLY_REBOOT = {
     "software.control.cogging.gain",
     # 持久化代次（boot 期比对；不属运行参数）
     "software.storage",
+    # CAN MIT 报文格式：协议初始化期消费
+    "software.control.mit.can_format",
+    # CAN 通信看门狗：init 期消费
+    "software.fault.comm_timeout_ms",
+    "software.fault.comm_wd_source",
 }
 
 # FOC 停机期消费项：param set 仅在 FOC OFF 接受，下一次 foc on 重载模型/角度链生效。

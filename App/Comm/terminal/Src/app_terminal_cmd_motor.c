@@ -216,14 +216,15 @@ static void cal_encoder_emit_result(const app_motor_identify_result_t* result) {
                           (double)(result->offset_end_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)result->direction, (double)result->quality,
                           (double)(result->ratio_err * 100.0f));
-    app_terminal_cmd_emit("    fwd=%.2f rev=%.2f deg (hyst=%.2f)  probe=%+.3f/%+.3f rad "
+    app_terminal_cmd_emit("    fwd=%.2f rev=%.2f deg (hyst=%.2f)  probe=%+.2f/%+.2f deg "
                           "(i=%.1fA)  resid mean/max=%.2f/%.2f deg  drift=%.1f deg/s  "
                           "i_peak=%.2f A  t=%.1f s\r\n",
                           (double)(result->offset_fwd_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)(result->offset_rev_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)(foc_wrap_pm_pi(result->offset_fwd_rad - result->offset_rev_rad)
                                    * CAL_ENCODER_RAD_TO_DEG),
-                          (double)result->probe_fwd_rad, (double)result->probe_rev_rad,
+                          (double)(result->probe_fwd_rad * CAL_ENCODER_RAD_TO_DEG),
+                          (double)(result->probe_rev_rad * CAL_ENCODER_RAD_TO_DEG),
                           (double)result->probe_current_a, (double)result->verify_mean_deg,
                           (double)result->verify_max_deg, (double)result->verify_drift_deg_s,
                           (double)result->i_peak_a, (double)result->elapsed_ms / 1000.0);

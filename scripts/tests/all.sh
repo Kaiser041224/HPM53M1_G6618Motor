@@ -26,7 +26,7 @@ run() {
 if [[ "${SKIP_LAYOUT:-0}" != "1" ]]; then
     run layout bash scripts/tests/layout/check_layout.sh
 fi
-for t in adc analog control fault foc encoder identify params; do
+for t in adc analog can control fault foc encoder identify params; do
     run "$t" bash "scripts/tests/$t/run.sh"
 done
 run gen python3 scripts/test_gen_params.py

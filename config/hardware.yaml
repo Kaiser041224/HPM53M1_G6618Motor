@@ -29,7 +29,10 @@ ntc:
   max_ohm: 1000000.0                      # 开路/超量程替代值 [Ω]
 
 canid_dip:
-  levels: 16                              # 占位：4-bit 拨码档数；解码逻辑未实现（节点号映射待硬件确认）
+  # 事实更正（2026-10-27）：节点号不是 GPIO 拨码，而是电阻网络经 ADC 采样
+  # （ADC_CH_V_CANID = ADC1_IN15 / PB00，app_analog_signal.c 仅返回原始电压）。
+  levels: 16                              # 16 档；阈值表需逐档实测后填入（当前未实现解码）
+  # 软件 v1 使用 software.can.node_id_default 作为节点号，不依赖本解码。
 
 adc:
   sample_cycle: 15                        # 采样窗口 [ADC 时钟数]（30kHz 三相：15 兼顾低侧窗口与噪声；下限 10）

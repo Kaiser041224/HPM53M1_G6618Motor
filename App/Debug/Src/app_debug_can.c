@@ -20,6 +20,7 @@
 #include "app_debug_can.h"
 
 #include "app_can.h"
+#include "app_can_service.h"
 #include "app_debug_rtt.h"
 #include "app_software_params.h"
 #include "intf_can.h"
@@ -40,47 +41,7 @@ extern void hpm_can_driver_register(void);
 #define CAN_LB_WAIT_MS   (100U)
 
 static uint32_t s_tick;
-static uint32_t s_tx_seq;
-static uint32_t s_rx_total;
 static uint32_t s_last_tx_cycle;
-static uint32_t s_tx_report_id;
-
-/**
- * @brief 将一帧 CAN 报文（ID/DLC/数据）打印到 RTT
- * @param tag 行首标记（如 "rx"）
- * @param msg 待打印报文
- */
-static void can_dump_frame(const char* tag, const app_can_msg_t* msg) {
-    app_debug_printf("[CAN] %s ID=0x%03lX DLC=%u data=", tag, (unsigned long)msg->id, msg->dlc);
-    for (uint8_t i = 0U; (i < msg->dlc) && (i < 8U); i++) {
-        app_debug_printf("%02X ", msg->data[i]);
-    }
-    app_debug_printf("\r\n");
-}
-
-/**
- * @brief CAN 接收回调：打印并把收到的帧原样回发（回显验证）
- * @param msg 收到的报文
- */
-static void can_rx_callback(const app_can_msg_t* msg) {
-    int echo_ret;
-
-    s_rx_total++;
-    can_dump_frame("rx", msg);
-
-    /*
-     * 回显：把收到的帧原样发回总线（对应 UART 自检的回显验证）。
-     * 上位机应能收到同 ID / 同数据的帧；失败时打印错误。
-     */
-    if (msg->is_ext_id) {
-        echo_ret = app_can_send_ext(msg->id, msg->data, msg->dlc);
-    } else {
-        echo_ret = app_can_send_std((uint16_t)msg->id, msg->data, msg->dlc);
-    }
-    if (echo_ret != 0) {
-        app_debug_printf("[CAN] echo FAILED ret=%d\r\n", echo_ret);
-    }
-}
 
 /* ============================================================================
  * 内部环回自检（不经外部收发器，不依赖总线对端）
@@ -178,8 +139,7 @@ void app_debug_can_init(void) {
 
     /* 先注册驱动：环回自检经 Interface 调用，需要 ops 已就绪（幂等） */
     hpm_can_driver_register();
-    software = app_software_params_current(); /* config/software.yaml（总线波特率 + 参数回报帧 ID） */
-    s_tx_report_id = software->can.tx_report_id;
+    software = app_software_params_current(); /* config/software.yaml（总线波特率） */
 
     app_debug_printf(
         "\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, report TX ID=0x%03X\r\n",
@@ -194,57 +154,41 @@ void app_debug_can_init(void) {
     }
     app_debug_printf("[CAN] init OK, clk=%u Hz\r\n", (unsigned)app_can_get_clock_hz());
 
-    app_can_set_rx_callback(can_rx_callback);
     app_can_clear_stats();
-
-    if (app_can_add_std_filter(0x000U, 0x000U) != 0) {
-        app_debug_printf("[CAN] std filter config FAILED\r\n");
-    }
-    if (app_can_add_ext_filter(0x00000000U, 0x00000000U) != 0) {
-        app_debug_printf("[CAN] ext filter config FAILED\r\n");
-    }
+    /* RX 回调、ISR 钩子与过滤器所有权已移交 App/Comm/can（app_can_service_init）。
+     * 本模块只保留自检与统计打印，避免同一回调/过滤器被两处注册。 */
 }
 
 void app_debug_can_run_once(void) {
     uint32_t now = intf_clock_get_cycle();
     uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * CAN_TX_PERIOD_MS;
+    intf_can_status_t st;
+    app_can_stats_t stats;
+    app_can_service_stats_t proto;
 
-    /* 1) 分发接收回调（主循环上下文） */
-    app_can_poll();
-
-    /* 2) 每秒发送一帧 + 状态行 */
-    if ((uint32_t)(now - s_last_tx_cycle) >= period_cycles) {
-        uint8_t data[CAN_DLC];
-        intf_can_status_t st;
-        app_can_stats_t stats;
-        int ret;
-
-        s_last_tx_cycle = now;
-        s_tick++;
-
-        data[0] = (uint8_t)s_tx_seq;
-        for (uint8_t i = 1U; i < CAN_DLC; i++) {
-            data[i] = (uint8_t)(0x10U + i);
-        }
-
-        /* 参数回报帧 ID（config/software.yaml；11-bit 标准帧，SCHEMA 限
-         * ≤0x7FF）；负载为计数占位，非真实参数回报 */
-        ret = app_can_send_std((uint16_t)s_tx_report_id, data, CAN_DLC);
-        s_tx_seq++;
+    /* RX 分发与周期发送由 app_can_service_step() 负责（1kHz）。
+     * 本函数只做低速统计打印，避免与协议层争用 poll。 */
+    if ((uint32_t)(now - s_last_tx_cycle) < period_cycles) {
+        return;
+    }
+    s_last_tx_cycle = now;
+    s_tick++;
 
 #if APP_DEBUG_PERIODIC_PRINT
-        if ((app_can_get_status(&st) == 0) && (app_can_get_stats(&stats) == 0)) {
-            app_debug_printf(
-                "[CAN] tx tick=%u seq=%u ret=%d rx_total=%u | tx_err=%u rx_err=%u bus_off=%d | "
-                "tx_ok=%u rx=%u drop=%u\r\n",
-                (unsigned)s_tick, (unsigned)data[0], ret, (unsigned)s_rx_total, st.tx_error_count,
-                st.rx_error_count, st.bus_off, (unsigned)stats.tx_ok_count,
-                (unsigned)stats.rx_count, (unsigned)stats.rx_drop_count);
-        }
-#else
-        (void)ret;
-        (void)st;
-        (void)stats;
-#endif
+    if ((app_can_get_status(&st) == 0) && (app_can_get_stats(&stats) == 0)) {
+        app_can_service_get_stats(&proto);
+        app_debug_printf(
+            "[CAN] t=%u bus_off=%d | tx_ok=%u rx=%u drop=%u | proto rx=%u drop=%u bad=%u "
+            "unk=%u fmt=%u mit(ok=%u to=%u)\r\n",
+            (unsigned)s_tick, st.bus_off, (unsigned)stats.tx_ok_count,
+            (unsigned)stats.rx_count, (unsigned)stats.rx_drop_count, (unsigned)proto.rx_frames,
+            (unsigned)proto.rx_dropped, (unsigned)proto.bad_len, (unsigned)proto.unknown_cmd,
+            (unsigned)proto.format_mismatch, (unsigned)proto.mit_pair_ok,
+            (unsigned)proto.mit_pair_timeout);
     }
+#else
+    (void)st;
+    (void)stats;
+    (void)proto;
+#endif
 }

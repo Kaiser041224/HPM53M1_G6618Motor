@@ -867,3 +867,31 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   ② 弱磁（`motion speed 40+` 实测 `use=100% sat=1`、`i_d` 被耦合推到 −4A）；③ NTC1 恒为
   开路替代值（`adc diag ch1=65535`，硬件待查）；④ `vbus fast−slow` 差值 ±0.55V
   （固定相位纹波，不阻塞）；⑤ EWDG 未做（CPU 挂死无兜底，G4 开放）。
+
+### 多圈/增量位置与 MIT（2026-10-27，台架已验证）
+
+- **多圈位置 P 项必须用连续误差**：新增 `algo_motion_position_cont()`（算术差），
+  `app_motion_position_step()` 按 `s_position_multi` 选择。
+  单圈 `algo_motion_position()` 内含 `foc_wrap_pm_pi`，多圈误用会把整圈误差折成 0 →
+  **"与目标差整圈的位置即静止"**。台架实测：`pos_multi 400` 停在 40°、
+  `pos_multi 720` 停在 0°，`diag` 显示 `now=40/cur=tgt=400` 而 `vel_cmd≈0`。
+  回归：`test_algo_position_p`（差 2π / 1.5 圈的两种语义对比）。
+- **多圈/增量强制要求梯形轨迹**：`trajectory_vel_limit` 与 `trajectory_accel_limit`
+  均 > 0，否则 `APP_MOTION_CMD_TRAJ_DISABLED(-11)`。二者是 `APPLY_REBOOT`：
+  运行期 `param set` 后必须 `param save` + `reboot`（`storage: keep` 会优先用 flash）。
+- **行程保护不可关闭**：`max_step_deg`（单次 3600°）、`max_travel_deg`（绝对值 36000°）。
+  `travel_min/max_deg` 为可选软限位（0/0 = 关闭，用户决定不强制）。
+- **连续角只在同一上电周期内可靠**；断电后由游标恢复单圈，绝对圈数无保证（需 homing）。
+  `motion cal/apply` 使累积器失效重基准；`motion zero` 同步归零。
+- **MIT 的 `p_des` 是绝对连续坐标**，不是"原地"：`motion mit 0 ...` 在轴于 120° 时
+  会因 `pos_err_max_deg(90)` 被拒。原地施加阻抗用 `motion mit_here v kp kd t_ff`。
+- **多圈/MIT 的实时路径必须在 ILM**：`algo_motion_position_cont`、`algo_mit_step`
+  （含 `mit_finite`/`mit_approach`）由 15kHz `app_motion_step` 每拍调用。布局守卫
+  已纳入这 5 个符号（28 项）；新增热路径函数必须同时加 `FOC_ATTR_RAMFUNC` 与守卫项，
+  且**不要在 ILM 函数里调用 libm**（`fabsf` 已改为显式比较）。
+- **MIT 限幅链顺序**（algo_mit）：增益上限校验 → 增益斜坡（Kd 按 Kp/Kd 上限比例）
+  → 位置误差钳制（运行中钳制、入口拒绝）→ 前馈占比 → 力矩上限（含 boost/DERATE）。
+- **CAN 1kHz 双向回报只支持 1~2 节点**（1 Mbps，标准帧≈125 bit；4 节点满载）。
+- **通信看门狗喂狗在 CAN RX ISR**（`app_can_set_rx_isr_hook`），不依赖 1kHz 任务——
+  否则 `foc off` 的 3s 自旋会把"有意静默"判成"通信丢失"。首帧才 arm；
+  CALIB/停机窗口挂起；出厂 `actions_enable=false` 时只告警不停机。

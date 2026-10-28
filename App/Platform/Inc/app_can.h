@@ -88,6 +88,16 @@ void app_can_deinit(void);
 void app_can_set_rx_callback(app_can_rx_callback_t cb);
 
 /**
+ * @brief 接收 ISR 钩子（**中断上下文**，在入队前调用）
+ *
+ * 用途：通信看门狗时间戳、帧级统计。实现方必须非阻塞、不得调用协议逻辑，
+ * 典型实现只是记录时间戳/序号。这样看门狗不依赖 1kHz 任务是否被长操作阻塞。
+ * @param hook 钩子（NULL = 清除）
+ */
+typedef void (*app_can_rx_isr_hook_t)(uint32_t id, const uint8_t* data, uint8_t len);
+void app_can_set_rx_isr_hook(app_can_rx_isr_hook_t hook);
+
+/**
  * @brief 轮询接收与发送队列
  */
 void app_can_poll(void);

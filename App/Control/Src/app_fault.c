@@ -28,7 +28,7 @@ volatile uint32_t g_fault_state __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_fault_codes __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_fault_latched __attribute__((section(".noncacheable.bss")));
 
-#define APP_FAULT_EVENT_COUNT (10U) /* bit0..9 事件计数 */
+#define APP_FAULT_EVENT_COUNT (12U) /* bit0..11 事件计数 */
 #define APP_FAULT_OC_COUNT    (3U)
 
 /**
@@ -98,6 +98,7 @@ static const app_fault_action_t s_policy_design[APP_FAULT_CODE_COUNT] = {
     APP_FLT_ACT_TRIP,   /* 8  ADC_TIMEOUT—— ISR 已死 = 控制链不可信 */
     APP_FLT_ACT_WARN,   /* 9  ENC_READ   —— 事件型，先观察 */
     APP_FLT_ACT_TRIP,   /* 10 OC_TRIP    —— 电流环自身快跳（硬编码动作） */
+    APP_FLT_ACT_STOP,   /* 11 COMM_TIMEOUT —— 主机失联：受控停机（不硬断桥） */
 };
 static app_fault_action_t s_policy[APP_FAULT_CODE_COUNT];
 static uint32_t s_action_mask; /**< 生效表中 policy ∈ {STOP,TRIP} 的码位 */

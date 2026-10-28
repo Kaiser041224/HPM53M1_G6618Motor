@@ -17,10 +17,12 @@ current_ff:
   bemf_en: true            # bEMF（ωλ）前馈；默认关闭
 
 can:
-  baudrate: 1000000          # CAN 波特率 [bps]
-  node_id_default: 1         # 占位：DIP 解码未实现时的回退节点号（与 CAN ID 的派生关系待协议定稿）
-  rx_control_id: 0x101       # 接收控制帧 CAN ID（占位：待 CAN 协议定稿）
-  tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
+  baudrate: 1000000          # CAN 波特率 [bps]（v1 固定 1Mbps；1kHz 双向回报仅支持 1~2 节点）
+  node_id_default: 1         # 节点号（1~15）；v1 以此为准，DIP 解码后续实现
+  # 以下两项为 CANSimple 之前的占位字段，v1 改用 (node_id << 5) | cmd_id 派生，
+  # 批次 1 实施时移除（保留仅为避免本次改动触发生成器/schema 变更）。
+  rx_control_id: 0x101       # [deprecated] 旧占位：接收控制帧 CAN ID
+  tx_report_id: 0x181        # [deprecated] 旧占位：参数回报帧 CAN ID
 
 fault:
   actions_enable: false                    # true=启用保护动作（按逐故障 policy 表，fault policy show 可见）；false=仅警告，不改写任何输出（台架默认）。APPLY_REBOOT：改后 make artifacts + 重新烧录；运行期可用 fault protect on/off 覆盖
@@ -30,6 +32,8 @@ fault:
   slow_debounce: 5                        # L2/L3 去抖次数（连续 1kHz tick）
   adc_stall_ms: 10                        # PMT 帧停滞超时 [ms]
   enc_err_delta: 3                        # 编码器错误增量阈值（每 1kHz tick 的错误计数增量）
+  comm_timeout_ms: 100                    # CAN 通信看门狗超时 [ms]（0=禁用；首帧后 arm）
+  comm_wd_source: can                     # 喂狗源：can=只认 CAN 控制帧（出厂）；usb=终端命令；both
   # —— 时序量：占位，待 FOC 时序体系定义后接入（当前代码使用内部宏：250 样本 / 50 tick）——
   # rms_window_samples: 250
   # settle_ticks: 50
@@ -70,8 +74,25 @@ control:
   position_loop:
     pos_gain: 25.0                    # [1/s] 位置环P（ODrive默认；vel_cmd=vel_ff+pos_gain*pos_err）
     input_filter_bandwidth: 20.0      # [rad/s] 输入二阶滤波带宽（10→20：位置命令响应约 2×）
-    trajectory_vel_limit: 0.0         # [rad/s] 位置梯形轨迹最大速度；0=关闭轨迹（使用输入滤波）
-    trajectory_accel_limit: 0.0       # [rad/s²] 位置梯形轨迹加速度/减速度；0=关闭轨迹
+    trajectory_vel_limit: 30.0         # [rad/s] 位置梯形轨迹最大速度；0=关闭轨迹（使用输入滤波）
+    trajectory_accel_limit: 60.0       # [rad/s²] 位置梯形轨迹加速度/减速度；0=关闭轨迹
+    # —— 多圈/增量行程保护（命令校验时每次读取，live）——
+    max_step_deg: 3600.0              # [deg] 单次命令最大位移（3600=10 圈）；不可关闭
+    max_travel_deg: 36000.0           # [deg] 连续角绝对值上限（100 圈）；f32 精度保护；不可关闭
+    travel_min_deg: 0.0               # [deg] 可选软限位下限；与上限同为 0 = 关闭
+    travel_max_deg: 0.0               # [deg] 可选软限位上限；与下限同为 0 = 关闭
+
+  # —— MIT 阻抗控制（位置/速度/阻抗五元组；模式进入时校验，live）——
+  mit:
+    enable: false                     # true = 允许进入 MIT 模式（默认关，需显式开启）
+    kp_max: 50.0                      # [Nm/rad] 轴端 Kp 上限
+    kd_max: 2.0                       # [Nm/(rad/s)] 轴端 Kd 上限；仅靠 observer 速度，保守取值
+    gain_ramp_rate: 200.0             # [(Nm/rad)/s] 增益逼近速率，防主机突跳 kp
+    pos_err_max_deg: 90.0             # [deg] 位置误差上限；超过则拒绝命令
+    t_ff_max_ratio: 1.0               # 前馈力矩占力矩上限的比例 (0,1]
+    can_format: compact               # CAN MIT 报文格式：compact=单帧位域；dual=双帧全精度
+    friction_ff_en: false             # true = MIT 下叠加摩擦前馈（默认关）
+    inertia_ff_en: false              # true = MIT 下叠加惯量前馈（默认关）
   limits:
     i_q_max_a: 30.0                   # [A_peak] 电流 boost/绝对硬上限（连续值见 i_q_continuous_a）
     i_q_continuous_a: 24.3            # [A_peak] 连续限幅（10s 额定）；boost 预算耗尽后回落到此值

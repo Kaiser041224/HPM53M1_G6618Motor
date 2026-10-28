@@ -170,6 +170,7 @@ sdk_app_src(App/Algorithm/Src/algo_cogging.c)
 sdk_app_src(App/Algorithm/Src/algo_rms.c)
 sdk_app_src(App/Algorithm/Src/algo_encoder_snapshot.c)
 sdk_app_src(App/Algorithm/Src/algo_motion.c)
+sdk_app_src(App/Algorithm/Src/algo_mit.c)
 sdk_app_src(App/Algorithm/Src/algo_friction.c)
 sdk_app_src(App/Algorithm/Src/algo_speed_observer.c)
 sdk_app_src(App/Algorithm/FOC/Src/foc_math.c)
@@ -223,6 +224,8 @@ sdk_app_src(App/Control/Identify/Src/app_cogging_identify.c)
 # Comm Layer
 # ============================================================================
 
+sdk_app_src(App/Comm/can/Src/app_can_protocol.c)
+sdk_app_src(App/Comm/can/Src/app_can_service.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_job.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_cmd.c)

@@ -147,6 +147,45 @@ typedef struct {
     float gain;            /**< 默认补偿增益（0~2） */
 } app_software_cogging_t;
 
+/**
+ * @brief 多圈/增量行程保护（追加字段；命令校验时 live 读取）
+ *
+ * max_step/max_travel 为硬限制，不可关闭：前者限制单次命令位移，后者限制连续角绝对值
+ * （f32 精度保护 + 防主机误发）。travel_min/max 为可选软限位，同为 0 时关闭。
+ */
+typedef struct {
+    float max_step_deg;   /**< 单次命令最大位移 [deg]（0 = 使用内部保守默认） */
+    float max_travel_deg; /**< 连续角绝对值上限 [deg]（0 = 使用内部保守默认） */
+    float travel_min_deg; /**< 可选软限位下限 [deg]（与上限同为 0 = 关闭） */
+    float travel_max_deg; /**< 可选软限位上限 [deg]（与下限同为 0 = 关闭） */
+} app_software_position_travel_t;
+
+/**
+ * @brief MIT 阻抗控制参数（追加字段；命令校验时 live 读取）
+ *
+ * 单位口径：Kp [Nm/rad]、Kd [Nm/(rad/s)]、前馈 [Nm]，均为轴端。位置/速度用 deg/rpm。
+ */
+typedef struct {
+    uint8_t enable;         /**< 1 = 允许进入 MIT 模式 */
+    uint8_t can_format;     /**< CAN MIT 报文格式：0 = compact 单帧，1 = dual 双帧 */
+    uint8_t friction_ff_en; /**< 1 = MIT 下叠加摩擦前馈（默认关） */
+    uint8_t inertia_ff_en;  /**< 1 = MIT 下叠加惯量前馈（默认关） */
+    float kp_max;           /**< Kp 上限 [Nm/rad] */
+    float kd_max;           /**< Kd 上限 [Nm/(rad/s)] */
+    float gain_ramp_rate;   /**< 增益逼近速率 [(Nm/rad)/s]（0 = 直通） */
+    float pos_err_max_deg;  /**< 位置误差上限 [deg]（超过则拒绝命令） */
+    float t_ff_max_ratio;   /**< 前馈力矩占力矩上限的比例 (0,1] */
+} app_software_mit_t;
+
+/**
+ * @brief CAN 通信看门狗参数（追加字段；init 期消费）
+ */
+typedef struct {
+    uint16_t comm_timeout_ms; /**< 超时 [ms]（0 = 禁用）；首次收到有效控制帧后 arm */
+    uint8_t wd_source;        /**< 喂狗源：0=can，1=usb，2=both */
+    uint8_t reserved;         /**< 对齐保留 */
+} app_software_comm_t;
+
 /** @brief flash 参数加载策略 */
 typedef enum {
     APP_SW_STORAGE_KEEP = 0,     /**< 使用 flash 中已保存的参数 */
@@ -179,6 +218,9 @@ typedef struct {
     float i_q_boost_recover_time_s; /**< boost 从耗尽回满时间 [s]（追加字段；0=不回充） */
     float i_q_boost_recover_ratio; /**< 低于连续值×该比例才回充（追加字段，0~1） */
     app_software_cogging_t cogging; /**< 齿槽补偿默认启用/表选择/增益（追加字段） */
+    app_software_position_travel_t position_travel; /**< 多圈行程保护（追加字段） */
+    app_software_mit_t mit;                         /**< MIT 阻抗控制（追加字段） */
+    app_software_comm_t comm;                       /**< CAN 通信看门狗（追加字段） */
 } app_software_params_t;
 
 /** @brief 工厂默认参数（只读，指向生成常量） */

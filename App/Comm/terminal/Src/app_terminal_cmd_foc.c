@@ -40,6 +40,8 @@ static const char k_motion_usage[] =
     "motion show|cal (OFF stationary)|apply|zero [save]|save|"
     "gains kp ki [coulomb] [viscous] (idle)|friction show|cal|apply|save|"
     "torque Nm|speed rpm|pos deg[0~360] [vel_ff] [torque_ff]|"
+    "pos_multi deg [vel_ff_rad_s] [torque_ff_nm]|pos_rel deg [vel_ff_rad_s] [torque_ff_nm]|"
+    "mit p_deg v_rpm kp kd t_ff|mit_here v_rpm kp kd t_ff|"
     "pos_gains p [bw] (idle)|off|direct (OFF)";
 
 static int foc_complete_off(chry_shell_t* csh, const char* who);
@@ -59,10 +61,23 @@ void app_terminal_cmd_foc_status(chry_shell_t* csh) {
     app_foc_current_snapshot_t snap;
 
     app_foc_get_snapshot(&snap);
-    csh_printf(
-        csh, "foc: state=%s  theta=%.1f deg  omega=%.1f rad/s\r\n",
-        app_terminal_cmd_foc_state_name(app_foc_get_state()),
-        (double)(snap.theta_e_rad * APP_TERMINAL_FOC_DEG_PER_RAD), (double)snap.omega_e_rad_s);
+    {
+        /* 对外统一 deg/rpm（2026-10-27）：omega 显示为出轴 rpm，括号内保留轴端 rad/s。
+         * 快照给的是电角速度，按 pole_pairs × reducer_ratio 折算到出轴。 */
+        const app_motor_params_t* motor = app_motor_params_current();
+        float shaft_rad_s = 0.0f;
+        float shaft_rpm = 0.0f;
+
+        if ((motor->pole_pairs >= 0.5f) && (motor->reducer_ratio >= 0.01f)) {
+            shaft_rad_s = snap.omega_e_rad_s / motor->pole_pairs / motor->reducer_ratio;
+            shaft_rpm = shaft_rad_s * (60.0f / 6.28318530718f);
+        }
+        csh_printf(
+            csh, "foc: state=%s  theta=%.1f deg  omega=%.1f rpm (%.1f rad/s 轴端)\r\n",
+            app_terminal_cmd_foc_state_name(app_foc_get_state()),
+            (double)(snap.theta_e_rad * APP_TERMINAL_FOC_DEG_PER_RAD), (double)shaft_rpm,
+            (double)shaft_rad_s);
+    }
     csh_printf(
         csh, "     i_d=%.3f/%.3f/%.3f A  i_q=%.3f/%.3f/%.3f A  (ref/avg/now)\r\n",
         (double)snap.i_d_ref_a, (double)snap.i_d_avg_a, (double)snap.i_d_a, (double)snap.i_q_ref_a,
@@ -407,6 +422,11 @@ static const char* app_terminal_motion_reason(int rc) {
     case APP_MOTION_CMD_MODE_LOCKED:
         return "torque/speed/position switch while active; 'motion off' first";
     case APP_MOTION_CMD_OWNER_DENIED: return "calibration/vtest owns output";
+    case APP_MOTION_CMD_MIT_DISABLED:
+        return "MIT disabled; set software.control.mit.enable=true (live param set works)";
+    case APP_MOTION_CMD_TRAJ_DISABLED:
+        return "multi-turn needs trajectory; set control.position_loop.trajectory_vel_limit/"
+               "trajectory_accel_limit > 0 and reboot";
     default: return "unknown";
     }
 }
@@ -606,6 +626,10 @@ static int cmd_motion(int argc, char** argv) {
         float speed_user = state.speed_rad_s * out_dir;
         float vel_cmd_user = state.vel_cmd_rad_s * out_dir;
         float torque_user = state.torque_nm * out_dir;
+        float travel_user = state.shaft_continuous_rad * out_dir;
+        float travel_sp_user = state.pos_setpoint_continuous_rad * out_dir;
+        float mit_err_user = state.mit_pos_err_rad * out_dir;
+        float mit_torque_user = state.mit_torque_nm * out_dir;
         if (shaft_user < 0.0f)
             shaft_user += 6.2831853f;
         if (pos_sp_user < 0.0f)
@@ -627,19 +651,37 @@ static int cmd_motion(int argc, char** argv) {
             csh,
             "motion: mode=%u cal=%u zero=%u valid=%u angle=%u active=%u calibrating=%u "
             "samples=%lu reason=%u\r\n"
-            "shaft=%.6frad speed=%.6frad/s (%.3frpm) phase=%.8fturn torque=%.4fNm iq=%.4fA "
+            "shaft=%.2fdeg speed=%.2frpm (%.4frad/s) phase=%.8fturn torque=%.4fNm iq=%.4fA "
             "good/bad=%lu/%lu\r\n"
             "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n"
-            "position: sp=%.6frad vel_cmd=%.6frad/s err=%.6frad\r\n",
+            "position: sp=%.2fdeg vel_cmd=%.2frpm err=%.3fdeg\r\n"
+            "travel: pos=%.2fdeg sp=%.2fdeg valid=%u rebase=%lu\r\n"
+            "diag: now=%.2fdeg cur=%.2fdeg tgt=%.2fdeg vff=%.2frpm gain=%.1f\r\n"
+            "mit: kp=%.3f kd=%.4f err=%.2fdeg tq=%.4fNm sat=%u gsat=%u eclamp=%u\r\n",
             (unsigned)state.mode, state.calibrated, state.zero_valid, state.feedback_valid,
             (unsigned)state.angle_valid, state.active, state.calibrating,
-            (unsigned long)state.calibration_samples, (unsigned)state.reason, (double)shaft_user,
-            (double)speed_user, (double)(speed_user * 60.0f / 6.28318530718f),
+            (unsigned long)state.calibration_samples, (unsigned)state.reason,
+            (double)(shaft_user * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(speed_user * 60.0f / 6.28318530718f), (double)speed_user,
             (double)state.phase_turns, (double)torque_user, (double)state.iq_a,
             (unsigned long)state.good_count, (unsigned long)state.bad_count,
             (double)state.iq_accepted_a, (unsigned long)state.hold_count,
             (unsigned)state.current_limited, (unsigned)state.voltage_saturated,
-            (double)pos_sp_user, (double)vel_cmd_user, (double)position_error);
+            (double)(pos_sp_user * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(vel_cmd_user * 60.0f / 6.28318530718f),
+            (double)(position_error * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(travel_user * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(travel_sp_user * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (unsigned)state.continuous_valid, (unsigned long)state.continuous_rebase_count,
+            (double)(state.pos_now_rad * out_dir * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(state.traj_cur_rad * out_dir * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(state.traj_tgt_rad * out_dir * APP_TERMINAL_FOC_DEG_PER_RAD),
+            (double)(state.traj_vel_rad_s * out_dir * 60.0f / 6.28318530718f),
+            (double)state.pos_gain_used,
+            (double)state.mit_kp_eff_nm_per_rad, (double)state.mit_kd_eff_nm_per_rad_s,
+            (double)(mit_err_user * APP_TERMINAL_FOC_DEG_PER_RAD), (double)mit_torque_user,
+            (unsigned)state.mit_saturated, (unsigned)state.mit_gain_limited,
+            (unsigned)state.mit_err_clamped);
         return 0;
     }
     if (strcmp(sub, "help") == 0) {
@@ -720,7 +762,41 @@ static int cmd_motion(int argc, char** argv) {
         }
     } else if (strcmp(sub, "direct") == 0)
         rc = app_foc_set_current_source(APP_FOC_CURRENT_SOURCE_DIRECT);
-    else if (argc >= 3 && app_terminal_cmd_parse_float(argv[2], &value) == 0) {
+    else if (strcmp(sub, "mit") == 0) {
+        /* MIT 五元组：位置 deg（连续坐标）、速度 rpm、Kp [Nm/rad]、Kd [Nm/(rad/s)]、前馈 Nm */
+        float p_deg = 0, v_rpm = 0, kp = 0, kd = 0, t_ff = 0;
+
+        if ((argc != 7) || (app_terminal_cmd_parse_float(argv[2], &p_deg) != 0)
+            || (app_terminal_cmd_parse_float(argv[3], &v_rpm) != 0)
+            || (app_terminal_cmd_parse_float(argv[4], &kp) != 0)
+            || (app_terminal_cmd_parse_float(argv[5], &kd) != 0)
+            || (app_terminal_cmd_parse_float(argv[6], &t_ff) != 0)) {
+            return app_terminal_cmd_usage(csh, "motion mit p_deg v_rpm kp kd t_ff");
+        }
+        rc = app_motion_mit(
+            p_deg * APP_TERMINAL_FOC_RAD_PER_DEG, v_rpm * APP_TERMINAL_FOC_RAD_PER_RPM, kp, kd,
+            t_ff);
+    } else if (strcmp(sub, "mit_here") == 0) {
+        /* 在当前位置施加阻抗：p_des 自动取当前连续角（用户坐标），避免先读角度。
+         * 参数：v_rpm kp kd t_ff。目标角与实测角同源（同一快照），误差≈0。 */
+        float v_rpm = 0, kp = 0, kd = 0, t_ff = 0;
+        app_motion_snapshot_t snap;
+
+        if ((argc != 6) || (app_terminal_cmd_parse_float(argv[2], &v_rpm) != 0)
+            || (app_terminal_cmd_parse_float(argv[3], &kp) != 0)
+            || (app_terminal_cmd_parse_float(argv[4], &kd) != 0)
+            || (app_terminal_cmd_parse_float(argv[5], &t_ff) != 0)) {
+            return app_terminal_cmd_usage(csh, "motion mit_here v_rpm kp kd t_ff");
+        }
+        app_motion_get_snapshot(&snap);
+        {
+            float out_dir = (snap.output_direction < 0.0f) ? -1.0f : 1.0f;
+            float p_deg = snap.shaft_continuous_rad * out_dir * APP_TERMINAL_FOC_DEG_PER_RAD;
+
+            rc = app_motion_mit(p_deg * APP_TERMINAL_FOC_RAD_PER_DEG,
+                                v_rpm * APP_TERMINAL_FOC_RAD_PER_RPM, kp, kd, t_ff);
+        }
+    } else if (argc >= 3 && app_terminal_cmd_parse_float(argv[2], &value) == 0) {
         if (strcmp(sub, "torque") == 0)
             rc = app_motion_torque(value);
         else if (strcmp(sub, "speed") == 0)
@@ -733,6 +809,24 @@ static int cmd_motion(int argc, char** argv) {
                     csh, "motion pos deg[0~360] [vel_ff_rad_s] [torque_ff_nm]");
             /* 单圈绝对值模式：0~360° → [0,2π]（360°=0°，API 取模最短路径） */
             rc = app_motion_position(value * (6.28318530718f / 360.0f), vel_ff, torque_ff);
+        } else if (strcmp(sub, "pos_multi") == 0) {
+            /* 多圈绝对：deg 连续坐标（不折叠到 0~360，可为负/多圈） */
+            float vel_ff = 0, torque_ff = 0;
+            if ((argc >= 4 && app_terminal_cmd_parse_float(argv[3], &vel_ff) != 0)
+                || (argc >= 5 && app_terminal_cmd_parse_float(argv[4], &torque_ff) != 0))
+                return app_terminal_cmd_usage(
+                    csh, "motion pos_multi deg [vel_ff_rad_s] [torque_ff_nm]");
+            rc = app_motion_position_multi(
+                value * APP_TERMINAL_FOC_RAD_PER_DEG, vel_ff, torque_ff);
+        } else if (strcmp(sub, "pos_rel") == 0) {
+            /* 增量：相对当前连续角的位移（deg） */
+            float vel_ff = 0, torque_ff = 0;
+            if ((argc >= 4 && app_terminal_cmd_parse_float(argv[3], &vel_ff) != 0)
+                || (argc >= 5 && app_terminal_cmd_parse_float(argv[4], &torque_ff) != 0))
+                return app_terminal_cmd_usage(
+                    csh, "motion pos_rel deg [vel_ff_rad_s] [torque_ff_nm]");
+            rc = app_motion_position_rel(
+                value * APP_TERMINAL_FOC_RAD_PER_DEG, vel_ff, torque_ff);
         } else if (strcmp(sub, "pos_gains") == 0) {
             float filter_bw = 0; /* 省略=0（直通）；与 motion gains 可选参数同语义 */
             if (argc >= 4 && app_terminal_cmd_parse_float(argv[3], &filter_bw) != 0)
@@ -751,7 +845,8 @@ static int cmd_motion(int argc, char** argv) {
         } else
             return app_terminal_cmd_usage(
                 csh, "motion gains kp ki [coulomb_nm] [viscous] (idle)|pos deg[0~360] "
-                     "[vel_ff] [torque_ff]|pos_gains p [bw] (idle)");
+                     "[vel_ff] [torque_ff]|pos_multi deg|pos_rel deg|mit p v kp kd t_ff|mit_here v kp kd t_ff|"
+                     "pos_gains p [bw] (idle)");
     } else
         return motion_usage(csh);
     csh_printf(

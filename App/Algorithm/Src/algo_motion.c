@@ -43,6 +43,42 @@ int algo_motion_vernier(float rotor, float vernier, float phase, float reducer_r
     return 0;
 }
 FOC_ATTR_RAMFUNC
+int algo_motion_continuous_step(float raw_angle, float prev_raw, float max_delta,
+                                float* continuous, bool* valid, bool* rebased) {
+    if (rebased != NULL) {
+        *rebased = false;
+    }
+    if ((continuous == NULL) || (valid == NULL) || !foc_finite(raw_angle)
+        || !foc_finite(prev_raw) || !foc_finite(max_delta) || (max_delta <= 0.0f)) {
+        return -2;
+    }
+    if (!*valid) {
+        /* 重基准：以当前单圈角为起点，不继承旧圈数（断电/重标定后绝对圈数无保证） */
+        *continuous = raw_angle;
+        *valid = true;
+        if (rebased != NULL) {
+            *rebased = true;
+        }
+        return 0;
+    }
+    float delta = foc_wrap_pm_pi(raw_angle - prev_raw);
+
+    if (!foc_finite(delta)) {
+        return -2;
+    }
+    /* 显式比较代替 fabsf：ILM 热路径内不引入 libm 调用（-ffast-math 下可能不内联） */
+    float abs_delta = (delta < 0.0f) ? -delta : delta;
+
+    if (abs_delta >= max_delta) {
+        /* 失配/齿隙污染导致的跳变：冻结累积器，下一拍重基准 */
+        *valid = false;
+        return -1;
+    }
+    *continuous += delta;
+    return 0;
+}
+
+FOC_ATTR_RAMFUNC
 float algo_motion_speed(
     algo_motion_pi_t* pi, float target, float speed, float kp, float ki, float dt, float limit) {
     if (pi && !foc_finite(pi->integral)) {
@@ -166,4 +202,14 @@ float algo_motion_position(float pos_setpoint, float pos_est, float pos_gain, fl
         return 0;
     /* 单圈绝对模式：位置误差取模最短路径（±π，ODrive circular 语义） */
     return vel_ff + pos_gain * foc_wrap_pm_pi(pos_setpoint - pos_est);
+}
+
+FOC_ATTR_RAMFUNC
+float algo_motion_position_cont(float pos_setpoint, float pos_est, float pos_gain, float vel_ff) {
+    if (!foc_finite(pos_setpoint) || !foc_finite(pos_est) || !foc_finite(pos_gain)
+        || !foc_finite(vel_ff))
+        return 0;
+    /* 连续坐标：误差不取模。多圈模式若误用 wrap 版本，整圈误差会被折成 0 →
+     * 表现为"走到差一整圈的位置就停住"（2026-10-27 台架实测）。 */
+    return vel_ff + pos_gain * (pos_setpoint - pos_est);
 }

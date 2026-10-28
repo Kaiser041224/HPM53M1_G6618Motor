@@ -286,8 +286,11 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
         csh_printf(csh, "WARN: safety-related parameter\r\n");
     }
     if (meta->apply == PARAM_META_APPLY_REBOOT) {
-        csh_printf(
-            csh, "OK  %s = %s (RAM; consumed at boot, not persistent - v2: save)\r\n", name, text);
+        /* 旧文案 "not persistent - v2: save" 会让用户以为没有保存手段；
+         * 实际 `param save` 已可用（FOC OFF 停机窗口）。 */
+        csh_printf(csh,
+                   "OK  %s = %s (RAM; run 'param save' with FOC OFF, then reboot)\r\n", name,
+                   text);
     } else if (meta->apply == PARAM_META_APPLY_FOC_OFF) {
         csh_printf(csh, "OK  %s = %s (RAM; consumed at next 'foc on')\r\n", name, text);
     } else {

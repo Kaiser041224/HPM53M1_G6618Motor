@@ -41,6 +41,13 @@ SYMBOLS=(
     fault_effective_active
     fault_effective_latched
     adc_get_seq_frames
+    # 2026-10-28 新增：多圈/MIT 实时路径（15kHz motion tick → 位置/P 与阻抗）
+    algo_motion_continuous_step
+    algo_motion_position
+    algo_motion_position_cont
+    algo_mit_step
+    mit_finite
+    mit_approach
 )
 
 if [[ ! -x "$NM" ]]; then

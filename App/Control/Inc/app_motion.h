@@ -28,6 +28,7 @@ typedef enum {
     APP_MOTION_MODE_TORQUE = 0,
     APP_MOTION_MODE_SPEED = 1,
     APP_MOTION_MODE_POSITION = 2,
+    APP_MOTION_MODE_MIT = 3, /**< MIT 阻抗控制：tau = Kp·e_p + Kd·e_v + tau_ff（无积分） */
 } app_motion_mode_t;
 /** @brief 最近一次拒绝/输出撤销原因，不自动恢复 */
 typedef enum {
@@ -70,6 +71,24 @@ typedef struct {
     float vernier_margin; /**< 游标解算余量 LPF [0,0.25]（健康观测；>0.15 提示重跑 motion cal） */
     float shaft_raw_rad; /**< 物理轴端单圈角（未应用方向/用户零点；齿槽 output 表索引基准） */
     float output_direction; /**< 出轴正方向定义（+1/-1）；用户坐标=本值×内部物理坐标 */
+    /* —— 多圈/增量（追加字段，2026-10-27）—— */
+    float shaft_continuous_rad; /**< 内部物理坐标连续角 [rad]（行程坐标；不 wrap） */
+    float pos_setpoint_continuous_rad; /**< 多圈位置设定（连续坐标）[rad] */
+    bool continuous_valid; /**< 连续角累积器可信（失配/重基准后为 0） */
+    uint32_t continuous_rebase_count; /**< 连续角重基准次数（诊断） */
+    /* —— MIT 诊断（追加字段）—— */
+    float mit_kp_eff_nm_per_rad;   /**< 斜坡后生效 Kp [Nm/rad] */
+    float mit_kd_eff_nm_per_rad_s; /**< 斜坡后生效 Kd [Nm/(rad/s)] */
+    float mit_pos_err_rad;         /**< 本拍位置误差（钳制后）[rad] */
+    float mit_torque_nm;           /**< 本拍 MIT 输出力矩 [Nm] */
+    bool mit_saturated;            /**< MIT 输出被力矩上限截断 */
+    bool mit_gain_limited;         /**< 请求增益超上限（本拍拒绝） */
+    bool mit_err_clamped;          /**< 位置误差被钳制 */
+    /* —— 位置环内部量（诊断：定位"多圈停在半路"类问题）—— */
+    float pos_now_rad;      /**< position_step 本拍用于 P 的反馈（连续或单圈）[rad] */
+    float traj_cur_rad;     /**< 轨迹 current [rad] */
+    float traj_tgt_rad;     /**< 轨迹 target [rad] */
+    float pos_gain_used;    /**< 本拍位置环 P 增益 [1/s] */
 } app_motion_snapshot_t;
 /** @brief 初始化/恢复参数；采样计时回调停止期间调用，不使能 */
 void app_motion_init(void);
@@ -108,8 +127,55 @@ int app_motion_gains(float kp, float ki, float coulomb_nm, float viscous_nm_per_
 int app_motion_torque(float torque);
 /** @brief 轴端rad/s目标（用户坐标；正=出轴正方向）；输出受电流硬限制 */
 int app_motion_speed(float speed);
-/** @brief 位置目标rad（用户坐标；单圈0~2π）+速度/力矩前馈（用户坐标） */
+/** @brief 位置目标rad（用户坐标；单圈0~2π，最短路径）+速度/力矩前馈（用户坐标） */
 int app_motion_position(float position_rad, float vel_ff_rad_s, float torque_ff_nm);
+/**
+ * @brief 多圈绝对位置（用户坐标，连续角）
+ *
+ * 与 app_motion_position 的区别：不做单圈 wrap、不走最短路径；目标为行程坐标绝对值。
+ * 需要连续角可信（游标未失配）且梯形轨迹可用。受 max_step/max_travel 与可选软限位约束。
+ * @param position_rad 目标绝对位置 [rad]（用户坐标，可为负/多圈）
+ * @param vel_ff_rad_s 速度前馈 [rad/s]（用户坐标）
+ * @param torque_ff_nm 力矩前馈 [Nm]（用户坐标）
+ * @return 0 成功；负值为 app_motion_cmd_status_t
+ */
+int app_motion_position_multi(float position_rad, float vel_ff_rad_s, float torque_ff_nm);
+/**
+ * @brief 增量位置（用户坐标）：目标 = 当前连续角 + delta
+ *
+ * 基准在命令入口的临界区内捕获，避免运动中与反馈错拍。连续角不可信时拒绝。
+ * @param delta_rad 相对位移 [rad]（用户坐标，可正可负）
+ * @param vel_ff_rad_s 速度前馈 [rad/s]
+ * @param torque_ff_nm 力矩前馈 [Nm]
+ * @return 0 成功；负值为 app_motion_cmd_status_t
+ */
+int app_motion_position_rel(float delta_rad, float vel_ff_rad_s, float torque_ff_nm);
+/**
+ * @brief MIT 阻抗控制命令（用户坐标）
+ *
+ * 进入条件：software.control.mit.enable=1、已标定、反馈新鲜、FOC READY/RUN、
+ * 连续角可信、|位置误差| ≤ mit.pos_err_max_deg、Kp/Kd ≤ 配置上限。
+ * @param position_rad 目标位置（连续坐标）[rad]（用户坐标）
+ * @param vel_rad_s 目标速度 [rad/s]（用户坐标）
+ * @param kp_nm_per_rad 刚度 [Nm/rad]（轴端）
+ * @param kd_nm_per_rad_s 阻尼 [Nm/(rad/s)]（轴端）
+ * @param torque_ff_nm 前馈力矩 [Nm]（用户坐标/轴端）
+ * @return 0 成功；负值为 app_motion_cmd_status_t
+ */
+int app_motion_mit(float position_rad, float vel_rad_s, float kp_nm_per_rad,
+                   float kd_nm_per_rad_s, float torque_ff_nm);
+/**
+ * @brief 运行期收紧速度限幅（CAN Set_Limits；只降不升）
+ * @param limit_rad_s 轴端速度上限 [rad/s]；当前为 0（不限）时允许首次设置
+ * @return 0 成功；APP_MOTION_CMD_TARGET_LIMIT 表示请求高于当前值（拒绝）
+ */
+int app_motion_set_speed_limit(float limit_rad_s);
+/**
+ * @brief 运行期收紧 motion 电流限幅（CAN Set_Limits；只降不升）
+ * @param iq_a 电流上限 [A]
+ * @return 0 成功；APP_MOTION_CMD_TARGET_LIMIT 表示请求高于当前值（拒绝）
+ */
+int app_motion_set_iq_max(float iq_a);
 /** @brief 位置环增益pos_gain[1/s]与输入滤波带宽[rad/s]（0=禁用/直通）；不驱动时可改，写透参数单例
  */
 int app_motion_position_gains(float pos_gain, float filter_bandwidth_rad_s);
@@ -134,6 +200,8 @@ typedef enum {
     APP_MOTION_CMD_BASE_CHANGED = -7,   /**< 活动中Kt/方向基准被改 */
     APP_MOTION_CMD_MODE_LOCKED = -8,    /**< 活动中不得切换力矩/速度/位置 */
     APP_MOTION_CMD_OWNER_DENIED = -9,   /**< 生产者授权被拒（校准/vtest占用） */
+    APP_MOTION_CMD_MIT_DISABLED = -10,  /**< MIT 未启用（software.control.mit.enable=0） */
+    APP_MOTION_CMD_TRAJ_DISABLED = -11, /**< 多圈位置需要梯形轨迹（velocity/accel limit = 0） */
 } app_motion_cmd_status_t;
 /** @brief 观测一致副本 */
 void app_motion_get_snapshot(app_motion_snapshot_t* out);

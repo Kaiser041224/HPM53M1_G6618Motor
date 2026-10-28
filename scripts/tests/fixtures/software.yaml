@@ -31,6 +31,8 @@ fault:
   slow_debounce: 5                        # L2/L3 去抖次数（连续 1kHz tick）
   adc_stall_ms: 10                        # PMT 帧停滞超时 [ms]
   enc_err_delta: 3                        # 编码器错误增量阈值（每 1kHz tick 的错误计数增量）
+  comm_timeout_ms: 100                    # CAN 通信看门狗超时 [ms]（夹具值）
+  comm_wd_source: can                     # 喂狗源（夹具值）
   # —— 时序量：占位，待 FOC 时序体系定义后接入（当前代码使用内部宏：250 样本 / 50 tick）——
   # rms_window_samples: 250
   # settle_ticks: 50
@@ -67,6 +69,20 @@ control:
     input_filter_bandwidth: 10.0      # [rad/s]（测试夹具值）
     trajectory_vel_limit: 0.0         # [rad/s]（测试夹具值：0=关闭轨迹）
     trajectory_accel_limit: 0.0       # [rad/s²]（测试夹具值：0=关闭轨迹）
+    max_step_deg: 3600.0              # [deg] 单次命令最大位移（夹具值）
+    max_travel_deg: 36000.0           # [deg] 连续角绝对值上限（夹具值）
+    travel_min_deg: 0.0               # [deg] 可选软限位（夹具值：0/0=关闭）
+    travel_max_deg: 0.0
+  mit:
+    enable: false                     # MIT 总开关（夹具值）
+    kp_max: 50.0                      # [Nm/rad]
+    kd_max: 2.0                       # [Nm/(rad/s)]
+    gain_ramp_rate: 200.0             # [(Nm/rad)/s]
+    pos_err_max_deg: 90.0             # [deg]
+    t_ff_max_ratio: 1.0
+    can_format: compact               # compact | dual
+    friction_ff_en: false
+    inertia_ff_en: false
   limits:
     i_q_max_a: 30.0                    # [A_peak] boost/绝对上限（测试夹具值）
     i_q_continuous_a: 24.3             # [A_peak] 连续限幅（测试夹具值）
