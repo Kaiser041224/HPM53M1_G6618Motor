@@ -3,15 +3,18 @@
  * @brief   CAN 自检（MCAN3，经典 CAN）
  * @author  Kaiser
  *
+ * 职责（2026-10-28 起）：**只读**。RX 回调、ISR 钩子与过滤器所有权已移交
+ * App/Comm/can（app_can_service_init），本模块不再注册任何回调，避免一处事件
+ * 被两处消费。
+ *
  * 测试内容：
  *   1) 内部环回自检：临时切到 LOOPBACK_INTERNAL，发 0x114 并校验回环数据（内部常量，测试隔离）
- *   2) 正常模式：每秒发送一帧参数回报帧（ID 取自 config/software.yaml → software.can.tx_report_id，
- *      8 字节，首字节递增计数）
- *   3) 接收：全接收过滤器 + RX 回调，收到帧即打印到 RTT
- *   4) 状态：每秒打印错误计数 / bus off / 收发统计
+ *   2) 周期**统计打印**（RTT，默认关闭见 APP_DEBUG_PERIODIC_PRINT）：
+ *      错误计数 / bus off / 驱动收发统计 / 协议层收帧与丢弃统计
+ *   3) 不再发送任何周期报文（原 0x181 参数回报帧已退役，回报由
+ *      app_can_service 的 encoder(0x29) + heartbeat(0x21) 承担）
  *
  * 硬件：MCAN3（PA15=TXD / PA14=RXD）→ TPT1044VQ，120Ω 端接由 DIP RES_CTL 控制。
- * 说明：无外部节点时正常模式发送将因无 ACK 而报错并最终 bus off，属预期现象。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -37,11 +40,11 @@ extern void hpm_can_driver_register(void);
 #define CAN_LB_BAUDRATE  (1000000U) /* 环回自检专用（与总线配置无关） */
 #define CAN_LB_ID        (0x114U)   /* 环回自检专用 */
 #define CAN_DLC          (8U)
-#define CAN_TX_PERIOD_MS (1000U)
+#define CAN_STAT_PERIOD_MS (1000U)
 #define CAN_LB_WAIT_MS   (100U)
 
 static uint32_t s_tick;
-static uint32_t s_last_tx_cycle;
+static uint32_t s_last_stat_cycle;
 
 /* ============================================================================
  * 内部环回自检（不经外部收发器，不依赖总线对端）
@@ -141,9 +144,11 @@ void app_debug_can_init(void) {
     hpm_can_driver_register();
     software = app_software_params_current(); /* config/software.yaml（总线波特率） */
 
-    app_debug_printf(
-        "\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, report TX ID=0x%03X\r\n",
-        (unsigned)software->can.baudrate, (unsigned)software->can.tx_report_id);
+    /* 周期回报由 app_can_service 承担（encoder 0x29 / heartbeat 0x21），
+     * 旧的 tx_report_id 已无发送方，不再打印，避免误导。 */
+    app_debug_printf("\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, node=%u\r\n",
+                     (unsigned)software->can.baudrate,
+                     (unsigned)app_can_service_get_node_id());
 
     lb_ok = can_loopback_selfcheck();
     app_debug_printf("[CAN] loopback self-check: %s\r\n", lb_ok ? "OK" : "FAILED");
@@ -161,17 +166,17 @@ void app_debug_can_init(void) {
 
 void app_debug_can_run_once(void) {
     uint32_t now = intf_clock_get_cycle();
-    uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * CAN_TX_PERIOD_MS;
+    uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * CAN_STAT_PERIOD_MS;
     intf_can_status_t st;
     app_can_stats_t stats;
     app_can_service_stats_t proto;
 
     /* RX 分发与周期发送由 app_can_service_step() 负责（1kHz）。
      * 本函数只做低速统计打印，避免与协议层争用 poll。 */
-    if ((uint32_t)(now - s_last_tx_cycle) < period_cycles) {
+    if ((uint32_t)(now - s_last_stat_cycle) < period_cycles) {
         return;
     }
-    s_last_tx_cycle = now;
+    s_last_stat_cycle = now;
     s_tick++;
 
 #if APP_DEBUG_PERIODIC_PRINT

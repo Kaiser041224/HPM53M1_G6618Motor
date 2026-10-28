@@ -53,7 +53,9 @@
 
 | 子目录 | 职责 | 允许依赖 | 禁止项 |
 | :--- | :--- | :--- | :--- |
-| **App/Application/** | 应用编排层；负责系统启动后的业务流程、状态机、模态切换、任务组织、上位机通讯编排 | `App/Control/`, `App/Platform/`, `App/Algorithm/`, `Interface/` | 禁止直接调用 `Driver/` 私有接口；禁止直接操作寄存器或 `hpm_*` API |
+| **App/Logic/** | **应用编排层（现状目录名）**：`app_logic.c` 承载 `app_init()` 启动顺序、`app_io_step()` / `app_diag_step()` 慢任务；`app_rtos_tasks.c` 定义任务与优先级。语义上等价于下表的 `App/Application/` | `App/Control/`, `App/Comm/`, `App/Platform/`, `App/Algorithm/`, `Interface/` | 禁止直接调用 `Driver/` 私有接口；禁止直接操作寄存器或 `hpm_*` API |
+| **App/Application/** | 应用编排层（**规划名，当前尚未建目录**）；新增应用流程时优先落到 `App/Logic/`，不要为名字再拆一层 | 同上 | 同上 |
+| **App/Comm/** | 通讯层（与 Control 平级）：终端、CAN 协议与服务的唯一归属，按模块分子目录（`terminal/`、`can/`） | `App/Control/`, `App/Platform/`, `App/Algorithm/`, `Interface/` | 禁止在此实现控制算法；禁止绕过 Interface 直接操作外设寄存器 |
 | **App/Control/** | 实际控制器层；负责闭环控制、保护策略、控制状态、调节器组合与控制输出决策 | `App/Algorithm/`, `App/Platform/`, `Interface/` | 禁止承担上位机协议编排；禁止直接依赖 `Driver/` 私有接口 |
 | **App/Algorithm/** | 纯算法库；提供 PID、PLL、滤波、RMS、斜坡等可复用计算模块 | C 标准库、`<math.h>`、`<float.h>`、必要的通用类型头 | 禁止依赖 `Driver/`、`Board/`，尽量避免依赖具体业务状态机 |
 | **App/Platform/** | 面向应用的硬件能力封装；把 `Interface/` 组合成可供 `Application/Control/` 使用的稳定能力 | `Interface/`, 必要的 App 公共类型头 | 禁止在此处写具体业务状态机；禁止把 SDK/HAL 细节向上泄漏 |
@@ -887,11 +889,37 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   会因 `pos_err_max_deg(90)` 被拒。原地施加阻抗用 `motion mit_here v kp kd t_ff`。
 - **多圈/MIT 的实时路径必须在 ILM**：`algo_motion_position_cont`、`algo_mit_step`
   （含 `mit_finite`/`mit_approach`）由 15kHz `app_motion_step` 每拍调用。布局守卫
-  已纳入这 5 个符号（28 项）；新增热路径函数必须同时加 `FOC_ATTR_RAMFUNC` 与守卫项，
+  已纳入这些符号；新增热路径函数必须同时加 `FOC_ATTR_RAMFUNC` 与守卫项，
   且**不要在 ILM 函数里调用 libm**（`fabsf` 已改为显式比较）。
+- **ILM 只解决"函数在哪"，不解决"它调用谁"（2026-10-28 教训）**：
+  把函数放进 `.fast` 后，它调用的辅助函数若仍在 XIP，每次调用照样回 flash 取指，
+  ILM 的收益被抵消——这类「ILM 债」不报错、不告警，只能反汇编发现。本批一次
+  查出 **26 处**（30kHz 齿槽/电流环、15kHz motion、1kHz 保护链、flash 实现的
+  同段辅助）。
+  - 守卫：`scripts/tests/layout/check_ilm_calls.sh`（已接入 `all.sh`）解析 `.fast`
+    段的 jal/jalr，目标落在 XIP 且不在白名单即 FAIL。
+  - **新增白名单条目必须在脚本里写明理由**；允许的三类只有：一次性初始化、
+    SDK/ROM 不可改且调用点已关中断、libm（精度不可替换且 ≤1kHz）。
+  - 典型反例：`algo_rms_finite` 用 `memcpy` 做 type punning → `-Og` 下不内联 →
+    ILM 里跳 XIP 的 `memcpy`。改用 `union`（同 `foc_finite`）。
+  - `fabsf`/`copysignf`/`fmodf` 优先改为显式比较/取符号/`foc_wrap_2pi`；
+    `sqrtf` 属精度必需，保留并列入白名单。
+  - **`app_foc_disable` 必须留在 XIP**：它含 20ms 软关断延时，只能在任务上下文跑；
+    不要因为"它被 ILM 函数调用"就把它塞进 ISR。
+- **启动顺序：USB 终端必须最后初始化**（`app_init()` 步骤 15）。flash 破坏性读写、
+  逆变桥输出自检都会长时间关闭全局中断；若 USB 已开始枚举会被打断，表现为偶发
+  "不枚举 / 描述符请求失败"，只能重插。USB 初始化后只进入任务循环，不再有 ms 级
+  阻塞操作。另：USB0 中断优先级 = 1（低于 ADC0/FOC=3、GPTMR1=2），避免枚举与
+  CDC ISR 抢占控制链。
 - **MIT 限幅链顺序**（algo_mit）：增益上限校验 → 增益斜坡（Kd 按 Kp/Kd 上限比例）
   → 位置误差钳制（运行中钳制、入口拒绝）→ 前馈占比 → 力矩上限（含 boost/DERATE）。
 - **CAN 1kHz 双向回报只支持 1~2 节点**（1 Mbps，标准帧≈125 bit；4 节点满载）。
-- **通信看门狗喂狗在 CAN RX ISR**（`app_can_set_rx_isr_hook`），不依赖 1kHz 任务——
-  否则 `foc off` 的 3s 自旋会把"有意静默"判成"通信丢失"。首帧才 arm；
-  CALIB/停机窗口挂起；出厂 `actions_enable=false` 时只告警不停机。
+- **通信看门狗双源喂狗，USB 终端优先**（2026-10-28）：
+  - CAN 控制帧在 **RX ISR** 喂（`app_can_set_rx_isr_hook`），不依赖 1kHz 任务——
+    否则 `foc off` 的 3s 自旋会把"有意静默"判成"通信丢失"。
+  - USB 终端有输入时也喂（`app_terminal_sget` → `app_can_service_feed_watchdog()`），
+    因此"CAN 静默但人在终端操作"不会被判主机失联。两源共享同一时间戳与超时判据，
+    后到者刷新；任一源活跃即保持。
+  - 首帧才 arm；CALIB/停机窗口挂起；出厂 `actions_enable=false` 时只告警不停机。
+  - **`fault.comm_wd_source` 已删除**（曾是死配置：字段与 YAML 都在，但无代码消费）。
+    不要重新引入"喂狗源选择"——语义固定为 CAN + USB 双源。

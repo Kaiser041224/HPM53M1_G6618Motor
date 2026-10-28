@@ -246,9 +246,16 @@ cogging 标定的局部看门狗）。
 
 - 新增 `APP_FAULT_COMM_TIMEOUT`（bit11），policy 设计值 **STOP**。
 - 参数：`fault.comm_timeout_ms`（默认 100，0=禁用）。
-- 喂狗源可配：`fault.comm_source` ∈ {`can`, `usb`, `both`}，默认 `can`。
-  - 理由：终端调试时不应阻止 CAN 看门狗生效，否则总线丢失会被调试命令掩盖。
-  - `usb` 模式下终端命令也算喂狗（台架联调用），**不作为出厂默认**。
+- 喂狗源**固定为双源**（2026-10-28 定案，取代早期"可配 `can/usb/both`"的设想）：
+  - CAN 控制帧：RX ISR 侧时间戳（不依赖 1kHz 任务）。
+  - USB 终端输入：`app_terminal_sget` → `app_can_service_feed_watchdog()`。
+  - 两源共享同一时间戳与超时判据，**后到者刷新**（USB 视为更高优先级：人在终端
+    操作期间不会因 CAN 静默被判主机失联）。
+  - `fault.comm_wd_source` 参数**已删除**——它曾存在于 YAML 与结构体中但无任何
+    代码消费（死配置）。不要再以"可选喂狗源"的形式引入。
+- **取舍必须知晓**：USB 喂狗意味着"终端在线且有人在敲命令"时不会因总线丢失停机。
+  这是为台架/联调让路的有意选择；量产整机若要求"拔 CAN 线必须停机"，应在验收
+  流程中把 USB 拔除（或后续增加"仅 CAN 模式"的显式开关，当前明确不做）。
 
 **三条此前未定义的语义（builder check Q3，此处定案）**：
 
@@ -774,10 +781,54 @@ cansend can0 038#00000000
    冲突仅靠 `MODE_LOCKED` 等既有保护。owner 仲裁仍是待办项。
 4. **MIT 的 Kd 仅靠 observer**：`kd_max=2.0` 是保守占位值，需实测
    `motion show` 的速度纹波后确认或下调。
+5. **1kHz 双向回报的节点数上限**：1 Mbps 下标准帧约 125 bit，1~2 节点可维持
+   每节点 1kHz encoder + 100ms heartbeat；4 节点需降频（协议层预留分频位，
+   当前未实现）。
 
-6. **多圈 P 项必须用连续误差（已修，2026-10-27 台架）**：`algo_motion_position()`
-   内含 `foc_wrap_pm_pi`（单圈最短路径），多圈模式误用它会把整圈误差折成 0
-   → 表现为"走到与目标差整圈的位置就停住"（实测：`pos_multi 400` 停在 40°、
-   `pos_multi 720` 停在 0°）。修复：新增 `algo_motion_position_cont()`
-   （误差不 wrap），`app_motion_position_step()` 按 `s_position_multi` 选择。
-   回归：`test_algo_position_p`（差 2π/3π 的两种语义对比）。
+#### 9.5.1 已修缺陷（保留记录，防止回退）
+
+- **多圈 P 项必须用连续误差（2026-10-27 台架）**：`algo_motion_position()`
+  内含 `foc_wrap_pm_pi`（单圈最短路径），多圈模式误用它会把整圈误差折成 0
+  → 表现为"走到与目标差整圈的位置就停住"（实测：`pos_multi 400` 停在 40°、
+  `pos_multi 720` 停在 0°）。修复：新增 `algo_motion_position_cont()`
+  （误差不 wrap），`app_motion_position_step()` 按 `s_position_multi` 选择。
+  回归：`test_algo_position_p`（差 2π/3π 的两种语义对比）。
+- **ILM 内跳回 XIP（2026-10-28）**：`.fast` 段内的热路径函数仍调用 XIP 中的
+  辅助函数 / libm，抵消了 ILM 的取指收益。已修 26 处（详见 §9.5.2），并新增
+  `scripts/tests/layout/check_ilm_calls.sh` 守卫。
+- **USB 枚举被启动自检打断（2026-09-22 修复，2026-10-28 复现到当前结构）**：
+  `app_usb_init()` 原在 `app_init()` 中间，其后紧跟 flash 破坏性读写与逆变桥
+  自检（都会长时间关中断），主机枚举可能被打断 → 偶发"不枚举/描述符请求失败"。
+  现移至 `app_init()` 末尾（步骤 15）。
+
+#### 9.5.2 ILM 跨段调用修复清单（2026-10-28）
+
+判据：`.fast` 内函数的直接调用目标若在 XIP（`>= 0x8000_0000`），必须消除或
+显式列入白名单（`check_ilm_calls.sh` 的 `ALLOW`）。
+
+已移入 ILM：
+
+| 类别 | 符号 |
+| :--- | :--- |
+| 30kHz 齿槽注入 | `algo_cogging_interp_i16`、`app_cogging_iq`、3 个 `cogging_finite` 副本、`fmodf` → `foc_wrap_2pi` |
+| 30kHz 电流环 | `app_foc_current_run_fresh` 的 `fabsf`/`copysignf` → 显式比较/取符号 |
+| 15kHz motion | `app_cogging_set_output_angle` / `_set_motion_active` / `_set_speed_limited`、`app_foc_stop_pending` |
+| 1kHz 保护链 | `fault_finite`、`fault_snapshot_now`、`fault_conditions_ok`、`fault_reset_all`、`algo_rms_finite`（union 取代 memcpy）、`app_adc_get_sequence`、`app_adc_wdog_reenable`、`app_encoder_get_error_count` |
+| 故障停机 | `app_foc_request_stop`、`app_foc_revoke_current`、`app_3phase_inverter_is_enabled`、`app_gpio_set` + `intf_gpio_set_level` + `hpm_gpio_set_level`（含 `get_gpio_base`/`get_gpio_port_index`） |
+| flash | `flash_addr_in_range`、`flash_dcache_invalidate_aligned`（read/program/erase 的三个 ILM 实现调用它们） |
+| 慢通道 | `ntc_resistance_from_volts` |
+
+显式保留在 XIP（白名单，附理由）：
+
+| 符号 | 理由 |
+| :--- | :--- |
+| `clock_get_frequency` | 仅 init/诊断期调用 |
+| `intf_hrpwm_init_pair` / `hrpwm_apply_phase` / `hrpwm_delay_ns_to_ticks` | PWM 配置期 |
+| `foc_math_init` | 建 sin/cos 表（含 `sinf`）；必须由启动期 init 保证，禁止 ISR 首调 |
+| `app_hardware_params_init` / `app_software_params_init` | 参数单例懒初始化兜底（一次） |
+| `rom_xpi_nor_read` / `l1c_dc_invalidate` | SDK/ROM，不可改；调用点已关中断 |
+| `sqrtf` | RMS 精度不可替换，1kHz |
+| `memset` | `fault_reset_all` 清结构体，clear 路径低频 |
+| `app_foc_disable` | 含 20ms 软关断延时，**必须**任务上下文 |
+
+资源：`.fast` 由 31.4KB → 32.7KB（ILM 128KB，占用约 25.6%）。
