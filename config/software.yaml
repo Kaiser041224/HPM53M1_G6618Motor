@@ -33,7 +33,6 @@ fault:
   adc_stall_ms: 10                        # PMT 帧停滞超时 [ms]
   enc_err_delta: 3                        # 编码器错误增量阈值（每 1kHz tick 的错误计数增量）
   comm_timeout_ms: 100                    # CAN 通信看门狗超时 [ms]（0=禁用；首帧后 arm）
-  comm_wd_source: can                     # 喂狗源：can=只认 CAN 控制帧（出厂）；usb=终端命令；both
   # —— 时序量：占位，待 FOC 时序体系定义后接入（当前代码使用内部宏：250 样本 / 50 tick）——
   # rms_window_samples: 250
   # settle_ticks: 50

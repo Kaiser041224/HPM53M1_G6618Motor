@@ -28,6 +28,7 @@
 
 #include "app_terminal_cmd.h"
 #include "app_terminal_monitor.h"
+#include "app_can_service.h" /* 通信看门狗：USB 终端输入喂狗 */
 #include "app_usb.h"
 #include "chry_ringbuffer.h"
 #include "csh.h"
@@ -217,6 +218,12 @@ static uint16_t app_terminal_sget(chry_readline_t* rl, void* data, uint16_t size
 
     received = app_usb_read((uint8_t*)data, (size_t)size);
     if (received > 0) {
+        /* 终端有输入 = 通信活跃：喂通信看门狗（USB 源优先于 CAN 帧）。
+         * 否则"CAN 静默但人在终端操作"会被判主机失联并触发 STOP。
+         * 放在 job 判断之前：长流程（cal cogging ≈100s 等）期间链路仍活着，
+         * 不能因为输入被丢弃就停止喂狗。 */
+        app_can_service_feed_watchdog();
+
         if (app_terminal_job_is_active()) {
             /* job 期间不接受指令输入：直接丢弃（不再"任意键中止"，
              * 避免长流程被误触打断；job 自身有超时兜底） */

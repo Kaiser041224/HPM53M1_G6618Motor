@@ -36,6 +36,17 @@ void app_can_service_step(void);
  */
 void app_can_service_suspend_watchdog(bool suspend);
 
+/**
+ * @brief 由非 CAN 源喂通信看门狗（当前：USB 终端输入）
+ *
+ * 语义：通信看门狗默认由 CAN 控制帧（RX ISR）喂；USB 终端有输入时同样喂，
+ * 且优先级更高——人在终端操作期间不会因 CAN 静默被判"主机失联"。
+ * 两个源共享同一时间戳与超时判据，后到者刷新。
+ *
+ * 可在任务上下文调用（不加锁；时间戳写入和 ISR 侧一致，单字写入天然原子）。
+ */
+void app_can_service_feed_watchdog(void);
+
 /** @brief 看门狗是否已 arm（收到首个有效控制帧后为 true） */
 bool app_can_service_watchdog_armed(void);
 

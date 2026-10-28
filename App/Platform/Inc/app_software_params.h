@@ -182,8 +182,8 @@ typedef struct {
  */
 typedef struct {
     uint16_t comm_timeout_ms; /**< 超时 [ms]（0 = 禁用）；首次收到有效控制帧后 arm */
-    uint8_t wd_source;        /**< 喂狗源：0=can，1=usb，2=both */
-    uint8_t reserved;         /**< 对齐保留 */
+    uint16_t reserved;        /**< 曾为 wd_source（已删除）；喂狗源固定为
+                               *   CAN 控制帧 + USB 终端输入（后到者刷新时间戳） */
 } app_software_comm_t;
 
 /** @brief flash 参数加载策略 */

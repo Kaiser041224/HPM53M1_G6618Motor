@@ -142,7 +142,6 @@ SCHEMA = {
         ("control.mit.inertia_ff_en", "mit.inertia_ff_en", "u8", 0, 1),
         # CAN 通信看门狗（追加到 params 末尾，避免重排既有字段偏移）
         ("fault.comm_timeout_ms", "comm.comm_timeout_ms", "u16", 0, 65535),
-        ("fault.comm_wd_source", "comm.wd_source", "u8", 0, 2),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
         ("control.limits.i_q_continuous_a", "i_q_continuous_a", "f32", 0.0, None),
         ("control.limits.i_q_boost_time_s", "i_q_boost_time_s", "f32", 0.0, None),
@@ -175,7 +174,6 @@ SCHEMA = {
 ENUM_FIELDS = {
     ("software", "storage"): {"keep": 0, "reset": 1, "override": 2},
     ("software", "control.mit.can_format"): {"compact": 0, "dual": 1},
-    ("software", "fault.comm_wd_source"): {"can": 0, "usb": 1, "both": 2},
 }
 
 # 布尔字段：YAML 接受 true/false、on/off、yes/no、1/0；生成 C 时写 u8 0/1
@@ -283,7 +281,6 @@ APPLY_REBOOT = {
     "software.control.mit.can_format",
     # CAN 通信看门狗：init 期消费
     "software.fault.comm_timeout_ms",
-    "software.fault.comm_wd_source",
 }
 
 # FOC 停机期消费项：param set 仅在 FOC OFF 接受，下一次 foc on 重载模型/角度链生效。

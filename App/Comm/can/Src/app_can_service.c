@@ -121,6 +121,12 @@ static void can_rx_isr_hook(uint32_t id, const uint8_t* data, uint8_t len) {
     }
 }
 
+void app_can_service_feed_watchdog(void) {
+    s_last_control_cycles = intf_clock_get_cycle();
+    s_wd_armed = true;
+    s_wd_fired = false;
+}
+
 /** @brief RX 回调（任务上下文）：只入队 */
 static void can_rx_callback(const app_can_msg_t* msg) {
     if (msg == NULL) {
