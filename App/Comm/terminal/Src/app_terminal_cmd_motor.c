@@ -525,6 +525,13 @@ static void cal_rl_emit(const app_current_identify_result_t* result) {
         (double)(result->trial_step.overshoot*100),
         (double)(result->trial_step.overshoot_raw*100), (double)result->trial_step.error_a,
         (double)result->trial_step.ripple_a, (double)result->trial_step.ripple_rms_a);
+    if (result->bandwidth_retries > 0U) {
+        app_terminal_cmd_emit("PI ladder: first overshoot=%.1f%% raw=%.1f%% -> last %.1f%%/%.1f%% stalled=%u\r\n",
+            (double)(result->ladder_first_overshoot*100),
+            (double)(result->ladder_first_overshoot_raw*100),
+            (double)(result->trial_step.overshoot*100),
+            (double)(result->trial_step.overshoot_raw*100), (unsigned)result->ladder_stalled);
+    }
     if (result->r_ff_tested) {
         app_terminal_cmd_emit(
             "RI A/B: off rise=%.3fms overshoot=%.1f%% rms=%.4fA | on rise=%.3fms "
@@ -605,6 +612,14 @@ static void cal_rl_tick(uint32_t now_ms) {
             (double)(result.step.overshoot_raw*100),(double)result.step.error_a,
             (double)result.step.ripple_a,(double)result.step.ripple_rms_a,
             (double)result.pi_baseline_rms_a);
+        if (result.ladder_stalled) {
+            app_terminal_cmd_emit(
+                "    ladder stalled: %.0fHz -> %.0fHz overshoot %.1f%% -> %.1f%% (bandwidth-invariant: "
+                "noise/nonlinearity, not loop delay); reporting target-bw gains\r\n",
+                (double)result.bandwidth_hz, (double)result.trial_bandwidth_hz,
+                (double)(result.ladder_first_overshoot * 100),
+                (double)(result.trial_step.overshoot * 100));
+        }
         if (result.r_ff_tested) {
             app_terminal_cmd_emit(
                 "    RI A/B: off rise=%.3fms overshoot=%.1f%% rms=%.4fA | on rise=%.3fms "

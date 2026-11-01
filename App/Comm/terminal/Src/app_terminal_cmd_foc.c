@@ -653,7 +653,7 @@ static int cmd_motion(int argc, char** argv) {
             "samples=%lu reason=%u\r\n"
             "shaft=%.2fdeg speed=%.2frpm (%.4frad/s) phase=%.8fturn torque=%.4fNm iq=%.4fA "
             "good/bad=%lu/%lu\r\n"
-            "exec: iq_acc=%.4fA hold=%lu lim=%u sat=%u\r\n"
+            "exec: iq_acc=%.4fA hold=%lu zoh=%lu lim=%u sat=%u\r\n"
             "position: sp=%.2fdeg vel_cmd=%.2frpm err=%.3fdeg\r\n"
             "travel: pos=%.2fdeg sp=%.2fdeg valid=%u rebase=%lu\r\n"
             "diag: now=%.2fdeg cur=%.2fdeg tgt=%.2fdeg vff=%.2frpm gain=%.1f\r\n"
@@ -666,6 +666,7 @@ static int cmd_motion(int argc, char** argv) {
             (double)state.phase_turns, (double)torque_user, (double)state.iq_a,
             (unsigned long)state.good_count, (unsigned long)state.bad_count,
             (double)state.iq_accepted_a, (unsigned long)state.hold_count,
+            (unsigned long)state.hold_zoh_count,
             (unsigned)state.current_limited, (unsigned)state.voltage_saturated,
             (double)(pos_sp_user * APP_TERMINAL_FOC_DEG_PER_RAD),
             (double)(vel_cmd_user * 60.0f / 6.28318530718f),

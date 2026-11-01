@@ -16,11 +16,13 @@ int g_fails = 0;
 
 void test_app_motor_identify(void);
 void test_app_motor_identify_adaptive_probe(void);
+void test_app_motor_identify_verify_coast(void);
 
 int main(void) {
     printf("Identify host tests\n");
     test_app_motor_identify();
     test_app_motor_identify_adaptive_probe();
+    test_app_motor_identify_verify_coast();
     printf("%d checks, %d failures\n", g_checks, g_fails);
     if (g_checks == 0) {
         printf("ERROR: no checks executed (test wiring missing?)\n");

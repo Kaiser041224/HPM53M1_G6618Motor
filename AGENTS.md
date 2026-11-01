@@ -476,11 +476,12 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   记录两方向机械行程与最终档位。正向或反向任一方向达到 `0.05 rad` 且方向正确即通过，
   并立即停机，避免自由轴在探针电流下继续多圈旋转；90° 错位两方向都无行程、
   180° 错位两方向都反向，仍会失败。扫描每步驻留延长到 10 ms、起始静默 300 ms，
-  总时长约 26 s；残差判据保持 `verify_max ≤ 15°`，不要用放宽阈值掩盖机械问题。
+  总时长约 26 s。**残差已不再是硬判据**（2026-11-01，见文末「标定流程修正」）：
+  verify 先零电流滑行至停稳，残差只做诊断，探针是唯一验收。
 - trial 零点：REV 终点仅在距正/反向合并圆均值 ≤5.7° 时采用；高摩擦/摆线减速器
   的终点可能停在齿槽/弹性死点，超出窗口必须回退圆均值，避免 endpoint 偏置。
-- verify 失败日志必须带上真实 `resid mean/max`、双向 `probe` 与探针档位；若在残差阶段
-  就失败，`i=0.0A` 表示探针未执行，不是探针电流丢失。
+- verify 失败日志必须带上真实 `resid mean/max`、双向 `probe` 与探针档位；若在停稳段
+  就失败（转子 400ms 内停不下来），`i=0.0A` 表示探针未执行，不是探针电流丢失。
 - **CALIB 期间 `s_i_q_ref` 由校准端口独占**。`app_foc_run_body()` 的 DIRECT 分支
   不得用 `s_i_q_ref_cmd` 覆盖它，否则 verify 的 q 探针电流会被 1kHz 编排清零，
   日志表现为 `probe≈0`、resid 很小但始终 verify failed。该覆盖已修复，并有
@@ -923,3 +924,92 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   - 首帧才 arm；CALIB/停机窗口挂起；出厂 `actions_enable=false` 时只告警不停机。
   - **`fault.comm_wd_source` 已删除**（曾是死配置：字段与 YAML 都在，但无代码消费）。
     不要重新引入"喂狗源选择"——语义固定为 CAN + USB 双源。
+
+### 实时拍锁相与帧内时间片（2026-10-30，台架已验证）
+
+- **现象**：motion speed/pos 下有周期极精准的 ~1Hz "颤动"噪声（像转子快速启停），
+  `motor iq` 完全没有。与齿槽/前馈/速度环强相关。
+- **机理（拍频）**：两个周期中断不同源。PWM/FOC 走 `mot0`=AHB=PLL0CLK0/6=160MHz，
+  `reload = clk/f - 1 = 5332` → 周期 5333 counts → **30001.875Hz**，FOC/2 =
+  15000.9375Hz；GPTMR1 当时走复位默认源（OSC24M），`reload = clk/f = 1600` →
+  **15000.000Hz**。两者差 **0.9375Hz（周期 1.067s）**，且同晶振 → 拍频不漂，
+  故"周期极准"。`DISABLE_IRQ_PREEMPTIVE=1` 下两个 ISR 不能互相抢占，相位滑到重叠区
+  就互相推迟 → 编码器配对超龄 → `motion_reject(SAMPLE)` → 零力矩 + 关齿槽注入。
+  与 2026-10-26 的 vbus 1.9Hz 拍频是同一类问题（1.875 = 2×0.9375）。
+- **修法 1 — 速率锁定**（`drv_clock.c`）：`clock_set_source_divider(clock_gptmr1,
+  clk_src_pll0_clk0, 12)` → GPTMR1 = 80.000MHz，`reload = 80e6/15000 = 5333` counts
+  = 66.6625µs = **恰好 2 个 PWM 周期**（5333 counts @160MHz），与 FOC 严格 2:1。
+  **新增任何周期性硬件拍，必须先确认其时钟源与 PWM 同源且整数倍**，不要只看标称频率。
+- **修法 2 — 相位安排**（`app_motion_timer.c:motion_timer_start_aligned`）：速率锁定后
+  相位恒定但启动瞬间随机，必须主动安排。启动时轮询转子快照序号抓到一帧 FOC 入口
+  （`timestamp_cycles` 即 `t_isr`），再等 `APP_MOTION_TIMER_PHASE_US` 才放行 GPTMR 计数；
+  等相位与放行必须在**同一个关中断窗口**内，否则 RTOS tick 插进来就计入相位。
+  **帧内实测分工**（台架 motion speed 5）：ADC0 PMT = 0–17.0µs（`[ISR] isr peak`，
+  预算 25µs），motion 相位 18µs 起、耗时 ≤6.5µs，尾部离下一帧 8.8µs。
+  - **定相位只能用带载实测值**：FOC 中断空载 2.8µs、带电流环+齿槽+observer 是 17µs。
+    首版按"典型 10µs"取 17µs，实际 FOC 刚好占到 17µs。
+  - **`app_gptmr_start` 的 XIP 执行时间整段计入相位**：首次执行 I-cache 冷，实测把落点
+    推后约 9µs（设定 17µs → `[MOTION] age` 均值 25.8µs），motion 尾部正顶在下一个 FOC
+    帧入口上 → period 长短交替（18264..45847 cycles）、`late` 每秒 1~3 次。现在先空跑
+    两次 start/stop（预热 I-cache + 实测热态耗时）再从目标时刻扣除。
+    **凡"等到某时刻再动手"的对齐代码，都要先扣掉动手那段路径自身的 XIP 耗时。**
+  - 相位下界由 FOC 耗时定（motion 需要帧尾发布的 observer 速度），上界由 motion 耗时定
+    （尾部不能压到下一帧）。
+  该相位是**时序设计常量，不进 YAML**：SPRM 记录已占 236/240 字节（结构体 232 +
+  记录头 4，见 `app_software_params.c` 的 `_Static_assert`），**只剩一个 4 字节字段
+  的余量** —— 再加软件参数前要先确认这一点。
+- **修法 3 — 配对新鲜度口径统一**（`app_encoder.c`）：
+  `APP_ENCODER_OUTPUT_MAX_AGE_US` 40µs → **74µs**，与 FOC 自己的
+  `APP_FOC_ENC_MAX_AGE_US`（34+40）一致 = "最多容忍一帧未刷新"。原 40µs 比一个
+  FOC 帧（33.3µs）只多 6.7µs，相位稍偏就误判超龄。**两侧新鲜度门限必须同口径**。
+- **修法 4 — 坏拍保持分两级**（`app_motion.c:motion_reject`）：窗口内
+  ≤`APP_MOTION_HOLD_ZOH_SAMPLES=3` 拍（200µs）续发上一拍 iq（ZOH）、齿槽按上一有效
+  输出角继续注入、PI 积分冻结；超过才退到零力矩（原行为），>300 拍仍判真失败。
+  200µs @30rad/s 轴端 = 0.35°，小于 output 表一格（256 点 = 1.4°）。
+  **单拍坏数据不要给零力矩**：带 50:1 减速器时表现为"松一下再抓住"的颤动。
+- **观测口径**（`[MOTION]` 行，1Hz）：
+  - `period` 名义 31998 cycles（= 480MHz / 15000.9375Hz）。**长短交替的大 min/max 区间
+    （如 18264..45847）不是测量噪声**，是本拍与 FOC 帧互相推迟的签名：一拍被推迟、
+    下一拍追回来，和恒为 0 的 `late` 一起看。
+  - `age=N(min..max)` = 帧内相位（入口反馈龄）。锁相成立时 min≈max≈PHASE_US×480；
+    被拉开到 0..16000 = 相位又在滑移（时钟源/对齐失效）。
+  - `slice=窗/累计`：判据是"入口龄 + 本拍耗时 > 一个 FOC 帧"，即尾部是否压到下一帧
+    （用实测相位而非设定值 —— 首版用设定值算，正好漏掉了上面那次 9µs 偏移）。应恒为 0。
+  - `motion show` 的 `hold=/zoh=` 与 `reject: sample/duplicate/timing`（锁相后应不增长）。
+- **电流环带宽 2kHz → 1kHz**（`software.yaml`，同批）：2kHz = fs/15 已接近
+  `cal current` 上限（`pwm_hz/15`），电流环把采样/编码器噪声放大进电压指令 → 电磁啸叫。
+  `kp/ki` 改为由 `motor.ls_h/rs_ohm × control.current_loop.bandwidth_rad_s` 表达式派生，
+  改带宽即同步生效（`cal current` 也读同一字段作辨识目标）。
+  **注意 flash FCUR 会覆盖 YAML**：改带宽后须 `cal current` 重标或清 FCUR
+  （`storage: reset`），否则跑的仍是旧 kp/ki。
+
+### 标定流程修正：cal encoder verify / cal rl 阶跃与阶梯（2026-11-01，待台架复验）
+
+- **cal encoder verify 的旧判据在自由轴上必然失败**：旧流程在试用零点 + 编码器角源下
+  施加 2A i_d，并以"静止残差 ≤15°电角"判死。零点误差 δ 时 i_d 产生 **恒定** 转矩
+  Kt·I·sinδ（不是回复力矩，不随转子位置改变方向）→ 无负载转子持续加速 → 残差必然
+  满量程（台架 resid 155°/179°、drift −482/+2396°/s）。**编码器角源下 i_d 不能锁位**，
+  只有固定激励角下才能。
+- **修法**（`app_motor_identify.c`）：VERIFY 先 **零电流滑行至停稳**（逐 ms 位移
+  <5e-4 rad 持续 20ms，≤400ms 超时判 VERIFY 失败、探针不执行）→ 残差采样 50ms
+  （**只诊断不判死**）→ 双向 i_q 探针（唯一硬验收：转子须朝指令方向转动）。
+- **主机 mock 的盲区**：`scripts/tests/identify/mock_platform.c` 是一阶位置跟随器、无惯量，
+  复现不了"恒定转矩 → 持续加速"。停稳段用显式注入 `g_mock_verify_drift_e_rad_per_ms`
+  覆盖（`test_app_motor_identify_verify_coast`）。**mock 全绿不代表动力学正确**。
+- **cal rl 超调"与带宽无关"的根因是噪声底，不是死区**：旧 PI 阶跃 3.0→3.5A（幅值 0.5A）。
+  台架块内噪声 `baseline_rms≈0.22A`，16 次平均后 ≈0.055A；128 点内噪声极值 ≈2.5σ
+  单独给出平滑超调 ≈17%、raw ≈28%，与实测 20.7/31.1%、23.2/34.5% 吻合。
+  rise 0.23~0.37ms 也远快于 377Hz 设计值（≈0.9ms）——90% 穿越被噪声提前触发。
+  固定激励角下三相电流按比例缩放，阶跃不新增相电流过零，死区只是常量偏置（积分吸收）。
+- **修法 1**（`app_current_identify.c`）：阶跃改为 **1.0→3.5A**（`CURRENT_IDENTIFY_PI_BASE_A/
+  STEP_A`），幅值 2.5A，噪声项降到 1/5。`PI baseline: mean` 现在应 ≈1.0A。
+- **修法 2 — 阶梯停滞**：降档 ≥2 级后归一化超调 `max(os/0.2, raw/0.3)` 仍 ≥ 首档 ×0.9
+  → `ladder_stalled=1`，停止降档，**产出回到目标带宽首档 kp/ki**（`trial_*` 仍记末档）。
+  旧逻辑在噪声型失败下把产出一路拖到 377Hz。延迟型超调随带宽单调下降，不触发停滞
+  （`test_current_identify` 有两种情形的回归）。终端：`cal rl` 打印 `ladder stalled:` 行，
+  `cal rl show` 打印 `PI ladder: first overshoot=… -> last … stalled=`。
+- R*I A/B 相位（`s_ri_test_phase`）不再进入降带宽阶梯：基线已在该带宽通过，R*I on
+  未通过只表示 `recommend=NO`，不应改动带宽。
+- **台架判读**：新固件 `cal rl` 应 retry=0 或少量降档即 PASS，raw 超调落到个位数~10% 量级。
+  若仍 `stalled`，先看 `baseline_rms`：噪声底本身变大（接地/采样/PWM 纹波）是采样链问题，
+  不要用放宽验收门限掩盖。

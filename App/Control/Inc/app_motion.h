@@ -63,6 +63,7 @@ typedef struct {
     uint32_t vernier_fallback_count; /**< 游标失配兜底测速样本数（转子角+最近圈号） */
     uint32_t timing_failure_count;
     uint32_t hold_count;        /**< 坏拍有界保持事件累计（active期间质量类坏拍进入保持的次数） */
+    uint32_t hold_zoh_count;    /**< 保持窗口中"上一拍力矩续发"的拍数（ZOH级；不含零力矩级） */
     app_motion_reason_t reason; /**< 最近拒绝/输出撤销；成功新命令清零 */
     bool current_limited, voltage_saturated; /**< 最近FOC执行限幅状态（仅属本请求时有效） */
     bool speed_limited; /**< 本拍轴端连续速度限幅生效 */

@@ -380,9 +380,11 @@ void app_diag_step(void) {
     app_isr_stats_print();
     app_motion_timer_snapshot_t motion_timer;
     app_motion_timer_take_window(&motion_timer);
+    /* period 应为 31998（480MHz / 15000.9375Hz，与 PWM 2:1 锁相）；
+     * age 为帧内相位，min..max 收敛即时间片成立；slice=本拍越余量次数（应为 0）。 */
     app_debug_printf(
         "[MOTION] tick n=%lu win=%lu period=%lu..%lu max=%lu late=%lu/%lu "
-        "age=%lu valid=%u [cycles]\r\n",
+        "age=%lu(%lu..%lu) slice=%lu/%lu valid=%u [cycles]\r\n",
         (unsigned long)motion_timer.tick.count,
         (unsigned long)motion_timer.tick.window_count,
         (unsigned long)motion_timer.tick.period_min_cycles,
@@ -391,6 +393,10 @@ void app_diag_step(void) {
         (unsigned long)motion_timer.tick.window_late_count,
         (unsigned long)motion_timer.tick.late_count,
         (unsigned long)motion_timer.tick.feedback_age_cycles,
+        (unsigned long)motion_timer.tick.feedback_age_min_cycles,
+        (unsigned long)motion_timer.tick.feedback_age_max_cycles,
+        (unsigned long)motion_timer.tick.window_slice_overrun_count,
+        (unsigned long)motion_timer.tick.slice_overrun_count,
         (unsigned)motion_timer.tick.feedback_valid);
 }
 

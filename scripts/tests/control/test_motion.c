@@ -282,7 +282,10 @@ void test_motion_hold(void) {
     CHECK(app_motion_position(0.5f, 0.0f, 0.0f) == 0);
 
     app_motion_snapshot_t snapshot;
-    /* 位置模式：pair 失败进入有界保持（速度/力矩模式不要求 pair） */
+    app_motion_snapshot_t before_fault;
+    app_motion_get_snapshot(&before_fault);
+    /* 位置模式：pair 失败进入有界保持（速度/力矩模式不要求 pair）。
+     * 窗口前 APP_MOTION_HOLD_ZOH_SAMPLES=3 拍为 ZOH 级：续发上一拍输出，不清零。 */
     g_mock_output_failure = 1;
     for (unsigned i = 0; i < 2; ++i) {
         mock_advance_cycle(48000);
@@ -292,10 +295,23 @@ void test_motion_hold(void) {
     app_motion_get_snapshot(&snapshot);
     CHECK(snapshot.active);
     CHECK(snapshot.reason == APP_MOTION_REASON_SAMPLE);
+    CHECK(snapshot.hold_count == 1);
+    CHECK(snapshot.hold_zoh_count == 2);
+    CHECK_NEAR(snapshot.iq_a, before_fault.iq_a, 1e-6f);
+    CHECK_NEAR(snapshot.torque_nm, before_fault.torque_nm, 1e-6f);
+    CHECK(app_motion_position(0.6f, 0, 0) != 0); /* 保持期间反馈失效，不接受新命令 */
+
+    /* 第 4 拍起退到零力矩级 */
+    for (unsigned i = 0; i < 2; ++i) {
+        mock_advance_cycle(48000);
+        app_motion_step();
+        app_foc_isr_step();
+    }
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.active);
+    CHECK(snapshot.hold_zoh_count == 3); /* ZOH 级有界：不随坏拍继续增长 */
     CHECK_NEAR(snapshot.iq_a, 0, 1e-6f);
     CHECK_NEAR(snapshot.torque_nm, 0, 1e-6f);
-    CHECK(snapshot.hold_count == 1);
-    CHECK(app_motion_position(0.6f, 0, 0) != 0); /* 保持期间反馈失效，不接受新命令 */
 
     /* 恢复 */
     g_mock_output_failure = 0;
@@ -316,6 +332,8 @@ void test_motion_hold(void) {
     app_motion_get_snapshot(&snapshot);
     CHECK(snapshot.active);
     CHECK(snapshot.hold_count == 2);
+    CHECK(snapshot.hold_zoh_count == 6); /* 每次保持事件最多 3 拍 ZOH */
+    CHECK_NEAR(snapshot.iq_a, 0, 1e-6f);
     g_mock_output_failure = 0;
     mock_advance_cycle(48000);
     g_mock_rotor_rad += .002f;

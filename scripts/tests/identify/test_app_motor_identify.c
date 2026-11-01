@@ -32,6 +32,7 @@ extern float g_mock_applied_dir;
 extern float g_mock_current_scale;
 extern bool g_mock_probe_stuck;
 extern float g_mock_probe_min_a;
+extern float g_mock_verify_drift_e_rad_per_ms;
 extern bool g_mock_snap_invalid;
 extern uint32_t g_mock_enc_errors;
 extern int g_mock_store_count;
@@ -240,4 +241,36 @@ void test_app_motor_identify_adaptive_probe(void) {
     CHECK(res.probe_travel_rad * res.direction >= 0.05f);
     CHECK((res.probe_fwd_rad * res.direction >= 0.05f)
           || (res.probe_rev_rad * res.direction <= -0.05f));
+}
+
+/**
+ * @brief VERIFY 零电流停稳段（2026-10-30）
+ *
+ * 1) 转子在 VERIFY 期间被持续拖动 → 停稳等待超时 → VERIFY 失败、探针不执行；
+ * 2) 拖动消失后同一流程应恢复为通过（停稳段不是单向门）。
+ * 旧实现在 VERIFY 施加 i_d 并以"静止残差 ≤15°电角"判死，自由轴上零点误差
+ * 产生恒定转矩使转子持续加速，残差必然满量程 → 必然失败（台架实测）。
+ */
+void test_app_motor_identify_verify_coast(void) {
+    app_motor_identify_result_t res;
+
+    /* 1) 持续拖动：0.02 rad 电角/ms ÷ pp=10 → 2 rad/s 机械，4× 停稳门 */
+    mock_reset(1.234f, 1.0f);
+    g_mock_verify_drift_e_rad_per_ms = 0.02f;
+    CHECK(app_motor_identify_start() == 0);
+    CHECK(run_until_idle(60000) < 60000);
+    app_motor_identify_get_result(&res);
+    CHECK(res.failed);
+    CHECK(res.fail_reason == APP_IDENTIFY_REASON_VERIFY);
+    CHECK_NEAR(res.probe_current_a, 0.0f, 1e-6f); /* 未进探针段 */
+    CHECK(g_mock_calib_end_count == 1);           /* 失败路径仍退出 CALIB */
+
+    /* 2) 无拖动：同一零点应通过探针验收 */
+    mock_reset(1.234f, 1.0f);
+    CHECK(app_motor_identify_start() == 0);
+    CHECK(run_until_idle(60000) < 60000);
+    app_motor_identify_get_result(&res);
+    CHECK(res.done);
+    CHECK(!res.failed);
+    CHECK(res.probe_travel_rad * res.direction >= 0.05f);
 }

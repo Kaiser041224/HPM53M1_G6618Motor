@@ -62,6 +62,18 @@ void intf_clock_init(void)
     clock_add_to_group(clock_spi3, 0);
     clock_set_source_divider(clock_spi3, clk_src_pll1_clk0, 10);
 
+    /*
+     * GPTMR1（motion 15kHz 拍）必须与 PWM/FOC 同源同倍率，否则两个 ISR 相位缓慢滑移：
+     *   PWM  : mot0 = AHB = PLL0CLK0/6 = 160MHz，reload 5333 → 30001.875Hz（FOC/2 = 15000.9375Hz）
+     *   默认 : GPTMR1 走复位默认源（OSC24M），reload 1600 → 15000.000Hz
+     *   拍频 : 15000.9375 − 15000 = 0.9375Hz（周期 1.067s）→ 每秒级地周期性撞拍
+     * 改为 PLL0CLK0/12 = 80MHz 后 reload = 80e6/15000 = 5333 counts = 66.6625µs
+     * ＝ 2 × PWM 周期（5333 counts @160MHz），与 FOC 严格 2:1 锁定，拍频消失。
+     * 验证：[MOTION] period 应为 31998 cycles（@480MHz）而非 32000。
+     */
+    clock_add_to_group(clock_gptmr1, 0);
+    clock_set_source_divider(clock_gptmr1, clk_src_pll0_clk0, 12);
+
     clock_connect_group_to_cpu(0, 0);
 
     /* Bump DCDC to the SDK-recommended voltage for stable 480MHz CPU operation. */

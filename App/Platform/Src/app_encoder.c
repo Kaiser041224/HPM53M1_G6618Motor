@@ -51,6 +51,14 @@
  * 周期（下一帧正在传输）时才等待，8µs 保证该情形能取到完整的新帧而非判失败。 */
 #define APP_ENCODER_SYNC_WAIT_US (8U)
 
+/* 配对快照新鲜度上限 [µs]（app_encoder_output_sample 的消费方 = 15kHz motion 拍）：
+ * 口径与 FOC 自身的 APP_FOC_ENC_MAX_AGE_US 一致 —— 采样周期 34µs + 40µs 余量，
+ * 即"最多容忍一帧未刷新"，连续两帧缺失才判失效。
+ * 原值 40µs（cpu/25000）比一个 FOC 帧（33.3µs）只多 6.7µs：motion 拍相位稍有偏移
+ * （被 FOC ISR 推迟、或落在帧尾）就会误判超龄 → SAMPLE 拒绝 → 零力矩保持，
+ * 是 1Hz 颤动的触发条件之一（2026-10-30）。 */
+#define APP_ENCODER_OUTPUT_MAX_AGE_US (74U)
+
 /**
  * @brief 编码器持久化参数（app_param 键 APP_PARAM_KEY_ENCODER 的数据布局）
  */
@@ -233,8 +241,9 @@ int app_encoder_output_start(void) {
         return -1;
     }
     s_output_fetch = dev->sync_fetch;
-    /* 快照超龄与原有转子守卫一致；这不是额外SPI等待时间。 */
-    s_output_max_age_cycles = intf_clock_get_cpu_freq() / 25000U;
+    /* 快照超龄与 FOC 侧口径一致（一帧 + 余量）；这不是额外SPI等待时间。 */
+    s_output_max_age_cycles =
+        (intf_clock_get_cpu_freq() / 1000000U) * APP_ENCODER_OUTPUT_MAX_AGE_US;
     s_encoder_pair.valid = false;
     s_output_sync_armed = true;
     return 0;

@@ -41,6 +41,8 @@ static uint32_t s_identify_pwm_hz, s_identify_pole_pairs;
 static float s_current_identify_origin_rotor;
 static bool s_pi_baseline_armed;
 static uint8_t s_pi_capture_retries; /**< PI 阶段捕获无效样本重试计数（每带宽级/RI 相位独立） */
+static float s_ladder_first_severity;  /**< 首档归一化超调 max(os/0.2, raw/0.3)（停滞判据基准） */
+static float s_ladder_first_bw_hz, s_ladder_first_kp, s_ladder_first_ki; /**< 目标带宽首档增益 */
 static double s_phase_sum[3];
 static double s_pi_baseline_sum, s_pi_baseline_variance_sum;
 static const float s_current_identify_targets[] = {2, 3, 4, 3, 2};
@@ -64,6 +66,19 @@ static id_rl_sample_t s_current_identify_average[APP_FOC_IDENTIFY_SAMPLES]
 #define CURRENT_IDENTIFY_BW_RETRY_FACTOR (0.85f)
 #define CURRENT_IDENTIFY_BW_RETRY_MAX    (6U)
 #define CURRENT_IDENTIFY_BW_MIN_HZ       (200.0f)
+/* 阶梯停滞：降档 ≥2 级（带宽 ×0.72）后归一化超调仍 ≥ 首档 ×0.9 ⇒ 超调与带宽无关
+ * （噪声底/非线性，不是环路延迟），继续降档只会让环路变慢。停止阶梯，产出回到目标
+ * 带宽的 kp/ki。2026-10-30 台架：1000→377Hz 共 6 级超调始终 20~23%，旧逻辑把
+ * 产出拖到 377Hz。真实延迟型超调随带宽单调下降，不会触发本判据。 */
+#define CURRENT_IDENTIFY_BW_STALL_RUNGS  (2U)
+#define CURRENT_IDENTIFY_BW_STALL_RATIO  (0.9f)
+/* PI 阶跃 1.0→3.5A（2026-11-01，原 3.0→3.5A）。台架块内噪声 RMS≈0.22A，16 次平均后
+ * ≈0.055A；0.5A 幅值下 128 点噪声极值（≈2.5σ）单独就给出平滑超调 ≈17%、raw ≈28%，
+ * 与实测 20.7/31.1%、23.2/34.5% 吻合且与带宽无关——验收量被噪声底卡死。幅值放大到
+ * 2.5A，噪声项降到 1/5。固定激励角下三相电流按比例缩放，阶跃不引入新的相电流过零，
+ * 死区非线性对基线与终值是同一常量偏置（由积分项吸收）。 */
+#define CURRENT_IDENTIFY_PI_BASE_A       (1.0f)
+#define CURRENT_IDENTIFY_PI_STEP_A       (3.5f)
 /* PI 阶段捕获样本无效（瞬态保护拍：编码器坏帧/vbus 抖动）时先重试捕获，
  * 不让单拍毛刺否决整轮（2026-10-26 台架：两轮在 2000/1400Hz 首试即死）。 */
 #define CURRENT_IDENTIFY_PI_CAPTURE_RETRY_MAX (2U)
@@ -169,6 +184,8 @@ int app_current_identify_start(void) {
     s_identify_pole_pairs=app_motor_params_current()->pole_pairs;
     s_pi_baseline_armed = false;
     s_pi_capture_retries = 0;
+    s_ladder_first_severity = 0;
+    s_ladder_first_bw_hz = s_ladder_first_kp = s_ladder_first_ki = 0;
     s_pi_baseline_sum = s_pi_baseline_variance_sum = 0;
     s_current_identify_index = 0;
     s_current_identify_voltage_base = app_motor_params_current()->rs_ohm * 2.0f;
@@ -518,7 +535,7 @@ void app_current_identify_run_once(void) {
         /* 仍在同一固定坐标系验证电流调节器。
          * 编码器跟随角下id不提供位置恢复，不能配固定角位移判据。 */
         result->progress = 0.65f;
-        current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+        current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, CURRENT_IDENTIFY_PI_BASE_A);
         break;
     case APP_CURRENT_IDENTIFY_PI_SETTLE:
         if (s_current_identify_ticks == 1 && s_current_identify_repeats == 0) {
@@ -530,6 +547,11 @@ void app_current_identify_run_once(void) {
             }
             result->trial_kp = kp;
             result->trial_ki = ki;
+            if (result->bandwidth_retries == 0U) {
+                s_ladder_first_bw_hz = result->trial_bandwidth_hz;
+                s_ladder_first_kp = kp;
+                s_ladder_first_ki = ki;
+            }
         }
         if (s_current_identify_ticks < 400)
             break;
@@ -572,7 +594,7 @@ void app_current_identify_run_once(void) {
         s_pi_baseline_armed = false;
         /* 同一临界区提交阶跃与捕获，避免ISR在两次发布之间运行。 */
         status = intf_sys_irq_save();
-        int rc = app_foc_calib_set_current(3.5f, 0);
+        int rc = app_foc_calib_set_current(CURRENT_IDENTIFY_PI_STEP_A, 0);
         if (!rc)
             rc = app_foc_calib_capture(0, false);
         intf_sys_irq_restore(status);
@@ -581,7 +603,7 @@ void app_current_identify_run_once(void) {
             current_identify_finish(2);
             break;
         }
-        result->current_ref_a = 3.5f;
+        result->current_ref_a = CURRENT_IDENTIFY_PI_STEP_A;
         result->state = APP_CURRENT_IDENTIFY_PI;
         break;
     case APP_CURRENT_IDENTIFY_PI:
@@ -610,7 +632,7 @@ void app_current_identify_run_once(void) {
                     s_pi_baseline_sum = 0;
                     s_pi_baseline_variance_sum = 0;
                     s_pi_baseline_armed = false;
-                    current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+                    current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, CURRENT_IDENTIFY_PI_BASE_A);
                     break;
                 }
                 result->detail = APP_CURRENT_IDENTIFY_DETAIL_CAPTURE_INVALID;
@@ -619,13 +641,14 @@ void app_current_identify_run_once(void) {
             }
         }
         if (++s_current_identify_repeats < CURRENT_IDENTIFY_REPEATS) {
-            current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+            current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, CURRENT_IDENTIFY_PI_BASE_A);
             break;
         }
         result->pi_baseline_a = (float)(s_pi_baseline_sum / CURRENT_IDENTIFY_REPEATS);
         result->pi_baseline_rms_a =
             (float)sqrt(s_pi_baseline_variance_sum / CURRENT_IDENTIFY_REPEATS);
-        if (id_rl_step(s_current_identify_average, count, dt, result->pi_baseline_a, 3.5f, &step)) {
+        if (id_rl_step(s_current_identify_average, count, dt, result->pi_baseline_a,
+                       CURRENT_IDENTIFY_PI_STEP_A, &step)) {
             result->detail = APP_CURRENT_IDENTIFY_DETAIL_CAPTURE_INVALID;
             current_identify_finish(2);
             break;
@@ -633,13 +656,25 @@ void app_current_identify_run_once(void) {
         result->trial_step = step;
         /* 2kHz 等较高带宽在采样/输出延迟下可能超调；step 未通过时按固定比例
          * 降到下一档重试。只重试“超调型”失败，跟踪误差/纹波失败不降带宽。
-         * 不修改用户的带宽配置，最终结果显式报告实际 trial 带宽。 */
-        if (!step.passed
-            && ((step.overshoot > 0.2f) || (step.overshoot_raw > ID_RL_OVERSHOOT_RAW_MAX))
-            && (result->bandwidth_retries < CURRENT_IDENTIFY_BW_RETRY_MAX)) {
+         * 不修改用户的带宽配置，最终结果显式报告实际 trial 带宽。
+         * 降档 ≥STALL_RUNGS 级仍无改善即判停滞（见 CURRENT_IDENTIFY_BW_STALL_*）。 */
+        if (!step.passed && !s_ri_test_phase
+            && ((step.overshoot > 0.2f) || (step.overshoot_raw > ID_RL_OVERSHOOT_RAW_MAX))) {
+            float severity =
+                fmaxf(step.overshoot / 0.2f, step.overshoot_raw / ID_RL_OVERSHOOT_RAW_MAX);
             float next_hz = result->trial_bandwidth_hz * CURRENT_IDENTIFY_BW_RETRY_FACTOR;
 
-            if (next_hz >= CURRENT_IDENTIFY_BW_MIN_HZ) {
+            if (result->bandwidth_retries == 0U) {
+                s_ladder_first_severity = severity;
+                result->ladder_first_overshoot = step.overshoot;
+                result->ladder_first_overshoot_raw = step.overshoot_raw;
+            } else if ((result->bandwidth_retries >= CURRENT_IDENTIFY_BW_STALL_RUNGS)
+                       && (severity >= s_ladder_first_severity * CURRENT_IDENTIFY_BW_STALL_RATIO)) {
+                result->ladder_stalled = true;
+            }
+            if (!result->ladder_stalled
+                && (result->bandwidth_retries < CURRENT_IDENTIFY_BW_RETRY_MAX)
+                && (next_hz >= CURRENT_IDENTIFY_BW_MIN_HZ)) {
                 result->trial_bandwidth_hz = next_hz;
                 result->bandwidth_retries++;
                 result->capture_retries = 0;
@@ -648,7 +683,7 @@ void app_current_identify_run_once(void) {
                 s_pi_baseline_sum = 0;
                 s_pi_baseline_variance_sum = 0;
                 s_pi_baseline_armed = false;
-                current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+                current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, CURRENT_IDENTIFY_PI_BASE_A);
                 break;
             }
         }
@@ -669,7 +704,7 @@ void app_current_identify_run_once(void) {
             s_pi_baseline_sum = 0;
             s_pi_baseline_variance_sum = 0;
             s_pi_baseline_armed = false;
-            current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, 3);
+            current_identify_stage(APP_CURRENT_IDENTIFY_PI_SETTLE, CURRENT_IDENTIFY_PI_BASE_A);
             break;
         }
         if (s_ri_test_phase) {
@@ -686,9 +721,16 @@ void app_current_identify_run_once(void) {
             (void)app_foc_calib_trial_r_ff(0U);
         }
         result->step = (result->r_ff_tested) ? result->r_ff_step_off : step;
-        result->bandwidth_hz = result->trial_bandwidth_hz;
-        result->kp=result->trial_kp; /* 已经过有限值检查并实际试用的增益 */
-        result->ki=result->trial_ki;
+        if (result->ladder_stalled) {
+            /* 降档无效：失败与带宽无关，产出回到目标带宽（首档实际试用过的增益） */
+            result->bandwidth_hz = s_ladder_first_bw_hz;
+            result->kp = s_ladder_first_kp;
+            result->ki = s_ladder_first_ki;
+        } else {
+            result->bandwidth_hz = result->trial_bandwidth_hz;
+            result->kp=result->trial_kp; /* 已经过有限值检查并实际试用的增益 */
+            result->ki=result->trial_ki;
+        }
         result->progress = 1;
         current_identify_finish(0);
         break;

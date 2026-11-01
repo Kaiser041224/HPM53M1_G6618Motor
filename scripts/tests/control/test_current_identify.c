@@ -97,7 +97,8 @@ void test_current_identify(void) {
     CHECK(result.r_ff_step_on.passed);
     CHECK(result.bandwidth_retries == 0U);
     CHECK(result.ld_extra_batches > 0);
-    CHECK_NEAR(result.pi_baseline_a, 3.0f, 0.05f);
+    CHECK_NEAR(result.pi_baseline_a, 1.0f, 0.05f); /* 阶跃 1.0→3.5A */
+    CHECK(!result.ladder_stalled);
     CHECK(result.pi_baseline_rms_a < 0.05f);
     CHECK_NEAR(result.rs_ohm, 0.2f, 0.005f);
     CHECK_NEAR(result.ld_h, 120e-6f, 8e-6f);
@@ -247,8 +248,54 @@ void test_current_identify(void) {
     CHECK(result.bandwidth_retries > 0U);
     CHECK(result.bandwidth_hz < 2000.0f);
     CHECK(result.bandwidth_hz >= 200.0f);
+    CHECK(!result.ladder_stalled); /* 延迟型超调随带宽下降，不得判停滞 */
     app_foc_disable();
     CHECK(app_current_identify_apply() == 0);
+
+    /* 与带宽无关的超调（噪声底/非线性替身）：每次阶跃捕获的固定位置注入 3 点 +0.8A，
+     * 任何带宽下平滑超调都 ≥32%。降 2 级仍无改善 → 判停滞、停止阶梯，
+     * 产出回到目标带宽（2kHz）首档增益，而不是被拖到阶梯末档。 */
+    CHECK(app_current_identify_clear() == 0); /* 丢弃上一段的保留 PASS，apply 才能体现拒绝 */
+    mock_params_reset();
+    mock_set_pwm_hz(30000);
+    app_software_params_mutable()->control.current_loop.bandwidth_rad_s = 12566.370614f;
+    app_foc_init();
+    CHECK(app_foc_enable() == 0);
+    CHECK(app_current_identify_start() == 0);
+    current = 0.0f;
+    for (unsigned tick = 0; tick < 90000 && app_current_identify_is_active(); ++tick) {
+        app_current_identify_result_t live;
+        app_current_identify_get_result(&live);
+        for (unsigned i = 0; i < 25; ++i) {
+            float v = g_foc_current_snapshot.v_d_v;
+            current = (current - v / 0.2f) * expf(-0.2f * sub_dt / 120e-6f) + v / 0.2f;
+            app_foc_current_run_fresh(0, 0, live.current_ref_a, 0, current, -0.5f * current,
+                                      -0.5f * current, 24, NULL, NULL);
+        }
+        if (live.state == APP_CURRENT_IDENTIFY_PI) {
+            uint16_t n;
+            id_rl_sample_t* samples = (id_rl_sample_t*)app_foc_current_identify_data(&n);
+            if (n == APP_FOC_IDENTIFY_SAMPLES) {
+                for (unsigned j = 60; j < 63; ++j)
+                    samples[j].i_d_a += 0.8f;
+            }
+        }
+        app_current_identify_run_once();
+    }
+    app_current_identify_get_result(&result);
+    CHECK(result.done && !result.failed && result.reason == 0);
+    CHECK(!result.step.passed);
+    CHECK(result.ladder_stalled);
+    CHECK(result.bandwidth_retries == 2U);
+    CHECK(result.ladder_first_overshoot >= 0.3f);
+    CHECK_NEAR(result.bandwidth_hz, 2000.0f, 0.5f);
+    CHECK_NEAR(result.kp, result.ld_h * 12566.370614f, 1e-4f);
+    CHECK_NEAR(result.ki, result.rs_ohm * 12566.370614f, 0.05f);
+    CHECK(result.trial_bandwidth_hz < 1500.0f); /* trial_* 仍报告末档，供诊断 */
+    CHECK(!result.r_ff_tested);
+    app_foc_disable();
+    CHECK(app_current_identify_apply() == -5); /* 未通过：仍拒绝应用 */
+    mock_set_pwm_hz(25000);
 }
 
 /* 保留 PASS 结果语义（2026-10-26 修复回归）：

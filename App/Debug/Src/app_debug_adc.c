@@ -66,9 +66,12 @@ static const char* const s_ch_units[ADC_CH_COUNT] = {
 void app_debug_adc_init(void) {
     const app_adc_cfg_t* cfg = app_adc_get_config();
 
+    /* 两条链同源于 PWM1 CMP10（2026-10-26 起 ADC1 不再用 GPTMR0 1kHz 自由相位触发，
+     * 见 AGENTS.md「母线采样与电流同源同步」）；ADC1 无 SEQ 完成中断，
+     * 慢保护节拍由 1kHz 任务承载。本行只是回报，改链路时必须同步改这里。 */
     app_debug_printf(
         "[ADC] chain: PWM1 CMP10 +%u ns -> TRGM PTRGI0A -> ADC0[IN2,IN3,IN4] PMT | "
-        "ADC1[IN15,IN6,IN11,IN1] SEQ 1kHz(GPTMR0)\r\n",
+        "PWM1 CH10REF -> TRGM -> ADC1[IN15,IN6,IN11,IN1,IN15] SEQ 30kHz(no irq)\r\n",
         (unsigned)cfg->trigger_delay_ns);
     app_debug_printf(
         "[ADC] %u bit / sample_cycle=%u / 触发 = PWM1 计数（30kHz）\r\n", (unsigned)cfg->resolution,

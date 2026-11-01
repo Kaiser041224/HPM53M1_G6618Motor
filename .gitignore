@@ -27,3 +27,4 @@ __pycache__/
 
 # superpowers 执行台账（scratch）
 .superpowers/
+.claude/settings.local.json

@@ -7,7 +7,8 @@
  *   RUN    ：id_encoder 纯状态机（lock-in → 方向判定 → 正/反扫描 → 计算），
  *            每拍回喂编码器机械角，下发强制角 + i_d 激励（app_foc_calib_set_excitation）
  *   VERIFY ：试用零点（app_foc_calib_use_trial_offset，编码器角源）
- *            静默 50ms（i_d 锁定）→ 残差采样 50ms → i_q 探针 60ms（转子须沿正方向转动）
+ *            零电流滑行至停稳（≤400ms）→ 残差诊断 50ms（不判死）
+ *            → 双向 i_q 探针（唯一硬验收：转子须朝指令方向转动）
  *   结束   ：任何结果都经 app_foc_calib_end() 退出 CALIB（运行零点恢复，试用值作废）
  *
  * 每拍公共守卫：FOC 仍为 CALIB、故障模块非 FAULT、编码器错误/跳变计数不增长、
@@ -41,13 +42,26 @@
                                             */
 #define APP_IDENTIFY_DT_NOMINAL_S (1.0e-3f) /**< 名义节拍 [s]（首拍/异常 dt 回退） */
 
-/* ---- 验证（探针法）：零点 ~90° 错误 → 无转矩 → 行程≈0 → 失败；180° 错误 → 反转 → 失败 ---- */
-#define APP_IDENTIFY_VERIFY_SETTLE_MS     (50U)   /**< 静默段 [ms]（排除扫描残余速度） */
-#define APP_IDENTIFY_VERIFY_RESID_MS      (50U)   /**< 残差采样窗口 [ms] */
-#define APP_IDENTIFY_VERIFY_RESID_MAX_DEG (15.0f) /**< 验证残差峰值上限 [deg 电角]：
-                                                    * 带 50:1 减速器+输出负载时实测 12.85°；
-                                                    * 10° 过紧。15° 仍拒绝 23°+ 的坏结果
-                                                    * （44° 级必须重标，不得 apply）。 */
+/* ---- 验证（探针法）：零点 ~90° 错误 → 无转矩 → 行程≈0 → 失败；180° 错误 → 反转 → 失败 ----
+ *
+ * 2026-10-30：取消"静止残差"硬判据，残差降级为诊断记录。
+ *   原设计：切到编码器角源 + i_d=2A，假定转子被吸在 θe≈0，残差峰值 >15° 即判失败。
+ *   实测推翻（台架两轮 resid max=155°/179°、drift=−482/+2396 °/s）：编码器角源下
+ *   磁场跟着转子走，零点误差 δ 产生的是**恒定转矩** Kt·I·sinδ，不是回复力矩 ——
+ *   δ=2.3°、I=2A、J≈2.3e-5 → α≈400 rad/s²，100ms 内转子已转过数圈，残差窗口读到的
+ *   是满量程 θe。该判据只在输出端摩擦大到能平衡误差转矩时才偶然成立（此前记录的
+ *   12.85° 即那种工况），自由轴上必然失败，且把后面的探针段整个挡死。
+ *   现在：段1 零电流滑行 + 停稳确认（给探针干净初值），段2 只记录残差，
+ *   验收完全交给段3 双向探针 —— 它直接测"按此零点通电，转子是否朝指令方向出力"，
+ *   90°（无行程）/180°（反向行程）都能捕获，正是残差门想抓的那两类错误。 */
+#define APP_IDENTIFY_VERIFY_COAST_MAX_MS (400U)   /**< 停稳等待上限 [ms]（超时判 VERIFY 失败） */
+#define APP_IDENTIFY_VERIFY_STILL_MS     (20U)    /**< 连续静止确认窗 [ms] */
+/** @brief 每拍机械角位移门 [rad]（1kHz → 0.5 rad/s）。
+ *  下界由编码器量化定（16bit → 9.6e-5 rad/count，静止时读数抖动 ±1 count，
+ *  门不能取到量化噪声里去，否则永远确认不了静止）；上界由探针判据定
+ *  （0.05 rad / 160ms 段 ≈ 0.3 rad/s，残余漂移须明显小于它才不污染行程）。 */
+#define APP_IDENTIFY_VERIFY_STILL_RAD    (5.0e-4f)
+#define APP_IDENTIFY_VERIFY_RESID_MS     (50U)    /**< 残差诊断采样窗口 [ms]（不作判据） */
 #define APP_IDENTIFY_PROBE_A_LOW          (2.0f)  /**< 一级探针 q 电流 [A] */
 #define APP_IDENTIFY_PROBE_A_HIGH         (4.0f)  /**< 二级探针 q 电流 [A]（高静摩擦/摆线减速器） */
 #define APP_IDENTIFY_PROBE_RAMP_MS        (40U)   /**< 每方向电流斜坡 [ms]（减轻冲击/联轴打滑） */
@@ -105,6 +119,10 @@ static float s_verify_max_deg;
 static float s_verify_first_deg;
 static uint32_t s_verify_count;
 static bool s_verify_first_valid;
+static uint8_t s_verify_phase;      /**< 0=零电流停稳, 1=残差诊断, 2=探针 */
+static uint32_t s_verify_still_ms;  /**< 连续静止拍数 [ms] */
+static float s_verify_theta_prev;   /**< 停稳判定的上一拍机械角 */
+static bool s_verify_theta_valid;
 static bool s_probe_active;
 static uint8_t s_probe_phase;       /**< 0=+low, 1=-low, 2=+high, 3=-high */
 static uint32_t s_probe_phase_ms;   /**< 当前方向段计时 */
@@ -276,12 +294,17 @@ static void identify_step_run(const app_foc_current_snapshot_t* snap, float dt_s
         s_identify_result.offset_rev_rad = out.offset_rev_rad;
         s_identify_result.direction = out.direction;
 
-        /* 试用零点：编码器角源 + i_d 锁定（运行零点不动，end 时恢复） */
+        /* 试用零点：编码器角源 + **零电流**（运行零点不动，end 时恢复）。
+         * 不能在这里施加 i_d：编码器角源下它是恒定转矩而非回复力矩，见上方
+         * APP_IDENTIFY_VERIFY_* 的说明。零电流让扫描残余速度自然衰减。 */
         if ((app_foc_calib_use_trial_offset(trial_offset, out.direction) != 0)
-            || (app_foc_calib_set_current(APP_IDENTIFY_I_CAL_A, 0.0f) != 0)) {
+            || (app_foc_calib_set_current(0.0f, 0.0f) != 0)) {
             identify_fail(APP_IDENTIFY_REASON_STATE);
             return;
         }
+        s_verify_phase = 0U;
+        s_verify_still_ms = 0U;
+        s_verify_theta_valid = false;
         s_verify_ms = 0U;
         s_verify_sum_deg = 0.0f;
         s_verify_max_deg = 0.0f;
@@ -349,27 +372,57 @@ static void identify_verify_fail(void) {
  * @param snap 本拍 FOC 电流快照
  */
 static void identify_step_verify(const app_foc_current_snapshot_t* snap) {
-    const uint32_t resid_end = APP_IDENTIFY_VERIFY_SETTLE_MS + APP_IDENTIFY_VERIFY_RESID_MS;
     const uint32_t probe_span = 4U * APP_IDENTIFY_PROBE_SEGMENT_MS;
     bool probe_positive;
     bool probe_ok;
     float theta_m;
 
     s_verify_ms++;
-    uint32_t progress_span = resid_end + probe_span;
+    uint32_t progress_span =
+        APP_IDENTIFY_VERIFY_STILL_MS + APP_IDENTIFY_VERIFY_RESID_MS + probe_span;
     float progress = (float)s_verify_ms / (float)progress_span;
     if (progress > 1.0f) {
         progress = 1.0f;
     }
     s_identify_result.progress = 0.95f + 0.05f * progress;
 
-    /* 段 1：静默（i_d 锁定，排除扫描残余速度） */
-    if (s_verify_ms <= APP_IDENTIFY_VERIFY_SETTLE_MS) {
+    /* 段 1：零电流滑行 + 停稳确认。给探针一个干净初值 —— 否则残余速度会叠加到
+     * 探针行程上，双向判据失真。零电流下无误差转矩，扫描残速只受摩擦衰减。 */
+    if (s_verify_phase == 0U) {
+        if (identify_read_theta_m(&theta_m)) {
+            if (s_verify_theta_valid
+                && (fabsf(foc_wrap_pm_pi(theta_m - s_verify_theta_prev))
+                    < APP_IDENTIFY_VERIFY_STILL_RAD)) {
+                s_verify_still_ms++;
+            } else {
+                s_verify_still_ms = 0U;
+            }
+            s_verify_theta_prev = theta_m;
+            s_verify_theta_valid = true;
+        } else {
+            identify_fail(APP_IDENTIFY_REASON_ENCODER);
+            return;
+        }
+        if (s_verify_still_ms >= APP_IDENTIFY_VERIFY_STILL_MS) {
+            s_verify_phase = 1U;
+            s_verify_ms = 0U;
+            return;
+        }
+        if (s_verify_ms >= APP_IDENTIFY_VERIFY_COAST_MAX_MS) {
+            /* 零电流仍停不下来：轴被外部拖动/编码器角跳变，探针数据不可信。
+             * drift 字段此时为 0（残差未采样），失败原因看 VERIFY + 本注释。 */
+            identify_verify_fill_resid();
+            s_identify_result.probe_current_a = 0.0f;
+            identify_fail(APP_IDENTIFY_REASON_VERIFY);
+            return;
+        }
         return;
     }
 
-    /* 段 2：残差采样（零点正确 → 转子停在扫描终点 θe≈0；信息量 + 大偏移判据） */
-    if (s_verify_ms <= resid_end) {
+    /* 段 2：残差诊断采样（零电流；只记录 mean/max/drift，不作判据）。
+     * 零电流下转子停在齿槽自然位置，残差大小由齿槽决定，与零点正确性无关；
+     * 保留它是为了让 drift≈0 可以作为"确实停稳"的旁证。 */
+    if (s_verify_phase == 1U) {
         float delta_deg = snap->theta_e_rad * (180.0f / FOC_PI_F);
 
         if (delta_deg > 180.0f) {
@@ -384,18 +437,16 @@ static void identify_step_verify(const app_foc_current_snapshot_t* snap) {
             s_verify_max_deg = fabsf(delta_deg);
         }
         s_verify_count++;
+        if (s_verify_ms >= APP_IDENTIFY_VERIFY_RESID_MS) {
+            s_verify_phase = 2U;
+            s_verify_ms = 0U;
+        }
         return;
     }
 
-    /* 段 3：自适应双向探针。每个档位先做正向再做反向；先 2A，失败后升到 4A。
-     * 每段包含 40ms 电流斜坡 + 120ms 满流保持，减轻静摩擦/联轴冲击。 */
+    /* 段 3：自适应双向探针 —— 唯一硬验收。每个档位先做正向再做反向；先 2A，
+     * 失败后升到 4A。每段包含 40ms 电流斜坡 + 120ms 满流保持，减轻静摩擦/联轴冲击。 */
     if (!s_probe_active) {
-        if (s_verify_max_deg > APP_IDENTIFY_VERIFY_RESID_MAX_DEG) {
-            identify_verify_fill_resid();
-            s_identify_result.probe_current_a = 0.0f;
-            identify_fail(APP_IDENTIFY_REASON_VERIFY);
-            return;
-        }
         if (!identify_read_theta_m(&s_probe_theta_prev)) {
             identify_fail(APP_IDENTIFY_REASON_ENCODER);
             return;

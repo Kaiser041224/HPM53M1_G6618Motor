@@ -23,6 +23,13 @@ typedef struct {
     uint32_t window_late_count;    /**< 本报告窗口入口间隔>标称110%的次数 */
     uint32_t feedback_sequence;
     uint32_t feedback_age_cycles;
+    /* —— 帧内时间片观测（追加字段，2026-10-30）——
+     * 入口反馈龄 = 本拍落在 FOC 帧内的相位。与 PWM 锁相后 min≈max≈PHASE_US；
+     * 两者被拉开到 0..一帧 = 相位又在滑移（时钟源或对齐失效）。 */
+    uint32_t feedback_age_min_cycles; /**< 本窗入口反馈龄最小值 */
+    uint32_t feedback_age_max_cycles; /**< 本窗入口反馈龄最大值 */
+    uint32_t slice_overrun_count;        /**< 启动以来"入口龄+本拍耗时 > 一个 FOC 帧"的次数 */
+    uint32_t window_slice_overrun_count; /**< 本窗同上（>0 = 本拍尾部压到下一个 FOC 帧） */
     bool feedback_valid;           /**< 转子快照有效；不是motion游标解算有效 */
 } app_motion_timer_channel_snapshot_t;
 /** @brief 单 15kHz motion 控制拍观测副本 */

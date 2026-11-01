@@ -176,7 +176,11 @@ void test_output_cache(void) {
     CHECK(stats.output_sample_count==g_encoder_output_sample_count);
     CHECK(stats.output_fail_count==g_encoder_output_read_fail_count);
     CHECK(stats.valid_pair_count==g_encoder_pair_valid_count);
-    g_mock_cycle = 40000 + 19201; /* 超过一个25kHz周期，拒绝陈旧快照 */
+    /* 新鲜度门限 = APP_ENCODER_OUTPUT_MAX_AGE_US(74µs) × 480 = 35520 cycle，
+     * 与 FOC 侧 APP_FOC_ENC_MAX_AGE_US 同口径："最多容忍一帧未刷新"。 */
+    g_mock_cycle = 40000 + 16000; /* 陈旧一个 30kHz 帧（33.3µs）：仍可供控制 */
+    CHECK(app_encoder_output_sample(&rotor, &raw) == 0);
+    g_mock_cycle = 40000 + 35521; /* 越过一帧+40µs 余量：拒绝陈旧快照 */
     CHECK(app_encoder_output_sample(&rotor, &raw) != 0);
     /* 32bit mcycle回绕只改变数值，不影响配对年龄计算。 */
     CHECK(app_encoder_sync_sample(UINT32_MAX-100U, &rotor)==0);

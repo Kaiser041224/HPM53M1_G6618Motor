@@ -164,9 +164,19 @@ static bool motion_vernier_params_valid(void) {
         && (reducer_delta >= -1.0e-3f);
 }
 
-/* 保持窗口15kHz×300=20ms零力矩：游标残差坏拍簇（齿隙/扭振瞬态）可穿过；
- * 游标每拍独立重解绝对圈号，恢复无累计误差。>窗口判真失败。 */
+/* 保持窗口15kHz×300=20ms：游标残差坏拍簇（齿隙/扭振瞬态）可穿过；
+ * 游标每拍独立重解绝对圈号，恢复无累计误差。>窗口判真失败。
+ *
+ * 窗口内分两级（2026-10-30）：
+ *   level-1（≤ ZOH_SAMPLES）：上一拍 iq 续发（ZOH）、齿槽继续按上一有效输出角注入、
+ *       PI 积分冻结。吸收单拍级反馈空窗（FOC 帧未刷新/游标残差一拍）。
+ *       原实现对任何单拍坏数据立即给零力矩 + 关齿槽注入，带 50:1 减速器时表现为
+ *       "松一下再抓住"的颤动（1Hz 拍频问题的放大环节）。
+ *   level-2（> ZOH_SAMPLES）：零力矩保持（真反馈中断的安全态，与原行为一致）。
+ * ZOH 期必须有界：3 拍 = 200µs @15kHz，输出轴 30rad/s 时角度误差 ≤0.35°，
+ * 小于齿槽 output 表一格；超出即落到零力矩，不得无限续发。 */
 #define APP_MOTION_HOLD_MAX_SAMPLES (300U)
+#define APP_MOTION_HOLD_ZOH_SAMPLES (3U)
 /** @brief 最新有效反馈不超过500us */
 static bool motion_feedback_fresh(void) {
     return s_motion.feedback_valid
@@ -261,19 +271,28 @@ static void motion_reject(app_motion_reason_t reason) {
         if (s_hold_samples == 0)
             s_motion.hold_count++;
         if (++s_hold_samples <= APP_MOTION_HOLD_MAX_SAMPLES) {
-            /* 有界保持：零力矩、冻结积分（不调用PI）、保留mode/target */
+            /* 有界保持：冻结积分（不调用PI）、保留mode/target；
+             * level-1 续发上一拍 iq，level-2 退到零力矩（见上方窗口说明）。 */
             s_velocity_gap = true;
             s_motion.feedback_valid = false;
             g_motion_shaft_angle_valid = 0;
             s_motion.bad_count++;
             s_motion.reason = reason;
-            s_motion.torque_nm = 0;
-            s_motion.iq_a = 0;
-            s_motion.inertia_ff_raw_nm = 0;
-            s_motion.inertia_ff_nm = 0;
-            app_cogging_set_output_angle(0.0f, false);
-            app_cogging_set_motion_active(false);
-            app_foc_current_request_t request = {0, 0, ++s_request_sequence, s_epoch, true};
+            float iq_hold = 0.0f;
+            if ((s_hold_samples <= APP_MOTION_HOLD_ZOH_SAMPLES) && foc_finite(s_motion.iq_a)) {
+                /* 齿槽 output 角保留上一有效值（≤200µs 陈旧，远小于表一格）：
+                 * 不调用 set_output_angle/set_motion_active，注入链保持原状。 */
+                iq_hold = s_motion.iq_a;
+                s_motion.hold_zoh_count++;
+            } else {
+                s_motion.torque_nm = 0;
+                s_motion.iq_a = 0;
+                s_motion.inertia_ff_raw_nm = 0;
+                s_motion.inertia_ff_nm = 0;
+                app_cogging_set_output_angle(0.0f, false);
+                app_cogging_set_motion_active(false);
+            }
+            app_foc_current_request_t request = {0, iq_hold, ++s_request_sequence, s_epoch, true};
             if (app_foc_submit_current(&request) != 0)
                 motion_clear_output(APP_MOTION_REASON_SUBMIT);
             return;

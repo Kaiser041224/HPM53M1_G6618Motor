@@ -42,6 +42,7 @@ float g_mock_dir_true;
 float g_mock_current_scale; /**< 实测电流 = 给定 × scale（过流注入） */
 bool g_mock_probe_stuck;    /**< 编码器模式下转子卡死（验证失败注入） */
 float g_mock_probe_min_a;   /**< q 探针最小起动力 [A]（自适应升流测试） */
+float g_mock_verify_drift_e_rad_per_ms; /**< VERIFY 段外部拖动 [rad 电角/ms]（停稳段测试） */
 bool g_mock_snap_invalid;   /**< 电流快照 valid=false（电流环保护路径注入） */
 uint32_t g_mock_enc_errors;
 uint32_t g_mock_enc_jumps;
@@ -82,6 +83,7 @@ void mock_reset(float off_true, float dir_true) {
     g_mock_current_scale = 1.0f;
     g_mock_probe_stuck = false;
     g_mock_probe_min_a = 0.0f;
+    g_mock_verify_drift_e_rad_per_ms = 0.0f;
     g_mock_snap_invalid = false;
     g_mock_enc_errors = 0U;
     g_mock_enc_jumps = 0U;
@@ -117,6 +119,13 @@ void mock_store_reset(void) {
 void mock_plant_step(void) {
     float mag = sqrtf(s_id * s_id + s_iq * s_iq);
 
+    /* 外部拖动替身：仅在非强制角段（= VERIFY）叠加恒定电角速度。
+     * 本模型是一阶位置跟随器、无惯量，复现不了真机"零点误差 → 恒定转矩 →
+     * 转子持续加速"的跑飞（2026-10-30 台架 resid 155°/drift 2396°/s 即该现象），
+     * 所以用显式拖动来覆盖 VERIFY 的零电流停稳段。 */
+    if (!s_forced && (g_mock_verify_drift_e_rad_per_ms != 0.0f)) {
+        s_beta = foc_wrap_2pi(s_beta + g_mock_verify_drift_e_rad_per_ms);
+    }
     if (mag > 0.0f) {
         float alpha;
 

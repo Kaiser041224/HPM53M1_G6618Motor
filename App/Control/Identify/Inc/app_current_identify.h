@@ -64,6 +64,8 @@ typedef struct {
     float trial_bandwidth_hz, trial_kp, trial_ki;  /**< 最后尝试参数，不代表通过 */
     id_rl_step_result_t trial_step;                /**< 最后尝试指标，与已通过step分离 */
     uint8_t bandwidth_retries;                     /**< 因 step 未通过而自动降带宽的次数 */
+    float ladder_first_overshoot, ladder_first_overshoot_raw; /**< 目标带宽首档超调（平滑/raw） */
+    bool ladder_stalled; /**< 降档无改善而停止：超调与带宽无关，kp/ki/bw 为目标带宽首档值 */
     float ld_half4_h, ld_half8_h;                  /**< 两种交替脉冲半周期的独立结果 */
     int ld_fit_status; /**< 0成功，-1输入，-2窗口不足，-3激励不足，-4残差 */
     float ld_rejected_h, ld_rejected_residual_a; /**< 不可应用的失败诊断 */
