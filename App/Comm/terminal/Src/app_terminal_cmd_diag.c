@@ -282,10 +282,10 @@ static int cmd_can(int argc, char** argv) {
                    (unsigned)st.tx_error_count, (unsigned)st.rx_error_count,
                    (unsigned)(st.error_passive ? 1U : 0U));
     }
-    csh_printf(csh, "     proto: rx=%u drop=%u bad=%u unk=%u fmt=%u mit(ok=%u to=%u)\r\n",
-               (unsigned)proto.rx_frames, (unsigned)proto.rx_dropped, (unsigned)proto.bad_len,
-               (unsigned)proto.unknown_cmd, (unsigned)proto.format_mismatch,
-               (unsigned)proto.mit_pair_ok, (unsigned)proto.mit_pair_timeout);
+    csh_printf(csh, "     proto: rx=%u drop=%u bad=%u foreign=%u switch=%u rej=%u tx_fail=%u\r\n",
+               (unsigned)proto.rx_frames, (unsigned)proto.rx_dropped, (unsigned)proto.bad_frames,
+               (unsigned)proto.foreign, (unsigned)proto.mode_switch, (unsigned)proto.rejected,
+               (unsigned)proto.tx_fail);
     return 0;
 }
 

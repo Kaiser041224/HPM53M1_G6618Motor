@@ -1240,3 +1240,91 @@ void test_motion_cal_settle(void) {
     CHECK(snapshot.vernier_margin < 0.05f);
     CHECK(snapshot.vernier_margin >= 0.0f);
 }
+
+/**
+ * @brief DM 位置模式 per-command 速度上限：不得泄漏到后续普通位置命令
+ */
+void test_motion_position_limited_vel(void) {
+    pos_setup_ex(0, 0, 10.0f, 100.0f, 0, 0); /* YAML 轨迹 10 rad/s */
+    CHECK(app_motion_position_limited(1.0f, 1.0f, 0.0f, 0.0f) == 0);
+
+    float max_vel = 0.0f;
+    app_motion_snapshot_t snapshot;
+
+    for (unsigned i = 0; i < 300U; i++) {
+        pos_run_ticks(1U);
+        app_motion_get_snapshot(&snapshot);
+        if (snapshot.traj_vel_rad_s > max_vel) {
+            max_vel = snapshot.traj_vel_rad_s;
+        }
+    }
+    CHECK(max_vel <= 1.0f + 1e-3f);
+    CHECK(max_vel > 0.5f);
+
+    /* 新普通位置命令：恢复 YAML 10 rad/s（短距离三角段峰值约 4.5 rad/s） */
+    CHECK(app_motion_position(0.2f, 0.0f, 0.0f) == 0);
+    float restore_vel = 0.0f;
+
+    for (unsigned i = 0; i < 300U; i++) {
+        pos_run_ticks(1U);
+        app_motion_get_snapshot(&snapshot);
+        if (snapshot.traj_vel_rad_s > restore_vel) {
+            restore_vel = snapshot.traj_vel_rad_s;
+        }
+    }
+    CHECK(restore_vel > 1.5f);
+
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/**
+ * @brief DM 力位混控 per-command 电流上限：iq 请求被钳在 2 A
+ */
+void test_motion_position_limited_iq(void) {
+    extern volatile float g_foc_speed_out_rad_s;
+    extern volatile bool g_foc_speed_out_valid;
+
+    pos_setup_ex(0, 0, 10.0f, 100.0f, 0, 0);
+    CHECK(app_motion_position_limited(3.0f, 10.0f, 0.0f, 2.0f) == 0);
+    pos_run_ticks(10U);
+
+    /* 注入反向大速度：速度环误差拉满，未限幅时 iq 会远超 2 A */
+    g_foc_speed_out_rad_s = -50.0f;
+    g_foc_speed_out_valid = true;
+    pos_run_ticks(1U);
+
+    app_motion_snapshot_t snapshot;
+
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.iq_a <= 2.0f + 1e-3f);
+    CHECK(snapshot.iq_a > 1.5f); /* 确实顶在限幅上，而不是自然很小 */
+
+    g_foc_speed_out_rad_s = 0.0f;
+    g_foc_speed_out_valid = false;
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}
+
+/**
+ * @brief 角度回报开关：速度模式下维护输出角
+ */
+void test_motion_angle_report_required(void) {
+    pos_setup_ex(0, 0, 10.0f, 100.0f, 0, 0);
+    app_motion_set_angle_report_required(true);
+    CHECK(app_motion_speed(1.0f) == 0);
+
+    app_motion_snapshot_t snapshot;
+
+    pos_run_ticks(100U);
+    app_motion_get_snapshot(&snapshot);
+    CHECK(snapshot.angle_valid);
+    CHECK(snapshot.shaft_rad != 0.0f);
+
+    app_motion_set_angle_report_required(false);
+    CHECK(app_motion_stop() == 0);
+    app_foc_disable();
+    pos_teardown();
+}

@@ -84,7 +84,7 @@ SCHEMA = {
     ],
     "software": [
         ("can.baudrate", "can.baudrate", "u32", 1, None),
-        ("can.node_id_default", "can.node_id_default", "u8", 0, 127),
+        ("can.can_id", "can.can_id", "u8", 0, 127),
         # CAN ID 暂限标准帧（11-bit ≤0x7FF）；扩展帧待协议定义帧格式字段后放宽
         ("can.rx_control_id", "can.rx_control_id", "u32", 0, 0x7FF),
         ("can.tx_report_id", "can.tx_report_id", "u32", 0, 0x7FF),
@@ -231,7 +231,7 @@ APPLY_REBOOT = {
     "hardware.canid_dip.levels",
     # 软件：CAN init 期配置
     "software.can.baudrate",
-    "software.can.node_id_default",
+    "software.can.can_id",
     "software.can.rx_control_id",
     "software.can.tx_report_id",
     # 软件：保护阈值（init 期换算为 WDOG 寄存器值/RMS 阈值）

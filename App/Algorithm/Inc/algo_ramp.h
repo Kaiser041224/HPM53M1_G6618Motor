@@ -101,6 +101,14 @@ typedef int (*algo_ramp_set_current_fn)(algo_ramp_t* self, float current);
  */
 typedef int (*algo_ramp_plan_fn)(algo_ramp_t* self, float target, float current, float velocity);
 /**
+ * @brief 运行期修改梯形限幅（仅 TRAPEZOIDAL）
+ * @param v_max 最大速度（必须 > 0）
+ * @param a_max 最大加速度（必须 > 0）
+ * @return 0 = 成功；负数 = NULL/非梯形/参数非法
+ * @note 只改限幅，不改当前目标/位置；下一次 plan() 起生效。
+ */
+typedef int (*algo_ramp_set_limits_fn)(algo_ramp_t* self, float v_max, float a_max);
+/**
  * @brief 读取当前值
  */
 typedef float (*algo_ramp_get_current_fn)(const algo_ramp_t* self);
@@ -132,6 +140,7 @@ struct algo_ramp {
         algo_ramp_set_target_fn set_target;       /**< 设置目标值 */
         algo_ramp_set_current_fn set_current;     /**< 设置当前值 */
         algo_ramp_plan_fn plan;                   /**< 带初速度重规划（梯形模式） */
+        algo_ramp_set_limits_fn set_limits;       /**< 运行期修改梯形限幅 */
         algo_ramp_get_current_fn get_current;     /**< 读取当前值 */
         algo_ramp_get_target_fn get_target;       /**< 读取目标值 */
         algo_ramp_get_velocity_fn get_velocity;   /**< 读取本拍 Yd */
@@ -161,6 +170,15 @@ struct algo_ramp {
  * @brief 构造斜坡发生器对象（绑定方法并清零状态）
  */
 void algo_ramp_ctor(algo_ramp_t* self);
+
+/**
+ * @brief 运行期修改梯形限幅（对象方法包装）
+ * @param self 对象
+ * @param v_max 最大速度（>0）
+ * @param a_max 最大加速度（>0）
+ * @return 0 = 成功；负数 = NULL/非梯形/参数非法
+ */
+int algo_ramp_set_limits(algo_ramp_t* self, float v_max, float a_max);
 
 /**
  * @brief IEEE-754 有限值判断（基于位操作，-ffast-math 下仍有效）

@@ -149,7 +149,7 @@ void app_debug_can_init(void) {
     app_debug_printf("\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, "
                      "node=%u (YAML fallback; DIP read after ADC)\r\n",
                      (unsigned)software->can.baudrate,
-                     (unsigned)software->can.node_id_default);
+                     (unsigned)software->can.can_id);
 
     lb_ok = can_loopback_selfcheck();
     app_debug_printf("[CAN] loopback self-check: %s\r\n", lb_ok ? "OK" : "FAILED");
@@ -184,13 +184,12 @@ void app_debug_can_run_once(void) {
     if ((app_can_get_status(&st) == 0) && (app_can_get_stats(&stats) == 0)) {
         app_can_service_get_stats(&proto);
         app_debug_printf(
-            "[CAN] t=%u bus_off=%d | tx_ok=%u rx=%u drop=%u | proto rx=%u drop=%u bad=%u "
-            "unk=%u fmt=%u mit(ok=%u to=%u)\r\n",
+            "[CAN] t=%u bus_off=%d | tx_ok=%u rx=%u drop=%u | dm rx=%u drop=%u bad=%u "
+            "foreign=%u switch=%u rej=%u txf=%u\r\n",
             (unsigned)s_tick, st.bus_off, (unsigned)stats.tx_ok_count,
             (unsigned)stats.rx_count, (unsigned)stats.rx_drop_count, (unsigned)proto.rx_frames,
-            (unsigned)proto.rx_dropped, (unsigned)proto.bad_len, (unsigned)proto.unknown_cmd,
-            (unsigned)proto.format_mismatch, (unsigned)proto.mit_pair_ok,
-            (unsigned)proto.mit_pair_timeout);
+            (unsigned)proto.rx_dropped, (unsigned)proto.bad_frames, (unsigned)proto.foreign,
+            (unsigned)proto.mode_switch, (unsigned)proto.rejected, (unsigned)proto.tx_fail);
     }
 #else
     (void)st;

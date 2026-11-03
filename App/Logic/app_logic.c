@@ -197,7 +197,7 @@ void app_init(void) {
         bool released;
 
         if (dip_id == APP_CAN_ID_INVALID) {
-            can_node = software->can.node_id_default;
+            can_node = software->can.can_id;
             can_source = "yaml(fallback)";
         }
 
@@ -276,6 +276,9 @@ void app_init(void) {
     {
         int rc = app_motion_timer_init();
         app_motion_init();
+        /* DM CAN 反馈要求任何模式下都能报位置：速度/力矩模式也维护输出角。
+         * 必须在 app_motion_init() 之后调用（init 会复位该标志）。 */
+        app_motion_set_angle_report_required(true);
         app_friction_identify_init();
         app_inertia_identify_init();
         app_cogging_init();

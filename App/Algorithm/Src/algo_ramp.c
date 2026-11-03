@@ -25,6 +25,7 @@ static void algo_ramp_reset_impl(algo_ramp_t* self);
 static int algo_ramp_set_target_impl(algo_ramp_t* self, float target);
 static int algo_ramp_set_current_impl(algo_ramp_t* self, float current);
 static int algo_ramp_plan_impl(algo_ramp_t* self, float target, float current, float velocity);
+static int algo_ramp_set_limits_impl(algo_ramp_t* self, float v_max, float a_max);
 static float algo_ramp_get_current_impl(const algo_ramp_t* self);
 static float algo_ramp_get_target_impl(const algo_ramp_t* self);
 static float algo_ramp_get_velocity_impl(const algo_ramp_t* self);
@@ -467,6 +468,31 @@ static int algo_ramp_plan_impl(algo_ramp_t* self, float target, float current, f
     return 0;
 }
 
+/**
+ * @brief 运行期修改梯形限幅
+ * @param self 对象
+ * @param v_max 最大速度（>0）
+ * @param a_max 最大加速度（>0）
+ * @return 0 成功；负数错误码
+ */
+static int algo_ramp_set_limits_impl(algo_ramp_t* self, float v_max, float a_max) {
+    if (self == NULL) {
+        return -1;
+    }
+    if (!algo_ramp_finite(v_max) || !algo_ramp_finite(a_max)) {
+        return -2;
+    }
+    if ((v_max <= 0.0f) || (a_max <= 0.0f)) {
+        return -2;
+    }
+    if (self->_mode != ALGO_RAMP_MODE_TRAPEZOIDAL) {
+        return -3;
+    }
+    self->_v_max = v_max;
+    self->_a_max = a_max;
+    return 0;
+}
+
 /* ── getters ──────────────────────────────────────────────────────────── */
 
 /**
@@ -532,6 +558,13 @@ static bool algo_ramp_is_done_impl(const algo_ramp_t* self) {
 
 /* ── Constructor ──────────────────────────────────────────────────────── */
 
+int algo_ramp_set_limits(algo_ramp_t* self, float v_max, float a_max) {
+    if ((self == NULL) || (self->set_limits == NULL)) {
+        return -1;
+    }
+    return self->set_limits(self, v_max, a_max);
+}
+
 /**
  * @brief 构造斜坡发生器对象
  * @param self 对象
@@ -546,6 +579,7 @@ void algo_ramp_ctor(algo_ramp_t* self) {
     self->set_target = algo_ramp_set_target_impl;
     self->set_current = algo_ramp_set_current_impl;
     self->plan = algo_ramp_plan_impl;
+    self->set_limits = algo_ramp_set_limits_impl;
     self->get_current = algo_ramp_get_current_impl;
     self->get_target = algo_ramp_get_target_impl;
     self->get_velocity = algo_ramp_get_velocity_impl;

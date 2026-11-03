@@ -1048,7 +1048,7 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   `000→0, 001→1, 010→2, 011→3, 100→4, 101→5, 110→6, 111→7`。
   阈值表按**电压低→高**排序（与 ID 不同序），解码后经 `s_can_id_level_to_id[]` 置换；
   改判据/表时两张表必须同时核对。节点 0 合法（000），只有解码失败才回退
-  `software.can.node_id_default`。
+  `software.can.can_id`。
   启动日志打印 `DIP: raw=... spread=... -> id=...` 与 `node=... source=...`。
 - **读完后释放 ADC1 槽**：`app_adc_canid_release()` 把序列从 5 槽重配为
   `[V_VBUS, NTC0, NTC1, V_VBUS]`。重配前先停硬件触发（驱动 `adc_init` 的 `seq_reinit`
@@ -1070,3 +1070,38 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   **修法**：`app_can_id_read()` 先等 2 ms 让序列稳定，再采 9 次；取中值后保留
   `±256 LSB` 内点，内点 ≥5 个才继续，最终按内点极差（≤512）判稳定性。
   启动日志与 `can id` 现在打印 `spread=`，可直接区分"值错"与"抖动"。
+
+### DM 兼容 CAN 运行时协议（2026-11-03，实现落地）
+
+- **ID**：标准帧 `0x100 | (type << 4) | node`。type 1 MIT、2 位置速度、3 速度、
+  4 力位混控、5 使能（magic `0xFC`）、6 失能（`0xFD`）、7 清故障（`0xFE`）、
+  8 反馈（`0x180 | node`）。type 0/9..15 不匹配；node 0..15（DIP 二进制）。
+- **编解码**：`app_can_protocol.[ch]` 纯函数。MIT 按手册大端位打包；位置/速度/力位
+  混控用 float32 小端；线缆定标 P=12.5 / V=30 / T=10 / KP=500 / KD=5。
+  力位混控的 `i_des` 解码为 0..1 标幺，服务层乘 `motor.i_peak_10s_a`（24.3 A）后作为
+  per-command iq 上限。
+- **策略**：`app_can_policy.[ch]`（`app_can_dm_plan`）纯函数：
+  - 使能/失能/清故障总是交执行层；控制帧要求 FOC READY/RUN；MIT 要求 `mit.enable`；
+  - 运动进行中跨**运动模式**（MIT/位置/速度）→ `app_motion_release_output()` 并丢弃
+    本帧，下一拍接受；POS_VEL 与 FORCE_POS 同属位置模式，不触发释放。
+- **服务**：`app_can_service.[ch]` 1 kHz；每拍 ≤8 帧、每条通过校验的本机帧回一帧反馈。
+  反馈：位置 `wrap_pm_pi(shaft_rad × output_direction)`、速度 × 方向、
+  转矩 `kt × measured_iq × reducer × 方向`；温度无效上报 `0xFF`。
+  `app_motion_set_angle_report_required(true)` 在 `app_motion_init()` **之后**设置
+  （init 会复位），速度/力矩/空闲模式也读输出 pair，位置反馈不冻结。
+- **ERR**：A(过流) > 8(过压) > 9(欠压) > D(通信) > F(反馈无效/其他) > 1/0。
+  B/C（MOS/线圈过温）暂未接入：当前没有对应故障码，阈值待定，不虚构。
+- **恢复顺序**：TRIP → `0x16X` 失能（FAULT→OFF，`app_foc_request_stop` 内部直接
+  disable）→ `0x17X` 清锁存 → `0x15X` 使能。
+- **运动层新增**：`app_motion_position_limited(pos, vel_limit, torque_ff, iq_limit)`、
+  `app_motion_set_angle_report_required()`、`algo_ramp_set_limits()`。
+  per-command 限幅只作用于本条命令；下一条普通命令恢复 YAML 轨迹限幅（30/60）。
+  位置模式要求梯形轨迹已配置，否则返回 `TRAJ_DISABLED`。
+- **配置**：`software.can.node_id_default` → `can_id`（原地改名，布局不变）；
+  `control.mit.can_format`、`rx_control_id`、`tx_report_id` 保留为 reserved，不再读取；
+  `control.mit.enable` 默认 **true**（如需禁用：`param set software.control.mit.enable 0`）。
+- **测试**：`scripts/tests/can` 126 checks（ID/MIT/浮点帧/magic/反馈/ERR/策略）；
+  `scripts/tests/control` 新增 per-command 限速、限流、角度回报用例。
+- **台架**：USB-CAN 按 1 kHz 发四类帧，反馈随每帧返回；跨模式切换先释放再接受；
+  TRIP 后按上述顺序恢复。拔线验证 `COMM_TIMEOUT` 需 `fault protect on` 或
+  YAML `fault.actions_enable=true`（出厂仍为只告警）。

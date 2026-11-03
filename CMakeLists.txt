@@ -226,6 +226,7 @@ sdk_app_src(App/Control/Identify/Src/app_cogging_identify.c)
 # ============================================================================
 
 sdk_app_src(App/Comm/can/Src/app_can_protocol.c)
+sdk_app_src(App/Comm/can/Src/app_can_policy.c)
 sdk_app_src(App/Comm/can/Src/app_can_service.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal.c)
 sdk_app_src(App/Comm/terminal/Src/app_terminal_job.c)

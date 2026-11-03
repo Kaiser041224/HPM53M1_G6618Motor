@@ -112,6 +112,15 @@ void app_motion_set_output_tracking(bool enable);
  * @param required true=读输出 pair 并更新输出角；关闭输出表后恢复 false
  */
 void app_motion_set_cogging_output_required(bool required);
+/**
+ * @brief 任意模式都维护输出轴角（DM CAN 反馈用）
+ *
+ * 速度/力矩模式默认只读转子/observer；打开后每 15kHz 拍额外读输出 pair 并解算
+ * 游标，保证反馈位置在任何模式都有效。与 output_tracking 分离：齿槽标定结束
+ * 会清 output_tracking，但不会清本标志。
+ * @param required true = 速度/力矩模式也维护 shaft_rad
+ */
+void app_motion_set_angle_report_required(bool required);
 /** @brief 静止OFF采1000组相位，期间不可移动 */
 int app_motion_calibrate(void);
 /** @brief OFF应用最近静止标定，旧机械零点失效 */
@@ -130,6 +139,21 @@ int app_motion_torque(float torque);
 int app_motion_speed(float speed);
 /** @brief 位置目标rad（用户坐标；单圈0~2π，最短路径）+速度/力矩前馈（用户坐标） */
 int app_motion_position(float position_rad, float vel_ff_rad_s, float torque_ff_nm);
+/**
+ * @brief DM 位置/力位混控：单圈位置 + 本次命令的速度上限与 iq 上限
+ *
+ * 与 app_motion_position 的区别：不改全局参数，只对本条命令收紧梯形轨迹
+ * v_max（min(vel_limit, YAML trajectory_vel_limit)）与输出电流上限。
+ * iq_limit=0 表示不额外限制；vel_limit 必须 >0 且梯形轨迹已配置，否则拒绝。
+ *
+ * @param position_rad 目标 [rad]（用户坐标，单圈）
+ * @param vel_limit_rad_s 本命令最大速度 [rad/s]（用户坐标，>0）
+ * @param torque_ff_nm 力矩前馈 [Nm]（用户坐标）
+ * @param iq_limit_a 本命令 q 轴电流上限 [A]（0 = 不额外限制）
+ * @return 0 成功；负值为 app_motion_cmd_status_t
+ */
+int app_motion_position_limited(float position_rad, float vel_limit_rad_s, float torque_ff_nm,
+                                float iq_limit_a);
 /**
  * @brief 多圈绝对位置（用户坐标，连续角）
  *

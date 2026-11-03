@@ -26,6 +26,62 @@ static void ramp_setup(algo_ramp_t* ramp) {
     CHECK(ramp->init(ramp, &cfg) == 0);
 }
 
+/** @brief 跑到轨迹完成，返回步数（超时返回上限） */
+static unsigned ramp_run_until_done(algo_ramp_t* ramp, unsigned max_ticks) {
+    unsigned ticks = 0U;
+
+    while (!ramp->is_done(ramp) && (ticks < max_ticks)) {
+        (void)ramp->step(ramp);
+        ticks++;
+    }
+    return ticks;
+}
+
+/**
+ * @brief 运行期改梯形限幅：v_max 生效（同一距离用时不同），非法值拒绝
+ */
+void test_algo_ramp_set_limits(void) {
+    algo_ramp_t ramp;
+
+    /* 同一段 8 rad：v_max=2 与 v_max=10 的用时必须显著不同 */
+    ramp_setup(&ramp);
+    CHECK(ramp.set_limits(&ramp, 2.0f, 10.0f) == 0);
+    CHECK(ramp.plan(&ramp, 8.0f, 0.0f, 0.0f) == 0);
+    unsigned ticks_slow = ramp_run_until_done(&ramp, 15000U * 8U);
+    CHECK(ticks_slow >= 15000U * 4U); /* 约 4.2 s */
+
+    ramp_setup(&ramp);
+    CHECK(ramp.set_limits(&ramp, 10.0f, 10.0f) == 0);
+    CHECK(ramp.plan(&ramp, 8.0f, 0.0f, 0.0f) == 0);
+    unsigned ticks_fast = ramp_run_until_done(&ramp, 15000U * 4U);
+    CHECK(ticks_fast < 15000U * 2U); /* 三角段约 1.79 s */
+
+    /* 非法参数拒绝 */
+    ramp_setup(&ramp);
+    CHECK(ramp.set_limits(&ramp, 0.0f, 10.0f) != 0);
+    CHECK(ramp.set_limits(&ramp, 2.0f, 0.0f) != 0);
+    CHECK(ramp.set_limits(&ramp, NAN, 10.0f) != 0);
+    CHECK(ramp.set_limits(&ramp, 2.0f, INFINITY) != 0);
+
+    /* 非梯形模式不允许改限幅 */
+    algo_ramp_cfg_t linear_cfg = {
+        .mode = ALGO_RAMP_MODE_LINEAR,
+        .rate = 1.0f,
+        .step_time_s = 1.0f / 15000.0f,
+        .target = 0.0f,
+        .initial = 0.0f,
+        .accel_max = 0.0f,
+        .duration_s = 0.0f,
+    };
+
+    algo_ramp_ctor(&ramp);
+    CHECK(ramp.init(&ramp, &linear_cfg) == 0);
+    CHECK(ramp.set_limits(&ramp, 2.0f, 10.0f) != 0);
+
+    /* NULL 安全 */
+    CHECK(ramp.set_limits(NULL, 2.0f, 10.0f) != 0);
+}
+
 void test_algo_ramp_plan(void) {
     algo_ramp_t ramp;
 

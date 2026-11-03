@@ -35,6 +35,8 @@
 static app_motion_snapshot_t s_motion;
 static volatile bool s_output_tracking; /**< 齿槽标定期间为速度模式维护输出角 */
 static volatile bool s_cogging_output_required; /**< 输出角表启用时速度模式也维护输出角 */
+static volatile bool s_report_tracking; /**< CAN 位置反馈：任意模式维护输出角 */
+static volatile float s_cmd_iq_limit_a; /**< 本命令附加 iq 上限[A]（0 = 不额外限制） */
 volatile float g_motion_shaft_angle_rad __attribute__((section(".noncacheable.bss")));
 volatile float g_motion_shaft_angle_deg __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_motion_shaft_angle_valid __attribute__((section(".noncacheable.bss")));
@@ -233,6 +235,7 @@ static void motion_clear_output(app_motion_reason_t reason) {
     s_motion.replan_vel_rad_s = 0;
     s_motion.speed_limited = false;
     s_motion.reason = reason;
+    s_cmd_iq_limit_a = 0.0f;
     s_target_effective = 0;
     s_target_ramp_primed = false;
     s_traj_reset = false;
@@ -304,6 +307,8 @@ void app_motion_init(void) {
     s_motion = (app_motion_snapshot_t){0};
     s_output_tracking = false;
     s_cogging_output_required = false;
+    s_report_tracking = false;
+    s_cmd_iq_limit_a = 0.0f;
     g_motion_shaft_angle_rad = 0;
     g_motion_shaft_angle_deg = 0;
     g_motion_shaft_angle_valid = 0;
@@ -572,8 +577,11 @@ int app_motion_gains(float kp, float ki, float coulomb_nm, float viscous_nm_per_
  * @param relative true = target 为相对当前连续角的增量（仅 multi 有效）
  */
 static int motion_command_ex(float target, float vel_ff, float torque_ff, app_motion_mode_t mode,
-                             bool multi, bool relative) {
+                             bool multi, bool relative, float vel_limit_rad_s, float iq_limit_a) {
     if (!foc_finite(target) || !foc_finite(vel_ff) || !foc_finite(torque_ff))
+        return APP_MOTION_CMD_BAD_PARAM;
+    if (!foc_finite(vel_limit_rad_s) || (vel_limit_rad_s < 0.0f) || !foc_finite(iq_limit_a)
+        || (iq_limit_a < 0.0f))
         return APP_MOTION_CMD_BAD_PARAM;
     /* 参数单例在临界区外取：current() 首次调用可能触发 init（读 flash），
      * 放进 IRQ 锁内会拉长关中断时间。 */
@@ -602,8 +610,13 @@ static int motion_command_ex(float target, float vel_ff, float torque_ff, app_mo
         return APP_MOTION_CMD_STALE_FEEDBACK;
     }
     /* 力矩/torque_ff 受 motion_iq_max_a 硬限制；速度/vel_ff 受 motion_speed_limit（0=不限）；
-     * 位置目标=单圈绝对值 [0,2π]（终端0~360°），见 over_angle */
-    float torque_cap = reducer * kt * s_motion_iq_max_a;
+     * 位置目标=单圈绝对值 [0,2π]（终端0~360°），见 over_angle。
+     * 本命令可附带更小的 iq 上限（DM 力位混控），只降不升。 */
+    float iq_cap = s_motion_iq_max_a;
+    if ((iq_limit_a > 0.0f) && (iq_limit_a < iq_cap)) {
+        iq_cap = iq_limit_a;
+    }
+    float torque_cap = reducer * kt * iq_cap;
     bool over_torque = (mode == APP_MOTION_MODE_TORQUE && fabsf(target) > torque_cap)
                     || (mode == APP_MOTION_MODE_POSITION && fabsf(torque_ff) > torque_cap);
     bool over_speed =
@@ -698,7 +711,27 @@ static int motion_command_ex(float target, float vel_ff, float torque_ff, app_mo
             s_epoch = app_foc_current_epoch();
         }
     }
+    /* 位置轨迹限幅：每次位置命令先回到 YAML 默认，再按本命令的 vel_limit 收紧
+     * （DM 位置/力位混控）。只降不升；轨迹未启用时无法兑现速度上限 → 拒绝。 */
+    if (mode == APP_MOTION_MODE_POSITION) {
+        if ((vel_limit_rad_s > 0.0f) && !s_position_traj_ready) {
+            intf_sys_irq_restore(st);
+            return APP_MOTION_CMD_TRAJ_DISABLED;
+        }
+        if (s_position_traj_ready) {
+            float traj_v = sw->position_traj.trajectory_vel_limit;
+            float traj_a = sw->position_traj.trajectory_accel_limit;
+
+            if ((vel_limit_rad_s > 0.0f) && ((traj_v <= 0.0f) || (vel_limit_rad_s < traj_v))) {
+                traj_v = vel_limit_rad_s;
+            }
+            if ((traj_v > 0.0f) && (traj_a > 0.0f)) {
+                (void)algo_ramp_set_limits(&s_position_traj, traj_v, traj_a);
+            }
+        }
+    }
     s_motion.mode = mode;
+    s_cmd_iq_limit_a = iq_limit_a;
     if (mode == APP_MOTION_MODE_POSITION) {
         if (multi) {
             s_input_pos_continuous = target; /* 已乘 output_direction：内部物理坐标 */
@@ -728,22 +761,28 @@ static int motion_command_ex(float target, float vel_ff, float torque_ff, app_mo
     return 0;
 }
 int app_motion_torque(float torque) {
-    return motion_command_ex(torque, 0, 0, APP_MOTION_MODE_TORQUE, false, false);
+    return motion_command_ex(torque, 0, 0, APP_MOTION_MODE_TORQUE, false, false, 0.0f, 0.0f);
 }
 int app_motion_speed(float speed) {
-    return motion_command_ex(speed, 0, 0, APP_MOTION_MODE_SPEED, false, false);
+    return motion_command_ex(speed, 0, 0, APP_MOTION_MODE_SPEED, false, false, 0.0f, 0.0f);
 }
 int app_motion_position(float position_rad, float vel_ff_rad_s, float torque_ff_nm) {
     return motion_command_ex(
-        position_rad, vel_ff_rad_s, torque_ff_nm, APP_MOTION_MODE_POSITION, false, false);
+        position_rad, vel_ff_rad_s, torque_ff_nm, APP_MOTION_MODE_POSITION, false, false, 0.0f,
+        0.0f);
+}
+int app_motion_position_limited(float position_rad, float vel_limit_rad_s, float torque_ff_nm,
+                                float iq_limit_a) {
+    return motion_command_ex(position_rad, 0.0f, torque_ff_nm, APP_MOTION_MODE_POSITION, false,
+                             false, vel_limit_rad_s, iq_limit_a);
 }
 int app_motion_position_multi(float position_rad, float vel_ff_rad_s, float torque_ff_nm) {
     return motion_command_ex(
-        position_rad, vel_ff_rad_s, torque_ff_nm, APP_MOTION_MODE_POSITION, true, false);
+        position_rad, vel_ff_rad_s, torque_ff_nm, APP_MOTION_MODE_POSITION, true, false, 0.0f, 0.0f);
 }
 int app_motion_position_rel(float delta_rad, float vel_ff_rad_s, float torque_ff_nm) {
     return motion_command_ex(
-        delta_rad, vel_ff_rad_s, torque_ff_nm, APP_MOTION_MODE_POSITION, true, true);
+        delta_rad, vel_ff_rad_s, torque_ff_nm, APP_MOTION_MODE_POSITION, true, true, 0.0f, 0.0f);
 }
 int app_motion_mit(float position_rad, float vel_rad_s, float kp_nm_per_rad,
                    float kd_nm_per_rad_s, float torque_ff_nm) {
@@ -820,6 +859,7 @@ int app_motion_mit(float position_rad, float vel_rad_s, float kp_nm_per_rad,
         }
     }
     s_motion.mode = APP_MOTION_MODE_MIT;
+    s_cmd_iq_limit_a = 0.0f; /* MIT 不使用 per-command iq 上限 */
     s_mit_cmd.p_des_rad = position_rad * s_output_direction;
     s_mit_cmd.v_des_rad_s = vel_rad_s * s_output_direction;
     s_mit_cmd.kp_nm_per_rad = kp_nm_per_rad;
@@ -919,7 +959,7 @@ void app_motion_step(void) {
     app_encoder_rotor_snapshot_t rotor;
     uint16_t raw;
     uint32_t now = intf_clock_get_cycle();
-    bool need_pair = s_motion.calibrating
+    bool need_pair = s_motion.calibrating || s_report_tracking
                      || (s_motion.active
                          && ((s_motion.mode == APP_MOTION_MODE_POSITION)
                              || (s_motion.mode == APP_MOTION_MODE_MIT) || s_output_tracking
@@ -929,7 +969,7 @@ void app_motion_step(void) {
     bool rotor_only = s_motion.active && !s_motion.calibrating
                       && (s_motion.mode != APP_MOTION_MODE_POSITION)
                       && (s_motion.mode != APP_MOTION_MODE_MIT) && !s_output_tracking
-                      && !s_cogging_output_required;
+                      && !s_cogging_output_required && !s_report_tracking;
     bool pair_ok = false;
     float reducer = s_motion_motor_params->reducer_ratio;
     float output_ratio = s_motion_motor_params->encoder.output_ratio;
@@ -1191,6 +1231,9 @@ void app_motion_step(void) {
                            || execution.voltage_saturated || execution.request_expired
                            || s_motion.speed_limited;
     float motion_iq_limit = s_motion_iq_max_a;
+    if ((s_cmd_iq_limit_a > 0.0f) && (s_cmd_iq_limit_a < motion_iq_limit)) {
+        motion_iq_limit = s_cmd_iq_limit_a;
+    }
     float dynamic_limit = app_foc_current_get_i_limit();
     if ((dynamic_limit > 0.0f) && (dynamic_limit < motion_iq_limit)) {
         motion_iq_limit = dynamic_limit;
@@ -1406,6 +1449,12 @@ void app_motion_set_output_tracking(bool enable) {
 void app_motion_set_cogging_output_required(bool required) {
     uint32_t state = intf_sys_irq_save();
     s_cogging_output_required = required;
+    intf_sys_irq_restore(state);
+}
+
+void app_motion_set_angle_report_required(bool required) {
+    uint32_t state = intf_sys_irq_save();
+    s_report_tracking = required;
     intf_sys_irq_restore(state);
 }
 

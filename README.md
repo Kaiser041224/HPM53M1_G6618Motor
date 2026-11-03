@@ -108,6 +108,8 @@ hpmdev new my_motor_ctrl
 
 ## 项目附加文档（HPM53M1_G6618Motor）
 
+- **电机控制协议 v0.1（CAN，随时查阅）**：`docs/can-protocol_v0.1.md`
+  - ID 分配 / 四类控制帧 / 反馈帧 / ERR / 运行时行为 / 报文示例与预期反馈
 - 编码器独立采样器 + FOC 实时域解耦（2026-09-22）
   - 设计：`docs/superpowers/specs/2026-09-22-encoder-sampler-foc-realtime-design.md`
   - 计划：`docs/superpowers/plans/2026-09-22-encoder-sampler-foc-realtime.md`

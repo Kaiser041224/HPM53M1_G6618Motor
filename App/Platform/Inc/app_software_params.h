@@ -24,8 +24,7 @@ extern "C" {
  */
 typedef struct {
     uint32_t baudrate;   /**< CAN 波特率 [bps] */
-    uint8_t
-        node_id_default; /**< 默认节点号（占位：DIP 解码未实现；与 CAN ID 的派生关系待协议定稿） */
+    uint8_t can_id; /**< YAML 兜底节点号（0~15）：DIP 解码失败时使用 */
     uint32_t rx_control_id; /**< 接收控制帧 CAN ID（占位：待协议定稿） */
     uint32_t tx_report_id;  /**< 参数回报帧 CAN ID（占位：待协议定稿） */
 } app_software_can_t;
@@ -167,7 +166,7 @@ typedef struct {
  */
 typedef struct {
     uint8_t enable;         /**< 1 = 允许进入 MIT 模式 */
-    uint8_t can_format;     /**< CAN MIT 报文格式：0 = compact 单帧，1 = dual 双帧 */
+    uint8_t can_format;     /**< reserved：DM 协议固定单帧 MIT；保留字段以维持 SPRM 布局 */
     uint8_t friction_ff_en; /**< 1 = MIT 下叠加摩擦前馈（默认关） */
     uint8_t inertia_ff_en;  /**< 1 = MIT 下叠加惯量前馈（默认关） */
     float kp_max;           /**< Kp 上限 [Nm/rad] */
