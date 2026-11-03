@@ -95,6 +95,36 @@ float app_analog_signal_vbus_fast(void);
 bool app_analog_signal_read_raw(adc_channel_t ch, uint16_t* raw);
 
 /**
+ * @brief NTC 阻值 → 摄氏温度（B 参数法，纯换算）
+ *
+ * T[℃] = 1 / (1/298.15 + ln(R/R25) / B) - 273.15
+ *
+ * 有效区间：(100 Ω, 1 MΩ)，且 R25/B 必须 > 0；开路替代值（hardware.ntc.max_ohm
+ * = 1 MΩ）与短路（0 Ω）都会落在区间外。非有限输入按位模式判定，不依赖
+ * isnan/isfinite（-ffast-math 下会被常量折叠）。
+ *
+ * @param r_ohm      NTC 阻值 [Ω]
+ * @param r25_ohm    25 ℃ 阻值 [Ω]
+ * @param b_value_k  B 常数 [K]
+ * @param temp_c     输出温度 [℃]（可为 NULL，此时仅判有效）
+ * @return true = 输入有效且已换算
+ */
+bool app_analog_signal_ntc_temp_from_ohm(float r_ohm, float r25_ohm, float b_value_k,
+                                         float* temp_c);
+
+/**
+ * @brief 读取 NTC 通道温度（缓存值，约 100 Hz 换算一次）
+ *
+ * 温度属于低频观测量，换算节拍刻意低于 1 kHz 慢任务（当前每 10 ms 一次）：
+ * 回报帧允许发送相对陈旧的换算值（≤10 ms），不要为此提高 logf 调用频率。
+ *
+ * @param ch     仅 ADC_CH_NTC0 / ADC_CH_NTC1
+ * @param temp_c 输出温度 [℃]
+ * @return true = 有效；false = 非 NTC 通道 / 尚无换算 / 开路或短路
+ */
+bool app_analog_signal_ntc_temp_c(adc_channel_t ch, float* temp_c);
+
+/**
  * @brief 电流零点标定（阻塞包装：boot 初始化阶段使用）。
  * @note 必须在无电流状态调用；检测到电流或超时会拒绝。
  * @return 0 成功，-1 失败

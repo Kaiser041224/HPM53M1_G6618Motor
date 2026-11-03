@@ -24,8 +24,11 @@
 extern "C" {
 #endif
 
-/** @brief 初始化（注册 RX 回调与 ISR 钩子、过滤器；不重复初始化外设） */
-void app_can_service_init(void);
+/**
+ * @brief 初始化（注册 RX 回调与 ISR 钩子、过滤器；不重复初始化外设）
+ * @param node_id 本机节点号（0..15；越界回退 1）
+ */
+void app_can_service_init(uint8_t node_id);
 
 /** @brief 1kHz 步进：收队列 → 执行 → 看门狗 → 周期发送 */
 void app_can_service_step(void);

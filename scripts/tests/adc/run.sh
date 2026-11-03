@@ -20,6 +20,7 @@ BASE_FLAGS=(-std=c17 -Wall -Wextra -Werror)
 shopt -s nullglob
 APP_SRC=(
     "$ROOT/App/Platform/Src/app_adc.c"
+    "$ROOT/App/Platform/Src/app_can_id.c"
 )
 TEST_SRC=("$HERE"/test_*.c)
 MOCK_SRC=("$HERE"/mock_*.c)

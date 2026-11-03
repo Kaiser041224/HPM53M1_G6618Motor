@@ -12,6 +12,7 @@
 #include "app_hardware_params.h"
 #include "app_hrpwm.h"
 #include "app_ramfunc.h"
+#include "intf_clock.h"
 #include "intf_hrpwm.h"
 #include "intf_trgm.h"
 
@@ -63,6 +64,9 @@ static const app_adc_map_t s_adc_map[ADC_CH_COUNT] = {
 #define APP_ADC_SLOW_CH_COUNT  (4U)
 #define APP_ADC_SLOW_RATE_HZ   (1000U) /* 慢保护目标节拍（现由 app_io_step 承载，本宏留作文档基准） */
 #define APP_ADC_SLOW_SEQ_COUNT (5U)
+/* 上电读完 CANID 后的序列形态：去掉 CANID 槽，读取项同步减一 */
+#define APP_ADC_SLOW_SEQ_COUNT_RELEASED (4U)
+#define APP_ADC_SLOW_CH_COUNT_RELEASED  (3U)
 /* ADC1 SEQ 配置**已冻结**（2026-10-26 台架验证通过，勿在无重验证的情况下改动）：
  *   · 速率 30kHz —— 由"与 ADC0 同一触发沿"结构性决定（= hardware.inverter.pwm_freq_hz
  *     = 30000），**不可独立设定**；改 PWM 频率即同时改 ADC1 速率，须重跑 §9.5.2 的 A/B。
@@ -120,6 +124,11 @@ static bool s_initialized;
 static uint16_t s_full_scale_code = 65535U;
 static app_adc_cfg_t s_adc_cfg;
 static void (*s_current_hook)(void); /**< 电流环钩子（ADC0 PMT ISR 内调用） */
+
+/** 慢速通道当前读取项数：上电读完 CANID 并释放槽后由 4 降为 3 */
+static uint8_t s_slow_ch_count = APP_ADC_SLOW_CH_COUNT;
+/** CANID 槽是否已释放（幂等标记） */
+static bool s_canid_released;
 
 /* 快通道母线状态（PMT ISR 写入、任务/ISR 读取）
  * 2026-10-26：vbus 由 ADC1 SEQ 与电流同源触发（PWM1_CH10REF 扇出），vbus 位于序列
@@ -219,6 +228,43 @@ static void adc_current_pmt_cb(
  * Public API
  * ============================================================================ */
 
+/**
+ * @brief 构建 ADC1 慢速序列配置（5 槽 / 4 槽共用）
+ *
+ * 槽序：首项 VBUS（转换最早完成，供 ADC0 PMT ISR 同拍读取）、末项 VBUS
+ * （首槽 S/H 污染自吸收）。5 槽时 CANID 位于 [3]；上电读完节点号后释放为 4 槽。
+ *
+ * @param seq_ch_count 序列槽数（4 或 5，由调用者保证）
+ * @param cfg 输出配置
+ */
+static void app_adc_build_slow_cfg(uint8_t seq_ch_count, intf_adc_cfg_t* cfg) {
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->resolution = (intf_adc_resolution_t)s_adc_cfg.resolution;
+    cfg->mode = INTF_ADC_MODE_SEQ;
+    cfg->sample_cycle = s_adc_cfg.sample_cycle;
+    cfg->clock_div = INTF_ADC_DEFAULT_CLOCK_DIV;
+    cfg->vref_mv = INTF_ADC_DEFAULT_VREF_MV;
+    cfg->seq_hw_trig = true;
+    cfg->seq_ch_count = seq_ch_count;
+    cfg->seq_ch_list[0] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
+    cfg->seq_ch_list[1] = s_adc_map[ADC_CH_NTC0].hw_ch;
+    cfg->seq_ch_list[2] = s_adc_map[ADC_CH_NTC1].hw_ch;
+    if (seq_ch_count >= APP_ADC_SLOW_SEQ_COUNT) {
+        cfg->seq_ch_list[3] = s_adc_map[ADC_CH_V_CANID].hw_ch;
+    }
+    cfg->seq_ch_list[seq_ch_count - 1U] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
+    cfg->seq_cb = NULL; /* 无周期中断：慢保护节拍由 1kHz 任务承载 */
+}
+
+/** @brief 重配失败时回退 5 槽（保持上电即有 CANID 的冻结配置） */
+static void app_adc_restore_slow_seq(void) {
+    intf_adc_cfg_t cfg;
+
+    app_adc_build_slow_cfg(APP_ADC_SLOW_SEQ_COUNT, &cfg);
+    (void)intf_adc_init(INTF_ADC_CH(1U, 0U), &cfg);
+    intf_clock_delay_ms(2U);
+}
+
 void app_adc_init(const app_adc_cfg_t* cfg) {
     intf_adc_cfg_t adc0_cfg;
     intf_adc_cfg_t adc1_cfg;
@@ -259,6 +305,8 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
     s_vbus_fast_sequence = 0U;
     s_vbus_fast_stale = 0U;
     s_vbus_fast_valid = false;
+    s_slow_ch_count = APP_ADC_SLOW_CH_COUNT;
+    s_canid_released = false;
 
     memset(&adc0_cfg, 0, sizeof(adc0_cfg));
     adc0_cfg.resolution = (intf_adc_resolution_t)s_adc_cfg.resolution;
@@ -290,20 +338,7 @@ void app_adc_init(const app_adc_cfg_t* cfg) {
      *      **seq_cb = NULL → 不使能 SEQ 完成中断，ADC1 无周期 ISR**（2026-10-27）：
      *      实测该 30kHz 入口占 1.5~1.6% CPU，且其 XIP 慢链风暴（10.9µs）落在距
      *      下一拍仅 5.9µs 的窗口内。慢保护节拍改由 1kHz 任务承载（见 app_logic）。 */
-    memset(&adc1_cfg, 0, sizeof(adc1_cfg));
-    adc1_cfg.resolution = (intf_adc_resolution_t)s_adc_cfg.resolution;
-    adc1_cfg.mode = INTF_ADC_MODE_SEQ;
-    adc1_cfg.sample_cycle = s_adc_cfg.sample_cycle;
-    adc1_cfg.clock_div = INTF_ADC_DEFAULT_CLOCK_DIV;
-    adc1_cfg.vref_mv = INTF_ADC_DEFAULT_VREF_MV;
-    adc1_cfg.seq_hw_trig = true;
-    adc1_cfg.seq_ch_count = APP_ADC_SLOW_SEQ_COUNT;
-    adc1_cfg.seq_ch_list[0] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
-    adc1_cfg.seq_ch_list[1] = s_adc_map[ADC_CH_NTC0].hw_ch;
-    adc1_cfg.seq_ch_list[2] = s_adc_map[ADC_CH_NTC1].hw_ch;
-    adc1_cfg.seq_ch_list[3] = s_adc_map[ADC_CH_V_CANID].hw_ch;
-    adc1_cfg.seq_ch_list[4] = s_adc_map[ADC_CH_V_VBUS].hw_ch;
-    adc1_cfg.seq_cb = NULL; /* 无周期中断：慢保护节拍由 1kHz 任务承载 */
+    app_adc_build_slow_cfg(APP_ADC_SLOW_SEQ_COUNT, &adc1_cfg);
     rc1 = intf_adc_init(INTF_ADC_CH(1U, 0U), &adc1_cfg);
 
     /* ---- 触发链：PWM1 CMP10 一个沿同时启动两路 ADC ----
@@ -329,6 +364,12 @@ const app_adc_cfg_t* app_adc_get_config(void) { return &s_adc_cfg; }
 APP_ATTR_RAMFUNC
 bool app_adc_get_raw(adc_channel_t ch, uint16_t* raw) {
     if ((ch >= ADC_CH_COUNT) || (raw == NULL) || !s_initialized) {
+        return false;
+    }
+    /* CANID 槽释放后不再作为有效通道对外暴露。用独立标志屏蔽而不是清
+     * s_valid_mask 位：该位由 PMT ISR 用 |= 更新，任务侧读改写会丢 PMT 位
+     * （虽只影响一帧有效性，但没必要引入竞争）。 */
+    if ((ch == ADC_CH_V_CANID) && s_canid_released) {
         return false;
     }
     if ((s_valid_mask & (1UL << ch)) == 0U) {
@@ -376,9 +417,9 @@ void app_adc_slow_process(void) {
         return;
     }
 
-    /* ADC1 序列转换每 1ms 触发一轮（5 项），结果由硬件同步到 PRD_RESULTx；
-     * 此处纯寄存器读取——无触发副作用、无读冲突。 */
-    for (uint8_t i = 0U; i < APP_ADC_SLOW_CH_COUNT; i++) {
+    /* ADC1 序列转换每 1ms 触发一轮（5 项 → 释放 CANID 后 4 项），结果由硬件同步到
+     * PRD_RESULTx；此处纯寄存器读取——无触发副作用、无读冲突。 */
+    for (uint8_t i = 0U; i < s_slow_ch_count; i++) {
         adc_channel_t ch = s_slow_channels[i];
         intf_adc_ch_t enc = INTF_ADC_CH(s_adc_map[ch].inst, s_adc_map[ch].hw_ch);
         uint16_t raw = 0U;
@@ -390,6 +431,52 @@ void app_adc_slow_process(void) {
         s_valid_mask |= (1UL << ch);
     }
 }
+
+int app_adc_canid_release(void) {
+    intf_adc_cfg_t adc1_cfg;
+    uint16_t vbus_raw = 0U;
+    uint32_t flags = 0U;
+
+    if (!s_initialized) {
+        return -1;
+    }
+    if (s_canid_released) {
+        return 0;
+    }
+    /* 尚未产出 CANID 结果 → 保留 5 槽；节点号由上层回退 YAML */
+    if ((s_valid_mask & (1UL << ADC_CH_V_CANID)) == 0U) {
+        return -1;
+    }
+
+    app_adc_build_slow_cfg(APP_ADC_SLOW_SEQ_COUNT_RELEASED, &adc1_cfg);
+    if (intf_adc_init(INTF_ADC_CH(1U, 0U), &adc1_cfg) != 0) {
+        app_adc_restore_slow_seq();
+        return -1;
+    }
+
+    /* 重配窗口内可能残留上一次序列的完成标志：先清，再等 2ms。
+     * 这 2ms 内出现新的 SEQ 完成位 = 4 槽序列确实在硬件触发下运行。 */
+    (void)intf_adc_clear_status(1U);
+    intf_clock_delay_ms(2U);
+
+    if ((intf_adc_get_status(1U, &flags) != 0)
+        || ((flags & INTF_ADC_STATUS_SEQ_COMPLETE) == 0U)) {
+        app_adc_restore_slow_seq();
+        return -1;
+    }
+    /* VBUS 是首/末槽，必须仍然有效（全 0/全 1 = 结果域未写入） */
+    if ((intf_adc_read(INTF_ADC_CH(1U, s_adc_map[ADC_CH_V_VBUS].hw_ch), &vbus_raw) != 0)
+        || (vbus_raw == 0U) || (vbus_raw == 0xFFFFU)) {
+        app_adc_restore_slow_seq();
+        return -1;
+    }
+
+    s_slow_ch_count = APP_ADC_SLOW_CH_COUNT_RELEASED;
+    s_canid_released = true;
+    return 0;
+}
+
+bool app_adc_is_canid_released(void) { return s_canid_released; }
 
 int app_adc_set_trigger_delay_ns(uint32_t delay_ns) {
     int rc = intf_hrpwm_set_trigger_cmp_delay(HRPWM_INST_1, APP_ADC_TRIGGER_CMP_INDEX, delay_ns);

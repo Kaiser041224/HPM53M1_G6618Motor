@@ -14,6 +14,7 @@
 
 #include "app_hardware_params.h"
 #include "intf_adc.h"
+#include "intf_clock.h"
 #include "intf_gptmr.h"
 #include "intf_hrpwm.h"
 #include "intf_trgm.h"
@@ -29,6 +30,39 @@ int g_mock_adc_init_count[INTF_ADC_INSTANCE_COUNT];
 uint16_t g_mock_prd_raw[INTF_ADC_INSTANCE_COUNT][16]; /**< 按实例+硬件通道可编程 */
 uint32_t g_mock_seq_frames[INTF_ADC_INSTANCE_COUNT];  /**< ADC1 SEQ 帧计数替身 */
 uint32_t g_mock_seq_progress[INTF_ADC_INSTANCE_COUNT]; /**< ADC16.SEQ_WR_ADDR 替身 */
+uint32_t g_mock_adc_status[INTF_ADC_INSTANCE_COUNT];   /**< intf_adc_get_status 替身 */
+uint32_t g_mock_adc_status_on_delay[INTF_ADC_INSTANCE_COUNT]; /**< 延时后自动置位的状态位 */
+uint32_t g_mock_delay_ms_calls;
+
+/* CANID（ADC1/IN15）逐次采样序列：模拟上电瞬态/离群样本 */
+static uint16_t s_mock_canid_seq[16];
+static uint8_t s_mock_canid_seq_len;
+static uint8_t s_mock_canid_seq_idx;
+
+void mock_adc_set_canid_sequence(const uint16_t* values, uint8_t count) {
+    if ((values == NULL) || (count > 16U)) {
+        return;
+    }
+    for (uint8_t i = 0U; i < count; i++) {
+        s_mock_canid_seq[i] = values[i];
+    }
+    s_mock_canid_seq_len = count;
+    s_mock_canid_seq_idx = 0U;
+}
+
+void mock_adc_set_status_on_delay(uint8_t inst, uint32_t flags) {
+    if (inst < INTF_ADC_INSTANCE_COUNT) {
+        g_mock_adc_status_on_delay[inst] = flags;
+    }
+}
+
+void intf_clock_delay_ms(uint32_t ms) {
+    g_mock_delay_ms_calls += ms;
+    /* 模拟"等待期间硬件完成一帧 SEQ"：重配后的进展判据依赖它 */
+    for (uint8_t i = 0U; i < INTF_ADC_INSTANCE_COUNT; i++) {
+        g_mock_adc_status[i] |= g_mock_adc_status_on_delay[i];
+    }
+}
 
 void mock_adc_reset(void) {
     memset(g_mock_adc_cfg, 0, sizeof(g_mock_adc_cfg));
@@ -36,6 +70,12 @@ void mock_adc_reset(void) {
     memset(g_mock_prd_raw, 0, sizeof(g_mock_prd_raw));
     memset(g_mock_seq_frames, 0, sizeof(g_mock_seq_frames));
     memset(g_mock_seq_progress, 0, sizeof(g_mock_seq_progress));
+    memset(g_mock_adc_status, 0, sizeof(g_mock_adc_status));
+    memset(g_mock_adc_status_on_delay, 0, sizeof(g_mock_adc_status_on_delay));
+    memset(s_mock_canid_seq, 0, sizeof(s_mock_canid_seq));
+    s_mock_canid_seq_len = 0U;
+    s_mock_canid_seq_idx = 0U;
+    g_mock_delay_ms_calls = 0U;
 }
 
 int intf_adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
@@ -55,6 +95,13 @@ int intf_adc_read(intf_adc_ch_t ch, uint16_t* value) {
 
     if ((inst >= INTF_ADC_INSTANCE_COUNT) || (value == NULL)) {
         return -1;
+    }
+    if ((inst == 1U) && (idx == 15U) && (s_mock_canid_seq_len > 0U)) {
+        *value = s_mock_canid_seq[s_mock_canid_seq_idx];
+        if ((uint8_t)(s_mock_canid_seq_idx + 1U) < s_mock_canid_seq_len) {
+            s_mock_canid_seq_idx++;
+        }
+        return 0;
     }
     *value = g_mock_prd_raw[inst][idx];
     return 0;
@@ -82,6 +129,15 @@ int intf_adc_clear_status(uint8_t inst) {
         return -1;
     }
     g_mock_clear_status_calls++;
+    g_mock_adc_status[inst] = 0U;
+    return 0;
+}
+
+int intf_adc_get_status(uint8_t inst, uint32_t* flags) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (flags == NULL)) {
+        return -1;
+    }
+    *flags = g_mock_adc_status[inst];
     return 0;
 }
 

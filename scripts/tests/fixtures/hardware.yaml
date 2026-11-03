@@ -24,13 +24,13 @@ vbus_sense:
   v_per_volt: "(divider_high_ohm + divider_low_ohm) / divider_low_ohm"  # 母线标度 [V/V] → 22.2121
 
 ntc:
-  pullup_ohm: 10000                       # 板上上拉 [Ω]
-  r25_ohm: 10000                          # 占位：NTC 型号未定（按典型 10K 填写，待选型修正）
-  b_value_k: 3950                         # 占位：B 常数 [K]（典型 3950K，待选型修正）
+  pullup_ohm: 10000                       # 板上上拉 [Ω]（当前装配 10k；后续硬件统一为 100k）
+  r25_ohm: 100000                         # NTC 25℃ 阻值 [Ω]（当前占位 100k/3950；MOS 与定子同规格）
+  b_value_k: 3950                         # B 常数 [K]（占位：MOS/定子 NTC 同规格，实测后修正）
   max_ohm: 1000000.0                      # 开路/超量程替代值 [Ω]
 
 canid_dip:
-  levels: 16                              # 占位：4-bit 拨码档数；解码逻辑未实现（节点号映射待硬件确认）
+  levels: 8                               # 8 档（S1/S2/S3）；ID = 拨码二进制，阈值表在 app_can_id.c
 
 adc:
   sample_cycle: 25                        # 采样窗口 [ADC 时钟数]（SDK 最小 10；曾复现通道数据重复，勿低于 10）

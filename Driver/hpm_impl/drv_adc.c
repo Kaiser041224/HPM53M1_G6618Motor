@@ -497,6 +497,26 @@ int adc_clear_status(uint8_t inst) {
     return 0;
 }
 
+/**
+ * @brief 读取实例状态标志（SEQ 完成位）
+ * @param inst 实例号
+ * @param flags 输出：INTF_ADC_STATUS_* 位或
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+int adc_get_status(uint8_t inst, uint32_t *flags) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (flags == NULL)) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    *flags = 0U;
+    if ((adc16_get_status_flags(s_adc_instances[inst].base) & ADC16_INT_STS_SEQ_CMPT_MASK) != 0U) {
+        *flags |= INTF_ADC_STATUS_SEQ_COMPLETE;
+    }
+    return 0;
+}
+
 ATTR_RAMFUNC /* ADC0 PMT ISR 每拍调用：vbus 快通道新鲜度证据 */
 int adc_get_seq_progress(uint8_t inst, uint32_t *wr_addr) {
     if ((inst >= INTF_ADC_INSTANCE_COUNT) || (wr_addr == NULL)) {
@@ -624,6 +644,8 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
     adc_inst_t* ai = &s_adc_instances[inst];
     uint32_t sample_cycle = (cfg->sample_cycle > 0) ? cfg->sample_cycle : ADC_DEFAULT_SAMPLE_CYCLE;
+    /* 运行期重配判定：必须在下面的全局 init 之前采样（首次 init 会把 initialized 置 true） */
+    bool seq_reinit = ai->initialized && (ai->mode == INTF_ADC_MODE_SEQ);
 
     /* --- global instance init (first call) --- */
     if (!ai->initialized) {
@@ -792,6 +814,13 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
         if (cfg->dma_en && (cfg->dma_buff == NULL || cfg->dma_buff_len == 0))
             return -1;
 
+        /* 运行期重配（例如 app_adc_canid_release 5→4 槽）：先停硬件触发，避免
+         * 改写 SEQ_CFG0/SEQ_QUE 期间插入半帧；set_seq_config 会按 cfg 重新置
+         * HW_TRIG_EN，末尾再显式放行一次作为双保险。 */
+        if (seq_reinit) {
+            adc16_seq_disable_hw_trigger(ai->base);
+        }
+
         ai->seq.hw_trig = cfg->seq_hw_trig;
         ai->seq.ch_count = cfg->seq_ch_count;
         ai->seq.cb = cfg->seq_cb;
@@ -820,6 +849,12 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
         seq_cfg.cont_en = true;
         seq_cfg.hw_trig_en = cfg->seq_hw_trig;
         seq_cfg.sw_trig_en = !cfg->seq_hw_trig;
+        if (seq_reinit && cfg->seq_hw_trig) {
+            /* set_seq_config 会先写 SEQ_CFG0 再写队列：重配窗口内必须先禁止触发，
+             * 队列写完后由下面的 enable 放行，否则可能插入一个半新半旧的序列帧。 */
+            seq_cfg.hw_trig_en = false;
+            seq_cfg.sw_trig_en = false;
+        }
 
         for (uint8_t i = 0; i < cfg->seq_ch_count; i++) {
             seq_cfg.queue[i].seq_int_en = ((i + 1) == cfg->seq_ch_count);
@@ -828,6 +863,10 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
         if (adc16_set_seq_config(ai->base, &seq_cfg) != status_success)
             return -1;
+
+        if (seq_reinit && cfg->seq_hw_trig) {
+            adc16_seq_enable_hw_trigger(ai->base);
+        }
 
         if (cfg->dma_en) {
             ai->dma.active = true;

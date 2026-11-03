@@ -1013,3 +1013,60 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **台架判读**：新固件 `cal rl` 应 retry=0 或少量降档即 PASS，raw 超调落到个位数~10% 量级。
   若仍 `stalled`，先看 `baseline_rms`：噪声底本身变大（接地/采样/PWM 纹波）是采样链问题，
   不要用放宽验收门限掩盖。
+
+### 终端导出命令签名与 NTC 温度口径（2026-11-03）
+
+- **CherrySH 导出命令的签名只能是 `int (*)(int argc, char **argv)`**
+  （`chry_shell.h:64` 的 `chry_syscall_func_t`，调用点 `chry_shell.c:500`）。
+  `csh` 指针由 `app_terminal_cmd_ctx(argc, argv)` 从 `argv[argc+1]` 取回。
+  - `cmd_can` 曾写成 `(chry_shell_t*, int, const char**)`：首个参数实际收到 `argc`（小整数），
+    `csh_printf` 把 `0x1xx` 当 `chry_shell_t*` 解引用。本板 **ILM 起于 `0x00000000`**
+    （`linkers/gcc/user_linker.ld:14`，128 KB），该地址不触发访问异常，而是读到垃圾函数
+    指针后跳飞 —— 表现为点 `can` 命令即"程序跑飞"，不是 CAN 驱动问题。
+  - 回归守卫：`app_terminal_cmd_diag.c` 末尾的 `_Static_assert(_Generic(&cmd_can,
+    chry_syscall_func_t: 1, default: 0) == 1, ...)`。新增导出命令时同样会暴露签名错误。
+  - 非导出的内部命令（`cmd_cal_encoder` / `cmd_cal_rl` 等）收 `chry_shell_t*` 是合法的，
+    因为它们由 `cmd_cal` 在已取得 csh 后调用。
+- **NTC 温度口径（占位，待硬件定稿）**：`hardware.ntc.r25_ohm = 100000`、`b_value_k = 3950`、
+  上拉当前 10 kΩ；后续硬件把上拉统一为 100 kΩ，**MOS 功率级传感器与定子 NTC 同规格**。
+  上拉 10 kΩ + 100 kΩ NTC 只在 25 ℃ 附近有可用分辨率，属临时台架口径，不要据此判断
+  长期温漂。
+- **温度是低频观测量**：`app_analog_signal_process()` 每 10 拍（1 kHz / 10 = **100 Hz**）
+  换算一次并缓存；`app_analog_signal_ntc_temp_c()` 读取缓存，回报帧允许发送相对陈旧的
+  值（≤10 ms）。不要为了"更新鲜"把 `logf` 提到每帧调用。
+- 无效判据：`R ≤ 100 Ω`（短路）、`R ≥ 1 MΩ`（开路替代值）、`R25/B ≤ 0`（参数未配置）、
+  非有限值。无效温度由上层映射哨兵（回报帧 `0xFF`），不要用 0 ℃ 冒充。
+- `adc dump` 的 NTC0/NTC1 行现在额外打印 `temp=`；NTC1 当前硬件开路，必然显示 invalid。
+
+### CAN 节点号与 ADC1 槽释放（2026-11-03）
+
+- **节点号来源**：CANID 电阻网络（ADC1_IN15 / PB00）→ 上电 `app_can_id_read()` 先等
+  2 ms、再采 9 次、取中值并用 ±256 LSB 内点过滤；8 档阈值表在
+  `App/Platform/Src/app_can_id.c`（2026-11-02 台架实测，不依赖原理图位序）。
+  **只在上电读一次**，运行期不再采样。
+- **ID = 拨码二进制（S1 为 MSB）**：`ID = S1<<2 | S2<<1 | S3`，即
+  `000→0, 001→1, 010→2, 011→3, 100→4, 101→5, 110→6, 111→7`。
+  阈值表按**电压低→高**排序（与 ID 不同序），解码后经 `s_can_id_level_to_id[]` 置换；
+  改判据/表时两张表必须同时核对。节点 0 合法（000），只有解码失败才回退
+  `software.can.node_id_default`。
+  启动日志打印 `DIP: raw=... spread=... -> id=...` 与 `node=... source=...`。
+- **读完后释放 ADC1 槽**：`app_adc_canid_release()` 把序列从 5 槽重配为
+  `[V_VBUS, NTC0, NTC1, V_VBUS]`。重配前先停硬件触发（驱动 `adc_init` 的 `seq_reinit`
+  分支），重配后清 INT_STS、等 2 ms、要求出现 `SEQ_CMPT` 且 VBUS 结果非全 0/全 1，
+  否则回退 5 槽。失败只降级（`adc dump` 继续显示 V_CANID），不阻塞启动。
+- **ADC1 无中断时不能用帧计数判进展**：`SEQ_WR_ADDR` 不随非 DMA 序列推进，
+  `intf_adc_get_seq_frames` 恒 0。本次新增 `intf_adc_get_status()`（`SEQ_COMPLETE` 位），
+  这是重配后"序列真的在跑"的唯一可用证据。
+- **验证红线不变**：5→4 槽改动了冻结的 ADC1 序列 → 必须重跑 spec
+  `2026-09-19-adc-sampling-design` §9.5.2 的 vbus 配对 A/B 与 `cal rl`，并确认
+  `adc diag` 的 vbus 快通道 `stale` 无增长。首末槽仍是 VBUS，风险集中在整帧时长
+  （5 项 ≈5.8 µs → 4 项 ≈4.6 µs）。
+- 终端：`can id` 打印上电 DIP 原始码/档位与 ADC 槽状态（released/kept）；
+  `adc dump` 在释放后显示 `V_CANID no data (released; ID read once at boot)`。
+
+- **上电瞬态离群样本（2026-11-03 台架）**：DIP `001` 的一次启动中，9 次采样中值
+  16323（本应解出 id=1），却因极差 >512 LSB 被判 invalid。原因是 ADC1 首帧/上电瞬态
+  出现离群值——boot 期间三相桥自检仍在 50% 开关，CANID 是无电容的高阻分压网络。
+  **修法**：`app_can_id_read()` 先等 2 ms 让序列稳定，再采 9 次；取中值后保留
+  `±256 LSB` 内点，内点 ≥5 个才继续，最终按内点极差（≤512）判稳定性。
+  启动日志与 `can id` 现在打印 `spread=`，可直接区分"值错"与"抖动"。

@@ -146,9 +146,10 @@ void app_debug_can_init(void) {
 
     /* 周期回报由 app_can_service 承担（encoder 0x29 / heartbeat 0x21），
      * 旧的 tx_report_id 已无发送方，不再打印，避免误导。 */
-    app_debug_printf("\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, node=%u\r\n",
+    app_debug_printf("\r\n[CAN] self-test: MCAN3 (PA15=TXD/PA14=RXD), classic @%u bps, "
+                     "node=%u (YAML fallback; DIP read after ADC)\r\n",
                      (unsigned)software->can.baudrate,
-                     (unsigned)app_can_service_get_node_id());
+                     (unsigned)software->can.node_id_default);
 
     lb_ok = can_loopback_selfcheck();
     app_debug_printf("[CAN] loopback self-check: %s\r\n", lb_ok ? "OK" : "FAILED");

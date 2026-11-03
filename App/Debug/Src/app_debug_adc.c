@@ -71,7 +71,8 @@ void app_debug_adc_init(void) {
      * 慢保护节拍由 1kHz 任务承载。本行只是回报，改链路时必须同步改这里。 */
     app_debug_printf(
         "[ADC] chain: PWM1 CMP10 +%u ns -> TRGM PTRGI0A -> ADC0[IN2,IN3,IN4] PMT | "
-        "PWM1 CH10REF -> TRGM -> ADC1[IN15,IN6,IN11,IN1,IN15] SEQ 30kHz(no irq)\r\n",
+        "PWM1 CH10REF -> TRGM -> ADC1[IN15,IN6,IN11,IN1,IN15] SEQ 30kHz(no irq; "
+        "5->4 slot after DIP read)\r\n",
         (unsigned)cfg->trigger_delay_ns);
     app_debug_printf(
         "[ADC] %u bit / sample_cycle=%u / 触发 = PWM1 计数（30kHz）\r\n", (unsigned)cfg->resolution,
@@ -94,8 +95,23 @@ void app_debug_adc_dump_channels(void) {
             app_debug_printf(
                 "[ADC] %-6s raw=%-5u %8.1f mV  %9.4f %s\r\n", s_ch_names[ch], (unsigned)raw,
                 (double)(app_adc_code_to_volts(raw) * 1000.0f), (double)phys, s_ch_units[ch]);
+        } else if ((ch == (uint8_t)ADC_CH_V_CANID) && app_adc_is_canid_released()) {
+            app_debug_printf("[ADC] %-6s no data (released; ID read once at boot)\r\n",
+                             s_ch_names[ch]);
         } else {
             app_debug_printf("[ADC] %-6s no data\r\n", s_ch_names[ch]);
+        }
+
+        /* NTC：温度是低频观测量（100 Hz 换算缓存），与阻值分开打印便于台架对照 */
+        if ((ch == (uint8_t)ADC_CH_NTC0) || (ch == (uint8_t)ADC_CH_NTC1)) {
+            float temp_c = 0.0f;
+
+            if (app_analog_signal_ntc_temp_c((adc_channel_t)ch, &temp_c)) {
+                app_debug_printf("[ADC] %-6s temp=%.1f C\r\n", s_ch_names[ch], (double)temp_c);
+            } else {
+                app_debug_printf("[ADC] %-6s temp=invalid (open/short/unconfigured)\r\n",
+                                 s_ch_names[ch]);
+            }
         }
     }
 }

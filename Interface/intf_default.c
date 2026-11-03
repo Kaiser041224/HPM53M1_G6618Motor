@@ -453,6 +453,21 @@ int intf_adc_clear_status(uint8_t inst)
     return adc_clear_status(inst);
 }
 
+__attribute__((weak)) int adc_get_status(uint8_t inst, uint32_t *flags)
+{
+    (void) inst;
+    (void) flags;
+    return -1;
+}
+
+int intf_adc_get_status(uint8_t inst, uint32_t *flags)
+{
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (flags == NULL)) {
+        return -1;
+    }
+    return adc_get_status(inst, flags);
+}
+
 __attribute__((weak)) int adc_get_seq_progress(uint8_t inst, uint32_t *wr_addr)
 {
     (void) inst;

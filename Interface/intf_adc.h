@@ -297,6 +297,21 @@ int intf_adc_get_seq_progress(uint8_t inst, uint32_t* wr_addr);
  */
 int intf_adc_clear_status(uint8_t inst);
 
+/** @brief 实例状态标志（与硬件寄存器位解耦） */
+#define INTF_ADC_STATUS_SEQ_COMPLETE (1UL << 0) /**< 自上次清除后，SEQ 已完成至少一帧 */
+
+/**
+ * @brief 读取实例状态标志（不清除）
+ *
+ * 用途：ADC1 无周期中断、且 SEQ_WR_ADDR 不随非 DMA 序列推进，运行期重配后需要
+ * 一个"序列真的重新跑起来"的证据。SEQ_CMPT 是硬件状态位，与 INT_EN 无关。
+ *
+ * @param inst 实例号（0/1）
+ * @param flags 输出：INTF_ADC_STATUS_* 位或
+ * @return 0 = 成功；-1 = 参数非法或实例未初始化
+ */
+int intf_adc_get_status(uint8_t inst, uint32_t* flags);
+
 /**
  * @brief 直读通道结果寄存器 PRD_RESULTx（**ISR 快速路径**，不做模式分支）
  *

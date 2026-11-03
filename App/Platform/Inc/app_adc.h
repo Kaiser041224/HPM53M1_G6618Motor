@@ -105,7 +105,7 @@ const app_adc_cfg_t* app_adc_get_config(void);
  * @brief 读取通道最新原始值（ISR 缓存）。
  * @param ch 逻辑通道
  * @param raw 输出原始码
- * @return true = 该通道已有有效数据
+ * @return true = 该通道已有有效数据；CANID 槽释放后恒为 false
  */
 bool app_adc_get_raw(adc_channel_t ch, uint16_t* raw);
 
@@ -135,10 +135,30 @@ uint32_t app_adc_get_vbus_fast_stale_count(void);
 
 /**
  * @brief 慢速通道采样（建议 1kHz 调用）。
- *        覆盖 V_VBUS / NTC0 / NTC1 / V_CANID：直接读取 ADC1 序列转换的
- *        PRD_RESULTx（与电流同源硬件触发 = pwm_freq，每轮 5 项），写入 raw 缓存。
+ *        上电覆盖 V_VBUS / NTC0 / NTC1 / V_CANID 四项；`app_adc_canid_release()`
+ *        之后降为三项（CANID 不再读取）。直接读取 ADC1 序列转换的 PRD_RESULTx
+ *        （与电流同源硬件触发 = pwm_freq），写入 raw 缓存。
  */
 void app_adc_slow_process(void);
+
+/**
+ * @brief 释放 CANID 采样槽（5 槽 → 4 槽），幂等
+ *
+ * 上电读完 DIP 节点号后调用一次。重新初始化 ADC1 SEQ 为
+ * `[V_VBUS, NTC0, NTC1, V_VBUS]`，并把慢速通道读取项从 4 降为 3。
+ *
+ * 失败即回退 5 槽（保持冻结配置），调用方应回退 YAML 节点号：
+ *   - ADC1 尚未产出 CANID 结果；
+ *   - 4 槽重配失败；
+ *   - 重配后 2 ms 内没有 SEQ 完成标志（序列未重新跑起来）；
+ *   - VBUS 结果仍为全 0/全 1。
+ *
+ * @return 0 = 已释放；-1 = 保留 5 槽
+ */
+int app_adc_canid_release(void);
+
+/** @brief CANID 槽是否已释放（诊断） */
+bool app_adc_is_canid_released(void);
 
 /**
  * @brief 重装指定通道的 WDOG 中断（故障清除后调用）

@@ -10,6 +10,8 @@
  *      sample_rate_hz 与实际调用频率不一致）；
  *   ③ 快通道调用不得污染 1kHz 路径（监控/故障/辨识仍读 1kHz 缓存）；
  *   ④ 快通道无首帧时返回 NAN（调用方回退 1kHz 缓存）。
+ *   ⑤ NTC 阻值 → 温度：B 参数法、有效区间、参数未配置拒绝换算；
+ *   ⑥ 温度缓存：约 100 Hz 换算节拍（1 kHz 慢任务 / 10），允许陈旧上报。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -147,4 +149,71 @@ void test_analog_vbus_fast_unavailable(void) {
     mock_set_fast_vbus(0U, 7U); /* 序号不变（陈旧） */
     float y2 = app_analog_signal_vbus_fast();
     CHECK_NEAR(y2, y1, 1e-6f); /* 未被 0 输入拖走 */
+}
+
+/* ⑤ NTC 温度换算：B 参数法 + 有效区间（100 Ω, 1 MΩ）
+ *
+ * 当前装配占位：R25 = 100 kΩ、B = 3950 K、上拉 = 10 kΩ。
+ * 后续硬件会把上拉统一为 100 kΩ，MOS 与定子 NTC 同规格。 */
+void test_analog_ntc_temp_from_ohm(void) {
+    float t = 0.0f;
+
+    /* R = R25 → 25 ℃ */
+    CHECK(app_analog_signal_ntc_temp_from_ohm(100000.0f, 100000.0f, 3950.0f, &t));
+    CHECK_NEAR(t, 25.0f, 0.2f);
+
+    /* R = R25/10 → 1/(1/298.15 + ln(0.1)/3950) - 273.15 ≈ 87.72 ℃ */
+    CHECK(app_analog_signal_ntc_temp_from_ohm(10000.0f, 100000.0f, 3950.0f, &t));
+    CHECK_NEAR(t, 87.72f, 0.5f);
+
+    /* 开路替代值（= max_ohm）与短路/越界 → 无效 */
+    CHECK(!app_analog_signal_ntc_temp_from_ohm(1000000.0f, 100000.0f, 3950.0f, &t));
+    CHECK(!app_analog_signal_ntc_temp_from_ohm(100.0f, 100000.0f, 3950.0f, &t));
+    CHECK(!app_analog_signal_ntc_temp_from_ohm(0.0f, 100000.0f, 3950.0f, &t));
+
+    /* 参数未配置（占位 0）→ 无效，不得除零 */
+    CHECK(!app_analog_signal_ntc_temp_from_ohm(100000.0f, 0.0f, 3950.0f, &t));
+    CHECK(!app_analog_signal_ntc_temp_from_ohm(100000.0f, 100000.0f, 0.0f, &t));
+
+    /* 非有限输入：位模式构造 NaN（-ffast-math 下不能用 isnan） */
+    union {
+        float f;
+        uint32_t u;
+    } nan_in = {.u = 0x7FC00000U};
+
+    CHECK(!app_analog_signal_ntc_temp_from_ohm(nan_in.f, 100000.0f, 3950.0f, &t));
+
+    /* 输出指针可为 NULL：仅判有效 */
+    CHECK(app_analog_signal_ntc_temp_from_ohm(100000.0f, 100000.0f, 3950.0f, NULL));
+}
+
+/* ⑥ 温度缓存：约 100 Hz 换算节拍（1 kHz 慢任务 / 10），允许陈旧上报 */
+void test_analog_ntc_temp_cached(void) {
+    analog_suite_init();
+
+    float t = 0.0f;
+
+    /* 10 kΩ 上拉 + 100 kΩ NTC：R = 100 kΩ → raw ≈ 59578（V ≈ 3.0 V） */
+    mock_set_slow_raw(ADC_CH_NTC0, 59578U);
+    mock_set_slow_raw(ADC_CH_NTC1, 65535U); /* 开路 → 无效 */
+    app_analog_signal_process();
+
+    CHECK(app_analog_signal_ntc_temp_c(ADC_CH_NTC0, &t));
+    CHECK_NEAR(t, 25.0f, 0.5f);
+    CHECK(!app_analog_signal_ntc_temp_c(ADC_CH_NTC1, &t));
+    CHECK(!app_analog_signal_ntc_temp_c(ADC_CH_I_U, &t));
+    CHECK(!app_analog_signal_ntc_temp_c(ADC_CH_NTC0, NULL));
+
+    /* 100 Hz 节拍：其后 9 拍保持旧值，第 10 拍才更新 */
+    mock_set_slow_raw(ADC_CH_NTC0, 32768U); /* R ≈ 10 kΩ → ≈ 87.7 ℃ */
+
+    for (uint32_t i = 0U; i < 9U; i++) {
+        app_analog_signal_process();
+    }
+    CHECK(app_analog_signal_ntc_temp_c(ADC_CH_NTC0, &t));
+    CHECK_NEAR(t, 25.0f, 0.5f);
+
+    app_analog_signal_process();
+    CHECK(app_analog_signal_ntc_temp_c(ADC_CH_NTC0, &t));
+    CHECK_NEAR(t, 87.72f, 1.0f);
 }

@@ -86,6 +86,16 @@ static float s_zero_volts[APP_ANALOG_CURRENT_COUNT];
 static float s_phys_values[ADC_CH_COUNT];
 static bool s_valid;
 
+/* NTC 温度（低频观测量）：1 kHz 慢任务 / 10 = 100 Hz 换算一次。
+ * 回报帧允许发送相对陈旧的换算值（≤10 ms），不要为此提高 logf 调用频率。 */
+#define APP_ANALOG_NTC_TEMP_PERIOD_TICKS (10U)
+#define APP_ANALOG_NTC_R_MIN_OHM         (100.0f)
+#define APP_ANALOG_NTC_R_MAX_OHM         (1.0e6f)
+
+static float s_ntc_temp_c[ADC_CH_COUNT];
+static bool s_ntc_temp_valid[ADC_CH_COUNT];
+static uint8_t s_ntc_temp_divider;
+
 /* ============================================================================
  * 换算
  * ============================================================================ */
@@ -107,6 +117,57 @@ static float ntc_resistance_from_volts(float volts) {
         return app_hardware_params_current()->ntc.max_ohm;
     }
     return app_hardware_params_current()->ntc.pullup_ohm * volts / (vref_volts - volts);
+}
+
+/**
+ * @brief 位模式有限性判定
+ *
+ * -ffast-math 隐含 -ffinite-math-only，isnan()/isfinite() 会被常量折叠，
+ * 因此与 foc_finite 同法用位运算判定。
+ */
+static bool analog_float_finite(float x) {
+    union {
+        float f;
+        uint32_t u;
+    } pun = {.f = x};
+
+    return (pun.u & 0x7F800000U) != 0x7F800000U;
+}
+
+bool app_analog_signal_ntc_temp_from_ohm(float r_ohm, float r25_ohm, float b_value_k,
+                                         float* temp_c) {
+    float temp_k;
+
+    if (!analog_float_finite(r_ohm) || !analog_float_finite(r25_ohm)
+        || !analog_float_finite(b_value_k)) {
+        return false;
+    }
+    if ((r25_ohm <= 0.0f) || (b_value_k <= 0.0f)) {
+        return false; /* 参数未配置（占位 0）：拒绝换算，不除零 */
+    }
+    if ((r_ohm <= APP_ANALOG_NTC_R_MIN_OHM) || (r_ohm >= APP_ANALOG_NTC_R_MAX_OHM)) {
+        return false; /* 短路 / 开路替代值 / 超量程 */
+    }
+
+    temp_k = 1.0f / ((1.0f / 298.15f) + (logf(r_ohm / r25_ohm) / b_value_k));
+    if (!analog_float_finite(temp_k) || (temp_k <= 0.0f)) {
+        return false;
+    }
+    if (temp_c != NULL) {
+        *temp_c = temp_k - 273.15f;
+    }
+    return true;
+}
+
+bool app_analog_signal_ntc_temp_c(adc_channel_t ch, float* temp_c) {
+    if ((temp_c == NULL) || ((ch != ADC_CH_NTC0) && (ch != ADC_CH_NTC1))) {
+        return false;
+    }
+    if (!s_ntc_temp_valid[ch]) {
+        return false;
+    }
+    *temp_c = s_ntc_temp_c[ch];
+    return true;
 }
 
 /**
@@ -168,7 +229,10 @@ void app_analog_signal_init(void) {
     }
     for (uint8_t ch = 0U; ch < ADC_CH_COUNT; ch++) {
         s_phys_values[ch] = 0.0f;
+        s_ntc_temp_c[ch] = 0.0f;
+        s_ntc_temp_valid[ch] = false;
     }
+    s_ntc_temp_divider = 0U;
 
     for (uint8_t ch = 0U; ch < ADC_CH_COUNT; ch++) {
         app_analog_filter_t* filter = &s_filters[ch];
@@ -249,6 +313,25 @@ void app_analog_signal_process(void) {
         }
         s_phys_values[ch] =
             filter_step((adc_channel_t)ch, channel_to_physical((adc_channel_t)ch, raw));
+    }
+
+    /* NTC 温度：每 10 拍（100 Hz）换算一次；上电首拍立即产出首值。 */
+    if (s_ntc_temp_divider == 0U) {
+        const app_hardware_ntc_t* ntc = &app_hardware_params_current()->ntc;
+
+        for (uint8_t ch = (uint8_t)ADC_CH_NTC0; ch <= (uint8_t)ADC_CH_NTC1; ch++) {
+            float temp_c = 0.0f;
+
+            s_ntc_temp_valid[ch] = app_analog_signal_ntc_temp_from_ohm(
+                s_phys_values[ch], ntc->r25_ohm, ntc->b_value_k, &temp_c);
+            if (s_ntc_temp_valid[ch]) {
+                s_ntc_temp_c[ch] = temp_c;
+            }
+        }
+    }
+    s_ntc_temp_divider++;
+    if (s_ntc_temp_divider >= APP_ANALOG_NTC_TEMP_PERIOD_TICKS) {
+        s_ntc_temp_divider = 0U;
     }
 
     if (app_adc_is_valid()) {

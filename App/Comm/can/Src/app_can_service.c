@@ -366,11 +366,11 @@ static void can_periodic_tx(void) {
     }
 }
 
-void app_can_service_init(void) {
+void app_can_service_init(uint8_t node_id) {
     const app_software_params_t* sw = app_software_params_current();
 
-    s_node_id = sw->can.node_id_default;
-    if ((s_node_id == 0U) || (s_node_id > APP_CAN_NODE_ID_MAX)) {
+    s_node_id = node_id;
+    if (s_node_id > APP_CAN_NODE_ID_MAX) {
         s_node_id = 1U;
     }
     s_mit_format = (sw->mit.can_format != 0U) ? 1U : 0U;
@@ -392,6 +392,14 @@ void app_can_service_init(void) {
 
     app_can_set_rx_callback(can_rx_callback);
     app_can_set_rx_isr_hook(can_rx_isr_hook);
+    /* 丢弃 service 注册前积压的报文：启动早期无回调，驱动环里的陈旧帧不应在
+     * 运行期被当作命令回放（spec：早到帧无人接收属预期）。 */
+    {
+        app_can_msg_t stale;
+
+        while (app_can_receive(&stale) == 0) {
+        }
+    }
     /* 接受全部标准帧（节点过滤在软件层做，避免过滤器把调试帧一起吞掉） */
     (void)app_can_add_std_filter(0x000U, 0x000U);
     s_initialized = true;

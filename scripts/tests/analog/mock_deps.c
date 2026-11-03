@@ -99,6 +99,8 @@ void mock_hardware_reset(void) {
     s_mock_hardware.current_sense.bias_v = 1.65f;
     s_mock_hardware.vbus_sense.v_per_volt = 22.2121f;
     s_mock_hardware.ntc.pullup_ohm = 10000U;
+    s_mock_hardware.ntc.r25_ohm = 100000.0f;
+    s_mock_hardware.ntc.b_value_k = 3950.0f;
     s_mock_hardware.ntc.max_ohm = 1000000.0f;
 }
 

@@ -21,6 +21,7 @@
 
 #include "app_adc.h"
 #include "app_can.h"
+#include "app_can_id.h"
 #include "app_can_service.h"
 #include "app_debug_adc.h"
 #include "app_debug_encoder.h"
@@ -225,28 +226,62 @@ static int cmd_profiler(int argc, char** argv) {
  * 输出：节点号、看门狗（armed/suspended/fired）、总线统计、协议统计。
  * 台架排查顺序：先看 wd armed（主机是否发过控制帧）→ 再看 proto.drop/bad（帧是否被丢）
  * → 最后看 bus_off/tx 失败（物理层）。
+ *
+ * 注意：导出命令的签名必须是 `int (*)(int argc, char **argv)`（chry_syscall_func_t）。
+ * 曾误写成 `(chry_shell_t*, int, const char**)`，CherrySH 把 argc 当 csh 传入 →
+ * csh_printf 解引用 0x1xx（ILM 内）取到垃圾函数指针 → 程序跑飞。
  */
-static int cmd_can(chry_shell_t* csh, int argc, const char** argv) {
-    (void)argc;
-    (void)argv;
+static int cmd_can(int argc, char** argv) {
+    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
     app_can_service_stats_t proto;
     app_can_stats_t bus;
     intf_can_status_t st;
     bool armed = false;
     bool suspended = false;
     bool fired = false;
+    bool bus_ok;
+
+    if ((argc >= 2) && (strcmp(argv[1], "id") == 0)) {
+        uint8_t dip = app_can_id_get_boot_id();
+        uint16_t raw = app_can_id_get_boot_raw();
+
+        if (dip == APP_CAN_ID_INVALID) {
+            csh_printf(csh, "can id: dip=invalid raw=%u spread=%u\r\n", (unsigned)raw,
+                       (unsigned)app_can_id_get_boot_spread());
+        } else {
+            csh_printf(csh, "can id: dip=%u raw=%u spread=%u\r\n", (unsigned)dip, (unsigned)raw,
+                       (unsigned)app_can_id_get_boot_spread());
+        }
+        csh_printf(csh, "        adc slot: %s\r\n",
+                   app_adc_is_canid_released() ? "released (4-slot)" : "kept (5-slot)");
+        return 0;
+    }
+    if (argc >= 2) {
+        return app_terminal_cmd_usage(csh, "can [id]");
+    }
+
+    memset(&proto, 0, sizeof(proto));
+    memset(&bus, 0, sizeof(bus));
+    memset(&st, 0, sizeof(st));
 
     app_can_service_get_stats(&proto);
     (void)app_can_get_stats(&bus);
-    (void)app_can_get_status(&st);
+    bus_ok = (app_can_get_status(&st) == 0);
     app_can_service_get_watchdog(&armed, &suspended, &fired);
 
-    csh_printf(csh, "can: node=%u wd=%s susp=%u fired=%u | bus_off=%d\r\n",
+    csh_printf(csh, "can: node=%u wd=%s susp=%u fired=%u | bus_off=%s\r\n",
                (unsigned)app_can_service_get_node_id(), armed ? "armed" : "idle",
-               (unsigned)suspended, (unsigned)fired, st.bus_off);
-    csh_printf(csh, "     bus: tx_ok=%u tx_fail=%u rx=%u drop=%u\r\n",
-               (unsigned)bus.tx_ok_count, (unsigned)bus.tx_fail_count, (unsigned)bus.rx_count,
-               (unsigned)bus.rx_drop_count);
+               (unsigned)suspended, (unsigned)fired,
+               bus_ok ? (st.bus_off ? "1" : "0") : "n/a");
+    if (!bus_ok) {
+        csh_printf(csh, "     bus: not initialized\r\n");
+    } else {
+        csh_printf(csh, "     bus: tx_ok=%u tx_fail=%u rx=%u drop=%u tec=%u rec=%u ep=%u\r\n",
+                   (unsigned)bus.tx_ok_count, (unsigned)bus.tx_fail_count,
+                   (unsigned)bus.rx_count, (unsigned)bus.rx_drop_count,
+                   (unsigned)st.tx_error_count, (unsigned)st.rx_error_count,
+                   (unsigned)(st.error_passive ? 1U : 0U));
+    }
     csh_printf(csh, "     proto: rx=%u drop=%u bad=%u unk=%u fmt=%u mit(ok=%u to=%u)\r\n",
                (unsigned)proto.rx_frames, (unsigned)proto.rx_dropped, (unsigned)proto.bad_len,
                (unsigned)proto.unknown_cmd, (unsigned)proto.format_mismatch,
@@ -260,3 +295,10 @@ CSH_CMD_EXPORT_ALIAS(cmd_pwm, pwm, );
 CSH_CMD_EXPORT_ALIAS(cmd_enc, enc, );
 CSH_CMD_EXPORT_ALIAS(cmd_fault, fault, );
 CSH_CMD_EXPORT_ALIAS(cmd_profiler, profiler, );
+
+/* CherrySH 只按 `int (*)(int argc, char **argv)` 调用导出命令（chry_shell.c:500）。
+ * 签名不符时首个参数收到的是 argc（小整数），`csh_printf` 会把它当 chry_shell_t*
+ * 解引用；本板 ILM 起于 0x0，落到 0x1xx 不触发访问异常，而是读出垃圾函数指针后
+ * 跳飞。`can` 命令曾因此跑飞（2026-11-03）。此断言防止再次回归。 */
+_Static_assert(_Generic(&cmd_can, chry_syscall_func_t: 1, default: 0) == 1,
+               "exported terminal command must match chry_syscall_func_t");

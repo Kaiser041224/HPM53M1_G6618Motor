@@ -18,7 +18,7 @@ current_ff:
 
 can:
   baudrate: 1000000          # CAN 波特率 [bps]（v1 固定 1Mbps；1kHz 双向回报仅支持 1~2 节点）
-  node_id_default: 1         # 节点号（1~15）；v1 以此为准，DIP 解码后续实现
+  node_id_default: 1         # 节点号兜底（0~15）：仅 DIP 解码失败时使用；正常以 DIP 二进制为准
   # 以下两项为 CANSimple 之前的占位字段，v1 改用 (node_id << 5) | cmd_id 派生，
   # 批次 1 实施时移除（保留仅为避免本次改动触发生成器/schema 变更）。
   rx_control_id: 0x101       # [deprecated] 旧占位：接收控制帧 CAN ID

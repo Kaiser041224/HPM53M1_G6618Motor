@@ -27,6 +27,7 @@
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_can_id.h"
 #include "app_current_identify.h"
 #include "app_debug_adc.h"
 #include "app_can_service.h"
@@ -140,10 +141,9 @@ void app_init(void) {
     /* 4. UART0 自检（PA00/PA01，115200 8N1） */
     app_debug_uart_init();
 
-    /* 5. CAN 自检（MCAN3，经典 CAN）+ 控制协议服务
-     *    自检负责环回验证与外设初始化；service 接管 RX 回调/ISR 钩子/过滤器。 */
+    /* 5. CAN 自检（MCAN3，经典 CAN）。
+     *    控制协议 service 推迟到步骤 11b：节点号来自 CANID 电阻网络，必须先有 ADC 结果。 */
     app_debug_can_init();
-    app_can_service_init();
 
     /* 6. 编码器自检（双 KTH7823：SPI3 转子 / SPI1 出轴）。
      *    flash 参数区已在 0b 就绪；app_encoder_init() 内重复调用 app_param_init() 为幂等。 */
@@ -182,6 +182,39 @@ void app_init(void) {
     }
     app_analog_signal_init();
     app_debug_adc_init();
+
+    /* 11b. CAN 节点号：上电从 CANID 电阻网络读一次并解码，随后把该槽从 ADC1 序列移除。
+     *
+     * ID = 拨码二进制（S1<<2 | S2<<1 | S3），000 即节点 0；只有解码失败才回退 YAML。
+     * 采样失败/槽释放失败都只降级、不阻塞启动（CAN 仍可用，仅节点号来源不同）。 */
+    {
+        const app_software_params_t* software = app_software_params_current();
+        uint8_t dip_id = app_can_id_read();
+        uint16_t dip_raw = app_can_id_get_boot_raw();
+        uint16_t dip_spread = app_can_id_get_boot_spread();
+        uint8_t can_node = dip_id;
+        const char* can_source = "dip";
+        bool released;
+
+        if (dip_id == APP_CAN_ID_INVALID) {
+            can_node = software->can.node_id_default;
+            can_source = "yaml(fallback)";
+        }
+
+        released = (app_adc_canid_release() == 0);
+
+        app_can_service_init(can_node);
+
+        if (dip_id == APP_CAN_ID_INVALID) {
+            app_debug_printf("[CAN] DIP: raw=%u spread=%u -> invalid\r\n", (unsigned)dip_raw,
+                             (unsigned)dip_spread);
+        } else {
+            app_debug_printf("[CAN] DIP: raw=%u spread=%u -> id=%u\r\n", (unsigned)dip_raw,
+                             (unsigned)dip_spread, (unsigned)dip_id);
+        }
+        app_debug_printf("[CAN] node=%u source=%s | ADC1 %s\r\n", (unsigned)can_node, can_source,
+                         released ? "4-slot (CANID released)" : "5-slot (CANID kept)");
+    }
 
     /* 12. 电流零点标定（须在无电流状态：桥臂零矢量且未旋转） */
     if (app_analog_signal_calibrate_offsets() == 0) {
