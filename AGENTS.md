@@ -1077,7 +1077,9 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   4 力位混控、5 使能（magic `0xFC`）、6 失能（`0xFD`）、7 清故障（`0xFE`）、
   8 反馈（`0x180 | node`）。type 0/9..15 不匹配；node 0..15（DIP 二进制）。
 - **编解码**：`app_can_protocol.[ch]` 纯函数。MIT 按手册大端位打包；位置/速度/力位
-  混控用 float32 小端；线缆定标 P=12.5 / V=30 / T=10 / KP=500 / KD=5。
+  混控用 float32 小端；线缆定标 P=12.5 / V=30 / KP=500 / KD=5；**MIT t_ff 保持
+  DM 的 ±10 Nm，反馈 T 使用本电机全量程 ±200 Nm**（DM 主机读反馈转矩需把 T_MAX
+  改成 200；控制输入不受影响）。
   力位混控的 `i_des` 解码为 0..1 标幺，服务层乘 `motor.i_peak_10s_a`（24.3 A）后作为
   per-command iq 上限。
 - **策略**：`app_can_policy.[ch]`（`app_can_dm_plan`）纯函数：
@@ -1093,6 +1095,11 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   B/C（MOS/线圈过温）暂未接入：当前没有对应故障码，阈值待定，不虚构。
 - **恢复顺序**：TRIP → `0x16X` 失能（FAULT→OFF，`app_foc_request_stop` 内部直接
   disable）→ `0x17X` 清锁存 → `0x15X` 使能。
+- **MIT 能力对齐（2026-11-03）**：`mit.kp_max=100`、`kd_max=5.0`（**输入增益钳位，
+  不是输出转矩上限**）。90° 误差对应约 157 Nm，之后由电流限幅（24.3 A 连续 / 30 A boost）
+  接管。CAN 入口静默钳位，终端 `motion mit` 拒绝超限；碰撞力随 kp 提高，调试从小 kp 开始。
+  `storage: keep` 时 flash SPRM 覆盖 YAML：改完需 `param set` + `param save`（FOC OFF），
+  否则重启回到旧值。
 - **运动层新增**：`app_motion_position_limited(pos, vel_limit, torque_ff, iq_limit)`、
   `app_motion_set_angle_report_required()`、`algo_ramp_set_limits()`。
   per-command 限幅只作用于本条命令；下一条普通命令恢复 YAML 轨迹限幅（30/60）。

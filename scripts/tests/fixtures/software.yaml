@@ -74,8 +74,8 @@ control:
     travel_max_deg: 0.0
   mit:
     enable: true                      # MIT 总开关（夹具值；默认开启）
-    kp_max: 50.0                      # [Nm/rad]
-    kd_max: 2.0                       # [Nm/(rad/s)]
+    kp_max: 100.0                     # [Nm/rad]（夹具值；与产品默认一致）
+    kd_max: 5.0                       # [Nm/(rad/s)]（夹具值；与产品默认一致）
     gain_ramp_rate: 200.0             # [(Nm/rad)/s]
     pos_err_max_deg: 90.0             # [deg]
     t_ff_max_ratio: 1.0

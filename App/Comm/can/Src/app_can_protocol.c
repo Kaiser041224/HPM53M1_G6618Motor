@@ -14,7 +14,8 @@
 static const app_can_dm_scale_t s_dm_default_scale = {
     .p_max_rad = APP_CAN_DM_P_MAX_RAD,
     .v_max_rad_s = APP_CAN_DM_V_MAX_RAD_S,
-    .t_max_nm = APP_CAN_DM_T_MAX_NM,
+    .t_ff_max_nm = APP_CAN_DM_T_MAX_NM,
+    .t_fb_max_nm = APP_CAN_DM_T_FB_MAX_NM,
     .kp_max = APP_CAN_DM_KP_MAX,
     .kd_max = APP_CAN_DM_KD_MAX,
 };
@@ -143,7 +144,7 @@ int app_can_dm_decode(uint32_t id, const uint8_t* data, uint8_t len, uint8_t nod
         out->v_des_rad_s = app_can_dm_uint_to_float(v_raw, -sc->v_max_rad_s, sc->v_max_rad_s, 12U);
         out->kp = app_can_dm_uint_to_float(kp_raw, 0.0f, sc->kp_max, 12U);
         out->kd = app_can_dm_uint_to_float(kd_raw, 0.0f, sc->kd_max, 12U);
-        out->t_ff_nm = app_can_dm_uint_to_float(t_raw, -sc->t_max_nm, sc->t_max_nm, 12U);
+        out->t_ff_nm = app_can_dm_uint_to_float(t_raw, -sc->t_ff_max_nm, sc->t_ff_max_nm, 12U);
         return 0;
     }
     case APP_CAN_DM_TYPE_POS_VEL: {
@@ -225,7 +226,7 @@ uint8_t app_can_dm_encode_feedback(uint8_t* out, uint8_t node, uint8_t err, floa
     }
     pos_raw = app_can_dm_float_to_uint(pos_rad, -sc->p_max_rad, sc->p_max_rad, 16U);
     vel_raw = app_can_dm_float_to_uint(vel_rad_s, -sc->v_max_rad_s, sc->v_max_rad_s, 12U);
-    t_raw = app_can_dm_float_to_uint(torque_nm, -sc->t_max_nm, sc->t_max_nm, 12U);
+    t_raw = app_can_dm_float_to_uint(torque_nm, -sc->t_fb_max_nm, sc->t_fb_max_nm, 12U);
 
     out[0] = (uint8_t)(((err & 0x0FU) << 4) | (node & 0x0FU));
     out[1] = (uint8_t)(pos_raw >> 8);

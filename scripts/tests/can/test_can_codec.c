@@ -180,14 +180,14 @@ void test_can_dm_feedback(void) {
     CHECK(out[6] == 40U);
     CHECK(out[7] == 50U);
 
-    /* pos=1.0, vel=2.0, t=1.0 → raw 35388/2184/2252 */
+    /* pos=1.0, vel=2.0, t=1.0 → raw 35388/2184/2057（T 按反馈量程 ±200） */
     CHECK(app_can_dm_encode_feedback(out, 1U, 1U, 1.0f, 2.0f, 1.0f, 0U, 0U, NULL) == 8U);
     CHECK(out[0] == 0x11U);
     CHECK(out[1] == 0x8AU);
     CHECK(out[2] == 0x3CU);
     CHECK(out[3] == 0x88U);
     CHECK(out[4] == 0x88U);
-    CHECK(out[5] == 0xCCU);
+    CHECK(out[5] == 0x09U);
 
     /* 越界饱和 */
     CHECK(app_can_dm_encode_feedback(out, 1U, 1U, 1e9f, 1e9f, 1e9f, 0U, 0U, NULL) == 8U);
@@ -227,4 +227,25 @@ void test_can_dm_scaling(void) {
 
         CHECK_NEAR(back, values[i], (span / 65535.0f) + 1e-6f);
     }
+}
+
+/* MIT t_ff 与反馈 T 的量程分离：t_ff 保持 ±10 Nm，反馈 T 用 ±200 Nm */
+void test_can_dm_torque_scale_split(void) {
+    const uint8_t t_max[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xFF};
+    app_can_dm_frame_t f;
+    uint8_t out[8] = {0};
+
+    /* MIT t_ff 满码仍解出 +10 Nm（DM 兼容） */
+    CHECK(app_can_dm_decode(0x110U, t_max, 8U, 0U, NULL, &f) == 0);
+    CHECK_NEAR(f.t_ff_nm, 10.0f, 1e-3f);
+
+    /* 反馈 T 满量程 ±200 Nm */
+    CHECK(app_can_dm_encode_feedback(out, 0U, 1U, 0.0f, 0.0f, 200.0f, 0U, 0U, NULL) == 8U);
+    CHECK(out[4] == 0xFFU && out[5] == 0xFFU);
+    CHECK(app_can_dm_encode_feedback(out, 0U, 1U, 0.0f, 0.0f, -200.0f, 0U, 0U, NULL) == 8U);
+    CHECK(out[4] == 0xF0U && out[5] == 0x00U);
+
+    /* 142 Nm（24.3 A 连续）不再被 10 Nm 截断 */
+    CHECK(app_can_dm_encode_feedback(out, 0U, 1U, 0.0f, 0.0f, 142.0f, 0U, 0U, NULL) == 8U);
+    CHECK(out[4] == 0xFDU && out[5] == 0xADU);
 }

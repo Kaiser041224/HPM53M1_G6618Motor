@@ -1,9 +1,12 @@
 # DM 兼容 CAN 控制协议设计（运行时通道）
 
 - 状态：**已实施**（2026-11-03：编解码 / 策略 / 1kHz 服务 / 运动层支撑）
-- 实施决议：线缆定标沿用 DM 默认（12.5/30/10/500/5）；MIT 位置按最近圈映射；
-  `i_des` 分母用 `motor.i_peak_10s_a`；转矩反馈用实测 iq；B/C（过温）暂未接入
-  （无对应故障码，阈值待定）；`COMM_TIMEOUT` 出厂仍只告警（`fault.actions_enable=false`）。
+- 实施决议：位置/速度/KP/KD 沿用 DM 默认（12.5/30/500/5）；MIT t_ff 保持 DM 的 ±10 Nm，
+  **反馈 T 使用本电机全量程 ±200 Nm**（DM 主机读反馈 T 需改常量，控制输入不受影响）；
+  MIT 能力对齐：`kp_max=100`、`kd_max=5.0`，电流限幅成为唯一瓶颈；
+  MIT 位置按最近圈映射；`i_des` 分母用 `motor.i_peak_10s_a`；转矩反馈用实测 iq；
+  B/C（过温）暂未接入（无对应故障码，阈值待定）；`COMM_TIMEOUT` 出厂仍只告警
+  （`fault.actions_enable=false`）。
 - 日期：2026-11-02
 - 参考：`Doc/datasheet/DM-J8009P-2EC 减速电机说明书 V1.3 2026-09-10.pdf`
 - 范围：CAN 运行时控制报文与反馈报文；USB / UART 继续承担调试与参数整定
@@ -206,13 +209,16 @@ float uint_to_float(uint32_t x, float x_min, float x_max, uint32_t bits) {
 | :--- | :--- | :--- |
 | `P_MAX` | 12.5 | MIT p_des、反馈 POS |
 | `V_MAX` | 30.0 | MIT v_des、反馈 VEL |
-| `T_MAX` | 10.0 | MIT t_ff、反馈 T |
+| `T_MAX` | 10.0 | MIT t_ff（保持 DM 兼容） |
+| `T_FB_MAX` | 200.0 | 反馈 T（本电机全量程，覆盖 30 A→175.5 Nm） |
 | `KP_MAX` | 500.0 | MIT kp 解码 |
 | `KD_MAX` | 5.0 | MIT kd 解码 |
 
 > 这些是**线缆契约**，不是本机能力上限。本机实际限幅（`control.mit.kp_max/kd_max`、`motion_iq_max_a`、`motion_speed_limit_rad_s`）仍在 motion/FOC 层生效。
 >
-> 备选：把 `P_MAX/V_MAX/T_MAX` 调整为机械匹配值（如 8 / 8 / 100）可提高分辨率，但与 DM 主机不兼容。v1 建议保留 DM 默认值，见 §10 待确认项。
+> 备选：把 `P_MAX/V_MAX` 调整为机械匹配值可提高分辨率，但与 DM 主机不兼容。
+> 反馈 T 已使用独立量程 `T_FB_MAX=200`（见 §10 第 1 项）；MIT `t_ff` 仍保持 ±10 Nm，
+> 因此 DM 主机的控制输入不受影响。
 
 ### 3.2 MIT 模式（ID = `0x11X`，8 字节）
 
@@ -251,7 +257,9 @@ app_motion_mit(target_cont, v_des, kp, kd, t_ff);
 ```
 
 - 前提：`shaft_continuous_rad` 可信（`continuous_valid`），否则丢帧并计数。
-- `kp`/`kd` 在进入 motion 前钳到 `control.mit.kp_max/kd_max`（钳位计数，供 USB 诊断）。
+- `kp`/`kd` 在进入 motion 前钳到 `control.mit.kp_max/kd_max`（CAN 入口静默钳位；终端
+  `motion mit` 拒绝超限）。**这是输入增益钳位，不是输出转矩上限**；输出转矩仍由
+  `pos_err_max_deg`（90°）与电流限幅（24.3 A 连续 / 30 A boost）约束。
 - MIT 仍需 `control.mit.enable = true`；未开启时丢帧并计数。
 - 位置误差受 `control.mit.pos_err_max_deg`（默认 90°）限制；超出即被 motion 拒绝。需要更大行程时改用位置速度模式。
 
@@ -347,7 +355,7 @@ app_motion_position_limited(p_user, v_lim, 0.0f, iq_lim);
 ```text
 POS = float_to_uint(pos_user,   -P_MAX, +P_MAX, 16)
 VEL = float_to_uint(vel_user,   -V_MAX, +V_MAX, 12)
-T   = float_to_uint(torque_user,-T_MAX, +T_MAX, 12)
+T   = float_to_uint(torque_user,-T_FB_MAX, +T_FB_MAX, 12)
 ```
 
 ```c
@@ -364,7 +372,7 @@ uint32_t float_to_uint(float x, float min, float max, uint32_t bits) {
 | :--- | :--- | :--- |
 | 位置 | `app_motion_snapshot.shaft_rad × output_direction`，再折到 `[-π, π)` | 以 `motion zero` 为零点；未标定/`feedback_valid=0` 时置 0 且 ERR=F；**速度/力矩模式需先打开角度回报（§7.2），否则 `shaft_rad` 会冻结**。游标失配（`angle_valid=0`）只降低位置精度，不判故障 |
 | 速度 | `snapshot.speed_rad_s × output_direction` | 输出轴 rad/s |
-| 转矩 | `kt_nm_per_a × i_q_measured × reducer_ratio × output_direction` | 电流估算值，非转矩传感器；限幅 ±T_MAX |
+| 转矩 | `kt_nm_per_a × i_q_measured × reducer_ratio × output_direction` | 电流估算值，非转矩传感器；限幅 ±T_FB_MAX |
 | `T_MOS` | NTC0 换算温度 | 见 §5.3 |
 | `T_Rotor` | NTC1 换算温度 | 本板 NTC1 当前开路 → `0xFF` |
 
@@ -496,7 +504,7 @@ CAN 服务只做协议与坐标转换，以下条件仍由现有模块判定；�
 
 阈值表放在 `App/Platform/Src/app_can_id.c` 的 `static const uint16_t s_canid_thresholds[7]`（16 位 ADC 码，见 §2.3.1 最终表）；生成器不支持 YAML 数组，且该表是板级事实、不需要运行期修改。`hardware.yaml` 的 `canid_dip.levels` 改为 8 作文档。阈值未配置（全 0）时判无效并回退 YAML。
 
-线缆定标常量（P_MAX/V_MAX/T_MAX/KP_MAX/KD_MAX）为编译期常量，不入 flash；改它们需要重烧两侧。若后续需要上位机可调，再新增独立 `APP_PARAM_KEY_CAN` 记录。
+线缆定标常量（P_MAX/V_MAX/T_MAX/T_FB_MAX/KP_MAX/KD_MAX）为编译期常量，不入 flash；改它们需要重烧两侧。`T_MAX` 只用于 MIT t_ff，`T_FB_MAX` 只用于反馈 T；两者分离以保持 DM 控制输入兼容。若后续需要上位机可调，再新增独立 `APP_PARAM_KEY_CAN` 记录。
 
 ---
 
@@ -511,7 +519,7 @@ CAN 服务只做协议与坐标转换，以下条件仍由现有模块判定；�
 | MIT 位打包 | 手册公式向量；边界 0 / 满量程 / 中点；与独立实现的逐位对照 |
 | MIT 往返 | 编码 → 解码误差 ≤ 1 LSB |
 | 反馈打包 | D0 的高/低半字节、D3/D4 的 12 位拆分、负值补码 |
-| 定标饱和 | p=±P_MAX、v=±V_MAX、t=±T_MAX、越界钳位 |
+| 定标饱和 | p=±P_MAX、v=±V_MAX、t_ff=±T_MAX（MIT）、T=±T_FB_MAX（反馈）、越界钳位 |
 | 位置折返 | `-π/π` 边界、`wrap_2pi`、MIT 最近圈映射 |
 | ERR 映射 | 单码、多码优先级、无故障 0/1 |
 | 温度 | 正常 R、开路、短路、`0xFF` 哨兵 |
@@ -547,7 +555,9 @@ CAN 服务只做协议与坐标转换，以下条件仍由现有模块判定；�
 
 ## 10. 待确认项（评审重点）
 
-1. **定标范围**：沿用 DM 默认 `P_MAX/V_MAX/T_MAX = 12.5/30/10`，还是改成机械匹配值以提高分辨率？建议沿用默认（换主机不改两边）。
+1. **定标范围**：P/V/KP/KD 沿用 DM 默认 `12.5/30/500/5`；MIT `t_ff` 保持 ±10 Nm（DM 兼容），
+   **反馈 T 改为本电机全量程 ±200 Nm**（DM 主机读 T 需改常量）。若要求反馈也完全兼容 DM，
+   可改用 `0x190` 扩展帧携带全量程转矩。
 2. ~~节点号阈值表~~：已实测确认（§2.3.1，8 档，2026-11-02）。固件按该表实现；返修 R75/R76 后需重测。
 3. **模式切换**：运行中切模式采用「释放输出（零力矩、保持使能）→ 下一拍接受新模式」，是否可接受？（DM 本身可在运行中切换，本机 motion 有 `MODE_LOCKED` 限制。）
 4. **MIT 位置语义**：按单圈最短路径映射（推荐，贴近 DM），还是要绝对连续坐标？

@@ -10,7 +10,8 @@
  *        7 = 清故障（magic 0xFE） 8 = 反馈（电机→主机）
  *
  * 载荷格式按 DM 手册（大端位序、float32 小端）；线缆定标为编译期契约：
- * P_MAX=12.5 rad、V_MAX=30 rad/s、T_MAX=10 Nm、KP_MAX=500、KD_MAX=5。
+ * P_MAX=12.5 rad、V_MAX=30 rad/s、KP_MAX=500、KD_MAX=5；
+ * MIT t_ff 保持 DM 的 ±10 Nm，反馈 T 使用本电机全量程 ±200 Nm。
  * 这些是**线缆契约**，不是本机能力上限；本机限幅仍在 motion/FOC 层。
  *
  * 职责边界：本模块只做字节 ↔ 物理量转换，不读参数单例、不驱动外设、不做策略。
@@ -51,10 +52,11 @@ extern "C" {
 #define APP_CAN_DM_MAGIC_DISABLE (0xFDU)
 #define APP_CAN_DM_MAGIC_CLEAR   (0xFEU)
 
-/** @brief 线缆定标（与 DM 手册一致） */
+/** @brief 线缆定标：控制帧与 DM 手册一致；反馈转矩为本电机扩展量程 */
 #define APP_CAN_DM_P_MAX_RAD   (12.5f)
 #define APP_CAN_DM_V_MAX_RAD_S (30.0f)
-#define APP_CAN_DM_T_MAX_NM    (10.0f)
+#define APP_CAN_DM_T_MAX_NM    (10.0f)  /**< MIT t_ff 线缆（DM 兼容） */
+#define APP_CAN_DM_T_FB_MAX_NM (200.0f) /**< 反馈 T 线缆（覆盖 30 A→175.5 Nm，留裕量） */
 #define APP_CAN_DM_KP_MAX      (500.0f)
 #define APP_CAN_DM_KD_MAX      (5.0f)
 
@@ -90,11 +92,18 @@ typedef struct {
     float iq_ratio;           /**< 力位混控电流标幺 [0,1]（乘 i_peak_10s_a 后为 A） */
 } app_can_dm_frame_t;
 
-/** @brief 线缆定标集合（便于主机测试用不同量程） */
+/**
+ * @brief 线缆定标集合（便于主机测试用不同量程）
+ *
+ * t_ff_max_nm 与 t_fb_max_nm 刻意分离：MIT 前馈保持 DM 的 ±10 Nm，
+ * 反馈 T 用本电机全量程 ±200 Nm。这样 DM 主机的 MIT 控制输入仍兼容，
+ * 只有读取反馈转矩的主机需要改常量。
+ */
 typedef struct {
     float p_max_rad;   /**< 位置半量程 [rad] */
     float v_max_rad_s; /**< 速度半量程 [rad/s] */
-    float t_max_nm;    /**< 力矩半量程 [Nm] */
+    float t_ff_max_nm; /**< MIT 前馈半量程 [Nm] */
+    float t_fb_max_nm; /**< 反馈转矩半量程 [Nm] */
     float kp_max;      /**< Kp 满量程 [Nm/rad] */
     float kd_max;      /**< Kd 满量程 [Nm/(rad/s)] */
 } app_can_dm_scale_t;
@@ -136,6 +145,7 @@ int app_can_dm_decode(uint32_t id, const uint8_t* data, uint8_t len, uint8_t nod
  *
  * D0=(ERR<<4)|node；POS 16 位；VEL 12 位；T 12 位；D6=T_MOS；D7=T_Rotor。
  * POS/VEL/T 按线缆定标截断（不四舍五入），越界饱和。
+ * 反馈 T 使用 `scale->t_fb_max_nm`（默认 ±200 Nm），与 MIT t_ff 的 ±10 Nm 分离。
  *
  * @return 8（固定长度）；参数非法返回 0
  */

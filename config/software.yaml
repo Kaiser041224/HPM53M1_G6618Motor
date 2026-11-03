@@ -92,10 +92,10 @@ control:
   # —— MIT 阻抗控制（位置/速度/阻抗五元组；模式进入时校验，live）——
   mit:
     enable: true                      # true = 允许进入 MIT 模式（默认开启）；false = 禁用 MIT
-    kp_max: 50.0                      # [Nm/rad] 轴端 Kp 上限
-    kd_max: 2.0                       # [Nm/(rad/s)] 轴端 Kd 上限；仅靠 observer 速度，保守取值
+    kp_max: 100.0                     # [Nm/rad] MIT 输入 Kp 钳位（非输出转矩上限）；live，flash SPRM 会覆盖 YAML
+    kd_max: 5.0                       # [Nm/(rad/s)] MIT 输入 Kd 钳位（=线缆满量程）；live
     gain_ramp_rate: 200.0             # [(Nm/rad)/s] 增益逼近速率，防主机突跳 kp
-    pos_err_max_deg: 90.0             # [deg] 位置误差上限；超过则拒绝命令
+    pos_err_max_deg: 90.0             # [deg] MIT 位置误差钳位；与电流限幅共同决定输出转矩
     t_ff_max_ratio: 1.0               # 前馈力矩占力矩上限的比例 (0,1]
     can_format: compact               # [reserved] DM 协议固定单帧 MIT；保留字段以维持 SPRM 布局
     friction_ff_en: false             # true = MIT 下叠加摩擦前馈（默认关）

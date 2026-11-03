@@ -8,7 +8,7 @@
 | 字节序 | MIT 为手册大端位域；其余多字节数值为**小端**（float32 IEEE754 / uint16） |
 | 坐标 | **输出轴（减速器后）** 用户坐标，正方向由 `software.motion.output_direction` 定义 |
 | 反馈 | **问询式**：每收到一条通过校验的本电机帧回一帧；无周期主动上报 |
-| 兼容性 | 载荷格式兼容 DM-J8009P-2EC 手册；**ID 分配为本电机的优化方案**（§1.2） |
+| 兼容性 | 控制帧载荷兼容 DM-J8009P-2EC 手册；**反馈 T 为本电机扩展量程 ±200 Nm**（§1.4） |
 
 ---
 
@@ -46,6 +46,15 @@ id = 0x100 | (type << 4) | node          // 0x110 .. 0x18F
 - 反馈在命令执行后立即组帧发送，因此运动类命令的**首帧反馈**通常仍是执行瞬间的旧状态；
   本文 §10 的“预期反馈”给的是**稳态**值。
 - 必须有第二节点/适配器提供 ACK；单节点无对端时发送失败计数会增长，属正常。
+
+### 1.4 与 DM 主机的兼容性
+
+- **控制帧**（MIT / 位置速度 / 速度 / 力位混控 / 使能 / 失能 / 清故障）的 ID 与载荷格式
+  兼容 DM 手册，DM 主机可以直接发。
+- **反馈 T 的量程是本电机扩展的 ±200 Nm**，不是 DM 的 ±10 Nm。DM 主机读取反馈转矩时
+  必须把 `T_MAX` 改成 200，否则会把 100 Nm 读成约 5 Nm。
+- **MIT 的 `t_ff` 仍保持 DM 的 ±10 Nm**，因此 DM 主机的控制输入不受影响。
+- 位置/速度反馈仍用 DM 的 ±12.5 rad / ±30 rad/s。
 
 ---
 
@@ -97,7 +106,8 @@ id = 0x100 | (type << 4) | node          // 0x110 .. 0x18F
 
 ### 4.1 MIT 模式（`0x11N`，8 字节）
 
-线缆定标：`P_MAX=12.5 rad`、`V_MAX=30 rad/s`、`T_MAX=10 Nm`、`KP_MAX=500`、`KD_MAX=5`。
+线缆定标：`P_MAX=12.5 rad`、`V_MAX=30 rad/s`、`T_MAX=10 Nm`（MIT t_ff）、`KP_MAX=500`、`KD_MAX=5`。
+反馈 T 使用独立量程 `T_FB_MAX=200 Nm`（见 §5）。
 
 | 位 | 字段 |
 | :--- | :--- |
@@ -121,9 +131,15 @@ t_ff  = raw/4095  × 20 − 10             [Nm]
 
 - `p_des` 映射到**距当前连续角最近的一圈**，不是绝对多圈坐标。
 - 入口与每拍都要求 `|p_des − 当前连续角| ≤ 90°`（`mit.pos_err_max_deg`）；超出即拒绝。
-- `kp` / `kd` 超过本电机上限（当前 50 / 2.0）会被**钳到上限**，不拒绝。
-- 增益有斜坡：`kp` 以 200 (Nm/rad)/s 逼近，`kd` 以 8 (Nm/(rad/s))/s 逼近。
-  阶跃增益的前 0.1~0.25 s 力矩偏软属正常。
+- `kp` / `kd` 超过本电机上限（当前 **100 / 5.0**）会被**钳到上限**，不拒绝（CAN 入口）；
+  终端 `motion mit` 对超限直接拒绝。
+  > `kp_max` / `kd_max` 是 **MIT 输入增益的钳位**，不是输出转矩上限。
+  > 输出转矩另受 `pos_err_max_deg=90°`、`motion_iq_max_a=30 A`、动态 boost
+  > （24.3 A 连续 / 30 A 2 s）与 FOC 2-norm 限幅约束：
+  > 24.3 A→约 142 Nm，30 A→约 175.5 Nm。
+- 增益有斜坡：`kp` 以 200 (Nm/rad)/s 逼近，`kd` 以 10 (Nm/(rad/s))/s 逼近
+  （`200 × kd_max/kp_max`）。`kp=100`、`kd=5` 约 0.5 s 到满值；
+  阶跃增益的前 0.5 s 力矩偏软属正常。
 - `t_ff` 受力矩上限约束（当前比例 1.0）。
 - MIT 默认开启（`software.control.mit.enable: true`）；如需禁用：
   `param set software.control.mit.enable 0`。
@@ -182,11 +198,12 @@ t_ff  = raw/4095  × 20 − 10             [Nm]
 ```text
 pos_rad   = POS_raw/65535 × 25 − 12.5     // 输出轴单圈 [-π, π) 落在 ±12.5 码域内
 vel_rad_s = VEL_raw/4095  × 60 − 30
-torque_nm = T_raw/4095    × 20 − 10       // kt × 实测 iq × 减速比，非转矩传感器
+torque_nm = T_raw/4095    × 400 − 200     // kt × 实测 iq × 减速比，非转矩传感器
 ```
 
 - POS 分辨率 0.38 mrad/LSB；本电机只用 `[-π, π)` 段（约 26% 码值）。
-- 转矩是按 `kt × 实测 iq × reducer` 的估算值，`±10 Nm` 截断。
+- 转矩是按 `kt × 实测 iq × reducer` 的估算值，按 **±200 Nm** 编码（0.098 Nm/LSB）；
+  这是本电机的反馈量程，**与 DM 的 ±10 Nm 不同**（见 §1.4）。
 - 温度：`0xFF` = 无效/未接；不要把 0xFF 当温度值。
   NTC0 = MOS/功率级，NTC1 = 定子（当前硬件开路，恒为 0xFF）。
 - 未标定或反馈无效时 POS/VEL/T 置 0，ERR=F。
@@ -229,7 +246,8 @@ torque_nm = T_raw/4095    × 20 − 10       // kt × 实测 iq × 减速比，�
 - FOC 非 READY/RUN；
 - 未标定 / 连续角不可信 / 反馈过期；
 - 位置模式未配置轨迹或增益；
-- MIT 未启用、增益/位置误差入口超限；
+- MIT 未启用、位置误差入口超过 `mit.pos_err_max_deg`（`kp/kd` 在 CAN 入口已钳位，
+  不会因增益超限被拒）；
 - 行程保护（单次 3600° / 绝对 36000° / 可选软限位）。
 
 ### 6.3 通信看门狗
@@ -254,17 +272,30 @@ torque_nm = T_raw/4095    × 20 − 10       // kt × 实测 iq × 减速比，�
 | :--- | :--- | :--- |
 | 位置 | ±12.5 rad | 单圈 `[-π, π)` |
 | 速度 | ±30 rad/s | `motion_speed_limit_rad_s=0`（不限）；FOC 内部限速 0（关闭） |
-| 转矩 | ±10 Nm | `motion_iq_max_a=30 A`、连续 24.3 A、boost 30 A/2 s |
-| MIT Kp | 0..500 | ≤50（超出钳位） |
-| MIT Kd | 0..5 | ≤2.0（超出钳位） |
-| MIT 位置误差 | — | ≤90° |
+| 转矩 | MIT t_ff ±10 Nm；反馈 T ±200 Nm | `motion_iq_max_a=30 A`、连续 24.3 A、boost 30 A/2 s |
+| MIT Kp | 0..500 | ≤100（输入增益钳位；超出 CAN 静默钳位、终端拒绝） |
+| MIT Kd | 0..5 | ≤5.0（输入增益钳位；线缆满量程） |
+| MIT 位置误差 | — | ≤90°（与电流限幅共同决定输出转矩） |
 | 位置轨迹 | — | 30 rad/s、60 rad/s² |
 
 转矩估算：`T_out = kt(0.117 Nm/A) × iq × reducer(50)`；1 A iq ≈ 5.85 Nm。
 
+> **MIT 限幅口径**：`kp_max/kd_max` 只限制输入增益，不是输出转矩上限。
+> 输出转矩由 `pos_err_max_deg`（90°）+ 电流限幅（24.3 A 连续 / 30 A boost）共同决定。
+>
+> **参数持久化**：`mit.*` 是 live 参数，`param set` 立即生效；
+> `param save`（FOC OFF）写入 flash SPRM。`storage: keep` 时启动优先使用 flash 值，
+> YAML 只在无 SPRM 记录时生效——所以改完必须 `param save`，否则重启会回到旧值。
+>
+> **可设范围**：`kp_max` 的生成器上限是 **100**（`param set` 超过会拒绝）；
+> `kd_max` 的生成器上限是 20，但 CAN 的 `kd` 线缆满量程是 **5**——
+> 把 `kd_max` 设到 5 以上只对终端 `motion mit` 有意义，对 CAN 输入不会生效。
+
 ---
 
 ## 8. 终端诊断
+
+> 终端命令的完整说明见 [usb-terminal_v0.1.md](usb-terminal_v0.1.md)。
 
 ```text
 can            # node / wd / bus(tec,rec,ep) / dm rx,drop,bad,foreign,switch,rej,txf
@@ -374,7 +405,7 @@ p=0.5 / v=5 / i=0     0x140：00 00 00 3F F4 01 00 00
 | 5 | `0x140：00 00 00 3F F4 01 E8 03` | `0x180：10 85 1E 7F F7 FF 28 FF` | 力位混控 0.5 rad；空载时 T≈0，带载时 T 随负载 |
 | 6 | `0x110：7F FF 7F F0 51 19 97 FF` | `0x180：10 7F FF 7F F7 FF 28 FF` | MIT 保持 0（kp=10 kd=0.5），静止 |
 | 7 | `0x110：85 1E 7F F0 A3 33 37 FF` | `0x180：10 85 1E 7F F7 FF 28 FF` | MIT 移到 0.5 rad（kp=20 kd=1.0），到达后 |
-| 8 | `0x110：7F FF 7F F0 51 19 98 65` | `0x180：10 80 82 7F F8 65 28 FF` | MIT 保持 0 +0.5 Nm；稳态位置误差 ≈0.05 rad，T≈0.5 Nm |
+| 8 | `0x110：7F FF 7F F0 51 19 98 65` | `0x180：10 80 82 7F F8 04 28 FF` | MIT 保持 0 +0.5 Nm；稳态位置误差 ≈0.05 rad，T≈0.5 Nm |
 | 9 | `0x160：FD 00 00 00 00 00 00 00` | `0x180：00 85 1E 7F F7 FF 28 FF` | 软停完成，FOC OFF，停在 0.5 rad |
 | 10 | `0x170：FE 00 00 00 00 00 00 00` | `0x180：00 85 1E 7F F7 FF 28 FF` | OFF 且无故障，清锁存后状态不变 |
 | 11 | 故障注入（过流） | `0x180：A0 7F FF 7F F7 FF 28 FF` | ERR=A；位置为故障时所在位置 |
@@ -385,7 +416,7 @@ p=0.5 / v=5 / i=0     0x140：00 00 00 3F F4 01 00 00
   速度稳态为 `84`（≈1.0 rad/s）。
 - 第 5 条：力位混控的转矩反馈取决于实际负载；空载/水平台架通常接近 0。
 - 第 8 条：`kp=10`、`t_ff=0.5 Nm` 时稳态误差 `e=t_ff/kp=0.05 rad`；
-  `80 82` 对应 pos≈0.05 rad，`65` 对应 T≈0.5 Nm。
+  `80 82` 对应 pos≈0.05 rad，`04` 对应 T≈0.5 Nm（反馈 T 量程 ±200）。
 - 第 9 条：软停需要数百 ms；主机需持续发帧才能看到 ERR 从 1 变 0。
 - 第 11 条：故障后位置/速度/转矩仍按当前快照上报；若反馈无效则置 0 且 ERR=F。
 
@@ -402,49 +433,192 @@ p=0.5 / v=5 / i=0     0x140：00 00 00 3F F4 01 00 00
 
 ---
 
-## 11. 编解码参考（Python）
+## 11. 编解码参考（C++17）
 
-```python
-import struct
+以下代码只依赖标准库，字节拼接不依赖主机字节序，主机侧可直接复用。
 
-P_MAX, V_MAX, T_MAX, KP_MAX, KD_MAX = 12.5, 30.0, 10.0, 500.0, 5.0
+```cpp
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 
-def mit_encode(p, v, kp, kd, t):
-    pr = int((p + P_MAX) * 65535 / (2 * P_MAX))
-    vr = int((v + V_MAX) * 4095 / (2 * V_MAX))
-    kr = int(kp * 4095 / KP_MAX)
-    dr = int(kd * 4095 / KD_MAX)
-    tr = int((t + T_MAX) * 4095 / (2 * T_MAX))
-    return bytes([
-        pr >> 8, pr & 0xFF,
-        vr >> 4, ((vr & 0xF) << 4) | (kr >> 8),
-        kr & 0xFF, dr >> 4, ((dr & 0xF) << 4) | (tr >> 8), tr & 0xFF,
-    ])
+namespace dm_can {
 
-def feedback_encode(err, node, pos, vel, tq, t_mos=0xFF, t_rotor=0xFF):
-    pr = int((pos + P_MAX) * 65535 / (2 * P_MAX))
-    vr = int((vel + V_MAX) * 4095 / (2 * V_MAX))
-    tr = int((tq + T_MAX) * 4095 / (2 * T_MAX))
-    return bytes([
-        ((err & 0xF) << 4) | (node & 0xF),
-        pr >> 8, pr & 0xFF,
-        vr >> 4, ((vr & 0xF) << 4) | (tr >> 8), tr & 0xFF,
-        t_mos, t_rotor,
-    ])
+constexpr float kPMax   = 12.5f;
+constexpr float kVMax   = 30.0f;
+constexpr float kTFFMax = 10.0f;  // MIT t_ff
+constexpr float kTFbMax = 200.0f; // 反馈 T
+constexpr float kKpMax  = 500.0f;
+constexpr float kKdMax  = 5.0f;
 
-def feedback_decode(d):
-    err = d[0] >> 4
-    pos = (((d[1] << 8) | d[2]) / 65535 * 25) - 12.5
-    vel = (((d[3] << 4) | (d[4] >> 4)) / 4095 * 60) - 30
-    tq  = ((((d[4] & 0xF) << 8) | d[5]) / 4095 * 20) - 10
-    return err, pos, vel, tq, d[6], d[7]
+using Bytes8 = std::array<std::uint8_t, 8>;
 
-def pos_vel_encode(p, v):
-    return struct.pack("<ff", p, v)
+inline void put_f32_le(Bytes8& out, std::size_t off, float v) {
+    std::uint32_t u;
+    std::memcpy(&u, &v, sizeof(u));
+    out[off + 0] = static_cast<std::uint8_t>(u);
+    out[off + 1] = static_cast<std::uint8_t>(u >> 8);
+    out[off + 2] = static_cast<std::uint8_t>(u >> 16);
+    out[off + 3] = static_cast<std::uint8_t>(u >> 24);
+}
 
-def force_pos_encode(p, v, i_ratio):
-    return struct.pack("<fHH", p, int(v * 100), int(i_ratio * 10000))
+inline float get_f32_le(const Bytes8& in, std::size_t off) {
+    const std::uint32_t u = static_cast<std::uint32_t>(in[off])
+                          | (static_cast<std::uint32_t>(in[off + 1]) << 8)
+                          | (static_cast<std::uint32_t>(in[off + 2]) << 16)
+                          | (static_cast<std::uint32_t>(in[off + 3]) << 24);
+    float v;
+    std::memcpy(&v, &u, sizeof(v));
+    return v;
+}
+
+inline void put_u16_le(Bytes8& out, std::size_t off, std::uint16_t v) {
+    out[off]     = static_cast<std::uint8_t>(v);
+    out[off + 1] = static_cast<std::uint8_t>(v >> 8);
+}
+
+inline std::uint32_t float_to_uint(float x, float lo, float hi, unsigned bits) {
+    const std::uint32_t max_raw = (1u << bits) - 1u;
+    if (!(x > lo)) return 0;          // 含 NaN
+    if (x >= hi) return max_raw;
+    return static_cast<std::uint32_t>((x - lo) * static_cast<float>(max_raw) / (hi - lo));
+}
+
+inline float uint_to_float(std::uint32_t raw, float lo, float hi, unsigned bits) {
+    const std::uint32_t max_raw = (1u << bits) - 1u;
+    return static_cast<float>(raw) * (hi - lo) / static_cast<float>(max_raw) + lo;
+}
+
+// MIT：p [rad]、v [rad/s]、kp [Nm/rad]、kd [Nm/(rad/s)]、t_ff [Nm]
+inline Bytes8 mit_encode(float p, float v, float kp, float kd, float t_ff) {
+    const auto pr = float_to_uint(p, -kPMax, kPMax, 16);
+    const auto vr = float_to_uint(v, -kVMax, kVMax, 12);
+    const auto kr = float_to_uint(kp, 0.0f, kKpMax, 12);
+    const auto dr = float_to_uint(kd, 0.0f, kKdMax, 12);
+    const auto tr = float_to_uint(t_ff, -kTFFMax, kTFFMax, 12);
+
+    return {
+        static_cast<std::uint8_t>(pr >> 8),
+        static_cast<std::uint8_t>(pr),
+        static_cast<std::uint8_t>(vr >> 4),
+        static_cast<std::uint8_t>(((vr & 0x0Fu) << 4) | (kr >> 8)),
+        static_cast<std::uint8_t>(kr),
+        static_cast<std::uint8_t>(dr >> 4),
+        static_cast<std::uint8_t>(((dr & 0x0Fu) << 4) | (tr >> 8)),
+        static_cast<std::uint8_t>(tr),
+    };
+}
+
+// 反馈编码（主机侧自测/模拟电机用）
+inline Bytes8 feedback_encode(std::uint8_t err, std::uint8_t node, float pos, float vel,
+                              float torque, std::uint8_t t_mos = 0xFF,
+                              std::uint8_t t_rotor = 0xFF) {
+    const auto pr = float_to_uint(pos, -kPMax, kPMax, 16);
+    const auto vr = float_to_uint(vel, -kVMax, kVMax, 12);
+    const auto tr = float_to_uint(torque, -kTFbMax, kTFbMax, 12);
+
+    return {
+        static_cast<std::uint8_t>(((err & 0x0Fu) << 4) | (node & 0x0Fu)),
+        static_cast<std::uint8_t>(pr >> 8),
+        static_cast<std::uint8_t>(pr),
+        static_cast<std::uint8_t>(vr >> 4),
+        static_cast<std::uint8_t>(((vr & 0x0Fu) << 4) | (tr >> 8)),
+        static_cast<std::uint8_t>(tr),
+        t_mos,
+        t_rotor,
+    };
+}
+
+struct Feedback {
+    std::uint8_t err;
+    float pos_rad;
+    float vel_rad_s;
+    float torque_nm;
+    std::uint8_t t_mos_c;
+    std::uint8_t t_rotor_c;
+};
+
+inline Feedback feedback_decode(const Bytes8& d) {
+    const std::uint32_t pr = (static_cast<std::uint32_t>(d[1]) << 8) | d[2];
+    const std::uint32_t vr = (static_cast<std::uint32_t>(d[3]) << 4) | (d[4] >> 4);
+    const std::uint32_t tr = (static_cast<std::uint32_t>(d[4] & 0x0Fu) << 8) | d[5];
+
+    return {
+        static_cast<std::uint8_t>(d[0] >> 4),
+        uint_to_float(pr, -kPMax, kPMax, 16),
+        uint_to_float(vr, -kVMax, kVMax, 12),
+        uint_to_float(tr, -kTFbMax, kTFbMax, 12),
+        d[6],
+        d[7],
+    };
+}
+
+// 位置速度：p [rad] + v_max [rad/s]
+inline Bytes8 pos_vel_encode(float p, float v) {
+    Bytes8 out{};
+    put_f32_le(out, 0, p);
+    put_f32_le(out, 4, v);
+    return out;
+}
+
+struct PosVel {
+    float p_rad;
+    float v_rad_s;
+};
+
+inline PosVel pos_vel_decode(const Bytes8& d) {
+    return {get_f32_le(d, 0), get_f32_le(d, 4)};
+}
+
+// 速度：v [rad/s]（只占 D0..D3）
+inline Bytes8 velocity_encode(float v) {
+    Bytes8 out{};
+    put_f32_le(out, 0, v);
+    return out;
+}
+
+// 力位混控：p [rad] + v [rad/s] + i_ratio [0,1]
+inline Bytes8 force_pos_encode(float p, float v_rad_s, float i_ratio) {
+    Bytes8 out{};
+    put_f32_le(out, 0, p);
+    put_u16_le(out, 4, static_cast<std::uint16_t>(v_rad_s * 100.0f));
+    put_u16_le(out, 6, static_cast<std::uint16_t>(i_ratio * 10000.0f));
+    return out;
+}
+
+} // namespace dm_can
 ```
+
+### 11.1 使用示例
+
+> 示意代码：`can_write()` / `printf()` 省略，实际调用换成你的 CAN 驱动接口。
+
+```cpp
+const std::uint8_t node = 0;
+dm_can::Bytes8 data;
+
+// 使能：0x150，D0=0xFC
+data = {};
+data[0] = 0xFC;
+// can_write(0x150u | node, data);
+
+// 速度 +1 rad/s：0x130
+// can_write(0x130u | node, dm_can::velocity_encode(1.0f));
+
+// 位置 0.5 rad / 最大 5 rad/s：0x120
+// can_write(0x120u | node, dm_can::pos_vel_encode(0.5f, 5.0f));
+
+// MIT：p=0.5, v=0, kp=20, kd=1.0, t_ff=0：0x110
+// can_write(0x110u | node, dm_can::mit_encode(0.5f, 0.0f, 20.0f, 1.0f, 0.0f));
+
+// 反馈解码（0x180 | node 收到的 8 字节）
+// dm_can::Feedback fb = dm_can::feedback_decode(rx);
+// printf("err=%X pos=%.3f vel=%.3f tq=%.3f Tmos=%u\n",
+//        fb.err, fb.pos_rad, fb.vel_rad_s, fb.torque_nm, fb.t_mos_c);
+```
+
+> MIT `t_ff` 用 `kTFFMax=10`，反馈 T 用 `kTFbMax=200`。
 
 ---
 
@@ -460,3 +634,5 @@ def force_pos_encode(p, v, i_ratio):
 8. **CAN 参数读写/标定/升级不做**：这些走 USB 终端。
 9. **输出编码器持续故障的代价**：位置反馈需要输出 pair；持续故障会使反馈 ERR=F，
    并可能拒绝运动命令。
+10. **反馈 T 刻度 ±200 Nm**：与 DM 的 ±10 Nm 不同；DM 主机读取反馈转矩需改常量，
+    控制输入（MIT t_ff 仍 ±10 Nm）不受影响。

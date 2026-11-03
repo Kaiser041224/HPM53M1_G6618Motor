@@ -16,6 +16,7 @@ void test_can_dm_control_float(void);
 void test_can_dm_control_nan(void);
 void test_can_dm_status_frames(void);
 void test_can_dm_feedback(void);
+void test_can_dm_torque_scale_split(void);
 void test_can_dm_err_map(void);
 void test_can_dm_scaling(void);
 void test_can_dm_policy(void);
@@ -27,6 +28,7 @@ int main(void) {
     test_can_dm_control_nan();
     test_can_dm_status_frames();
     test_can_dm_feedback();
+    test_can_dm_torque_scale_split();
     test_can_dm_err_map();
     test_can_dm_scaling();
     test_can_dm_policy();
