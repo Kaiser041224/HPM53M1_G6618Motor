@@ -214,8 +214,10 @@ static uint16_t proto_encode_value(const param_meta_t *meta, uint8_t *out) {
 /**
  * @brief 编码 STATUS_GET 应答体（布局见 motor_proto.h）
  *
- * freq_hz 取电流环快照的电角速度换算；mod_pct 取电压圆利用率。
- * 温度取 NTC0；换算无效时上报 0（协议没有无效哨兵）。
+ * freq_hz 仅在运行态取电流环快照的电角速度换算；停机态恒 0。
+ *   —— OFF 时角度链仍以 PLL 跟踪转子，静止下 PLL 噪声可达 ±40Hz，
+ *      直接上报会让上位机在停机时画出一条假频率曲线（台架实测）。
+ * mod_pct 取电压圆利用率；温度取 NTC0，换算无效时上报 0（协议没有无效哨兵）。
  */
 static uint16_t proto_encode_status(uint8_t *out) {
     app_foc_current_snapshot_t snap;
@@ -239,7 +241,7 @@ static uint16_t proto_encode_status(uint8_t *out) {
     pos = (uint16_t) (pos + 4U);
     out[pos++] = running ? 1U : 0U;
     out[pos++] = running ? (uint8_t) MP_MOTOR_RUN : (uint8_t) MP_MOTOR_STOP;
-    put_f32(&out[pos], snap.omega_e_rad_s / 6.28318530718f);
+    put_f32(&out[pos], running ? (snap.omega_e_rad_s / 6.28318530718f) : 0.0f);
     pos = (uint16_t) (pos + 4U);
     put_f32(&out[pos], snap.voltage_utilization * 100.0f);
     pos = (uint16_t) (pos + 4U);

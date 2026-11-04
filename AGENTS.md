@@ -1135,7 +1135,9 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   - 固件 `U8/U16` 统一上报 `MP_TYPE_U32`（线格式没有 U8/U16）；`F32` 原样；
   - **没有 BOOL 映射**：元数据不区分 YAML bool 与 0/1 整数，禁止按值域猜测；
   - `PARAM_META_APPLY_FOC_OFF` 上报为 `MP_APPLY_REBOOT`（线格式只有 live/reboot）；
-  - `STATUS_GET` 的 `freq_hz = omega_e_rad_s / 2π`（电频率），
+  - `STATUS_GET` 的 `freq_hz` 仅在运行态为 `omega_e_rad_s / 2π`（电频率），
+    **停机态恒 0**——OFF 时角度链仍在跑 PLL，静止下噪声可达 ±40Hz，直接上报会
+    让上位机画出假频率曲线（2026-11-04 台架实测）；
     `mod_pct = voltage_utilization × 100`，温度取 NTC0，换算无效时上报 0。
 - **资源**：bulk 接收环 1KB + TX 缓冲 1KB + 端点缓冲 512B 全部在 DLM；
   当前 DLM **91.94%**（余量约 10KB）。P2 遥测环不得再加进 DLM，优先 AHB。

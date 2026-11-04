@@ -124,6 +124,17 @@ static int cmd_usb(int argc, char** argv) {
                (unsigned)st.tx_timeouts, (unsigned)st.tx_drops);
     csh_printf(csh, "     rx_drops=%u byte  bus_resets=%u  xfer_errors=%u\r\n",
                (unsigned)st.rx_drops, (unsigned)st.bus_resets, (unsigned)st.xfer_errors);
+    {
+        intf_usb_bulk_stats_t bs = {0};
+
+        app_usb_bulk_get_stats(&bs);
+        csh_printf(csh, "bulk: ready=%u rx_pkts=%u tx_pkts=%u\r\n",
+                   app_usb_bulk_ready() ? 1U : 0U, (unsigned)bs.rx_packets,
+                   (unsigned)bs.tx_packets);
+        csh_printf(csh, "      rx_drops=%u byte  tx_drops=%u byte  oversize=%u  bus_resets=%u\r\n",
+                   (unsigned)bs.rx_drops, (unsigned)bs.tx_drops, (unsigned)bs.oversize,
+                   (unsigned)bs.bus_resets);
+    }
 
     return 0;
 }
