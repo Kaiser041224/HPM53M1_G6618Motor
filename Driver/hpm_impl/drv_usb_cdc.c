@@ -1,15 +1,21 @@
 /**
  * @file    drv_usb_cdc.c
- * @brief   USB CDC ACM 驱动 - HPM USB0 虚拟串口（CherryUSB 设备栈）
+ * @brief   USB 复合设备驱动 - HPM USB0（CherryUSB 设备栈：CDC ACM + WinUSB bulk）
  * @author  Kaiser
  *
  * 实现说明：
  *   - 复用 SDK 中间件 CherryUSB（middleware/cherryusb）：设备栈 + CDC ACM 类 + HPM 端口
+ *   - 接口 0：厂商自定义（WinUSB，bulk IN/OUT）—— 二进制高速通道
+ *   - 接口 1/2：CDC ACM —— Terminal 文本通道（行为与改动前一致）
+ *   - MS OS 2.0 描述符（BOS + WCID）使 Windows 10/11 免驱绑定 WinUSB，无需 Zadig
  *   - RX：OUT 端点中断回调 → SPSC 环形缓冲（+ 可选用户回调，中断上下文执行）
  *   - TX：拷贝至非缓存缓冲 → usbd_ep_start_write → 等待完成（mcycle 超时）
  *   - 板级：USB0 时钟与 PHY（内部 VBUS）由 board_init_usb() 完成；
  *     HPM53M1 的 USB_DP/USB_DM 为专用引脚（pin48/49），无 IOMUX 配置
  *   - DTR：上位机打开虚拟串口后置位，可经 intf_usb_cdc_t::is_dtr() 查询
+ *
+ * P0 阶段：bulk 通道仅做「回环自检」（OUT 收到什么就原样发回 IN），用于验证
+ *   复合设备枚举与端点通路；P1 将由二进制协议服务替换。
  *
  * 约束：单次 write ≤ USB_CDC_TX_BUF_SIZE（512B）
  * timeout_ms 语义（write）：0 = 不等待、UINT32_MAX = 无限、其他 = 毫秒
@@ -35,29 +41,75 @@
 #define USB_CDC_OUT_EP       (0x01U)
 #define USB_CDC_INT_EP       (0x83U)
 
+/* 厂商自定义（WinUSB）接口：interface 0，位于 CDC 之前 */
+#define USB_BULK_IN_EP       (0x82U)
+#define USB_BULK_OUT_EP      (0x02U)
+#define USB_BULK_MPS_HS      (512U)
+#define USB_BULK_MPS_FS      (64U)
+
 #define USB_CDC_EP_MPS       (512U)
 #define USB_CDC_TX_BUF_SIZE  (512U)
 #define USB_CDC_RX_RING_SIZE (512U) /* 必须为 2 的幂 */
 #define USB_CDC_RX_RING_MASK (USB_CDC_RX_RING_SIZE - 1U)
 
 /* ============================================================================
- * 描述符（参考 SDK 样例 cdc_acm_vcom）
+ * 描述符（参考 SDK 样例 cherryusb/demo/winusb2.0_cdc_template.c）
  * ============================================================================ */
 
-#define USB_CONFIG_SIZE (9 + CDC_ACM_DESCRIPTOR_LEN)
+/* interface 0 描述符 + 2 个 bulk 端点 */
+#define USB_VENDOR_INTF_SIZE (9 + 7 + 7)
+
+#define USB_CONFIG_SIZE     (9 + USB_VENDOR_INTF_SIZE + CDC_ACM_DESCRIPTOR_LEN)
+#define USB_CONFIG_INTF_NUM (3U) /* vendor + CDC 控制 + CDC 数据 */
+
+/* MS OS 2.0：Windows 据 WCID 自动为 interface 0 绑定 WinUSB（Win10/11 免驱） */
+#define USB_WINUSB_VENDOR_CODE (0x17U)
+
+__ALIGN_BEGIN static const uint8_t s_winusb_wcid_descriptor[] = {
+    USB_MSOSV2_COMP_ID_SET_HEADER_DESCRIPTOR_INIT(
+        10U + USB_MSOSV2_COMP_ID_FUNCTION_WINUSB_MULTI_DESCRIPTOR_LEN),
+    USB_MSOSV2_COMP_ID_FUNCTION_WINUSB_MULTI_DESCRIPTOR_INIT(0x00U),
+};
+
+__ALIGN_BEGIN static const uint8_t s_bos_descriptor_data[] = {
+    USB_BOS_HEADER_DESCRIPTOR_INIT(5U + USB_BOS_CAP_PLATFORM_WINUSB_DESCRIPTOR_LEN, 1U),
+    USB_BOS_CAP_PLATFORM_WINUSB_DESCRIPTOR_INIT(USB_WINUSB_VENDOR_CODE,
+                                                sizeof(s_winusb_wcid_descriptor)),
+};
+
+static const struct usb_msosv2_descriptor s_msosv2_descriptor = {
+    .vendor_code = USB_WINUSB_VENDOR_CODE,
+    .compat_id = s_winusb_wcid_descriptor,
+    .compat_id_len = sizeof(s_winusb_wcid_descriptor),
+};
+
+static const struct usb_bos_descriptor s_bos_descriptor = {
+    .string = s_bos_descriptor_data,
+    .string_len = sizeof(s_bos_descriptor_data),
+};
 
 static const uint8_t s_device_descriptor[] = {
-    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0100, 0x01)
+    /* bcdUSB 2.1：BOS 描述符要求 ≥ 0x0210 */
+    USB_DEVICE_DESCRIPTOR_INIT(USB_2_1, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0100, 0x01)
 };
 
 static const uint8_t s_config_descriptor_hs[] = {
-    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    CDC_ACM_DESCRIPTOR_INIT(0x00, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01, USB_CONFIG_BUS_POWERED,
+                               USBD_MAX_POWER),
+    /* Interface 0：vendor specific（WinUSB） */
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
+    CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
 };
 
 static const uint8_t s_config_descriptor_fs[] = {
-    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    CDC_ACM_DESCRIPTOR_INIT(0x00, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01, USB_CONFIG_BUS_POWERED,
+                               USBD_MAX_POWER),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
+    CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
 };
 
 static const uint8_t s_device_quality_descriptor[] = {
@@ -65,13 +117,21 @@ static const uint8_t s_device_quality_descriptor[] = {
 };
 
 static const uint8_t s_other_speed_config_descriptor_hs[] = {
-    USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    CDC_ACM_DESCRIPTOR_INIT(0x00, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
+    USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01,
+                                           USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
+    CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
 };
 
 static const uint8_t s_other_speed_config_descriptor_fs[] = {
-    USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    CDC_ACM_DESCRIPTOR_INIT(0x00, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
+    USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01,
+                                           USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
+    USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
+    CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
 };
 
 static const char *s_string_descriptors[] = {
@@ -149,12 +209,14 @@ static const char *string_descriptor_callback(uint8_t speed, uint8_t index)
     return s_string_descriptors[index];
 }
 
-static const struct usb_descriptor s_cdc_descriptor = {
+static const struct usb_descriptor s_usb_descriptor = {
     .device_descriptor_callback = device_descriptor_callback,
     .config_descriptor_callback = config_descriptor_callback,
     .device_quality_descriptor_callback = device_quality_descriptor_callback,
     .other_speed_descriptor_callback = other_speed_config_descriptor_callback,
     .string_descriptor_callback = string_descriptor_callback,
+    .msosv2_descriptor = &s_msosv2_descriptor,
+    .bos_descriptor = &s_bos_descriptor,
 };
 
 /* ============================================================================
@@ -181,6 +243,16 @@ static intf_usb_cdc_rx_cb_t s_rx_cb;
 
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_ep_out_buf[USB_CDC_EP_MPS];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_ep_in_buf[USB_CDC_TX_BUF_SIZE];
+
+/* ---- 厂商自定义接口（WinUSB bulk，P0 回环自检） ---- */
+static volatile bool s_bulk_tx_busy;
+static volatile uint32_t s_stat_bulk_rx_packets;  /**< 收到的 OUT 包数 */
+static volatile uint32_t s_stat_bulk_tx_packets;  /**< 成功排队的 IN 包数 */
+static volatile uint32_t s_stat_bulk_dropped;     /**< IN 忙或启动失败丢弃的包数 */
+static volatile uint32_t s_stat_bulk_oversize;    /**< 超 MPS 的异常包数 */
+
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_bulk_out_buf[USB_BULK_MPS_HS];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_bulk_in_buf[USB_BULK_MPS_HS];
 
 /* SPSC 环形缓冲：head 仅 ISR 写，tail 仅主循环写（RV32 上 16bit 访问原子） */
 static uint8_t s_rx_ring[USB_CDC_RX_RING_SIZE];
@@ -264,6 +336,7 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
         s_configured = false;
         s_dtr = false;
         s_tx_busy = false;
+        s_bulk_tx_busy = false;
         s_stat_bus_resets++;
         break;
     case USBD_EVENT_ERROR:
@@ -272,12 +345,16 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
         if (s_configured) {
             usbd_ep_start_read(busid, USB_CDC_OUT_EP, s_ep_out_buf,
                                usbd_get_ep_mps(busid, USB_CDC_OUT_EP));
+            usbd_ep_start_read(busid, USB_BULK_OUT_EP, s_bulk_out_buf,
+                               usbd_get_ep_mps(busid, USB_BULK_OUT_EP));
         }
         break;
     case USBD_EVENT_CONFIGURED:
         s_configured = true;
         usbd_ep_start_read(busid, USB_CDC_OUT_EP, s_ep_out_buf,
                            usbd_get_ep_mps(busid, USB_CDC_OUT_EP));
+        usbd_ep_start_read(busid, USB_BULK_OUT_EP, s_bulk_out_buf,
+                           usbd_get_ep_mps(busid, USB_BULK_OUT_EP));
         break;
     default:
         break;
@@ -314,6 +391,66 @@ void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
     s_dtr = dtr;
 }
 
+/* ---- 厂商自定义接口（WinUSB bulk，P0 回环自检） ---- */
+
+/**
+ * @brief bulk OUT 完成：P0 将收到的数据原样排队回 bulk IN
+ * @param busid 总线 ID
+ * @param ep 端点地址
+ * @param nbytes 收到的字节数
+ */
+static void usbd_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
+{
+    s_stat_bulk_rx_packets++;
+
+    if (nbytes == 0U) {
+        /* 主机的 ZLP，无需回环 */
+    } else if (nbytes > sizeof(s_bulk_in_buf)) {
+        s_stat_bulk_oversize++;
+    } else if (s_bulk_tx_busy) {
+        s_stat_bulk_dropped++; /* 主机未取走上一包：丢弃本包，不阻塞 OUT 重臂 */
+    } else {
+        memcpy(s_bulk_in_buf, s_bulk_out_buf, nbytes);
+        s_bulk_tx_busy = true;
+        if (usbd_ep_start_write(busid, USB_BULK_IN_EP, s_bulk_in_buf, nbytes) == 0) {
+            s_stat_bulk_tx_packets++;
+        } else {
+            s_bulk_tx_busy = false;
+            s_stat_bulk_dropped++;
+        }
+    }
+
+    usbd_ep_start_read(busid, ep, s_bulk_out_buf, usbd_get_ep_mps(busid, ep));
+}
+
+/**
+ * @brief bulk IN 完成：MPS 整数倍时补 ZLP
+ * @param busid 总线 ID
+ * @param ep 端点地址
+ * @param nbytes 已发送字节数
+ */
+static void usbd_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
+{
+    if (((nbytes % usbd_get_ep_mps(busid, ep)) == 0U) && (nbytes != 0U)) {
+        usbd_ep_start_write(busid, ep, NULL, 0);
+    } else {
+        s_bulk_tx_busy = false;
+    }
+}
+
+static struct usbd_endpoint s_bulk_out_ep = {
+    .ep_addr = USB_BULK_OUT_EP,
+    .ep_cb = usbd_bulk_out,
+};
+
+static struct usbd_endpoint s_bulk_in_ep = {
+    .ep_addr = USB_BULK_IN_EP,
+    .ep_cb = usbd_bulk_in,
+};
+
+/* 厂商接口无类请求处理器：仅标准请求由核心处理 */
+static struct usbd_interface s_vendor_intf;
+
 static struct usbd_endpoint s_cdc_out_ep = {
     .ep_addr = USB_CDC_OUT_EP,
     .ep_cb = usbd_cdc_acm_bulk_out,
@@ -347,6 +484,7 @@ static int hpm_usb_cdc_init(void)
     s_rx_head = 0U;
     s_rx_tail = 0U;
     s_tx_busy = false;
+    s_bulk_tx_busy = false;
     s_configured = false;
     s_dtr = false;
     s_rx_cb = NULL;
@@ -355,9 +493,14 @@ static int hpm_usb_cdc_init(void)
      * CDC ISR 抢占控制链路。 */
     intc_set_irq_priority(IRQn_USB0, 1);
 
-    usbd_desc_register(USB_CDC_BUSID, &s_cdc_descriptor);
+    /* 接口编号由 usbd_add_interface 顺序分配，必须与配置描述符顺序一致：
+     * 0 = vendor(WinUSB)，1 = CDC 控制，2 = CDC 数据 */
+    usbd_desc_register(USB_CDC_BUSID, &s_usb_descriptor);
+    usbd_add_interface(USB_CDC_BUSID, &s_vendor_intf);
     usbd_add_interface(USB_CDC_BUSID, usbd_cdc_acm_init_intf(USB_CDC_BUSID, &s_cdc_intf0));
     usbd_add_interface(USB_CDC_BUSID, usbd_cdc_acm_init_intf(USB_CDC_BUSID, &s_cdc_intf1));
+    usbd_add_endpoint(USB_CDC_BUSID, &s_bulk_out_ep);
+    usbd_add_endpoint(USB_CDC_BUSID, &s_bulk_in_ep);
     usbd_add_endpoint(USB_CDC_BUSID, &s_cdc_out_ep);
     usbd_add_endpoint(USB_CDC_BUSID, &s_cdc_in_ep);
     usbd_initialize(USB_CDC_BUSID, CONFIG_HPM_USBD_BASE, usbd_event_handler);

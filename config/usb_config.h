@@ -47,7 +47,9 @@
 
 /* descriptor common define */
 #define USBD_VID           0x34B7 /* HPMicro VID */
-#define USBD_PID           0xFFFF
+/* 复合设备专用 PID（vendor/WinUSB + CDC）。不要沿用 0xFFFF：
+ * Windows 按 VID/PID 缓存驱动绑定结果，改描述符后需要新的 PID 才会重新枚举。 */
+#define USBD_PID           0x6618
 #define USBD_MAX_POWER     200
 
 /* attribute data into no cache ram */
