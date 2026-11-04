@@ -118,6 +118,27 @@ typedef struct {
          * @return 失败次数（单调递增）
          */
         uint32_t (*get_error_count)(void);
+
+        /**
+         * @brief 启用硬件同步采样（可选能力；NULL = 不支持）
+         * @param trig 触发源（intf_spi_trig_src_t 取值，经总线驱动转发）
+         * @return 0 = 成功；-1 = 不支持/失败
+         * @note arm 后每次触发自动启动一帧"读角度"；寄存器读写不可再用
+         */
+        int (*sync_arm)(uint8_t trig);
+
+        /**
+         * @brief 取最近一次同步采样的原始位置（中断上下文，有界，无阻塞）
+         * @param raw 输出原始位置
+         * @param wait_cycles 帧仍在传输时的最长等待 [CPU cycle]
+         * @return 0 = 成功；-1 = 无新样本/超时（计入 get_error_count）
+         */
+        int (*sync_fetch)(uint16_t *raw, uint32_t wait_cycles);
+
+        /**
+         * @brief 关闭硬件同步采样
+         */
+        void (*sync_disarm)(void);
     };
 } intf_encoder_t;
 

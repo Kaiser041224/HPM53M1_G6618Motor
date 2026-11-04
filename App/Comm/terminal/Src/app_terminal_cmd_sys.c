@@ -15,10 +15,12 @@
 
 #include "app_terminal_cmd.h"
 
+#include "app_3phase_inverter.h"
 #include "app_analog_signal.h"
 #include "app_debug_encoder.h"
 #include "app_encoder.h"
 #include "app_fault.h"
+#include "app_foc.h"
 #include "app_terminal.h"
 #include "app_usb.h"
 #include "intf_sys.h"
@@ -26,7 +28,7 @@
 #include <string.h>
 
 /** 固件版本串 */
-#define APP_TERMINAL_FW_VERSION "0.1.0"
+#define APP_TERMINAL_FW_VERSION "0.1.1"
 
 /**
  * @brief 命令 ver：打印固件版本、构建时间与复位源状态。
@@ -108,14 +110,20 @@ static int cmd_status(int argc, char** argv) {
 }
 
 /**
- * @brief 命令 usb：DTR / Terminal 就绪 / TX 丢弃字节统计。
+ * @brief 命令 usb：链路统计（DTR / Terminal 就绪 / 丢弃 / TX 卡死恢复 / 总线复位）。
  */
 static int cmd_usb(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    intf_usb_cdc_stats_t st = {0};
 
-    csh_printf(
-        csh, "DTR=%u terminal ready=%u tx drop bytes=%u\r\n", app_usb_is_dtr() ? 1U : 0U,
-        app_terminal_is_ready() ? 1U : 0U, (unsigned)app_terminal_get_tx_drop_bytes());
+    app_usb_get_stats(&st);
+    csh_printf(csh, "DTR=%u terminal ready=%u tx drop bytes=%u\r\n", app_usb_is_dtr() ? 1U : 0U,
+               app_terminal_is_ready() ? 1U : 0U,
+               (unsigned)app_terminal_get_tx_drop_bytes());
+    csh_printf(csh, "cdc: tx_timeouts=%u (端点卡死强制恢复，应保持 0)  tx_drops=%u\r\n",
+               (unsigned)st.tx_timeouts, (unsigned)st.tx_drops);
+    csh_printf(csh, "     rx_drops=%u byte  bus_resets=%u  xfer_errors=%u\r\n",
+               (unsigned)st.rx_drops, (unsigned)st.bus_resets, (unsigned)st.xfer_errors);
 
     return 0;
 }
@@ -139,7 +147,53 @@ static int cmd_reboot(int argc, char** argv) {
     return 0;
 }
 
+/**
+ * @brief 命令 driver power：FOC OFF 下手动开关 +12V 栅极供电
+ */
+static int cmd_driver(int argc, char** argv) {
+    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    const char* what = (argc >= 2) ? argv[1] : NULL;
+
+    if ((what == NULL) || (strcmp(what, "power") != 0)) {
+        return app_terminal_cmd_usage(csh, "driver power [on|off]");
+    }
+    if ((argc < 3) || (strcmp(argv[2], "on") == 0) || (strcmp(argv[2], "off") == 0)) {
+        if (argc < 3) {
+            csh_printf(csh, "driver gate power: %s\r\n",
+                       app_3phase_inverter_gate_power_is_on() ? "ON" : "OFF");
+            return 0;
+        }
+    } else {
+        return app_terminal_cmd_usage(csh, "driver power [on|off]");
+    }
+
+    if (app_foc_stop_pending()) {
+        csh_printf(csh, "ERR: FOC stop pending; wait for state=OFF\r\n");
+        return -1;
+    }
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        csh_printf(csh, "ERR: driver power requires FOC OFF (use 'foc off' first)\r\n");
+        return -1;
+    }
+
+    if (strcmp(argv[2], "on") == 0) {
+        if (app_3phase_inverter_gate_power_on() != 0) {
+            csh_printf(csh, "ERR: gate power on rejected\r\n");
+            return -1;
+        }
+        csh_printf(csh, "driver gate power: ON (PWM still disabled)\r\n");
+    } else {
+        if (app_3phase_inverter_gate_power_off() != 0) {
+            csh_printf(csh, "ERR: gate power off rejected\r\n");
+            return -1;
+        }
+        csh_printf(csh, "driver gate power: OFF\r\n");
+    }
+    return 0;
+}
+
 CSH_CMD_EXPORT_ALIAS(cmd_ver, ver, );
 CSH_CMD_EXPORT_ALIAS(cmd_status, status, );
 CSH_CMD_EXPORT_ALIAS(cmd_usb, usb, );
 CSH_CMD_EXPORT_ALIAS(cmd_reboot, reboot, );
+CSH_CMD_EXPORT_ALIAS(cmd_driver, driver, );

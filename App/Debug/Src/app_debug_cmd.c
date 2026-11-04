@@ -10,7 +10,6 @@
  *   i = 打印零点与当前位置
  *   1/2/3 = 仅驱动三相半桥的 U/V/W 相（25kHz/50%，用于故障定位）
  *   a = 三相全开；0 = 三相全关（含 12V）
- *   r = 开环旋转启停（V/F）；+/- = 电频率 ±0.5Hz；m/M = 调制比 ∓/±1%
  *   d = ADC 全通道表（raw / mV / 物理量）；p = ADC 诊断（PMT 完成率等）
  *   k = 触发延时预设循环（100/250/500/1000/2000 ns）；n = 电流零点标定
  *   f = 故障保护状态（状态机/故障码/计数/快照）；F = 清除锁存
@@ -28,7 +27,7 @@
 #include "app_debug_adc.h"
 #include "app_debug_fault.h"
 #include "app_debug_inverter.h"
-#include "app_debug_motor.h"
+#include "app_foc.h"
 #include "app_debug_rtt.h"
 #include "app_encoder.h"
 
@@ -88,23 +87,23 @@ void app_debug_cmd_handle(const uint8_t* data, size_t len) {
 
         /* 三相逆变桥逐相控制（bring-up 故障定位/相序确认；先停旋转避免状态冲突） */
         case '1':
-            app_debug_motor_stop();
+            app_foc_disable();
             app_debug_inverter_set_output(0x1U); /* 仅 U */
             break;
         case '2':
-            app_debug_motor_stop();
+            app_foc_disable();
             app_debug_inverter_set_output(0x2U); /* 仅 V */
             break;
         case '3':
-            app_debug_motor_stop();
+            app_foc_disable();
             app_debug_inverter_set_output(0x4U); /* 仅 W */
             break;
         case 'a':
-            app_debug_motor_stop();
+            app_foc_disable();
             app_debug_inverter_set_output(0x7U); /* 三相全开 */
             break;
         case '0':
-            app_debug_motor_stop();              /* 安全：先停旋转（含归零矢量） */
+            app_foc_disable();                        /* 安全：先停 FOC（含归零矢量） */
             app_debug_inverter_set_output(0x0U); /* 全关（含 12V） */
             break;
 
@@ -135,13 +134,6 @@ void app_debug_cmd_handle(const uint8_t* data, size_t len) {
                 app_debug_printf("[CMD] ADC zero calibration: FAILED (no current required)\r\n");
             }
             break;
-
-        /* 开环旋转自检（V/F） */
-        case 'r': app_debug_motor_rotation_toggle(); break;
-        case '+': app_debug_motor_freq_step(1); break;
-        case '-': app_debug_motor_freq_step(-1); break;
-        case 'm': app_debug_motor_mod_step(-1); break;
-        case 'M': app_debug_motor_mod_step(1); break;
 
         default: break;
         }

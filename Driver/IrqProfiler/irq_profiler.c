@@ -25,6 +25,7 @@ volatile uint64_t g_irq_busy_cycles;
 static volatile uint8_t  s_irq_nest_depth;
 static volatile uint32_t s_irq_outer_t0;
 
+ATTR_RAMFUNC /* 25kHz ADC0 ISR 入口/出口调用：放 ILM */
 void irq_prof_nest_enter(void) {
     uint32_t mstatus = disable_global_irq(CSR_MSTATUS_MIE_MASK);
     if (s_irq_nest_depth == 0U) {
@@ -34,6 +35,7 @@ void irq_prof_nest_enter(void) {
     restore_global_irq(mstatus);
 }
 
+ATTR_RAMFUNC
 void irq_prof_nest_exit(void) {
     uint32_t mstatus = disable_global_irq(CSR_MSTATUS_MIE_MASK);
     if (s_irq_nest_depth > 0U) {

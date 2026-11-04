@@ -258,6 +258,74 @@ int intf_adc_stop(intf_adc_ch_t ch);
  * @param snapshot 输出诊断快照
  * @return 0 = 成功；-1 = 失败
  */
+/**
+ * @brief 读取实例的 SEQ 帧完成计数（每帧 SEQ_CMPT 递增，与是否启用回调无关）
+ *
+ * 用途：SEQ 与 PMT 同源触发时，PMT ISR 借此判断"本实例序列链是否存活/本帧是否已写入
+ * 结果寄存器"。PRD_RESULTx 无 VALID 位、无 cycle-bit、无序号（RO 纯结果域），
+ * 帧计数是唯一可用的新鲜度握手信号。
+ *
+ * @param inst 实例号（0 = ADC0，1 = ADC1）
+ * @param frames 输出：累计帧数
+ * @return 0 = 成功；-1 = 参数非法
+ */
+int intf_adc_get_seq_frames(uint8_t inst, uint32_t* frames);
+
+/**
+ * @brief 读实例 SEQ 硬件写指针（ADC16.SEQ_WR_ADDR，RO）
+ *
+ * 与 intf_adc_get_seq_frames 的区别：帧计数只在 SEQ 完成**中断**内递增，而 ADC1 已于
+ * 2026-10-27 去掉周期中断 → 帧计数恒不推进；本寄存器由硬件在写入序列时更新，无需中断
+ * 即可观测，因此是 ADC1 "序列链是否仍在推进"的唯一可用证据（vbus 快通道新鲜度握手）。
+ * 若该寄存器不按帧推进，`stale` 会增长并使电流环回退 1kHz —— 可见、安全，不静默。
+ *
+ * @param inst 实例号（0 = ADC0，1 = ADC1）
+ * @param wr_addr 输出：写指针当前值
+ * @return 0 = 成功；-1 = 参数非法或实例未初始化
+ */
+int intf_adc_get_seq_progress(uint8_t inst, uint32_t* wr_addr);
+
+/**
+ * @brief 清实例状态标志（INT_STS 写 1 清除）
+ *
+ * 用途：ADC1 自 2026-10-27 去掉周期完成中断后，驱动 ISR 不再清它的 INT_STS →
+ * SEQ_CMPT 等标志累积不变（实测恒 0x01800000），使该诊断行失去判别力。
+ * 由 1kHz 任务定期清一次；因 INT_EN=0，清标志不会影响任何中断行为。
+ *
+ * @param inst 实例号（0/1）
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+int intf_adc_clear_status(uint8_t inst);
+
+/** @brief 实例状态标志（与硬件寄存器位解耦） */
+#define INTF_ADC_STATUS_SEQ_COMPLETE (1UL << 0) /**< 自上次清除后，SEQ 已完成至少一帧 */
+
+/**
+ * @brief 读取实例状态标志（不清除）
+ *
+ * 用途：ADC1 无周期中断、且 SEQ_WR_ADDR 不随非 DMA 序列推进，运行期重配后需要
+ * 一个"序列真的重新跑起来"的证据。SEQ_CMPT 是硬件状态位，与 INT_EN 无关。
+ *
+ * @param inst 实例号（0/1）
+ * @param flags 输出：INTF_ADC_STATUS_* 位或
+ * @return 0 = 成功；-1 = 参数非法或实例未初始化
+ */
+int intf_adc_get_status(uint8_t inst, uint32_t* flags);
+
+/**
+ * @brief 直读通道结果寄存器 PRD_RESULTx（**ISR 快速路径**，不做模式分支）
+ *
+ * 专供 ADC0 PMT ISR 调用链（ILM 常驻）：手册 §53.2.4 —— 任意转换模式都会更新该寄存器，
+ * 因此序列转换（SEQ）结果可纯寄存器读取。与 intf_adc_read 的差别：无模式分支、
+ * 无 SDK 包装、无通道配置检查，只做边界判断 + 一次 16 位读。
+ *
+ * @param inst 实例号（0/1）
+ * @param hw_ch 硬件通道号（0..15）
+ * @param raw 输出：最近一次转换结果原始码
+ * @return 0 = 成功；-1 = 参数非法或实例未初始化
+ */
+int intf_adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t* raw);
+
 int intf_adc_get_diag_snapshot(intf_adc_diag_snapshot_t* snapshot);
 
 /**

@@ -25,6 +25,10 @@ __pycache__/
 .sisyphus/
 .mimocode/
 
+# superpowers 执行台账（scratch）
+.superpowers/
+.claude/settings.local.json
+
 # Rust (Gui host tool)
 Gui/**/target/
 Gui/.cargo/

@@ -6,31 +6,110 @@
 # 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
 # ============================================================================
 
+storage: keep               # flash 参数策略：keep=使用flash保存值；reset=SPRM/MPRM回YAML并清除FCUR；override=本次启动用YAML但不写flash；编译期值，改后需重新烧录
+
+motion:
+  output_direction: 1.0      # 出轴正方向：+1/-1；仅翻转 motion 用户坐标（位置/速度/转矩），不改 FOC/编码器方向；重启生效
+
+current_ff:
+  r_en: true                # R·I 前馈；默认开启（cal rl step 通过后生效）
+  wl_en: true               # ωL 交叉耦合前馈；默认开启
+  bemf_en: true            # bEMF（ωλ）前馈；默认开启（前馈越准，电流环越不必靠高带宽补偿）
+
 can:
-  baudrate: 1000000          # CAN 波特率 [bps]
-  node_id_default: 1         # 占位：DIP 解码未实现时的回退节点号（与 CAN ID 的派生关系待协议定稿）
-  rx_control_id: 0x101       # 接收控制帧 CAN ID（占位：待 CAN 协议定稿）
-  tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
+  baudrate: 1000000          # CAN 波特率 [bps]（v1 固定 1Mbps；1kHz 双向回报仅支持 1~2 节点）
+  can_id: 1         # 节点号兜底（0~15）：仅 DIP 解码失败时使用；正常以 DIP 二进制为准
+  # 以下两项为 CANSimple 之前的占位字段，v1 改用 (node_id << 5) | cmd_id 派生，
+  # 批次 1 实施时移除（保留仅为避免本次改动触发生成器/schema 变更）。
+  rx_control_id: 0x101       # [deprecated] 旧占位：接收控制帧 CAN ID
+  tx_report_id: 0x181        # [deprecated] 旧占位：参数回报帧 CAN ID
 
 fault:
+  actions_enable: false                    # true=启用保护动作（按逐故障 policy 表，fault policy show 可见）；false=仅警告，不改写任何输出（台架默认）。APPLY_REBOOT：改后 make artifacts + 重新烧录；运行期可用 fault protect on/off 覆盖
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）
   slow_debounce: 5                        # L2/L3 去抖次数（连续 1kHz tick）
   adc_stall_ms: 10                        # PMT 帧停滞超时 [ms]
   enc_err_delta: 3                        # 编码器错误增量阈值（每 1kHz tick 的错误计数增量）
+  comm_timeout_ms: 100                    # CAN 通信看门狗超时 [ms]（0=禁用；首帧后 arm）
   # —— 时序量：占位，待 FOC 时序体系定义后接入（当前代码使用内部宏：250 样本 / 50 tick）——
   # rms_window_samples: 250
   # settle_ticks: 50
 
 control:
-  # FOC 预留（数值待整定；当前无消费者）
+  # 齿槽/传动补偿默认启用（boot 或 cal cogging apply 后消费）
+  cogging:
+    enable: true           # true=加载到有效角表后自动打开总开关；运行期可 cogging on/off
+    rotor_enable: true      # 总开关打开时默认启用转子角表
+    output_enable: true     # 默认启用两张表；若带载表现不稳，改为 false
+    gain: 1.0               # 补偿增益 0~2；运行期可用 cogging gain 改
+  # 速度/力矩命令整形（app_motion init 期消费；0 = 直通）
+  motion_input:
+    vel_ramp_rate: 0.0        # [rad/s²] 速度目标斜坡；0=直通
+    torque_ramp_rate: 0.0     # [Nm/s] 力矩目标斜坡；0=直通
+  # FOC 电流环（V1 落地；增益 = 手册 R/L + 极点对消初值，V2 自整定更新）
   current_loop:
-    kp: 0.0                # 电流环 PID（目标带宽 1kHz）
-    ki: 0.0
+    # G66-18 KV70 星型：手册线R=0.316Ω(20℃最大)、线L=0.237mH，按相值R=0.158Ω、L=118.5µH设计
+    # （与 motor.yaml 的 rs_ohm/ls_h 同口径；下面 kp/ki 由其与带宽派生，改带宽即同步生效）。
+    # 极点对消初值：kp = Ls×ωc、ki = Rs×ωc；Ki为连续增益，算法内部乘Ts=33.3us，
+    # 不得在这里重复乘Ts。模型初值，不等于实测稳定性认证。Flash FCUR可覆盖默认值。
+    # 2026-10-30：目标带宽 2kHz → 1kHz。2kHz = fs/15 已接近 cal current 允许上限
+    # （pwm_hz/15），电流环把采样/编码器/逆变器噪声直接放大进电压指令，表现为明显的
+    # 电磁啸叫；1kHz = fs/30 仍远高于速度环（~20Hz）与 observer（500rad/s≈80Hz）带宽，
+    # 对速度/位置环动态无影响。要回激进档只改 bandwidth_rad_s。
+    # 20℃手册R；105℃时 R≈0.211Ω → ki≈1326（热态极点更靠上），cal current 可在热态重标。
+    kp: "motor.ls_h * control.current_loop.bandwidth_rad_s"   # [V/A]      ≈0.7445575
+    ki: "motor.rs_ohm * control.current_loop.bandwidth_rad_s" # [V/(A·s)]  ≈992.7433
+    bandwidth_rad_s: 6283.185307     # 目标带宽 [rad/s] = 2π×1000Hz（kp/ki 与 cal current 共用）
+    decoupling_en: false     # 解耦前馈（旧组合开关：同时打开 ωL + bEMF；V1 关闭）
+    output_delay_s: 3.3333333e-5 # 反 Park 输出延迟补偿 [s]（一拍 30kHz；0=关闭；init 期消费）
+  speed_observer:            # P0-B：30kHz 转子速度/ωe observer（FOC 与速度环共用）
+    enable: true             # true=启用；false=退回 foc_angle/差分测速（init 期消费）
+    bandwidth_rad_s: 500.0   # PLL 带宽 [rad/s]
+    max_speed_rad_s: 700.0   # 机械转速限幅 [rad/s]
   speed_loop:
-    kp: 0.0                # 速度环 PID（目标带宽 50Hz）
-    ki: 0.0
+    # 本组为 2kHz 电流环带宽下的机上整定值。电流环降到 1kHz 只多约 0.16ms 滞后
+    # （速度环带宽 ~20Hz 量级），理论上无需改；若 1kHz 下出现超调/低频摆动，
+    # 先按 kp 降 20%、ki 按 ki/kp 比例同步降（motion gains 可在线改，无需重烧）。
+    kp: 32.5                  # [Nm/(rad/s)] 速度环P（轴端；机上整定值2026-10-15；0=禁用速度模式）
+    ki: 725.0                 # [Nm/rad] 速度环I（轴端；同上；motion gains 可在线改）
+    friction_coulomb_nm: 1.5          # [Nm] 库仑摩擦前馈 Tc（机上整定值；motion friction cal 自整定）
+    friction_viscous_nm_per_rad_s: 0.90 # [Nm/(rad/s)] 粘性摩擦前馈 Kv（可负=Stribeck斜率）
+    friction_smoothing_rad_s: 0.05     # [rad/s] 平滑符号速度尺度（模型常量；0=硬符号）
+    velocity_lpf_coeff: 0.05        # 测速一阶滤波系数（15kHz 下约 120Hz；有效域(0,1]）
+  position_loop:
+    pos_gain: 25.0                    # [1/s] 位置环P（ODrive默认；vel_cmd=vel_ff+pos_gain*pos_err）
+    input_filter_bandwidth: 20.0      # [rad/s] 输入二阶滤波带宽（10→20：位置命令响应约 2×）
+    trajectory_vel_limit: 30.0         # [rad/s] 位置梯形轨迹最大速度；0=关闭轨迹（使用输入滤波）
+    trajectory_accel_limit: 60.0       # [rad/s²] 位置梯形轨迹加速度/减速度；0=关闭轨迹
+    # —— 多圈/增量行程保护（命令校验时每次读取，live）——
+    max_step_deg: 3600.0              # [deg] 单次命令最大位移（3600=10 圈）；不可关闭
+    max_travel_deg: 36000.0           # [deg] 连续角绝对值上限（100 圈）；f32 精度保护；不可关闭
+    travel_min_deg: 0.0               # [deg] 可选软限位下限；与上限同为 0 = 关闭
+    travel_max_deg: 0.0               # [deg] 可选软限位上限；与下限同为 0 = 关闭
+
+  # —— MIT 阻抗控制（位置/速度/阻抗五元组；模式进入时校验，live）——
+  mit:
+    enable: true                      # true = 允许进入 MIT 模式（默认开启）；false = 禁用 MIT
+    kp_max: 100.0                     # [Nm/rad] MIT 输入 Kp 钳位（非输出转矩上限）；live，flash SPRM 会覆盖 YAML
+    kd_max: 5.0                       # [Nm/(rad/s)] MIT 输入 Kd 钳位（=线缆满量程）；live
+    gain_ramp_rate: 200.0             # [(Nm/rad)/s] 增益逼近速率，防主机突跳 kp
+    pos_err_max_deg: 90.0             # [deg] MIT 位置误差钳位；与电流限幅共同决定输出转矩
+    t_ff_max_ratio: 1.0               # 前馈力矩占力矩上限的比例 (0,1]
+    can_format: compact               # [reserved] DM 协议固定单帧 MIT；保留字段以维持 SPRM 布局
+    friction_ff_en: false             # true = MIT 下叠加摩擦前馈（默认关）
+    inertia_ff_en: false              # true = MIT 下叠加惯量前馈（默认关）
   limits:
-    i_q_max_a: "motor.i_peak_10s_a"   # 电流限幅 [A]（RMS 口径，与 motor.i_peak_10s_a 一致；FOC 接入时确认）→ 24.3
-    duty_max: 0.95                    # 占空比上限
+    i_q_max_a: 30.0                   # [A_peak] 电流 boost/绝对硬上限（连续值见 i_q_continuous_a）
+    i_q_continuous_a: 24.3            # [A_peak] 连续限幅（10s 额定）；boost 预算耗尽后回落到此值
+    i_q_boost_time_s: 2.0             # [s] 30A 满额 boost 可持续时间（I²t 归一化预算）
+    i_q_boost_recover_time_s: 10.0    # [s] boost 从耗尽回满的时间
+    i_q_boost_recover_ratio: 0.9      # 低于 i_q_continuous_a×该比例才回充，避免 30/24.3A 边界脉冲
+    i_trip_a: 0.0                     # 快速过流跳闸 [A]（峰值口径；0 = 关闭；连续 2 拍超限 → 零矢量+关桥+FAULT）
+    foc_speed_max_rad_s: 0.0          # [rad/s 电角] FOC 内部连续限速上限（0=关闭；与 motion 独立；G66-18 额定 3300rpm≈3456rad/s）
+    foc_speed_limit_gain: 50.0        # [A/(rad/s)] FOC 内部连续限速增益（0=关闭；仅上限>0时生效）
+    duty_max: 0.90                     # 24V空载速度试验选定；高占空比采样精度仍需波形验证
+    motion_iq_max_a: 30.0             # [A] motion命令电流绝对上限；实际值再与动态 boost 限幅取小
+    motion_speed_limit_rad_s: 0.0      # [rad/s] 轴端实际速度上限（0 = 不限；同时约束命令）
+    motion_speed_limit_gain: 50.0      # [Nm/(rad/s)] 连续速度限幅增益（0=关闭；仅上限>0时生效）

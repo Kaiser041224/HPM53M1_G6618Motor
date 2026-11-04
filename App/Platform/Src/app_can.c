@@ -46,6 +46,7 @@ static inline void can_critical_exit(uint32_t state) {
      | INTF_CAN_EVENT_RAM_ACCESS_FAIL)
 
 static app_can_rx_callback_t s_rx_callback;
+static app_can_rx_isr_hook_t s_rx_isr_hook; /**< ISR 上下文钩子（看门狗时间戳） */
 static bool s_initialized;
 
 static struct {
@@ -284,6 +285,9 @@ static void can_irq_handler(intf_can_inst_t inst, uint32_t event_flags, void* us
             s_stats.rx_count++;
             s_stats.last_rx_id = local_msg.id;
             s_stats.last_rx_dlc = local_msg.dlc;
+            if (s_rx_isr_hook != NULL) {
+                s_rx_isr_hook(local_msg.id, local_msg.data, local_msg.dlc);
+            }
 
             if (s_rx_ring.count < APP_CAN_RX_BUF_SIZE) {
                 s_rx_ring.buf[s_rx_ring.head] = local_msg;
@@ -357,6 +361,8 @@ void app_can_deinit(void) {
     app_can_reset_state();
     s_initialized = false;
 }
+
+void app_can_set_rx_isr_hook(app_can_rx_isr_hook_t hook) { s_rx_isr_hook = hook; }
 
 void app_can_set_rx_callback(app_can_rx_callback_t cb) {
     uint32_t irq_state = can_critical_enter();

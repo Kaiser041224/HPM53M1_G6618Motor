@@ -12,6 +12,7 @@
 #ifndef APP_MOTOR_PARAMS_H
 #define APP_MOTOR_PARAMS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -19,48 +20,70 @@ extern "C" {
 #endif
 
 /**
- * @brief 编码器齿系（转子轴外齿圈 + 两路小齿轮）
+ * @brief 编码器齿系与电角度标定（转子轴外齿圈 + 两路小齿轮）
  */
 typedef struct {
     uint8_t resolution_bits;     /**< 单圈绝对分辨率 [bit] */
     uint8_t rotor_ring_teeth;    /**< 转子轴外齿圈齿数（两路小齿轮共用） */
     uint8_t rotor_pinion_teeth;  /**< 转子编码器小齿轮齿数 */
     uint8_t output_pinion_teeth; /**< 出轴编码器小齿轮齿数 */
-    float   rotor_ratio;         /**< 转子编码器转角 / 转子转角 */
-    float   output_ratio;        /**< 出轴编码器转角 / 转子转角 */
+    float rotor_ratio;           /**< 转子编码器转角 / 转子转角 */
+    float output_ratio;          /**< 出轴编码器转角 / 转子转角 */
+    float electrical_offset_rad; /**< 电角度零点 [rad]（cal encoder 写入） */
+    float direction;             /**< 编码器方向（+1.0 / −1.0） */
+    uint8_t electrical_offset_valid; /**< 0=未确认标定（仅告警）；1=cal encoder/FENC 已确认 */
 } app_motor_encoder_t;
 
 /**
  * @brief 电机机械/电磁参数（工厂默认）
  */
 typedef struct {
-    uint8_t  pole_pairs;         /**< 极对数 */
-    float    rs_ohm;             /**< 相电阻 [Ω] */
-    float    ls_h;               /**< 相电感 [H] */
-    float    ke_vs_per_rad;      /**< 反电动势系数 [V·s/rad] */
-    float    kt_nm_per_a;        /**< 转矩系数 [N·m/A] */
-    float    i_rated_a;          /**< 额定电流 [A]（RMS，105°C） */
-    float    i_peak_10s_a;       /**< 峰值电流 10s [A]（RMS） */
-    float    i_peak_2s_a;        /**< 峰值电流 2s [A]（RMS） */
-    float    vbus_nom_v;         /**< 母线额定电压 [V] */
+    uint8_t pole_pairs;          /**< 极对数 */
+    float rs_ohm;                /**< 相电阻 [Ω] */
+    float ls_h;                  /**< 相电感 [H] */
+    float ke_vs_per_rad;         /**< 反电动势系数 [V·s/rad]（机械角·线电压 RMS；仅文档/对照） */
+    float flux_linkage_wb;       /**< 磁链 [Wb]（由 Kt_peak/(1.5p) 派生的 FOC 口径；运行时由 Kt 重算） */
+    float kt_nm_per_a;           /**< 转子转矩系数 [N·m/A_peak]（峰值 q 轴电流口径） */
+    float i_rated_a;             /**< 额定电流 [A]（RMS，105°C） */
+    float i_peak_10s_a;          /**< 峰值电流 10s [A]（峰值） */
+    float i_peak_2s_a;           /**< 峰值电流 2s [A]（峰值） */
+    float vbus_nom_v;            /**< 母线额定电压 [V] */
     uint16_t rpm_max;            /**< 最高转速 [rpm] */
-    float    inertia_kgm2;       /**< 转动惯量 [kg·m²] */
-    float    torque_rated_nm;    /**< 额定转矩 [N·m] */
-    float    torque_peak_10s_nm; /**< 峰值转矩 10s [N·m] */
-    app_motor_encoder_t encoder; /**< 编码器齿系 */
+    float inertia_kgm2;          /**< 转子侧转动惯量 [kg·m²]；轴端前馈按 J×reducer² 反射 */
+    float torque_rated_nm;       /**< 额定转矩 [N·m] */
+    float torque_peak_10s_nm;    /**< 峰值转矩 10s [N·m] */
+    float reducer_ratio;         /**< 减速比（出轴/转子）；多圈游标、转矩/速度换算统一使用 */
+    app_motor_encoder_t encoder; /**< 编码器齿系与电角度标定 */
+    float load_inertia_kgm2;     /**< 轴端负载/减速器附加惯量 [kg·m²]（cal inertia 写入，≥0） */
 } app_motor_params_t;
+
+/** @brief 增加 load_inertia 前的旧 MPRM 负载长度（前缀迁移用） */
+#define APP_MOTOR_PARAMS_V1_SIZE (offsetof(app_motor_params_t, load_inertia_kgm2))
 
 /**
  * @brief  工厂默认参数（只读，指向生成常量）
  * @return 指向工厂常量结构体的只读指针
  */
-const app_motor_params_t *app_motor_params_default(void);
+const app_motor_params_t* app_motor_params_default(void);
 
 /**
- * @brief 加载参数：工厂默认 +（将来）flash 覆盖（在线辨识结果）
+ * @brief 加载参数：工厂默认 + flash 记忆覆盖（代次/长度不符时仅出厂值）
  * @param out 输出参数结构体（不可为 NULL）
  */
-void app_motor_params_load(app_motor_params_t *out);
+int app_motor_params_load(app_motor_params_t* out);
+
+/**
+ * @brief 持久化当前参数到 flash（"MPRM"；停机窗口由调用方保证）
+ * @return 0 = 成功；-1 = 失败
+ */
+int app_motor_params_store(void);
+
+/**
+ * @brief 把运行期电机参数恢复为 YAML 默认并写入 flash（MPRM）
+ * @return 0 = 成功；-1 = 写入失败
+ * @note 用于 `storage: reset`；FENC/MOTN 独立记录不在此函数内清除。
+ */
+int app_motor_params_reset(void);
 
 /**
  * @brief 初始化运行期单例（boot 时调用一次；幂等）。
@@ -71,13 +94,13 @@ void app_motor_params_init(void);
  * @brief 运行期参数单例（只读；消费者统一经此读取）。
  * @return 单例指针（未初始化时自动初始化）
  */
-const app_motor_params_t *app_motor_params_current(void);
+const app_motor_params_t* app_motor_params_current(void);
 
 /**
  * @brief 运行期参数单例（可写；仅 Shell param 命令等调试路径使用）。
  * @return 单例指针
  */
-app_motor_params_t *app_motor_params_mutable(void);
+app_motor_params_t* app_motor_params_mutable(void);
 
 #ifdef __cplusplus
 }

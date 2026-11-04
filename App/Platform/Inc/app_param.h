@@ -32,9 +32,17 @@ extern "C" {
  * 参数键登记（各模块在此登记，避免冲突）
  * ============================================================================ */
 #define APP_PARAM_KEY_ENCODER (0x454E4344U) /* "ENCD"：编码器零点等 */
+#define APP_PARAM_KEY_FOC_ENCODER \
+    (0x46454E43U)                           /* "FENC"：FOC 电角度零点/方向（app_motor_identify） */
+#define APP_PARAM_KEY_FOC_CURRENT (0x46435552U) /* "FCUR"：等效Rs/Ld及PI */
+#define APP_PARAM_KEY_MOTION      (0x4D4F544EU) /* "MOTN"：游标安装相位与轴端零位 */
+#define APP_PARAM_KEY_MOTOR_PARAMS \
+    (0x4D50524DU)                               /* "MPRM"：电机参数在线改记忆（app_param_record） */
+#define APP_PARAM_KEY_SOFTWARE_PARAMS \
+    (0x5350524DU)                               /* "SPRM"：软件参数在线改记忆（app_param_record） */
 
-/* 单条记录最大数据长度（128 - 头 12 - CRC 4） */
-#define APP_PARAM_DATA_MAX (112U)
+/* 单条记录最大数据长度（256 - 头 12 - CRC 4） */
+#define APP_PARAM_DATA_MAX (240U)
 
 /**
  * @brief 初始化参数存储：注册 flash 驱动、初始化 flash。
@@ -57,10 +65,28 @@ bool app_param_is_ready(void);
 int app_param_load(uint32_t key, void* buf, size_t len);
 
 /**
+ * @brief 读取参数（长度可变）：记录长度 ≤ cap 时拷贝实际长度
+ * @param key 参数键
+ * @param buf 输出缓冲
+ * @param cap 输出缓冲容量
+ * @param out_len 实际拷贝长度（非 NULL）
+ * @return 0 = 成功；-1 = 未找到 / 校验失败 / 记录长于 cap / 存储不可用
+ * @note 供带版本迁移的记录读取使用；普通调用仍应使用 app_param_load() 的精确长度语义
+ */
+int app_param_load_flex(uint32_t key, void* buf, size_t cap, size_t* out_len);
+
+/**
  * @brief 保存参数：更新（或新增）key 对应记录（整扇区读-改-写 + 回读校验）。
  * @return 0 = 成功；-1 = 失败
  */
 int app_param_store(uint32_t key, const void* buf, size_t len);
+
+/**
+ * @brief 删除指定 key 的记录（不改变其他记录）
+ * @return 0 = 删除成功或记录本就不存在；-1 = flash 不可用 / 读写失败
+ * @note 需要整扇区擦写；仅允许停机窗口调用。
+ */
+int app_param_erase(uint32_t key);
 
 #ifdef __cplusplus
 }

@@ -21,6 +21,13 @@
 #ifndef ALGO_RMS_H
 #define ALGO_RMS_H
 
+/* 热路径段属性（ILM / .fast）：保护链 RMS 累加与取值在 1kHz 保护节拍内调用，
+ * 且经函数指针间接调用（无法内联）→ 必须 ILM 常驻，避免 XIP 取指风暴。
+ * 非热路径（ctor/init/reset）不标注。 */
+#ifndef ALGO_RMS_ATTR_RAMFUNC
+#  define ALGO_RMS_ATTR_RAMFUNC __attribute__((section(".fast")))
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -101,10 +108,19 @@ void algo_rms_ctor(algo_rms_t* self);
  * @param x 待判断值
  * @return true = 有限值
  */
+/** @brief 有限性判定（1kHz 保护链；与 RMS 累加同段，避免跨段取指）
+ *
+ * 用 union 做 type punning 而非 memcpy：后者在 -Og 下不会被内联，
+ * 会在 ILM 热路径里跳回 XIP 的 memcpy 取指（同 foc_finite 的写法）。
+ */
+ALGO_RMS_ATTR_RAMFUNC
 static inline bool algo_rms_finite(float x) {
-    uint32_t bits;
-    memcpy(&bits, &x, sizeof(bits));
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    union {
+        float f;
+        uint32_t u;
+    } pun = {.f = x};
+
+    return (pun.u & 0x7F800000u) != 0x7F800000u;
 }
 
 #ifdef __cplusplus

@@ -11,6 +11,7 @@
 
 #include "algo_filter.h"
 #include "app_hardware_params.h"
+#include "app_ramfunc.h"
 #include "intf_clock.h"
 
 #include <math.h>
@@ -23,7 +24,10 @@
  * ============================================================================ */
 
 /* 零点标定过程参数（不随 YAML，标定流程专用） */
-#define APP_ANALOG_ZERO_CAL_FRAMES      (256U)   /* ~10ms @25kHz（TBD：随 pwm_freq 派生） */
+#define APP_ANALOG_ZERO_CAL_FRAMES      (256U)   /* ~8.5ms @30kHz（TBD：随 pwm_freq 派生） */
+/* app_analog_signal_process() 的调用频率：app_io_step 1ms 慢任务，不是 PWM/电流拍。
+ * 滤波器初始化必须用本值，否则 LPF 系数会按 30kHz 计算而实际以 1kHz 运行。 */
+#define APP_ANALOG_PROCESS_RATE_HZ      (1000.0f)
 #define APP_ANALOG_ZERO_CAL_TIMEOUT_US  (50000U) /* 50ms 超时 */
 #define APP_ANALOG_ZERO_CAL_MAX_DEV_PCT (5U)     /* 偏离中值超过 5% FS → 视为有电流 */
 
@@ -50,14 +54,27 @@ static app_analog_filter_t s_filters[ADC_CH_COUNT] = {
     [ADC_CH_I_U] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_I_V] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_I_W] = {.type = APP_ANALOG_FILTER_NONE},
-    /* 慢速通道（ADC1 读取模式 @1kHz）：值本身为直流，process 以主循环节拍（=
-     * inverter.pwm_freq_hz，config/hardware.yaml）重复调用，
-     * 滤波系数与调用频率不匹配会过度滤波，故暂用直通；待 FOC 阶段按 1kHz 重新标定。 */
+    /* 慢速通道（ADC1 读取模式 @1kHz）：值本身为直流，process 以 app_io_step
+     * 1ms 节拍重复调用（不是 pwm_freq），滤波系数按 APP_ANALOG_PROCESS_RATE_HZ
+     * 标定；当前仍用直通，待 FOC 阶段按 1kHz 重新标定。 */
     [ADC_CH_V_VBUS] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_NTC0] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_NTC1] = {.type = APP_ANALOG_FILTER_NONE},
     [ADC_CH_V_CANID] = {.type = APP_ANALOG_FILTER_NONE},
 };
+
+/* 快通道母线（与三相电流同源触发，30kHz）：
+ * 独立 LPF 实例 —— **系数必须按真实采样率 = inverter.pwm_freq_hz 标定**，不得沿用
+ * APP_ANALOG_PROCESS_RATE_HZ(1kHz)：按 1kHz 算出的 α=0.926 与 30kHz 的 α=0.295
+ * 相差 3 倍以上，会把开关纹波/帧间纪元抖动直接放大进 duty（2026-10-18 spec §4.7
+ * 已记录同源缺陷）。截止 2kHz：τ≈80µs，平滑逐帧纪元抖动，对母线阶跃仍足够快。 */
+#define APP_ANALOG_VBUS_FAST_LPF_HZ (2000.0f)
+
+static algo_lpf_t s_vbus_fast_lpf;         /**< 快通道母线一阶低通 */
+static float s_vbus_fast_value;            /**< 快通道母线滤波值 [V] */
+static uint32_t s_vbus_fast_last_seq;      /**< 已消费的锁存序号 */
+static bool s_vbus_fast_ready;             /**< 已产出首个有效值 */
+static bool s_vbus_fast_inited;            /**< 滤波器已初始化（pwm_freq 合法） */
 
 /* ============================================================================
  * State
@@ -69,6 +86,16 @@ static float s_zero_volts[APP_ANALOG_CURRENT_COUNT];
 static float s_phys_values[ADC_CH_COUNT];
 static bool s_valid;
 
+/* NTC 温度（低频观测量）：1 kHz 慢任务 / 10 = 100 Hz 换算一次。
+ * 回报帧允许发送相对陈旧的换算值（≤10 ms），不要为此提高 logf 调用频率。 */
+#define APP_ANALOG_NTC_TEMP_PERIOD_TICKS (10U)
+#define APP_ANALOG_NTC_R_MIN_OHM         (100.0f)
+#define APP_ANALOG_NTC_R_MAX_OHM         (1.0e6f)
+
+static float s_ntc_temp_c[ADC_CH_COUNT];
+static bool s_ntc_temp_valid[ADC_CH_COUNT];
+static uint8_t s_ntc_temp_divider;
+
 /* ============================================================================
  * 换算
  * ============================================================================ */
@@ -78,6 +105,8 @@ static bool s_valid;
  * @param volts 分压点电压
  * @return NTC 阻值 [Ω]（越界时返回替代值）
  */
+/** @brief NTC 电压→电阻（channel_to_physical 在 ILM，须同段避免跨段） */
+APP_ATTR_RAMFUNC
 static float ntc_resistance_from_volts(float volts) {
     const float vref_volts = INTF_ADC_DEFAULT_VREF_MV / 1000.0f;
 
@@ -91,19 +120,80 @@ static float ntc_resistance_from_volts(float volts) {
 }
 
 /**
+ * @brief 位模式有限性判定
+ *
+ * -ffast-math 隐含 -ffinite-math-only，isnan()/isfinite() 会被常量折叠，
+ * 因此与 foc_finite 同法用位运算判定。
+ */
+static bool analog_float_finite(float x) {
+    union {
+        float f;
+        uint32_t u;
+    } pun = {.f = x};
+
+    return (pun.u & 0x7F800000U) != 0x7F800000U;
+}
+
+bool app_analog_signal_ntc_temp_from_ohm(float r_ohm, float r25_ohm, float b_value_k,
+                                         float* temp_c) {
+    float temp_k;
+
+    if (!analog_float_finite(r_ohm) || !analog_float_finite(r25_ohm)
+        || !analog_float_finite(b_value_k)) {
+        return false;
+    }
+    if ((r25_ohm <= 0.0f) || (b_value_k <= 0.0f)) {
+        return false; /* 参数未配置（占位 0）：拒绝换算，不除零 */
+    }
+    if ((r_ohm <= APP_ANALOG_NTC_R_MIN_OHM) || (r_ohm >= APP_ANALOG_NTC_R_MAX_OHM)) {
+        return false; /* 短路 / 开路替代值 / 超量程 */
+    }
+
+    temp_k = 1.0f / ((1.0f / 298.15f) + (logf(r_ohm / r25_ohm) / b_value_k));
+    if (!analog_float_finite(temp_k) || (temp_k <= 0.0f)) {
+        return false;
+    }
+    if (temp_c != NULL) {
+        *temp_c = temp_k - 273.15f;
+    }
+    return true;
+}
+
+bool app_analog_signal_ntc_temp_c(adc_channel_t ch, float* temp_c) {
+    if ((temp_c == NULL) || ((ch != ADC_CH_NTC0) && (ch != ADC_CH_NTC1))) {
+        return false;
+    }
+    if (!s_ntc_temp_valid[ch]) {
+        return false;
+    }
+    *temp_c = s_ntc_temp_c[ch];
+    return true;
+}
+
+/**
  * @brief 将 ADC 原始码按通道类型换算为物理量
  * @param ch 逻辑通道
  * @param raw ADC 原始码
  * @return 物理量（电流 [A] / 电压 [V] / 阻值 [Ω]）
  */
+APP_ATTR_RAMFUNC /* FOC ISR 电流换算路径 */
 static float channel_to_physical(adc_channel_t ch, uint16_t raw) {
     float volts = app_adc_code_to_volts(raw);
 
     switch (ch) {
     case ADC_CH_I_U:
     case ADC_CH_I_V:
-    case ADC_CH_I_W:
-        return (volts - s_zero_volts[ch]) * app_hardware_params_current()->current_sense.a_per_volt;
+    case ADC_CH_I_W: {
+        const app_hardware_current_sense_t* sense =
+            &app_hardware_params_current()->current_sense;
+        float amps = (volts - s_zero_volts[ch]) * sense->a_per_volt;
+
+        /* 符号约定：正电流 = 流入电机（马达约定，FOC dq 变换的前提）。
+         * 本板低侧采样：I_*+ 接低侧 MOSFET 源极、I_*− 接 PGND（原理图 Inverter_Power_Stage
+         * R30~R32），I_*+ → 运放 +IN（Analog Signal Processing U9B/C/D）→ 低侧导通期间
+         * 测得电压与马达约定反相 → hardware.current_sense.invert 默认 1（取反）。 */
+        return (sense->invert != 0U) ? -amps : amps;
+    }
     case ADC_CH_V_VBUS: return volts * app_hardware_params_current()->vbus_sense.v_per_volt;
     case ADC_CH_NTC0:
     case ADC_CH_NTC1: return ntc_resistance_from_volts(volts);
@@ -139,7 +229,10 @@ void app_analog_signal_init(void) {
     }
     for (uint8_t ch = 0U; ch < ADC_CH_COUNT; ch++) {
         s_phys_values[ch] = 0.0f;
+        s_ntc_temp_c[ch] = 0.0f;
+        s_ntc_temp_valid[ch] = false;
     }
+    s_ntc_temp_divider = 0U;
 
     for (uint8_t ch = 0U; ch < ADC_CH_COUNT; ch++) {
         app_analog_filter_t* filter = &s_filters[ch];
@@ -154,7 +247,7 @@ void app_analog_signal_init(void) {
         } else if (filter->type == APP_ANALOG_FILTER_LPF) {
             algo_lpf_cfg_t cfg = {
                 .cutoff_hz = filter->lpf_cutoff_hz,
-                .sample_rate_hz = (float)app_hardware_params_current()->inverter.pwm_freq_hz,
+                .sample_rate_hz = APP_ANALOG_PROCESS_RATE_HZ,
             };
             algo_lpf_ctor(&filter->lpf);
             (void)filter->lpf.init(&filter->lpf, &cfg);
@@ -164,6 +257,51 @@ void app_analog_signal_init(void) {
     }
 
     s_valid = false;
+
+    /* 快通道母线：独立 LPF，采样率取真实 PWM 频率（同源触发速率） */
+    s_vbus_fast_ready = false;
+    s_vbus_fast_value = 0.0f;
+    s_vbus_fast_last_seq = 0U;
+    {
+        float pwm_hz = (float)app_hardware_params_current()->inverter.pwm_freq_hz;
+
+        if (pwm_hz > 0.0f) {
+            algo_lpf_cfg_t fast_cfg = {
+                .cutoff_hz = APP_ANALOG_VBUS_FAST_LPF_HZ,
+                .sample_rate_hz = pwm_hz,
+            };
+
+            algo_lpf_ctor(&s_vbus_fast_lpf);
+            s_vbus_fast_inited = (s_vbus_fast_lpf.init(&s_vbus_fast_lpf, &fast_cfg) == 0);
+        } else {
+            s_vbus_fast_inited = false;
+        }
+    }
+}
+
+APP_ATTR_RAMFUNC /* FOC 30kHz ISR 调用 */
+float app_analog_signal_vbus_fast(void) {
+    uint16_t raw;
+    uint32_t seq;
+
+    if (!s_vbus_fast_inited) {
+        return NAN;
+    }
+    if (!app_adc_get_vbus_fast(&raw)) {
+        return NAN; /* 快通道尚无首帧：调用方回退 1kHz 缓存（保留原有启动语义） */
+    }
+
+    seq = app_adc_get_vbus_fast_sequence();
+    if (seq != s_vbus_fast_last_seq) {
+        const app_hardware_params_t* hardware = app_hardware_params_current();
+
+        s_vbus_fast_last_seq = seq;
+        s_vbus_fast_value = algo_lpf_step_fast(
+            &s_vbus_fast_lpf, app_adc_code_to_volts(raw) * hardware->vbus_sense.v_per_volt);
+        s_vbus_fast_ready = true;
+    }
+    /* 无新锁存时不重复灌同一样本（保持上次输出） */
+    return s_vbus_fast_ready ? s_vbus_fast_value : NAN;
 }
 
 void app_analog_signal_process(void) {
@@ -177,11 +315,39 @@ void app_analog_signal_process(void) {
             filter_step((adc_channel_t)ch, channel_to_physical((adc_channel_t)ch, raw));
     }
 
+    /* NTC 温度：每 10 拍（100 Hz）换算一次；上电首拍立即产出首值。 */
+    if (s_ntc_temp_divider == 0U) {
+        const app_hardware_ntc_t* ntc = &app_hardware_params_current()->ntc;
+
+        for (uint8_t ch = (uint8_t)ADC_CH_NTC0; ch <= (uint8_t)ADC_CH_NTC1; ch++) {
+            float temp_c = 0.0f;
+
+            s_ntc_temp_valid[ch] = app_analog_signal_ntc_temp_from_ohm(
+                s_phys_values[ch], ntc->r25_ohm, ntc->b_value_k, &temp_c);
+            if (s_ntc_temp_valid[ch]) {
+                s_ntc_temp_c[ch] = temp_c;
+            }
+        }
+    }
+    s_ntc_temp_divider++;
+    if (s_ntc_temp_divider >= APP_ANALOG_NTC_TEMP_PERIOD_TICKS) {
+        s_ntc_temp_divider = 0U;
+    }
+
     if (app_adc_is_valid()) {
         s_valid = true;
     }
 }
 
+APP_ATTR_RAMFUNC
+float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw) {
+    if (ch >= ADC_CH_COUNT) {
+        return NAN;
+    }
+    return channel_to_physical(ch, raw);
+}
+
+APP_ATTR_RAMFUNC
 bool app_analog_signal_read_all(app_analog_values_t* values) {
     if ((values == NULL) || !s_valid) {
         return false;
@@ -196,6 +362,7 @@ bool app_analog_signal_read_all(app_analog_values_t* values) {
     return true;
 }
 
+APP_ATTR_RAMFUNC
 float app_analog_signal_read(adc_channel_t ch) {
     if ((ch >= ADC_CH_COUNT) || !s_valid) {
         return NAN;

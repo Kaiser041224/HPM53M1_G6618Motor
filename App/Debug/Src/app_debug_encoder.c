@@ -22,14 +22,11 @@
 
 #include "app_debug_rtt.h"
 #include "app_encoder.h"
+#include "app_ramfunc.h"
 #include "intf_clock.h"
 
 #define ENC_REG_RD     (0x09U)
 #define ENC_REG_RD_BIT (0x80U) /* RD 位于 0x09 的 bit7，出厂默认 1 */
-
-/* 出轴编码器降采样：游标差值变化率仅为转子的 1/50，1kHz 足够。
-   设为 1 = 每周期读（双路 25kHz 压力模式）。（TBD：随 pwm_freq 派生） */
-#define ENC_OUTPUT_SAMPLE_DIV (25U)
 
 /* init 基准：read_raw 平均耗时测量次数 */
 #define ENC_BENCH_ITERS (100U)
@@ -47,46 +44,11 @@ volatile uint32_t g_enc_rotor_read_us __attribute__((section(".noncacheable.bss"
 volatile uint32_t g_enc_output_read_us __attribute__((section(".noncacheable.bss")));
 volatile uint32_t g_enc_loop_late_us __attribute__((section(".noncacheable.bss")));
 volatile int32_t g_enc_ratio_x10000 __attribute__((section(".noncacheable.bss")));
-
-/* ============================================================================
- * 游标比值累计（1kHz 成对采样）
- *
- * 原理：每 1ms 将两路编码器背靠背采样（间隔 ~7µs），逐对计算 wrap-safe 有符号
- * 差值并累计。刚体传动下每对 ΔO = k·ΔR（k 为齿比），故累计和之比即为精确 k；
- * 采样偏斜（~7µs）在累计中大部分抵消（误差 ~0.02%），远优于 1Hz 打印对比。
- * ============================================================================ */
-
-static uint16_t s_ratio_prev_rotor;
-static uint16_t s_ratio_prev_output;
-static bool s_ratio_primed;
-static int64_t s_ratio_sum_rotor;
-static int64_t s_ratio_sum_output;
-static uint32_t s_ratio_pairs;
-
-/**
- * @brief 累加一对转子的游标差值（wrap-safe），用于估算齿比
- * @param rotor_raw 转子编码器原始值
- * @param output_raw 出轴编码器原始值
- */
-static void ratio_accumulate(uint16_t rotor_raw, uint16_t output_raw) {
-    if (!s_ratio_primed) {
-        s_ratio_prev_rotor = rotor_raw;
-        s_ratio_prev_output = output_raw;
-        s_ratio_primed = true;
-        return;
-    }
-
-    /* wrap-safe 有符号差（1kHz 采样，单步位移远小于半量程） */
-    int32_t delta_rotor = (int16_t)(rotor_raw - s_ratio_prev_rotor);
-    int32_t delta_output = (int16_t)(output_raw - s_ratio_prev_output);
-
-    s_ratio_sum_rotor += delta_rotor;
-    s_ratio_sum_output += delta_output;
-    s_ratio_pairs++;
-
-    s_ratio_prev_rotor = rotor_raw;
-    s_ratio_prev_output = output_raw;
-}
+/* 自检结果：被动健康 vs 通电电气标定（字段分离） */
+volatile uint32_t g_enc_passive_ok __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_passive_spi_hz __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_energized_ok __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_energized_not_run __attribute__((section(".noncacheable.bss")));
 
 /* ============================================================================
  * 统计窗口（print_stats 后清零）
@@ -99,13 +61,13 @@ static uint32_t s_loop_count;
 static uint32_t s_loop_late_count;
 static uint32_t s_loop_late_max_us;
 static uint32_t s_cpu_mhz;
-static uint32_t s_sample_index;
 
 /**
  * @brief 将 CPU 周期数换算为微秒（首次调用时缓存 CPU 频率）
  * @param cycles 待换算的周期数
  * @return 对应微秒数
  */
+APP_ATTR_RAMFUNC
 static inline uint32_t cycles_to_us(uint32_t cycles) {
     if (s_cpu_mhz == 0U) {
         s_cpu_mhz = intf_clock_get_cpu_freq() / 1000000U;
@@ -122,48 +84,6 @@ static const char* encoder_name(app_encoder_id_t id) {
     return (id == APP_ENCODER_ROTOR) ? "rotor" : "output";
 }
 
-/**
- * @brief 读一次编码器 + 计时 + 更新观测变量
- * @param id 编码器实例
- * @return read_raw 结果（0 = 成功）
- */
-static int encoder_sample_one(app_encoder_id_t id) {
-    uint32_t cycle_start = intf_clock_get_cycle();
-    uint16_t raw = 0U;
-    uint16_t zero = 0U;
-    uint32_t mdeg = 0U;
-    int ret = app_encoder_read_raw(id, &raw);
-    uint32_t cycles = intf_clock_get_cycle() - cycle_start;
-
-    s_read_cycles_sum[id] += cycles;
-    if (cycles > s_read_cycles_max[id]) {
-        s_read_cycles_max[id] = cycles;
-    }
-    s_read_count[id]++;
-
-    if (id == APP_ENCODER_ROTOR) {
-        g_enc_rotor_read_us = cycles_to_us(cycles);
-    } else {
-        g_enc_output_read_us = cycles_to_us(cycles);
-    }
-
-    if (ret == 0) {
-        /* 观测角度为"零点修正后"的机械角（与 app API 语义一致） */
-        (void)app_encoder_get_zero(id, &zero);
-        mdeg = (uint32_t)(((uint64_t)(uint16_t)(raw - zero) * 360000U) / 65536U);
-    }
-
-    if (id == APP_ENCODER_ROTOR) {
-        g_enc_rotor_raw = raw;
-        g_enc_rotor_deg = (float)mdeg / 1000.0f;
-    } else {
-        g_enc_output_raw = raw;
-        g_enc_output_deg = (float)mdeg / 1000.0f;
-    }
-
-    return ret;
-}
-
 /* ============================================================================
  * 对外接口
  * ============================================================================ */
@@ -171,10 +91,12 @@ static int encoder_sample_one(app_encoder_id_t id) {
 void app_debug_encoder_init(void) {
     uint16_t raw = 0U;
     int ret;
+    int init_ret;
 
     app_debug_printf("\r\n[ENC] dual KTH7823 self-test: rotor=SPI3, output=SPI1, mode3\r\n");
 
     ret = app_encoder_init();
+    init_ret = ret;
     app_debug_printf(
         "[ENC] init: %s | sclk: rotor=%u Hz, output=%u Hz\r\n", (ret == 0) ? "OK" : "FAILED",
         (unsigned)app_encoder_get_sclk_hz(APP_ENCODER_ROTOR),
@@ -218,27 +140,173 @@ void app_debug_encoder_init(void) {
             (unsigned)(cycles / ENC_BENCH_ITERS), (unsigned)cycles_to_us(cycles / ENC_BENCH_ITERS),
             (unsigned)ENC_BENCH_ITERS, (unsigned)(intf_clock_get_cpu_freq() / 1000000U));
     }
+
+    /* 被动健康自检（真实读转子 + RD 寄存器；此刻采样器尚未 claim SPI3） */
+    {
+        int passive = app_debug_encoder_passive_selftest();
+
+        if ((passive != 0) || (init_ret != 0)) {
+            g_enc_passive_ok = 0U; /* init 或自检任一失败 → 不通过 */
+        }
+        g_enc_energized_ok = 0U;
+        g_enc_energized_not_run = 1U;
+        app_debug_printf(
+            "[ENC] selftest: passive=%s spi=%u Hz | energized=not_run\r\n",
+            (g_enc_passive_ok != 0U) ? "OK" : "FAIL", (unsigned)g_enc_passive_spi_hz);
+    }
 }
 
-/* 每控制周期调用：转子每周期采样；出轴按 ENC_OUTPUT_SAMPLE_DIV 降采样。
-   降采样周期内两路背靠背采样（间隔 ~7µs），同时用于游标比值累计。 */
+int app_debug_encoder_passive_selftest(void) {
+    uint16_t raw = 0U;
+    uint8_t rd = 0U;
+    bool ok = true;
+
+    /* 运行期 SPI3 归采样器独占：不可物理读，保留 boot 结果并明确返回忙 */
+    if (app_encoder_sampler_active()) {
+        return -3;
+    }
+    if (app_encoder_read_raw(APP_ENCODER_ROTOR, &raw) != 0) {
+        ok = false;
+    }
+    if (app_encoder_read_reg(APP_ENCODER_ROTOR, ENC_REG_RD, &rd) != 0) {
+        ok = false;
+    }
+    if ((rd & ENC_REG_RD_BIT) == 0U) {
+        ok = false;
+    }
+    g_enc_passive_spi_hz = app_encoder_get_sclk_hz(APP_ENCODER_ROTOR);
+    g_enc_passive_ok = ok ? 1U : 0U;
+    return ok ? 0 : -1;
+}
+
+/* ---- 运行期健康自检（不触碰 SPI3；评估采样器快照流） ---- */
+volatile uint32_t g_enc_runtime_active __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_ok __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_progress __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_seq_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_valid_pct __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_read_fail_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_jump_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_err_delta __attribute__((section(".noncacheable.bss")));
+volatile uint32_t g_enc_runtime_age_max_us __attribute__((section(".noncacheable.bss")));
+
+static uint32_t s_health_ticks;
+static uint32_t s_health_valid;
+static uint32_t s_health_seq_start;
+static uint32_t s_health_fail_start;
+static uint32_t s_health_jump_start;
+static uint32_t s_health_err_start;
+static uint32_t s_health_age_max_cycles;
+
+bool app_debug_encoder_health_active(void) { return g_enc_runtime_active != 0U; }
+
+void app_debug_encoder_health_start(void) {
+    app_encoder_rotor_snapshot_t snap;
+
+    if (g_enc_runtime_active != 0U) {
+        return;                                  /* 已在运行 */
+    }
+    (void)app_encoder_get_rotor_snapshot(&snap);
+
+    s_health_ticks = 0U;
+    s_health_valid = 0U;
+    s_health_age_max_cycles = 0U;
+    s_health_seq_start = snap.seq;
+    s_health_fail_start = g_encoder_read_fail_count;
+    s_health_jump_start = app_encoder_get_rotor_jump_count();
+    s_health_err_start = app_encoder_get_error_count(APP_ENCODER_ROTOR);
+
+    g_enc_runtime_ok = 0U;
+    g_enc_runtime_progress = 0U;
+    g_enc_runtime_seq_delta = 0U;
+    g_enc_runtime_valid_pct = 0U;
+    g_enc_runtime_read_fail_delta = 0U;
+    g_enc_runtime_jump_delta = 0U;
+    g_enc_runtime_err_delta = 0U;
+    g_enc_runtime_age_max_us = 0U;
+    g_enc_runtime_active = 1U;
+}
+
+void app_debug_encoder_health_tick(void) {
+    app_encoder_rotor_snapshot_t snap;
+    uint32_t seq_delta;
+    uint32_t fail_delta;
+    uint32_t jump_delta;
+    uint32_t err_delta;
+    uint32_t valid_pct;
+    uint32_t cpu;
+
+    if (g_enc_runtime_active == 0U) {
+        return;
+    }
+
+    (void)app_encoder_get_rotor_snapshot(&snap); /* 只读快照：不触碰 SPI3 */
+    if (snap.valid) {
+        s_health_valid++;
+    }
+    if (snap.age_cycles > s_health_age_max_cycles) {
+        s_health_age_max_cycles = snap.age_cycles;
+    }
+
+    s_health_ticks++;
+    g_enc_runtime_progress = (s_health_ticks * 100U) / APP_ENC_HEALTH_TICKS;
+    if (s_health_ticks < APP_ENC_HEALTH_TICKS) {
+        return;
+    }
+
+    seq_delta = snap.seq - s_health_seq_start;
+    fail_delta = g_encoder_read_fail_count - s_health_fail_start;
+    jump_delta = app_encoder_get_rotor_jump_count() - s_health_jump_start;
+    err_delta = app_encoder_get_error_count(APP_ENCODER_ROTOR) - s_health_err_start;
+    valid_pct = (s_health_valid * 100U) / APP_ENC_HEALTH_TICKS;
+
+    g_enc_runtime_seq_delta = seq_delta;
+    g_enc_runtime_read_fail_delta = fail_delta;
+    g_enc_runtime_jump_delta = jump_delta;
+    g_enc_runtime_err_delta = err_delta;
+    g_enc_runtime_valid_pct = valid_pct;
+
+    cpu = intf_clock_get_cpu_freq();
+    g_enc_runtime_age_max_us =
+        (cpu != 0U) ? (uint32_t)(((uint64_t)s_health_age_max_cycles * 1000000U) / cpu) : 0U;
+
+    g_enc_runtime_ok =
+        ((seq_delta >= ((APP_ENC_HEALTH_EXPECTED_SEQ * 8U) / 10U)) && (valid_pct >= 99U)
+         && (fail_delta == 0U) && (jump_delta == 0U) && (err_delta == 0U))
+            ? 1U
+            : 0U;
+    g_enc_runtime_progress = 100U;
+    g_enc_runtime_active = 0U;
+}
+
+/* 刷新双编码器观测（缓存读，零SPI成本；output为游标磁铁角度，不是实际轴端角度）。 */
 void app_debug_encoder_sample(void) {
-    int ret_rotor;
+    uint16_t raw;
+    bool valid;
 
-    ret_rotor = encoder_sample_one(APP_ENCODER_ROTOR);
+    /* 转子：采样在 ADC0 PMT ISR（25kHz 硬件同步，SPI3 独占）；此处只读一致快照 */
+    if ((app_encoder_get_rotor_raw(&raw, &valid, NULL) == 0) && valid) {
+        uint16_t zero = 0U;
 
-    if ((s_sample_index % ENC_OUTPUT_SAMPLE_DIV) == 0U) {
-        int ret_output = encoder_sample_one(APP_ENCODER_OUTPUT);
-
-        if ((ret_rotor == 0) && (ret_output == 0)) {
-            ratio_accumulate(g_enc_rotor_raw, g_enc_output_raw);
+        g_enc_rotor_raw = raw;
+        if (app_encoder_get_zero(APP_ENCODER_ROTOR, &zero) == 0) {
+            g_enc_rotor_deg = (float)(uint16_t)(raw - zero) * (360.0f / 65536.0f);
         }
     }
-    s_sample_index++;
+    s_read_cycles_sum[APP_ENCODER_ROTOR] += 0U;
+    s_read_count[APP_ENCODER_ROTOR]++;
+    if (app_encoder_get_output_raw(&raw) == 0) {
+        uint16_t zero = 0U;
+        g_enc_output_raw = raw;
+        if (app_encoder_get_zero(APP_ENCODER_OUTPUT, &zero) == 0)
+            g_enc_output_deg = (float)(uint16_t)(raw - zero) * (360.0f / 65536.0f);
+        s_read_count[APP_ENCODER_OUTPUT]++;
+    }
     s_loop_count++;
 }
 
-/* 主循环节拍迟到反馈（迟到周期数） */
+/* 快车道超预算反馈（迟到周期数；ADC0 ISR 内调用 → ILM） */
+APP_ATTR_RAMFUNC
 void app_debug_encoder_note_loop_late(uint32_t late_cycles) {
     uint32_t late_us = cycles_to_us(late_cycles);
 
@@ -289,17 +357,38 @@ void app_debug_encoder_print_stats(void) {
         (unsigned)app_encoder_get_error_count(APP_ENCODER_ROTOR),
         (unsigned)app_encoder_get_error_count(APP_ENCODER_OUTPUT));
 
-    /* 游标比值（1kHz 成对采样累计）：刚体传动下 ratio = ΔO/ΔR = 齿比 */
-    if (s_ratio_sum_rotor != 0) {
-        int32_t ratio_x10000 = (int32_t)((s_ratio_sum_output * 10000) / s_ratio_sum_rotor);
+    /* 同步采样（ADC0 ISR 内取帧）：rate 应 = 25000；fail 正常 0；isr max = 单拍取帧+发布耗时 */
+    {
+        static uint32_t s_prev_sample_count;
+        static uint32_t s_prev_fail_count;
+        uint32_t sample_now = g_encoder_sample_count;
+        uint32_t fail_now = g_encoder_read_fail_count;
 
-        g_enc_ratio_x10000 = ratio_x10000;
         app_debug_printf(
-            "[ENC] vernier: pairs=%u dR=%d dO=%d ratio_x10000=%d\r\n", (unsigned)s_ratio_pairs,
-            (int32_t)s_ratio_sum_rotor, (int32_t)s_ratio_sum_output, ratio_x10000);
-    } else {
-        app_debug_printf(
-            "[ENC] vernier: waiting for motion (pairs=%u)\r\n", (unsigned)s_ratio_pairs);
+            "[ENC] sync=%s rate=%u Hz fail=%u | fetch last/max=%u/%u cycles\r\n",
+            app_encoder_sync_active() ? "on" : "OFF", (unsigned)(sample_now - s_prev_sample_count),
+            (unsigned)(fail_now - s_prev_fail_count), (unsigned)g_encoder_isr_cycles,
+            (unsigned)g_encoder_isr_cycles_max);
+        s_prev_sample_count = sample_now;
+        s_prev_fail_count = fail_now;
+    }
+    /* 游标同样每ADC拍取帧；外环消费频率不影响这三个生产者计数。 */
+    {
+        static uint32_t s_previous_output_count;
+        static uint32_t s_previous_output_fail_count;
+        static uint32_t s_previous_pair_count;
+        app_encoder_pair_stats_t pair_stats;
+        app_encoder_get_pair_stats(&pair_stats);
+        uint32_t output_count = pair_stats.output_sample_count;
+        uint32_t output_fail_count = pair_stats.output_fail_count;
+        uint32_t pair_count = pair_stats.valid_pair_count;
+        app_debug_printf("[ENC] pair: output rate=%u fail=%u valid=%u [per report]\r\n",
+                         (unsigned)(output_count - s_previous_output_count),
+                         (unsigned)(output_fail_count - s_previous_output_fail_count),
+                         (unsigned)(pair_count - s_previous_pair_count));
+        s_previous_output_count = output_count;
+        s_previous_output_fail_count = output_fail_count;
+        s_previous_pair_count = pair_count;
     }
 
     /* 清零窗口 */

@@ -6,7 +6,8 @@
  * 实现策略：
  *   - 使用 boot ROM 的 XPI NOR API（rom_xpi_nor_*），与 SDK flashstress 样例一致
  *   - auto_config 依据板级 option（board.h）探测并配置 flash；容量/扇区大小运行时查询
- *   - 擦/写前关闭全局中断（mstatus.MIE 保存/恢复）：flash 读窗口在操作期间不可用
+ *   - 擦/写/ROM 读期间关闭全局中断（mstatus.MIE 保存/恢复）：
+ *     XPI 操作期间 flash 取指窗口不可用，必须阻止 ISR 从 flash 取指。
  *
  * 注意：
  *   - 本驱动会重新配置 XPI 控制器（auto_config），应在系统初始化阶段调用一次
@@ -18,6 +19,8 @@
  */
 
 #include "intf_flash.h"
+
+#include "hpm_l1c_drv.h"
 #include "board.h"
 
 #include "hpm_romapi.h"
@@ -53,9 +56,27 @@ static inline void flash_exit_critical(uint32_t irq_state)
  * @param len 长度 [byte]
  * @return true = 在范围内
  */
+/** @brief 地址范围检查（read/program/erase 的 ILM 实现每拍调用，须同段） */
+ATTR_RAMFUNC
 static bool flash_addr_in_range(uint32_t addr, uint32_t len)
 {
     return (addr >= s_base) && ((addr + len) <= (s_base + s_size)) && (len > 0U);
+}
+
+/**
+ * @brief 按 L1 D-Cache line 对齐后失效
+ *
+ * l1c_dc_invalidate() 要求起始地址和长度都为 32B 对齐；flash 记录长度、
+ * 最后一块长度通常不是 32B 倍数，直接传入会触发 SDK assert。
+ */
+/** @brief cache line 对齐后失效（program/erase 的 ILM 实现调用，须同段） */
+ATTR_RAMFUNC
+static void flash_dcache_invalidate_aligned(uint32_t addr, uint32_t len)
+{
+    uint32_t aligned_start = HPM_L1C_CACHELINE_ALIGN_DOWN(addr);
+    uint32_t aligned_end = HPM_L1C_CACHELINE_ALIGN_UP(addr + len);
+
+    l1c_dc_invalidate(aligned_start, aligned_end - aligned_start);
 }
 
 /* ============================================================================
@@ -133,17 +154,25 @@ static uint32_t flash_get_sector_size_impl(void)
  * @param buf 目的缓冲
  * @param len 长度 [byte]
  * @return 0 = 成功；-1 = 参数非法或 ROM 读失败
+ * @note ROM XPI read 期间必须关中断；否则 25kHz ADC/USB ISR 可能从
+ *       flash 取指，遇到 XPI 读窗口会取到全 1 指令并触发 illegal instruction。
  */
+ATTR_RAMFUNC
 static int flash_read_impl(uint32_t addr, void *buf, size_t len)
 {
+    uint32_t irq_state;
+    hpm_stat_t status;
+
     if (!s_initialized || (buf == NULL) || !flash_addr_in_range(addr, (uint32_t) len)) {
         return -1;
     }
 
-    return (rom_xpi_nor_read(BOARD_APP_XPI_NOR_XPI_BASE, xpi_xfer_channel_auto, &s_nor_config,
-                             (uint32_t *) buf, addr - s_base, (uint32_t) len) == status_success)
-               ? 0
-               : -1;
+    irq_state = flash_enter_critical();
+    status = rom_xpi_nor_read(BOARD_APP_XPI_NOR_XPI_BASE, xpi_xfer_channel_auto, &s_nor_config,
+                              (uint32_t *) buf, addr - s_base, (uint32_t) len);
+    flash_exit_critical(irq_state);
+
+    return (status == status_success) ? 0 : -1;
 }
 
 /**
@@ -153,6 +182,7 @@ static int flash_read_impl(uint32_t addr, void *buf, size_t len)
  * @param len 长度 [byte]
  * @return 0 = 成功；-1 = 参数非法或 ROM 编程失败
  */
+ATTR_RAMFUNC
 static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
 {
     uint32_t irq_state;
@@ -171,7 +201,13 @@ static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
                                  (const uint32_t *) buf, addr - s_base, (uint32_t) len);
     flash_exit_critical(irq_state);
 
-    return (status == status_success) ? 0 : -1;
+    if (status == status_success) {
+        /* ROM 经 XPI 写 flash，CPU 侧 D-Cache 中的旧行必须失效，否则回读校验读到陈旧数据
+         * （L1C 已使能；XIP flash 区为可缓存区）。长度/首址需按 cache line 对齐。 */
+        flash_dcache_invalidate_aligned(addr, (uint32_t) len);
+        return 0;
+    }
+    return -1;
 }
 
 /**
@@ -179,6 +215,7 @@ static int flash_program_impl(uint32_t addr, const void *buf, size_t len)
  * @param addr 扇区地址（须扇区对齐）
  * @return 0 = 成功；-1 = 参数非法或 ROM 擦除失败
  */
+ATTR_RAMFUNC
 static int flash_erase_sector_impl(uint32_t addr)
 {
     uint32_t irq_state;
@@ -196,7 +233,12 @@ static int flash_erase_sector_impl(uint32_t addr)
                                       addr - s_base);
     flash_exit_critical(irq_state);
 
-    return (status == status_success) ? 0 : -1;
+    if (status == status_success) {
+        /* 同上：擦除后整扇区内容变化，失效该扇区的缓存行 */
+        flash_dcache_invalidate_aligned(addr, s_sector_size);
+        return 0;
+    }
+    return -1;
 }
 
 /* ============================================================================

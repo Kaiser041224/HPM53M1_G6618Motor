@@ -52,10 +52,14 @@ LAST_BUILD_LOG := $(BUILD_DIR)/last_build.log
 
 # Optimization level (separate Debug/Release)
 # Usage: make build OPT_LEVEL_DBG=-Og OPT_LEVEL_REL=-Ofast
-# Debug:  -O0 (default, best debugging experience)
+# Debug:  -Og (default: debuggable + FOC ISR real-time budget; -O0 too slow for 25kHz loop)
 # Release: -O3 (default, maximum speed)
-OPT_LEVEL_DBG ?= -O0
+OPT_LEVEL_DBG ?= -Og
 OPT_LEVEL_REL ?= -O3
+
+# Extra app-level preprocessor defines (e.g. -DAPP_BENCH_DEBUG_MODE=1 for
+# bench-only debug builds that bypass USB/terminal). Empty = normal build.
+APP_DEFINES ?=
 
 # ============================================================================
 # Flash Configuration
@@ -102,7 +106,7 @@ CMAKE_ARGS := \
 	-DRV_ABI=$(RV_ABI) \
 	-DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE) \
 	-DHPM_BUILD_TYPE=$(HPM_BUILD_TYPE) \
-	-DEXTRA_C_FLAGS="$(DEBUG_PREFIX_MAP)" \
+	-DEXTRA_C_FLAGS="$(DEBUG_PREFIX_MAP) $(APP_DEFINES)" \
 	$(OPT_CMAKE_ARGS)
 
 # ============================================================================
@@ -169,7 +173,7 @@ artifacts:
 # ============================================================================
 flash: flash-$(FLASH_TOOL)
 
-flash-openocd:
+flash-openocd: artifacts
 	@echo "[FLASH] Using OpenOCD..."
 	$(OPENOCD_BIN) \
 		-s $(OCD_SCRIPTS) \
@@ -178,7 +182,7 @@ flash-openocd:
 		-f $(BOARD_CFG) \
 		-c "program $(OUTPUT_DIR)/$(PROJECT_NAME).elf verify reset exit"
 
-flash-jlink:
+flash-jlink: artifacts
 	@echo "[FLASH] Using J-Link..."
 	@echo "device $(JLINK_DEVICE)" > /tmp/jlink_flash.jlink
 	@echo "if $(JLINK_IF)" >> /tmp/jlink_flash.jlink

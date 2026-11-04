@@ -4,7 +4,7 @@
  * @author  Kaiser
  *
  * GPTMR1 外环定时器封装。
- * 使用与 PWM 相同的 AHB 时钟源 (120MHz)，保证频率一致性。
+ * 频率与相位需运行态验证，不声称与PWM锁相。
  * 通过 intf_gptmr 接口层访问驱动，不直接调用驱动层。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
@@ -20,14 +20,17 @@
 #define APP_GPTMR_INSTANCE 1U
 #define APP_GPTMR_CH_BASE  (APP_GPTMR_INSTANCE * 4U)
 
-#define APP_GPTMR_CH0_FREQ 50000U
-/* TBD：FOC 接入后随 inverter.pwm_freq_hz 派生（当前无消费者） */
-#define APP_GPTMR_CH1_FREQ 25000U
+#define APP_GPTMR_CH0_FREQ 15000U
+/* 预留 15kHz（motion 速度独立拍已合并至 CH0；motion timer 不启动本通道） */
+#define APP_GPTMR_CH1_FREQ 15000U
 #define APP_GPTMR_CH2_FREQ 10000U
+/* 编码器采样：25kHz 的一半，供 25kHz FOC 复用（用时间戳算 dt） */
+#define APP_GPTMR_CH3_FREQ 12500U /* 预留通道（原转子采样器频率，现无使用者） */
 
 extern void hpm_gptmr_driver_register(void);
 
 static app_gptmr_callback_t s_callbacks[APP_GPTMR_CH_COUNT];
+static uint32_t s_channel_frequency[APP_GPTMR_CH_COUNT];
 
 /**
  * @brief 将应用通道号转换为接口层全局通道号
@@ -40,8 +43,12 @@ static intf_gptmr_ch_t app_ch_to_intf(app_gptmr_ch_t ch) {
 
 void app_gptmr_init(void) {
     hpm_gptmr_driver_register();
+    s_channel_frequency[0] = APP_GPTMR_CH0_FREQ;
+    s_channel_frequency[1] = APP_GPTMR_CH1_FREQ;
+    s_channel_frequency[2] = APP_GPTMR_CH2_FREQ;
+    s_channel_frequency[3] = APP_GPTMR_CH3_FREQ;
 
-    /* CH0: 电压外环 50kHz */
+    /* CH0: motion 单控制拍 15kHz（position → velocity） */
     intf_gptmr_cfg_t cfg_voltage = {
         .mode = INTF_GPTMR_MODE_TIMER,
         .frequency_hz = APP_GPTMR_CH0_FREQ,
@@ -50,7 +57,7 @@ void app_gptmr_init(void) {
     };
     (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_0), &cfg_voltage);
 
-    /* CH1: 功率外环 25kHz */
+    /* CH1: 预留 15kHz（motion 速度独立拍已合并至 CH0，motion timer 不启动） */
     intf_gptmr_cfg_t cfg_power = {
         .mode = INTF_GPTMR_MODE_TIMER,
         .frequency_hz = APP_GPTMR_CH1_FREQ,
@@ -68,33 +75,36 @@ void app_gptmr_init(void) {
     };
     (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_2), &cfg_ch2);
 
+    /* CH3: 预留（原 12.5kHz 编码器采样器；转子已改为 ADC 同拍硬件同步采样） */
+    intf_gptmr_cfg_t cfg_ch3 = {
+        .mode = INTF_GPTMR_MODE_TIMER,
+        .frequency_hz = APP_GPTMR_CH3_FREQ,
+        .callback = NULL,
+        .enable_sync = false,
+    };
+    (void)intf_gptmr_init(app_ch_to_intf(APP_GPTMR_CH_3), &cfg_ch3);
+
     s_callbacks[APP_GPTMR_CH_0] = NULL;
     s_callbacks[APP_GPTMR_CH_1] = NULL;
     s_callbacks[APP_GPTMR_CH_2] = NULL;
+    s_callbacks[APP_GPTMR_CH_3] = NULL;
 }
 
 int app_gptmr_register_callback(app_gptmr_ch_t ch, app_gptmr_callback_t cb) {
-    if (ch >= APP_GPTMR_CH_COUNT || cb == NULL) {
+    if (ch >= APP_GPTMR_CH_COUNT) {
         return -1;
-    }
-
-    s_callbacks[ch] = cb;
-
-    uint32_t freq;
-    switch (ch) {
-    case APP_GPTMR_CH_0: freq = APP_GPTMR_CH0_FREQ; break;
-    case APP_GPTMR_CH_1: freq = APP_GPTMR_CH1_FREQ; break;
-    case APP_GPTMR_CH_2: freq = APP_GPTMR_CH2_FREQ; break;
-    default: return -1;
     }
 
     intf_gptmr_cfg_t cfg = {
         .mode = INTF_GPTMR_MODE_TIMER,
-        .frequency_hz = freq,
+        .frequency_hz = s_channel_frequency[ch],
         .callback = cb,
         .enable_sync = false,
     };
-    return intf_gptmr_init(app_ch_to_intf(ch), &cfg);
+    int rc = intf_gptmr_init(app_ch_to_intf(ch), &cfg);
+    if (rc == 0)
+        s_callbacks[ch] = cb;
+    return rc;
 }
 
 int app_gptmr_start(app_gptmr_ch_t ch) {
@@ -127,5 +137,10 @@ int app_gptmr_set_frequency(app_gptmr_ch_t ch, uint32_t frequency_hz) {
     if (ch >= APP_GPTMR_CH_COUNT) {
         return -1;
     }
-    return intf_gptmr_set_frequency(app_ch_to_intf(ch), frequency_hz);
+    if (frequency_hz == 0)
+        return -1;
+    int rc = intf_gptmr_set_frequency(app_ch_to_intf(ch), frequency_hz);
+    if (rc == 0)
+        s_channel_frequency[ch] = frequency_hz;
+    return rc;
 }

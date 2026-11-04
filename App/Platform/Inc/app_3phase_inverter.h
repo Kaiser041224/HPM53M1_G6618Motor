@@ -14,7 +14,9 @@
  * 安全模型：
  *   - 初始化后输出保持关闭（PWM 未使能、+12V 关闭）
  *   - enable：先开 +12V 栅极供电 → 再启动三相 PWM
- *   - disable：先停 PWM → 再关 +12V
+ *   - disable：先停 PWM → 延迟 → 关 +12V（故障/急停路径）
+ *   - disable_soft：先关 +12V → 等待 → 停 PWM（正常停机，降低 USB/地线瞬态）
+ *   - coast：只停 PWM，保留 +12V（调试/特殊路径）
  *   - emergency_stop：三相强制关断（force low）+ 关 +12V
  *   - force_low 与占空比更新互不干扰（独立 force 通路），可安全用于保护
  *
@@ -69,6 +71,35 @@ int app_3phase_inverter_enable(void);
  * @brief 关闭输出（先停 PWM → 关 +12V）。
  */
 void app_3phase_inverter_disable(void);
+
+/**
+ * @brief 正常 coast：停止 PWM 输出，保留 +12V 栅极供电。
+ * @note 用于 FOC/motion 正常关闭，避免关 +12V 的电源瞬态；
+ *       故障路径仍使用 emergency_stop（零矢量 + force_low + 关 +12V）。
+ */
+void app_3phase_inverter_coast(void);
+
+/**
+ * @brief 软关断：先撤 +12V 栅极供电，等待驱动进入无源态，再停 PWM。
+ * @note 仅用于正常停机；故障/急停仍走 app_3phase_inverter_disable()。
+ *       用于避免“栅极驱动仍上电时直接停 PWM”造成的 USB/地线瞬态。
+ */
+void app_3phase_inverter_disable_soft(void);
+
+/**
+ * @brief 手动开启 +12V 栅极供电（不启动 PWM）
+ * @return 0 成功；-1 输出已使能/参数非法
+ */
+int app_3phase_inverter_gate_power_on(void);
+
+/**
+ * @brief 手动关闭 +12V 栅极供电（要求 PWM 输出未使能）
+ * @return 0 成功；-1 输出已使能
+ */
+int app_3phase_inverter_gate_power_off(void);
+
+/** @brief 当前 +12V 栅极供电是否已开 */
+bool app_3phase_inverter_gate_power_is_on(void);
 
 /**
  * @brief 三相占空比更新（热路径：无打印/无动态分配，逐相限幅 [0,1]）。

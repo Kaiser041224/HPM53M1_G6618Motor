@@ -50,14 +50,30 @@ static int trgm_connect_impl(intf_trgm_src_t src, intf_trgm_dst_t dst) {
         [INTF_TRGM_DST_ADC1_STRGI]   = HPM_TRGM0_OUTPUT_SRC_ADC1_STRGI,
     };
 
-    if (src >= sizeof(src_map) / sizeof(src_map[0]) || dst >= sizeof(dst_map) / sizeof(dst_map[0]))
+    if (src >= sizeof(src_map) / sizeof(src_map[0])) {
         return -1;
+    }
 
     trgm_output_t cfg;
     cfg.invert = false;
     cfg.type   = trgm_output_pulse_at_input_rising_edge;
     cfg.input = src_map[src];
 
+    /* DMA 请求目标：TRGM 输出 TRGM_DMA0/1（输入上升沿 → 单脉冲，与 ADC 触发同型）
+     * + DMACFGx 选择该输出作为 DMA 请求并使能 DMAMUX 转发（DMAMUX 源 = MOT_0/1）。
+     * 依据：UM §34.3.4 / §34.5.3；SDK bldc_foc（DMAV2）同一链路。 */
+    if ((dst == INTF_TRGM_DST_DMA_REQ0) || (dst == INTF_TRGM_DST_DMA_REQ1)) {
+        bool req1 = (dst == INTF_TRGM_DST_DMA_REQ1);
+
+        trgm_output_config(HPM_TRGM0, req1 ? TRGM_TRGOCFG_TRGM_DMA1 : TRGM_TRGOCFG_TRGM_DMA0, &cfg);
+        trgm_dma_request_config(HPM_TRGM0, req1 ? TRGM_DMACFG_1 : TRGM_DMACFG_0,
+                                req1 ? HPM_TRGM0_DMA_SRC_TRGM1 : HPM_TRGM0_DMA_SRC_TRGM0);
+        return 0;
+    }
+
+    if (dst >= sizeof(dst_map) / sizeof(dst_map[0])) {
+        return -1;
+    }
     trgm_output_config(HPM_TRGM0, dst_map[dst], &cfg);
     return 0;
 }

@@ -11,7 +11,8 @@
 
 - 表达式：引号字符串按计算式求值（构建期）；引用支持 同文件叶子名 / 节.字段 / 跨文件 域.路径
 - 校验：模式（必填/未知键/类型/范围）+ 跨域一致性；任一失败 → 非零退出 + 文件:行:键:原因
-- apply：启动期消费项在 APPLY_REBOOT 集合声明（缺省 live）；unit 从 YAML 行注释 [..] 尽力提取
+- apply：启动期消费项在 APPLY_REBOOT、FOC 停机期消费项在 APPLY_FOC_OFF 集合声明
+  （缺省 live）；unit 从 YAML 行注释 [..] 尽力提取
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ SCHEMA = {
         ("rs_ohm", "rs_ohm", "f32", 0.0, None),
         ("ls_h", "ls_h", "f32", 0.0, None),
         ("ke_vs_per_rad", "ke_vs_per_rad", "f32", 0.0, None),
+        ("flux_linkage_wb", "flux_linkage_wb", "f32", 0.0, None),
         ("kt_nm_per_a", "kt_nm_per_a", "f32", 0.0, None),
         ("i_rated_a", "i_rated_a", "f32", 0.0, None),
         ("i_peak_10s_a", "i_peak_10s_a", "f32", 0.0, None),
@@ -46,20 +48,26 @@ SCHEMA = {
         ("vbus_nom_v", "vbus_nom_v", "f32", 0.0, None),
         ("rpm_max", "rpm_max", "u16", 1, 65535),
         ("inertia_kgm2", "inertia_kgm2", "f32", 0.0, None),
+        ("load_inertia_kgm2", "load_inertia_kgm2", "f32", 0.0, None),
         ("torque_rated_nm", "torque_rated_nm", "f32", 0.0, None),
         ("torque_peak_10s_nm", "torque_peak_10s_nm", "f32", 0.0, None),
+        ("reducer_ratio", "reducer_ratio", "f32", 0.0, None),
         ("encoder.resolution_bits", "encoder.resolution_bits", "u8", 1, 32),
         ("encoder.rotor_ring_teeth", "encoder.rotor_ring_teeth", "u8", 1, 255),
         ("encoder.rotor_pinion_teeth", "encoder.rotor_pinion_teeth", "u8", 1, 255),
         ("encoder.output_pinion_teeth", "encoder.output_pinion_teeth", "u8", 1, 255),
         ("encoder.rotor_ratio", "encoder.rotor_ratio", "f32", 0.0, None),
         ("encoder.output_ratio", "encoder.output_ratio", "f32", 0.0, None),
+        ("encoder.electrical_offset_rad", "encoder.electrical_offset_rad", "f32", 0.0, 6.283185307179586),
+        ("encoder.direction", "encoder.direction", "f32", -1.0, 1.0),
+        ("encoder.electrical_offset_valid", "encoder.electrical_offset_valid", "u8", 0, 1),
     ],
     "hardware": [
         ("current_sense.shunt_ohm", "current_sense.shunt_ohm", "f32", 0.0, None),
         ("current_sense.amp_gain", "current_sense.amp_gain", "f32", 0.0, None),
         ("current_sense.a_per_volt", "current_sense.a_per_volt", "f32", 0.0, None),
         ("current_sense.bias_v", "current_sense.bias_v", "f32", 0.0, None),
+        ("current_sense.invert", "current_sense.invert", "u8", 0, 1),
         ("vbus_sense.divider_high_ohm", "vbus_sense.divider_high_ohm", "u32", 1, None),
         ("vbus_sense.divider_low_ohm", "vbus_sense.divider_low_ohm", "u32", 1, None),
         ("vbus_sense.v_per_volt", "vbus_sense.v_per_volt", "f32", 1.0, None),
@@ -72,26 +80,118 @@ SCHEMA = {
         ("adc.trigger_delay_ns", "adc.trigger_delay_ns", "u32", 0, None),
         ("inverter.pwm_freq_hz", "inverter.pwm_freq_hz", "u32", 1, None),
         ("inverter.deadtime_ns", "inverter.deadtime_ns", "u32", 0, None),
+        ("inverter.deadtime_comp_ns", "inverter.deadtime_comp_ns", "u32", 0, 5000),
     ],
     "software": [
         ("can.baudrate", "can.baudrate", "u32", 1, None),
-        ("can.node_id_default", "can.node_id_default", "u8", 0, 127),
+        ("can.can_id", "can.can_id", "u8", 0, 127),
         # CAN ID 暂限标准帧（11-bit ≤0x7FF）；扩展帧待协议定义帧格式字段后放宽
         ("can.rx_control_id", "can.rx_control_id", "u32", 0, 0x7FF),
         ("can.tx_report_id", "can.tx_report_id", "u32", 0, 0x7FF),
+        ("fault.actions_enable", "fault.actions_enable", "u8", 0, 1),
         ("fault.oc_trip_a", "fault.oc_trip_a", "f32", 0.0, None),
         ("fault.vbus_ov_v", "fault.vbus_ov_v", "f32", 0.0, None),
         ("fault.vbus_uv_v", "fault.vbus_uv_v", "f32", 0.0, None),
         ("fault.slow_debounce", "fault.slow_debounce", "u16", 1, 65535),
         ("fault.adc_stall_ms", "fault.adc_stall_ms", "u16", 1, 65535),
         ("fault.enc_err_delta", "fault.enc_err_delta", "u8", 1, 255),
+        ("control.motion_input.vel_ramp_rate", "motion_input.vel_ramp_rate", "f32", 0.0, None),
+        ("control.motion_input.torque_ramp_rate", "motion_input.torque_ramp_rate", "f32", 0.0, None),
         ("control.current_loop.kp", "control.current_loop.kp", "f32", None, None),
         ("control.current_loop.ki", "control.current_loop.ki", "f32", None, None),
+        ("control.current_loop.bandwidth_rad_s", "control.current_loop.bandwidth_rad_s", "f32", 0.0, None),
+        ("control.current_loop.decoupling_en", "control.current_loop.decoupling_en", "u8", 0, 1),
+        ("control.current_loop.output_delay_s", "current_loop_output_delay_s", "f32", 0.0, 1.0e-3),
+        ("control.speed_observer.enable", "speed_observer.enable", "u8", 0, 1),
+        ("control.speed_observer.bandwidth_rad_s",
+         "speed_observer.bandwidth_rad_s", "f32", 1.0, None),
+        ("control.speed_observer.max_speed_rad_s",
+         "speed_observer.max_speed_rad_s", "f32", 1.0, None),
         ("control.speed_loop.kp", "control.speed_loop.kp", "f32", None, None),
         ("control.speed_loop.ki", "control.speed_loop.ki", "f32", None, None),
+        ("control.speed_loop.friction_coulomb_nm",
+         "control.speed_loop.friction_coulomb_nm", "f32", 0.0, 100.0),
+        ("control.speed_loop.friction_viscous_nm_per_rad_s",
+         "control.speed_loop.friction_viscous_nm_per_rad_s", "f32", -100.0, 100.0),
+        ("control.speed_loop.friction_smoothing_rad_s",
+         "control.speed_loop.friction_smoothing_rad_s", "f32", 0.0, 1.0),
+        ("control.speed_loop.velocity_lpf_coeff",
+         "control.speed_loop.velocity_lpf_coeff", "f32", 0.0, 1.0),
+        ("control.position_loop.pos_gain",
+         "control.position_loop.pos_gain", "f32", 0.0, 100.0),
+        ("control.position_loop.input_filter_bandwidth",
+         "control.position_loop.input_filter_bandwidth", "f32", 0.0, 100.0),
+        ("control.position_loop.trajectory_vel_limit",
+         "position_traj.trajectory_vel_limit", "f32", 0.0, None),
+        ("control.position_loop.trajectory_accel_limit",
+         "position_traj.trajectory_accel_limit", "f32", 0.0, None),
+        # 多圈/增量行程保护（追加到 params 末尾，避免重排既有字段偏移）
+        ("control.position_loop.max_step_deg", "position_travel.max_step_deg", "f32", 0.0, None),
+        ("control.position_loop.max_travel_deg", "position_travel.max_travel_deg", "f32", 0.0, None),
+        ("control.position_loop.travel_min_deg", "position_travel.travel_min_deg", "f32", None, None),
+        ("control.position_loop.travel_max_deg", "position_travel.travel_max_deg", "f32", None, None),
+        # MIT 阻抗控制
+        ("control.mit.enable", "mit.enable", "u8", 0, 1),
+        ("control.mit.kp_max", "mit.kp_max", "f32", 0.0, 100.0),
+        ("control.mit.kd_max", "mit.kd_max", "f32", 0.0, 20.0),
+        ("control.mit.gain_ramp_rate", "mit.gain_ramp_rate", "f32", 0.0, None),
+        ("control.mit.pos_err_max_deg", "mit.pos_err_max_deg", "f32", 0.0, None),
+        ("control.mit.t_ff_max_ratio", "mit.t_ff_max_ratio", "f32", 0.0, 1.0),
+        ("control.mit.can_format", "mit.can_format", "u8", 0, 1),
+        ("control.mit.friction_ff_en", "mit.friction_ff_en", "u8", 0, 1),
+        ("control.mit.inertia_ff_en", "mit.inertia_ff_en", "u8", 0, 1),
+        # CAN 通信看门狗（追加到 params 末尾，避免重排既有字段偏移）
+        ("fault.comm_timeout_ms", "comm.comm_timeout_ms", "u16", 0, 65535),
         ("control.limits.i_q_max_a", "control.limits.i_q_max_a", "f32", 0.0, None),
-        ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.0, 1.0),
+        ("control.limits.i_q_continuous_a", "i_q_continuous_a", "f32", 0.0, None),
+        ("control.limits.i_q_boost_time_s", "i_q_boost_time_s", "f32", 0.0, None),
+        ("control.limits.i_q_boost_recover_time_s", "i_q_boost_recover_time_s", "f32", 0.0, None),
+        ("control.limits.i_q_boost_recover_ratio", "i_q_boost_recover_ratio", "f32", 0.0, 1.0),
+        ("control.limits.duty_max", "control.limits.duty_max", "f32", 0.501, 1.0),
+        ("control.limits.i_trip_a", "control.limits.i_trip_a", "f32", 0.0, None),
+        ("control.limits.foc_speed_max_rad_s",
+         "control.limits.speed_max_rad_s", "f32", 0.0, None),
+        ("control.limits.foc_speed_limit_gain",
+         "foc_speed_limit_gain", "f32", 0.0, None),
+        ("control.limits.motion_iq_max_a", "control.limits.motion_iq_max_a", "f32", 0.0, None),
+        ("control.limits.motion_speed_limit_rad_s",
+         "control.limits.motion_speed_limit_rad_s", "f32", 0.0, None),
+        ("control.limits.motion_speed_limit_gain",
+         "motion_speed_limit_gain", "f32", 0.0, None),
+        ("motion.output_direction", "motion.output_direction", "f32", -1.0, 1.0),
+        ("control.cogging.enable", "cogging.enable", "u8", 0, 1),
+        ("control.cogging.rotor_enable", "cogging.rotor_enable", "u8", 0, 1),
+        ("control.cogging.output_enable", "cogging.output_enable", "u8", 0, 1),
+        ("control.cogging.gain", "cogging.gain", "f32", 0.0, 2.0),
+        ("current_ff.r_en", "current_ff.r_en", "u8", 0, 1),
+        ("current_ff.wl_en", "current_ff.wl_en", "u8", 0, 1),
+        ("current_ff.bemf_en", "current_ff.bemf_en", "u8", 0, 1),
+        ("storage", "storage", "u32", 0, 2),
     ],
+}
+
+# 字符串枚举字段：YAML 使用可读单词，生成 C 时转为数值
+ENUM_FIELDS = {
+    ("software", "storage"): {"keep": 0, "reset": 1, "override": 2},
+    ("software", "control.mit.can_format"): {"compact": 0, "dual": 1},
+}
+
+# 布尔字段：YAML 接受 true/false、on/off、yes/no、1/0；生成 C 时写 u8 0/1
+BOOL_FIELDS = {
+    ("hardware", "current_sense.invert"),
+    ("software", "fault.actions_enable"),
+    ("software", "control.current_loop.decoupling_en"),
+    ("software", "control.speed_observer.enable"),
+    ("software", "current_ff.r_en"),
+    ("software", "current_ff.wl_en"),
+    ("software", "current_ff.bemf_en"),
+    ("software", "control.cogging.enable"),
+    ("software", "control.cogging.rotor_enable"),
+    ("software", "control.cogging.output_enable"),
+    ("motor", "encoder.electrical_offset_valid"),
+    ("software", "control.mit.enable"),
+    ("software", "control.mit.friction_ff_en"),
+    ("software", "control.mit.inertia_ff_en"),
 }
 
 # 仅文档字段：(yaml 路径, 允许值集合或 None)；只校验，不生成 C 字段
@@ -131,7 +231,7 @@ APPLY_REBOOT = {
     "hardware.canid_dip.levels",
     # 软件：CAN init 期配置
     "software.can.baudrate",
-    "software.can.node_id_default",
+    "software.can.can_id",
     "software.can.rx_control_id",
     "software.can.tx_report_id",
     # 软件：保护阈值（init 期换算为 WDOG 寄存器值/RMS 阈值）
@@ -141,6 +241,59 @@ APPLY_REBOOT = {
     "software.fault.slow_debounce",
     "software.fault.adc_stall_ms",
     "software.fault.enc_err_delta",
+    # 电机：转矩换算（init 期缓存）
+    "motor.reducer_ratio",
+    # 软件：运动控制（app_motion init 期缓存；在线改走 motion gains / param save）
+    "software.control.speed_loop.kp",
+    "software.control.speed_loop.ki",
+    "software.control.speed_loop.friction_coulomb_nm",
+    "software.control.speed_loop.friction_viscous_nm_per_rad_s",
+    "software.control.speed_loop.friction_smoothing_rad_s",
+    "software.control.speed_loop.velocity_lpf_coeff",
+    # 软件：FOC observer / 输出延迟（app_foc、app_foc_current init 期缓存）
+    "software.control.speed_observer.enable",
+    "software.control.speed_observer.bandwidth_rad_s",
+    "software.control.speed_observer.max_speed_rad_s",
+    "software.control.current_loop.output_delay_s",
+    "software.control.position_loop.pos_gain",
+    "software.control.position_loop.input_filter_bandwidth",
+    "software.control.limits.motion_iq_max_a",
+    "software.control.limits.i_q_continuous_a",
+    "software.control.limits.i_q_boost_time_s",
+    "software.control.limits.i_q_boost_recover_time_s",
+    "software.control.limits.i_q_boost_recover_ratio",
+    "software.control.limits.motion_speed_limit_rad_s",
+    "software.control.limits.motion_speed_limit_gain",
+    "software.control.motion_input.vel_ramp_rate",
+    "software.control.motion_input.torque_ramp_rate",
+    "software.control.position_loop.trajectory_vel_limit",
+    "software.control.position_loop.trajectory_accel_limit",
+    # 软件：motion 用户坐标方向（app_motion init 期缓存；改向需重启）
+    "software.motion.output_direction",
+    # 齿槽补偿默认启用（boot 时在表加载后消费；运行期用 cogging on/off）
+    "software.control.cogging.enable",
+    "software.control.cogging.rotor_enable",
+    "software.control.cogging.output_enable",
+    "software.control.cogging.gain",
+    # 持久化代次（boot 期比对；不属运行参数）
+    "software.storage",
+    # CAN MIT 报文格式：协议初始化期消费
+    "software.control.mit.can_format",
+    # CAN 通信看门狗：init 期消费
+    "software.fault.comm_timeout_ms",
+}
+
+# FOC 停机期消费项：param set 仅在 FOC OFF 接受，下一次 foc on 重载模型/角度链生效。
+# 与 APPLY_REBOOT 区分：不要求重启，但必须保证功率级无输出。
+APPLY_FOC_OFF = {
+    # 硬件：逆变器死区补偿（foc on 时 reload_model 折算为占空比偏移）
+    "hardware.inverter.deadtime_comp_ns",
+    "motor.pole_pairs",
+    "motor.rs_ohm",
+    "motor.ls_h",
+    "motor.kt_nm_per_a",
+    "motor.encoder.electrical_offset_rad",
+    "motor.encoder.direction",
 }
 
 META_DOMAIN_ENUMS = {
@@ -156,6 +309,7 @@ META_TYPE_ENUMS = {
 }
 META_APPLY_LIVE = "PARAM_META_APPLY_LIVE"
 META_APPLY_REBOOT = "PARAM_META_APPLY_REBOOT"
+META_APPLY_FOC_OFF = "PARAM_META_APPLY_FOC_OFF"
 
 # YAML 行注释中的单位标记（如 "# ... [Ω]"）；取最后一个匹配
 _UNIT_RE = re.compile(r"\[([^\]\[]+)\]")
@@ -281,6 +435,21 @@ def check_literal(where: str, val, ctype: str, lo, hi) -> None:
         raise err(where, f"越界：{val}（允许 {lo2}..{hi2}）")
 
 
+def parse_bool(where: str, val):
+    """把 YAML 布尔写法归一化为 1/0；保留旧 0/1 兼容。"""
+    if isinstance(val, bool):
+        return 1 if val else 0
+    if isinstance(val, str):
+        text = val.strip().lower()
+        if text in ("true", "on", "yes", "1"):
+            return 1
+        if text in ("false", "off", "no", "0"):
+            return 0
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and val in (0, 1):
+        return int(val)
+    raise err(where, f"布尔字段必须是 true/false/on/off（或 0/1；实际 {val!r}）")
+
+
 def validate_domain(domain: str, flat: dict, marks) -> None:
     spec = {path: (ctype, lo, hi) for (path, _cfield, ctype, lo, hi) in SCHEMA[domain]}
     docs = dict(DOC_ONLY[domain])
@@ -299,6 +468,15 @@ def validate_domain(domain: str, flat: dict, marks) -> None:
                     raise err(where, f"取值必须是 {sorted(allowed)} 之一（实际 {val!r}）")
             elif not isinstance(val, str):
                 raise err(where, f"必须是字符串（实际 {type(val).__name__}）")
+            continue
+        if (domain, path) in BOOL_FIELDS:
+            flat[path] = parse_bool(where, val)
+            continue
+        enum = ENUM_FIELDS.get((domain, path))
+        if enum is not None:
+            if not isinstance(val, str) or val not in enum:
+                raise err(where, f"取值必须是 {sorted(enum)} 之一（实际 {val!r}）")
+            flat[path] = enum[val]
             continue
         ctype, lo, hi = spec[path]
         if isinstance(val, str):
@@ -474,6 +652,37 @@ def cross_checks(symbols) -> None:
         raise err("跨域校验", "vbus_ov_v 超过电机额定电压（motor.vbus_nom_v）")
     if g("software", "fault.oc_trip_a") < g("motor", "i_rated_a"):
         raise err("跨域校验", "oc_trip_a 低于额定电流（会误报）")
+    pole_pairs = g("motor", "pole_pairs")
+    kt = g("motor", "kt_nm_per_a")
+    flux = g("motor", "flux_linkage_wb")
+    flux_expected = kt / (1.5 * pole_pairs)
+    if abs(flux - flux_expected) > 1e-6:
+        raise err(
+            "跨域校验",
+            f"Kt/flux 口径不一致：flux_linkage_wb={flux:.9g}，"
+            f"Kt_peak/(1.5·pole_pairs)={flux_expected:.9g}；"
+            "bEMF 前馈必须与转矩常数使用同一峰值电流口径")
+    i_cont = g("software", "control.limits.i_q_continuous_a")
+    i_boost = g("software", "control.limits.i_q_max_a")
+    i_motion = g("software", "control.limits.motion_iq_max_a")
+    if i_cont > i_boost:
+        raise err(
+            "跨域校验",
+            f"i_q_continuous_a={i_cont:.9g} 不能大于 i_q_max_a={i_boost:.9g}")
+    if i_cont > i_motion:
+        raise err(
+            "跨域校验",
+            f"i_q_continuous_a={i_cont:.9g} 不能大于 motion_iq_max_a={i_motion:.9g}")
+    reducer = g("motor", "reducer_ratio")
+    output_ratio = g("motor", "encoder.output_ratio")
+    if not (0.0 < output_ratio < 1.0):
+        raise err("跨域校验", "encoder.output_ratio 必须在 (0, 1) 内（出轴/转子比）")
+    if abs(reducer - round(reducer)) > 1e-6:
+        raise err("跨域校验", "motor.reducer_ratio 必须为正整数圈数")
+    if abs(reducer * (1.0 - output_ratio) - 1.0) > 1e-3:
+        raise err(
+            "跨域校验",
+            "游标参数不一致：reducer_ratio × (1 - encoder.output_ratio) 必须≈1")
     full_scale = g("hardware", "current_sense.bias_v") * g("hardware", "current_sense.a_per_volt")
     if g("software", "fault.oc_trip_a") > full_scale:
         raise err("跨域校验", f"oc_trip_a 超过采样链路满量程（{full_scale:.1f} A）")
@@ -595,6 +804,7 @@ typedef enum {
 typedef enum {
     PARAM_META_APPLY_LIVE = 0, /**< set 立即生效（消费者实时读取） */
     PARAM_META_APPLY_REBOOT,   /**< set 仅改 RAM，重启后生效 */
+    PARAM_META_APPLY_FOC_OFF,  /**< set 仅在 FOC OFF 接受，下一次 foc on 生效 */
 } param_meta_apply_t;
 
 /**
@@ -636,7 +846,13 @@ def gen_meta_source(units) -> str:
     ]
     for d in DOMAINS:
         for path, cfield, ctype, lo, hi in SCHEMA[d]:
-            apply = META_APPLY_REBOOT if f"{d}.{path}" in APPLY_REBOOT else META_APPLY_LIVE
+            key = f"{d}.{path}"
+            if key in APPLY_FOC_OFF:
+                apply = META_APPLY_FOC_OFF
+            elif key in APPLY_REBOOT:
+                apply = META_APPLY_REBOOT
+            else:
+                apply = META_APPLY_LIVE
             unit = units[d].get(path)
             unit_lit = "NULL" if unit is None else c_string(unit)
             min_lit = _fmt_bound(lo, "-INFINITY")

@@ -10,7 +10,7 @@ HEAP_SIZE = _heap_size;
 
 MEMORY
 {
-    FLASH (rx) : ORIGIN = 0x80000000, LENGTH = _flash_size - 0x2000  /* 末尾 8KB 保留：参数+测试扇区 */
+    FLASH (rx) : ORIGIN = 0x80000000, LENGTH = _flash_size - 0x3000  /* 末尾 12KB 保留：齿槽表+参数+测试扇区 */
     ILM (wx) : ORIGIN = 0x00000000, LENGTH = 128K
     DLM (w) : ORIGIN = 0x00080300, LENGTH = 128K - 768
     AHB_SRAM (w) : ORIGIN = 0xf0400000, LENGTH = 32K
@@ -266,6 +266,7 @@ SECTIONS
         KEEP(*(.ahb_sram))
         KEEP(*(.ahb_sram.*))
     } > AHB_SRAM
+    ASSERT(SIZEOF(.ahb_sram) <= LENGTH(AHB_SRAM), "AHB_SRAM overflow")
 
     .fast_ram (NOLOAD) : {
         . = ALIGN(8);

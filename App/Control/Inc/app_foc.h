@@ -1,0 +1,328 @@
+/**
+ * @file    app_foc.h
+ * @brief   FOC 编排：状态机 / 模式 / 联锁 / 30kHz 入口
+ * @author  Kaiser
+ *
+ * 状态机（spec §4.1）：
+ *   OFF → (enable) → READY → (首次非零给定) → RUN
+ *   READY/RUN → (cal 请求) → CALIB → (完成/中止) → READY
+ *   任意 → (fault != NORMAL) → FAULT（零矢量 + 关桥）→ (disable) → OFF
+ *
+ * Copyright (c) 2026 Alliance HardwareGroup
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#ifndef APP_FOC_H
+#define APP_FOC_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "app_foc_current.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief FOC 状态
+ */
+typedef enum {
+    APP_FOC_STATE_OFF = 0, /**< 输出关闭 */
+    APP_FOC_STATE_READY,   /**< 桥已使能，零矢量 */
+    APP_FOC_STATE_RUN,     /**< 电流闭环 */
+    APP_FOC_STATE_CALIB,   /**< 辨识模式（强制角 + 辨识模块驱动） */
+    APP_FOC_STATE_FAULT,   /**< 故障门控（零矢量 + 关桥） */
+} app_foc_state_t;
+
+/** @brief 正常电流请求生产者；校准/停止不属于正常请求 */
+typedef enum {
+    APP_FOC_CURRENT_SOURCE_DIRECT = 0,
+    APP_FOC_CURRENT_SOURCE_MOTION,
+} app_foc_current_source_t;
+/** @brief 完整电流请求，epoch必须与当前权限一致 */
+typedef struct {
+    float id_ref_a;
+    float iq_ref_a;
+    uint32_t sequence;
+    uint32_t epoch;
+    bool valid;
+} app_foc_current_request_t;
+/** @brief ADC执行反馈；accepted为给定，不是实测电流 */
+typedef struct {
+    uint32_t sample_sequence;
+    uint32_t timestamp_cycles;
+    uint32_t request_sequence;
+    uint32_t epoch;
+    uint32_t invalid_count;
+    uint32_t limited_count;
+    uint32_t saturated_count;
+    float requested_id_a, requested_iq_a;
+    float accepted_id_a, accepted_iq_a;
+    float measured_id_a, measured_iq_a;
+    bool valid;
+    bool normal_owner;
+    bool current_limited;
+    bool voltage_saturated;
+    bool request_expired; /**< MOTION请求超过500us，零给定回退，不关桥 */
+} app_foc_execution_t;
+/** @brief OFF或零给定READY切换生产者，撤销旧请求；0成功 */
+int app_foc_set_current_source(app_foc_current_source_t source);
+/** @brief 当前正常请求生产者；供诊断互斥，不代表输出权限已授予 */
+app_foc_current_source_t app_foc_get_current_source(void);
+/** @brief 读取当前权限代次 */
+uint32_t app_foc_current_epoch(void);
+/** @brief MOTION生产者原子提交id/iq，错误返回-1，不改变现有请求 */
+int app_foc_submit_current(const app_foc_current_request_t* request);
+/** @brief 短临界区复制执行反馈（累计计数，可差分） */
+void app_foc_get_execution(app_foc_execution_t* out);
+
+/**
+ * @brief 角度来源
+ */
+typedef enum {
+    APP_FOC_ANGLE_ENCODER = 0, /**< 编码器（正常闭环） */
+    APP_FOC_ANGLE_FORCED,      /**< 强制角（辨识/调试） */
+    APP_FOC_ANGLE_OBSERVER,    /**< 观测器（无感占位；V1 未实现） */
+} app_foc_angle_source_t;
+
+/**
+ * Ozone 观测：FOC 单拍耗时 [cycle]（.noncacheable.bss；30kHz 节拍）
+ */
+extern volatile uint32_t g_foc_loop_cycles;
+/** Ozone 观测：FOC 调用间隔 [µs]（30kHz 标称；明显大于 34 = 节拍抖动/丢拍） */
+extern volatile uint32_t g_foc_loop_dt_us;
+
+/**
+ * @brief 本拍母线来源观测（.noncacheable.bss）
+ *
+ * 1 = 采用与三相电流**同源触发、同拍**的 30kHz 快通道值（正式路径）；
+ * 0 = 快通道不可用（尚无首帧 / ADC1 序列异常 / 参数非法 → NAN）→ 回退 1kHz 缓存值。
+ *
+ * **快通道是唯一正式来源，不存在运行期开关**（原 A/B 开关 `g_foc_vbus_fast_en` 已于
+ * 2026-10-27 收尾移除）。定案依据（2026-10-26 配对 A/B，同固件同热态、3+3 轮）：
+ *   FAST 臂 → cal rl 887/1445/1044Hz 全 PASS，RI A/B recommend=YES，raw 超调 22.3~26.9%；
+ *   SLOW 臂 → cal rl 754/754/754Hz 全 NOT PASSED，raw 超调 28.6~31.1%。
+ * 机理：duty = v_cmd/v_bus，慢值在电流阶跃期间给的是阶跃前的母线 → duty 缩放系统性
+ * 错误；快值每拍用本拍母线。
+ *
+ * 本变量为 0 即表示发生回退，应视为数据链异常（终端 `foc` 的 `vbus src=` 行据此显示）。
+ */
+extern volatile uint8_t g_foc_vbus_src_used;
+/** Ozone 观测：30kHz ISR 单拍耗时 [cycle] / 历史最大 */
+extern volatile uint32_t g_foc_isr_cycles;
+extern volatile uint32_t g_foc_isr_cycles_max;
+/** Ozone 观测：ISR 单拍超预算次数（超限即停用快路径并紧急关桥） */
+extern volatile uint32_t g_foc_isr_overruns;
+/** Ozone 观测：编码器快照年龄与序号（ISR 侧） */
+extern volatile uint32_t g_foc_enc_age_cycles;
+extern volatile uint32_t g_foc_enc_age_us;
+extern volatile uint32_t g_foc_enc_seq;
+/** @brief observer 轴端速度快照 [rad/s]（ISR 发布；15kHz motion 直读，热路径免 Flash 调用） */
+extern volatile float g_foc_speed_out_rad_s;
+/** @brief g_foc_speed_out_rad_s 有效（本拍电流环执行且 observer 有效） */
+extern volatile bool g_foc_speed_out_valid;
+/** ISR→主循环 故障请求（ISR 只置位；主循环负责状态迁移） */
+extern volatile uint32_t g_foc_fault_request;
+
+/**
+ * @brief 初始化（上电状态 OFF）
+ */
+void app_foc_init(void);
+
+/**
+ * @brief 绑定外部紧急停机请求邮箱（Control 持有指针；ISR 每拍只读，无需主循环）。
+ * @param req 请求字指针（*req != 0 → ISR 立即紧急关桥并锁存抑制）；可为 NULL 解绑。
+ * @note 典型绑定：Debug 层把一个 volatile 静态字段地址传入；Ozone 直接写该字段=1
+ *       即可在无主循环参与下触发停机。生命周期须覆盖运行期。
+ *       触发后 *req 会被回写为 1（锁存），disable() 会清零。
+ */
+void app_foc_register_estop_request(volatile uint32_t* req);
+
+/**
+ * @brief ISR 是否已锁存输出抑制（故障后为 true；disable 清除）
+ */
+bool app_foc_isr_inhibited(void);
+
+/**
+ * @brief 30kHz 节拍（ADC0 PMT ISR 调用）
+ */
+void app_foc_run_once(void);
+
+/**
+ * @brief FOC 快速路径（ADC0 PMT 完成中断内调用；由 app_foc_init 自动注册）
+ * @note 编码器采样 + 角度链 + 电流环；固定 30kHz。禁止在中断外直接调用。
+ */
+void app_foc_isr_step(void);
+
+/**
+ * @brief 使能（OFF → READY）：检查故障/ADC/编码器/参数 → 使能逆变桥
+ * @return 0 = 成功；-1 = 拒绝
+ */
+int app_foc_enable(void);
+
+/**
+ * @brief 关闭（任意 → OFF）：零矢量 + 关桥
+ */
+void app_foc_disable(void);
+/** @brief 用户关闭：100个1ms任务拍缓降+20拍零给定，非阻塞 */
+int app_foc_request_stop(void);
+/**
+ * @brief 等待正常停机完成（阻塞；内部推进 stop 状态机）
+ * @param timeout_ms 超时 [ms]（0 按 1ms）
+ * @return true = state=OFF 且 stop_pending=false
+ * @note 仅由任务上下文调用；阻塞期间 FOC 电流环 ISR 继续运行。
+ *       超时会强制 app_foc_disable()（正常路径为软关断）后返回 false。
+ */
+bool app_foc_wait_off(uint32_t timeout_ms);
+/** @brief 正常关闭尚未完成，期间拒绝新给定/校准 */
+bool app_foc_stop_pending(void);
+
+/**
+ * @brief 保护动作层请求"受控停机"（policy = STOP）
+ * @param code 触发故障码（仅记录/诊断）
+ * @return 0 = 已发起（复用既有软停机状态机：卸转矩 → 缓降 → 软关断）；
+ *         -1 = 当前状态无软停机可言（OFF-但桥可能使能 / CALIB / vtest）
+ *              → 调用方须降级为 TRIP（`app_fault_note_stop_rejected()`）
+ * @note 不由本函数阻塞等待；超时兜底由慢保护完成。
+ */
+int app_foc_request_fault_stop(uint32_t code);
+/** @brief OFF时设置占空比上限[0.70,0.98]，RAM；重启默认0.95；高值采样精度未验证 */
+int app_foc_set_duty_ceiling(float ceiling);
+
+/**
+ * @brief 设置转矩给定（限幅 ±i_q_max）
+ * @param i_q_a q 轴电流给定 [A]
+ * @return 0 = 成功；-1 = 状态不允许/参数非法
+ */
+int app_foc_set_iq_ref(float i_q_a);
+
+/**
+ * @brief 读取当前 q 轴给定（已限幅；命令回显用）
+ * @return q 轴给定 [A]
+ */
+float app_foc_get_iq_ref(void);
+
+/**
+ * @brief 设置 d 轴给定（辨识/调试；默认 0）
+ * @param i_d_a d 轴给定 [A]（不做单独限幅：内部电流矢量限幅兜底）
+ * @return 0 = 成功；-1 = 状态不允许/参数非法
+ */
+int app_foc_set_id_ref(float i_d_a);
+
+/**
+ * @brief 设置角度来源与强制角
+ * @param src 角度来源（编码器 / 强制）
+ * @param theta_e_rad 强制电角度 [rad]（src = ENCODER 时忽略）
+ * @return 0 = 成功；-1 = 枚举非法/非有限值/状态不允许
+ */
+int app_foc_set_angle_source(app_foc_angle_source_t src, float theta_e_rad);
+
+/**
+ * @brief 当前状态
+ * @return 状态枚举
+ */
+app_foc_state_t app_foc_get_state(void);
+
+/**
+ * @brief 是否活动（!= OFF；供 Debug/Comm 互斥判断）
+ * @return true = 活动
+ */
+bool app_foc_is_active(void);
+
+/**
+ * @brief 读取电流环快照
+ * @param out 输出快照（不可为 NULL）
+ */
+void app_foc_get_snapshot(app_foc_current_snapshot_t* out);
+/**
+ * @brief 使能/停用 30kHz speed/ωe observer（默认由 software.yaml 决定；此 API 供测试/调试覆盖）
+ * @param enable true = 步进 observer 并发布 ωe/speed；false = 只用 foc_angle
+ */
+void app_foc_set_speed_observer_enable(bool enable);
+
+/* ============================================================================
+ * 校准端口（Calibration Port）
+ *
+ * 供隔离的校准模块（app_motor_identify）在 1kHz 任务上下文借用电流环：
+ *   begin → set_excitation（强制角激励）/ use_trial_offset + set_current（试用零点验证）→ end
+ * 约束：
+ *   - 仅 CALIB 状态生效；FOC 不感知校准算法，ISR 无新增代码（复用 CALIB 角源/给定）；
+ *   - 运行零点由镜像持续记录（仅 apply / enable 更新），end 时据此恢复（试用零点永不残留）；
+ *   - 校准结果生效只经 app_foc_apply_encoder_offset（由调用方显式发起）。
+ * ============================================================================ */
+
+/**
+ * @brief 开始校准（READY/RUN → CALIB；强制角 0、给定清零、PI 积分清零）
+ * @return 0 = 成功；-1 = 状态不允许（非 READY/RUN 或 vtest 进行中）
+ */
+int app_foc_calib_begin(void);
+/** @brief CALIB专用同步捕获，可选有限d轴电压脉冲 */
+int app_foc_calib_capture(float voltage, bool voltage_mode);
+/** @brief CALIB专用临时PI，不修改正式软件参数 */
+int app_foc_calib_trial_pi(float kp, float ki);
+/** @brief 校准期临时强制 R*I 前馈，不修改用户配置；0成功 */
+int app_foc_calib_trial_r_ff(uint8_t enable);
+/** @brief 有限恒压租约；voltage<0退出恒压，周期数由ADC拍数计数 */
+int app_foc_calib_voltage(float voltage, uint32_t cycles);
+/** @brief 恒压偏置周围同步交替激励，half_period单位ADC拍 */
+int app_foc_calib_pulse(float amplitude, uint16_t half_period);
+
+/**
+ * @brief 结束校准（CALIB → READY；恢复运行零点与编码器角源、给定清零）；非 CALIB 时无操作
+ */
+void app_foc_calib_end(void);
+
+/**
+ * @brief 强制角激励（CALIB；切换为强制角源）
+ * @param theta_e_rad 强制电角度 [rad]
+ * @param i_d_ref d 轴电流给定 [A]
+ * @param i_q_ref q 轴电流给定 [A]
+ * @return 0 = 成功；-1 = 非 CALIB / 参数非有限
+ */
+int app_foc_calib_set_excitation(float theta_e_rad, float i_d_ref, float i_q_ref);
+
+/**
+ * @brief 试用零点（CALIB；切换为编码器角源并临时使用给定零点/方向，end 时作废）
+ * @param offset_rad 试用电角度零点 [rad]
+ * @param direction 试用方向（+1.0 / −1.0）
+ * @return 0 = 成功；-1 = 非 CALIB / 参数非法
+ */
+int app_foc_calib_use_trial_offset(float offset_rad, float direction);
+
+/**
+ * @brief 设置 d/q 电流给定（CALIB；不改变角源）
+ * @param i_d_ref d 轴电流给定 [A]
+ * @param i_q_ref q 轴电流给定 [A]
+ * @return 0 = 成功；-1 = 非 CALIB / 参数非有限
+ */
+int app_foc_calib_set_current(float i_d_ref, float i_q_ref);
+
+/**
+ * @brief 应用电角度零点/方向到运行期角度链（不写参数；CALIB 中拒绝）
+ * @param offset_rad 电角度零点 [rad]
+ * @param direction 方向（+1.0 / −1.0）
+ * @return 0 = 成功；-1 = CALIB 中 / 参数非法
+ * @note app_foc_enable 会从电机参数重建角度链：持久生效须同时写电机参数
+ *       （app_motor_identify_apply 已一并处理）。
+ */
+int app_foc_apply_encoder_offset(float offset_rad, float direction);
+
+/**
+ * @brief 读取运行期角度链当前生效的零点/方向（不含 CALIB 试用值）
+ * @param offset_rad 输出零点 [rad]（可为 NULL）
+ * @param direction 输出方向（可为 NULL）
+ */
+void app_foc_get_encoder_offset(float* offset_rad, float* direction);
+
+/**
+ * @brief 是否处于 FAULT 门控
+ * @return true = 当前状态为 FAULT
+ */
+bool app_foc_fault_gate(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* APP_FOC_H */

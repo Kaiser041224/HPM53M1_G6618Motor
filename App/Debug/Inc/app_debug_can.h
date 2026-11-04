@@ -24,11 +24,10 @@ extern "C" {
 void app_debug_can_init(void);
 
 /**
- * @brief CAN 自检周期任务：
- *        1) 分发接收回调（主循环上下文）：打印 + **原样回显到总线**
- *        2) 每秒发送一帧经典 CAN（ID 取自 config/software.yaml → software.can.tx_report_id，
- *           8 字节，首字节为递增计数）
- *        3) 每秒打印状态行（发送结果 / 错误计数 / bus off / 收包统计）
+ * @brief CAN 自检周期任务（只读）：每秒打印驱动/协议统计
+ *
+ * RX 分发与周期回报已移交 App/Comm/can（app_can_service_step）；
+ * 本函数不再发送任何报文，也不注册回调。
  */
 void app_debug_can_run_once(void);
 

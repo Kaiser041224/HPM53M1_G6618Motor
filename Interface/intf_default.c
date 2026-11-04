@@ -384,6 +384,8 @@ int intf_adc_stop(intf_adc_ch_t ch)
 
 extern void adc_wdog_reenable(uint8_t inst, uint8_t ch);
 
+/** @brief 重臂 ADC 硬件 WDOG（1kHz 保护服务调用，须驻留 ILM） */
+ATTR_RAMFUNC
 void intf_adc_wdog_reenable(intf_adc_ch_t ch)
 {
     uint8_t inst   = INTF_ADC_CH_INST(ch);
@@ -407,6 +409,99 @@ __attribute__((weak)) int adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapsh
 int intf_adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapshot)
 {
     return adc_get_diag_snapshot(snapshot);
+}
+
+/**
+ * @brief 读取 ADC 实例 SEQ 帧计数（弱默认实现：无实现时返回 -1）
+ * @param inst 实例号
+ * @param frames 输出：累计 SEQ 完成帧数
+ * @return 0 = 成功；-1 = 未实现
+ */
+__attribute__((weak)) int adc_get_seq_frames(uint8_t inst, uint32_t *frames)
+{
+    (void) inst;
+    (void) frames;
+    return -1;
+}
+
+ATTR_RAMFUNC
+int intf_adc_get_seq_frames(uint8_t inst, uint32_t *frames)
+{
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    return adc_get_seq_frames(inst, frames);
+}
+
+/**
+ * @brief 读 ADC 实例 SEQ 硬件写指针（弱默认实现：无实现时返回 -1）
+ * @param inst 实例号
+ * @param wr_addr 输出：ADC16.SEQ_WR_ADDR 当前值
+ * @return 0 = 成功；-1 = 未实现
+ */
+__attribute__((weak)) int adc_clear_status(uint8_t inst)
+{
+    (void) inst;
+    return -1;
+}
+
+int intf_adc_clear_status(uint8_t inst)
+{
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    return adc_clear_status(inst);
+}
+
+__attribute__((weak)) int adc_get_status(uint8_t inst, uint32_t *flags)
+{
+    (void) inst;
+    (void) flags;
+    return -1;
+}
+
+int intf_adc_get_status(uint8_t inst, uint32_t *flags)
+{
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (flags == NULL)) {
+        return -1;
+    }
+    return adc_get_status(inst, flags);
+}
+
+__attribute__((weak)) int adc_get_seq_progress(uint8_t inst, uint32_t *wr_addr)
+{
+    (void) inst;
+    (void) wr_addr;
+    return -1;
+}
+
+ATTR_RAMFUNC
+int intf_adc_get_seq_progress(uint8_t inst, uint32_t *wr_addr)
+{
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    return adc_get_seq_progress(inst, wr_addr);
+}
+
+/**
+ * @brief 直读通道结果寄存器（弱默认实现：无实现时返回 -1）
+ */
+__attribute__((weak)) int adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t *raw)
+{
+    (void) inst;
+    (void) hw_ch;
+    (void) raw;
+    return -1;
+}
+
+ATTR_RAMFUNC
+int intf_adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t *raw)
+{
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (raw == NULL)) {
+        return -1;
+    }
+    return adc_get_prd_result(inst, hw_ch, raw);
 }
 
 /**
@@ -459,6 +554,8 @@ int intf_gpio_init(const intf_gpio_cfg_t *cfg)
     return -1;
 }
 
+/** @brief 设置引脚电平（emergency_stop 关栅极供电路径，须驻留 ILM） */
+ATTR_RAMFUNC
 int intf_gpio_set_level(intf_gpio_pin_t pin, intf_gpio_level_t level)
 {
     if (s_gpio_ops && s_gpio_ops->set_level) return s_gpio_ops->set_level(pin, level);

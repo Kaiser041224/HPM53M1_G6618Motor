@@ -22,6 +22,17 @@ extern "C" {
 #endif
 
 /**
+ * @brief USB CDC 运行统计（链路稳定性诊断）
+ */
+typedef struct {
+    uint32_t tx_timeouts; /**< TX 等待完成超时次数（强制恢复；>0 说明发生过卡死） */
+    uint32_t tx_drops;    /**< 写失败次数（端点忙/未就绪） */
+    uint32_t rx_drops;    /**< 接收环满丢弃字节数 */
+    uint32_t bus_resets;  /**< 总线复位/断开次数 */
+    uint32_t xfer_errors; /**< 控制器传输错误事件次数 */
+} intf_usb_cdc_stats_t;
+
+/**
  * @brief USB CDC 接收回调（USB 中断上下文执行，data 仅在回调期间有效）
  * @param data 接收数据
  * @param len 数据长度
@@ -74,6 +85,12 @@ typedef struct {
          * @return true = 已打开
          */
         bool (*is_dtr)(void);
+
+        /**
+         * @brief 读取运行统计
+         * @param out 统计输出（NULL = 忽略）
+         */
+        void (*get_stats)(intf_usb_cdc_stats_t *out);
 
         /**
          * @brief 反初始化 USB CDC 设备

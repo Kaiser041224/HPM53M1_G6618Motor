@@ -22,9 +22,13 @@
 
 #include "app_terminal.h"
 
+#include "app_cold_ram.h"
 #include "app_debug_rtt.h"
 #include "app_terminal_job.h"
+
+#include "app_terminal_cmd.h"
 #include "app_terminal_monitor.h"
+#include "app_can_service.h" /* 通信看门狗：USB 终端输入喂狗 */
 #include "app_usb.h"
 #include "chry_ringbuffer.h"
 #include "csh.h"
@@ -42,7 +46,9 @@ extern const int __vsymtab_start;
 extern const int __vsymtab_end;
 
 #define APP_TERMINAL_TX_RING_SIZE       (8192U) /**< TX 环容量（2 的幂，cherryrb 要求；需容纳欢迎界面 ~4KB） */
-#define APP_TERMINAL_TX_CHUNK_SIZE      (512U)  /**< 单次 USB 写上限（HS MPS） */
+/* 单次 USB 写上限：取 256（< HS MPS=512）→ 每次都是短包，避免"整 MPS 倍数需补 ZLP"
+ * 那条链路（ZLP 完成回调依赖更强，历史上是 TX 卡死入口） */
+#define APP_TERMINAL_TX_CHUNK_SIZE      (256U)  /**< 单次 USB 写上限（< HS MPS，免 ZLP） */
 #define APP_TERMINAL_TX_FLUSH_CHUNKS    (4U)    /**< 单拍最多推送块数 */
 #define APP_TERMINAL_RUN_BUDGET_US      (200U)  /**< 单次 run_once 输出 flush 总预算 [µs] */
 #define APP_TERMINAL_LINE_SIZE          (256U)  /**< 命令行上限 */
@@ -71,7 +77,8 @@ typedef int (*app_terminal_user_cb_t)(chry_readline_t*, uint8_t);
 
 static chry_shell_t s_csh;                      /**< CherrySH 实例 */
 static chry_ringbuffer_t s_tx_ring;               /**< TX 环（cherryrb） */
-static uint8_t s_tx_pool[APP_TERMINAL_TX_RING_SIZE]; /**< TX 环存储 */
+static uint8_t s_tx_pool[APP_TERMINAL_TX_RING_SIZE]
+    APP_ATTR_AHB_SRAM; /**< TX 环存储（1kHz 终端冷路径，放 AHB SRAM） */
 static uint32_t s_tx_drop_bytes;                  /**< 输出丢弃统计 [byte] */
 static uint32_t s_line_feeds;                     /**< 输出流换行计数（monitor 布局判定） */
 static bool s_ready;                              /**< 初始化完成 */
@@ -198,7 +205,7 @@ static uint16_t app_terminal_sput(chry_readline_t* rl, const void* data, uint16_
  * ============================================================================ */
 
 /**
- * @brief 输入回调：USB 驱动环 → CherrySH（非阻塞；任意新输入中止前台 job）。
+ * @brief 输入回调：USB 驱动环 → CherrySH（非阻塞；前台 job 期间丢弃输入）。
  * @param rl readline 实例（未用）
  * @param data 输出缓冲
  * @param size 期望长度
@@ -211,9 +218,16 @@ static uint16_t app_terminal_sget(chry_readline_t* rl, void* data, uint16_t size
 
     received = app_usb_read((uint8_t*)data, (size_t)size);
     if (received > 0) {
+        /* 终端有输入 = 通信活跃：喂通信看门狗（USB 源优先于 CAN 帧）。
+         * 否则"CAN 静默但人在终端操作"会被判主机失联并触发 STOP。
+         * 放在 job 判断之前：长流程（cal cogging ≈100s 等）期间链路仍活着，
+         * 不能因为输入被丢弃就停止喂狗。 */
+        app_can_service_feed_watchdog();
+
         if (app_terminal_job_is_active()) {
-            app_terminal_job_abort(); /* 任意新输入中止前台 job */
-            return 0U;             /* 吞掉触发键，避免其落入命令行 */
+            /* job 期间不接受指令输入：直接丢弃（不再"任意键中止"，
+             * 避免长流程被误触打断；job 自身有超时兜底） */
+            return 0U;
         }
         return (uint16_t)received;
     }
@@ -269,20 +283,22 @@ typedef struct {
     uint8_t count;            /**< 候选数 */
 } app_terminal_argument_t;
 
-static const char* const s_sub_motor[] = {"start", "stop", "status", "freq", "mod", "help"};
+static const char* const s_sub_motor[] = {"start", "stop", "status", "freq", "mod", "iq", "help"};
 static const char* const s_sub_inv[] = {"u", "v", "w", "all", "off"};
+static const char* const s_sub_foc[] = {"status", "on", "off"};
 static const char* const s_sub_adc[] = {"dump", "diag", "delay"};
 static const char* const s_sub_enc[] = {"info", "zero", "clear"};
 static const char* const s_sub_fault[] = {"show", "clear"};
 static const char* const s_sub_pwm[] = {"dump"};
 static const char* const s_sub_profiler[] = {"dump"};
-static const char* const s_sub_cal[] = {"current"};
+static const char* const s_sub_cal[] = {"current", "encoder"};
 static const char* const s_sub_reboot[] = {"confirm"};
 static const char* const s_sub_param[] = {"list", "get", "set", "reset"};
 
 static const app_terminal_subcommand_t s_subcommands[] = {
     {"motor", s_sub_motor, (uint8_t)(sizeof(s_sub_motor) / sizeof(s_sub_motor[0]))},
     {"inv", s_sub_inv, (uint8_t)(sizeof(s_sub_inv) / sizeof(s_sub_inv[0]))},
+    {"foc", s_sub_foc, (uint8_t)(sizeof(s_sub_foc) / sizeof(s_sub_foc[0]))},
     {"adc", s_sub_adc, (uint8_t)(sizeof(s_sub_adc) / sizeof(s_sub_adc[0]))},
     {"enc", s_sub_enc, (uint8_t)(sizeof(s_sub_enc) / sizeof(s_sub_enc[0]))},
     {"fault", s_sub_fault, (uint8_t)(sizeof(s_sub_fault) / sizeof(s_sub_fault[0]))},
@@ -623,7 +639,7 @@ static const char* const s_banner_lines[] = {
     "\033[38;5;213m" "│                                      ██████   ██████   ██████   ██  █████                                      │\r\n" "\033[0m",
     "│                                                                                                                │\r\n",
     "\033[38;5;141m" "│                                        Kaiser @ Alliance HardwareGroup                                         │\r\n" "\033[0m",
-    "\033[38;5;121m" "│                                  firmware v0.1.0  |  type 'help' for commands                                  │\r\n" "\033[0m",
+    "\033[38;5;121m" "│                                  firmware v0.1.1  |  type 'help' for commands                                  │\r\n" "\033[0m",
     "╰\033[38;5;51m───────────────────\033[38;5;121m───────────────────\033[38;5;51m───────────────────\033[38;5;141m───────────────────\033[38;5;207m──────────────────\033[38;5;213m──────────────────\033[38;5;213m╯\r\n",
     "\r\n",
 };

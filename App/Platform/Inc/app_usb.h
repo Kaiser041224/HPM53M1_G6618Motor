@@ -10,6 +10,8 @@
 #ifndef APP_USB_H
 #define APP_USB_H
 
+#include "intf_usb_cdc.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -62,6 +64,12 @@ int app_usb_read(uint8_t* data, size_t len);
  * @return true = 已打开
  */
 bool app_usb_is_dtr(void);
+
+/**
+ * @brief 读取 USB CDC 运行统计（链路稳定性诊断）
+ * @param out 统计输出
+ */
+void app_usb_get_stats(intf_usb_cdc_stats_t* out);
 
 #ifdef __cplusplus
 }

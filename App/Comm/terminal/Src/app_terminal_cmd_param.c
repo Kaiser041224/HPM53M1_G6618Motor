@@ -6,8 +6,9 @@
  * 名称空间：<域>.<路径>（域 = motor / hardware / software）
  *   例：hardware.current_sense.a_per_volt、software.control.current_loop.kp
  * 生效语义（元数据 apply 字段）：
- *   live   = 消费者逐次使用读取，set 立即生效
- *   reboot = init 期消费；v1 仅改 RAM 不持久化（flash 持久化见 v2）
+ *   live    = 消费者逐次使用读取，set 立即生效
+ *   reboot  = init 期消费；v1 仅改 RAM 不持久化（flash 持久化见 v2）
+ *   foc_off = FOC OFF 才接受 set；下一次 foc on 重载模型/角度链后生效
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -15,6 +16,7 @@
 
 #include "app_terminal_cmd.h"
 
+#include "app_foc.h"
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
@@ -25,15 +27,29 @@
 
 /** 安全相关参数（set 时警告；与设计文档 §8 一致） */
 static const char* const s_safety_params[] = {
-    "software.fault.oc_trip_a",        "software.fault.vbus_ov_v",
-    "software.fault.vbus_uv_v",        "hardware.inverter.pwm_freq_hz",
-    "hardware.inverter.deadtime_ns",   "software.control.limits.duty_max",
-    "software.control.limits.i_q_max_a",
+    "software.fault.oc_trip_a",          "software.fault.vbus_ov_v",
+    "software.fault.vbus_uv_v",          "hardware.inverter.pwm_freq_hz",
+    "hardware.inverter.deadtime_ns",     "software.control.limits.duty_max",
+    "software.control.limits.i_q_max_a", "software.control.limits.i_trip_a",
+    "hardware.current_sense.invert",
 };
 
 /** @brief apply 字段文本 */
 static const char* param_apply_name(uint8_t apply) {
-    return (apply == PARAM_META_APPLY_REBOOT) ? "reboot" : "live";
+    switch (apply) {
+    case PARAM_META_APPLY_REBOOT: return "reboot";
+    case PARAM_META_APPLY_FOC_OFF: return "foc_off";
+    default: return "live";
+    }
+}
+
+/** @brief flash 存储策略文本 */
+static const char* param_storage_name(uint32_t storage) {
+    switch (storage) {
+    case APP_SW_STORAGE_RESET: return "reset";
+    case APP_SW_STORAGE_OVERRIDE: return "override";
+    default: return "keep";
+    }
 }
 
 /** @brief 按名称查找元数据（名称须为域限定全名） */
@@ -99,21 +115,28 @@ static void param_print(chry_shell_t* csh, const param_meta_t* meta) {
 
     switch (meta->type) {
     case PARAM_META_TYPE_U8:
-        csh_printf(csh, "%-46s = %u %s (%s)\r\n", meta->name, (unsigned)*(const uint8_t*)value, unit,
-                   apply);
+        csh_printf(
+            csh, "%-46s = %u %s (%s)\r\n", meta->name, (unsigned)*(const uint8_t*)value, unit,
+            apply);
         break;
     case PARAM_META_TYPE_U16:
-        csh_printf(csh, "%-46s = %u %s (%s)\r\n", meta->name, (unsigned)*(const uint16_t*)value,
-                   unit, apply);
+        csh_printf(
+            csh, "%-46s = %u %s (%s)\r\n", meta->name, (unsigned)*(const uint16_t*)value, unit,
+            apply);
         break;
     case PARAM_META_TYPE_U32:
-        csh_printf(csh, "%-46s = %u %s (%s)\r\n", meta->name, (unsigned)*(const uint32_t*)value,
-                   unit, apply);
+        if (strcmp(meta->name, "software.storage") == 0) {
+            csh_printf(csh, "%-46s = %s %s (%s)\r\n", meta->name,
+                       param_storage_name(*(const uint32_t*)value), unit, apply);
+        } else {
+            csh_printf(csh, "%-46s = %u %s (%s)\r\n", meta->name,
+                       (unsigned)*(const uint32_t*)value, unit, apply);
+        }
         break;
     case PARAM_META_TYPE_F32:
     default:
-        csh_printf(csh, "%-46s = %.7g %s (%s)\r\n", meta->name, (double)*(const float*)value, unit,
-                   apply);
+        csh_printf(
+            csh, "%-46s = %.7g %s (%s)\r\n", meta->name, (double)*(const float*)value, unit, apply);
         break;
     }
 }
@@ -143,9 +166,8 @@ static bool param_matches_domain(const param_meta_t* meta, const char* filter) {
 static int cmd_param_list(chry_shell_t* csh, const char* filter) {
     uint32_t count = 0U;
 
-    if ((filter != NULL) && (param_find(filter) == NULL)
-        && (strcmp(filter, "motor") != 0) && (strcmp(filter, "hardware") != 0)
-        && (strcmp(filter, "software") != 0)) {
+    if ((filter != NULL) && (param_find(filter) == NULL) && (strcmp(filter, "motor") != 0)
+        && (strcmp(filter, "hardware") != 0) && (strcmp(filter, "software") != 0)) {
         csh_printf(csh, "ERR: unknown domain '%s' (motor|hardware|software)\r\n", filter);
         return -1;
     }
@@ -186,6 +208,14 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
 
     if (meta == NULL) {
         csh_printf(csh, "ERR: unknown parameter '%s' (try 'param list')\r\n", name);
+        return -1;
+    }
+    if ((meta->apply == PARAM_META_APPLY_FOC_OFF)
+        && (app_foc_get_state() != APP_FOC_STATE_OFF)) {
+        csh_printf(
+            csh,
+            "ERR: %s requires FOC OFF (current state=%d); 'foc off' first\r\n",
+            name, (int)app_foc_get_state());
         return -1;
     }
 
@@ -246,20 +276,31 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
     }
     }
 
+    if ((strcmp(name, "motor.encoder.electrical_offset_rad") == 0)
+        || (strcmp(name, "motor.encoder.direction") == 0)) {
+        /* 只维护告警状态，不拒绝命令；新零点在下一次 foc on 的角度链重建时生效 */
+        app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+        csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only\r\n");
+    }
     if (param_is_safety_related(name)) {
         csh_printf(csh, "WARN: safety-related parameter\r\n");
     }
     if (meta->apply == PARAM_META_APPLY_REBOOT) {
-        csh_printf(csh, "OK  %s = %s (RAM; consumed at boot, not persistent - v2: save)\r\n", name,
+        /* 旧文案 "not persistent - v2: save" 会让用户以为没有保存手段；
+         * 实际 `param save` 已可用（FOC OFF 停机窗口）。 */
+        csh_printf(csh,
+                   "OK  %s = %s (RAM; run 'param save' with FOC OFF, then reboot)\r\n", name,
                    text);
+    } else if (meta->apply == PARAM_META_APPLY_FOC_OFF) {
+        csh_printf(csh, "OK  %s = %s (RAM; consumed at next 'foc on')\r\n", name, text);
     } else {
         csh_printf(csh, "OK  %s = %s (RAM, live)\r\n", name, text);
     }
     return 0;
 
 out_of_range:
-    csh_printf(csh, "ERR: %s out of range [%.7g, %.7g]\r\n", name, (double)meta->min,
-               (double)meta->max);
+    csh_printf(
+        csh, "ERR: %s out of range [%.7g, %.7g]\r\n", name, (double)meta->min, (double)meta->max);
     return -1;
 }
 
@@ -267,17 +308,23 @@ out_of_range:
  * @brief param reset [name|domain]
  */
 static int cmd_param_reset(chry_shell_t* csh, const char* target) {
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        csh_printf(csh, "ERR: param reset requires FOC OFF; 'foc off' first\r\n");
+        return -1;
+    }
     if (target == NULL) {
         *app_motor_params_mutable() = *app_motor_params_default();
         *app_hardware_params_mutable() = *app_hardware_params_default();
         *app_software_params_mutable() = *app_software_params_default();
         csh_printf(csh, "OK  all parameters reset to factory defaults\r\n");
+        csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only, commands continue\r\n");
         return 0;
     }
 
     if (strcmp(target, "motor") == 0) {
         *app_motor_params_mutable() = *app_motor_params_default();
         csh_printf(csh, "OK  motor parameters reset to factory defaults\r\n");
+        csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only, commands continue\r\n");
         return 0;
     }
     if (strcmp(target, "hardware") == 0) {
@@ -299,9 +346,39 @@ static int cmd_param_reset(chry_shell_t* csh, const char* target) {
             return -1;
         }
         memcpy(param_data(meta), param_factory_data(meta), param_type_size(meta->type));
+        if ((strcmp(target, "motor.encoder.electrical_offset_rad") == 0)
+            || (strcmp(target, "motor.encoder.direction") == 0)) {
+            app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+            csh_printf(csh, "WARN: encoder calibration flag cleared; FOC will warn only\r\n");
+        }
         csh_printf(csh, "OK  %s reset to factory default\r\n", target);
     }
     return 0;
+}
+
+/**
+ * @brief 持久化参数到 flash（motor/software 两域；hardware 不持久化）
+ * @note flash 写仅停机窗口：FOC 非 OFF 时拒绝（AGENTS.md 通讯子系统约定）
+ */
+static int cmd_param_save(chry_shell_t* csh) {
+    if (app_foc_stop_pending()) {
+        csh_printf(csh, "ERR: FOC stop pending; wait for OFF before flash save\r\n");
+        return -1;
+    }
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        csh_printf(csh, "ERR: parameter save requires FOC OFF (flash write in stop window)\r\n");
+        return -1;
+    }
+    int rc_motor = app_motor_params_store();
+    int rc_software = app_software_params_store();
+
+    csh_printf(
+        csh,
+        "param save: motor=%s software=%s | hardware not persisted (board facts) | "
+        "storage=%s (software.yaml: keep/reset/override; change + reflash)\r\n",
+        rc_motor == 0 ? "OK" : "FAIL", rc_software == 0 ? "OK" : "FAIL",
+        param_storage_name(app_software_params_default()->storage));
+    return (rc_motor == 0 && rc_software == 0) ? 0 : -1;
 }
 
 /**
@@ -311,7 +388,7 @@ static int cmd_param(int argc, char** argv) {
     chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
     const char* usage =
         "param list [domain] | param get <name> | param set <name> <value> | param reset "
-        "[name|domain]";
+        "[name|domain] | param save (FOC OFF)";
 
     if (argc < 2) {
         return app_terminal_cmd_usage(csh, usage);
@@ -333,6 +410,9 @@ static int cmd_param(int argc, char** argv) {
     }
     if (strcmp(argv[1], "reset") == 0) {
         return cmd_param_reset(csh, (argc >= 3) ? argv[2] : NULL);
+    }
+    if (strcmp(argv[1], "save") == 0) {
+        return cmd_param_save(csh);
     }
 
     return app_terminal_cmd_usage(csh, usage);

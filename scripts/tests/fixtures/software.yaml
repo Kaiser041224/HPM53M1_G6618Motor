@@ -7,31 +7,91 @@
 # 表达式：引号字符串按计算式处理，构建期求值（跨文件引用 motor./hardware./software.）。
 # ============================================================================
 
+storage: keep         # 测试夹具值：keep/reset/override
+
+motion:
+  output_direction: 1.0      # 测试夹具值：出轴用户方向
+
+current_ff:
+  r_en: false                # 测试夹具值：R·I 前馈默认关闭
+  wl_en: false               # 测试夹具值：ωL 前馈默认关闭
+  bemf_en: false             # 测试夹具值：bEMF 前馈默认关闭
+
 can:
   baudrate: 1000000          # CAN 波特率 [bps]
-  node_id_default: 1         # 占位：DIP 解码未实现时的回退节点号（与 CAN ID 的派生关系待协议定稿）
+  can_id: 1         # 占位：DIP 解码未实现时的回退节点号（与 CAN ID 的派生关系待协议定稿）
   rx_control_id: 0x101       # 接收控制帧 CAN ID（占位：待 CAN 协议定稿）
   tx_report_id: 0x181        # 参数回报帧 CAN ID（占位：待 CAN 协议定稿）
 
 fault:
+  actions_enable: true
   oc_trip_a: "3 * motor.i_peak_10s_a"     # 过流阈值 [A] → 72.9
   vbus_ov_v: 36.0                         # 母线过压 [V]（24V 系统门限，1.5× 系统额定）
   vbus_uv_v: 9.0                          # 母线欠压 [V]（24V 系统门限）
   slow_debounce: 5                        # L2/L3 去抖次数（连续 1kHz tick）
   adc_stall_ms: 10                        # PMT 帧停滞超时 [ms]
   enc_err_delta: 3                        # 编码器错误增量阈值（每 1kHz tick 的错误计数增量）
+  comm_timeout_ms: 100                    # CAN 通信看门狗超时 [ms]（夹具值）
   # —— 时序量：占位，待 FOC 时序体系定义后接入（当前代码使用内部宏：250 样本 / 50 tick）——
   # rms_window_samples: 250
   # settle_ticks: 50
 
 control:
-  # FOC 预留（数值待整定；当前无消费者）
+  cogging:
+    enable: false           # 测试夹具值
+    rotor_enable: true
+    output_enable: false
+    gain: 1.0
+  motion_input:
+    vel_ramp_rate: 0.0        # [rad/s²]（测试夹具值：0=直通）
+    torque_ramp_rate: 0.0     # [Nm/s]（测试夹具值：0=直通）
+  # FOC 电流环（V1 落地；增益 = 手册 R/L + 极点对消初值，V2 自整定更新）
   current_loop:
-    kp: 0.0                # 电流环 PID（目标带宽 1kHz）
-    ki: 0.0
+    kp: 0.372                # [V/A] = Ls × ωbw（Ls=118.5µH，ωbw=2π×1kHz）
+    ki: 496.4                # [V/(A·s)] = Rs × ωbw（Rs=0.158Ω）
+    bandwidth_rad_s: 3141.6  # 目标带宽 [rad/s]（自整定用）
+    decoupling_en: false     # 解耦前馈（旧组合开关；V1 关闭）
+    output_delay_s: 3.3333333e-5 # 反 Park 输出延迟补偿 [s]（测试夹具值：一拍 30kHz）
+  speed_observer:            # P0-B observer（测试夹具值）
+    enable: true
+    bandwidth_rad_s: 500.0
+    max_speed_rad_s: 700.0
   speed_loop:
-    kp: 0.0                # 速度环 PID（目标带宽 50Hz）
-    ki: 0.0
+    kp: 1.5                  # [Nm/(rad/s)]（测试夹具值）
+    ki: 20.0                 # [Nm/rad]（测试夹具值）
+    friction_coulomb_nm: 0.5          # [Nm]（测试夹具值）
+    friction_viscous_nm_per_rad_s: 0.1 # [Nm/(rad/s)]（测试夹具值）
+    friction_smoothing_rad_s: 0.02     # [rad/s]（测试夹具值）
+    velocity_lpf_coeff: 0.05       # 测速一阶滤波系数（测试夹具值）
+  position_loop:
+    pos_gain: 20.0                    # [1/s]（测试夹具值）
+    input_filter_bandwidth: 10.0      # [rad/s]（测试夹具值）
+    trajectory_vel_limit: 0.0         # [rad/s]（测试夹具值：0=关闭轨迹）
+    trajectory_accel_limit: 0.0       # [rad/s²]（测试夹具值：0=关闭轨迹）
+    max_step_deg: 3600.0              # [deg] 单次命令最大位移（夹具值）
+    max_travel_deg: 36000.0           # [deg] 连续角绝对值上限（夹具值）
+    travel_min_deg: 0.0               # [deg] 可选软限位（夹具值：0/0=关闭）
+    travel_max_deg: 0.0
+  mit:
+    enable: true                      # MIT 总开关（夹具值；默认开启）
+    kp_max: 100.0                     # [Nm/rad]（夹具值；与产品默认一致）
+    kd_max: 5.0                       # [Nm/(rad/s)]（夹具值；与产品默认一致）
+    gain_ramp_rate: 200.0             # [(Nm/rad)/s]
+    pos_err_max_deg: 90.0             # [deg]
+    t_ff_max_ratio: 1.0
+    can_format: compact               # compact | dual
+    friction_ff_en: false
+    inertia_ff_en: false
   limits:
-    i_q_max_a: "motor.i_peak_10s_a"   # 电流限幅 [A]（RMS 口径，与 motor.i_peak_10s_a 一致；FOC 接入时确认）→ 24.3
-    duty_max: 0.95                    # 占空比上限
+    i_q_max_a: 30.0                    # [A_peak] boost/绝对上限（测试夹具值）
+    i_q_continuous_a: 24.3             # [A_peak] 连续限幅（测试夹具值）
+    i_q_boost_time_s: 2.0              # [s]（测试夹具值）
+    i_q_boost_recover_time_s: 10.0     # [s]（测试夹具值）
+    i_q_boost_recover_ratio: 0.9       # （测试夹具值）
+    i_trip_a: 10.0                     # 快速过流跳闸 [A]（0 = 关闭）
+    foc_speed_max_rad_s: 2500.0        # [rad/s 电角] FOC 内部连续限速上限（0 = 关闭）
+    foc_speed_limit_gain: 50.0         # [A/(rad/s)] FOC 内部连续限速增益
+    duty_max: 0.885                    # 调制上限（有效域 (0.5, 1.0]；0.885 = 三电阻采样窗口约束，ADC spec §4）
+    motion_iq_max_a: 30.0              # [A]（测试夹具值）
+    motion_speed_limit_rad_s: 10.0     # [rad/s]（测试夹具值）
+    motion_speed_limit_gain: 50.0      # [Nm/(rad/s)]（测试夹具值）

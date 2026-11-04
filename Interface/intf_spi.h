@@ -13,6 +13,9 @@
  *       0          = 不等待
  *       UINT32_MAX = 无限等待
  *       其他       = 毫秒级超时
+ *   - 硬件触发单帧（trig_*，可选能力）：外部触发源经 DMA 写 SPI CMD 启动一帧，
+ *     CPU 只在消费点 fetch 结果（零启动开销、零忙等）；帧格式沿用 init 配置。
+ *     arm 后该总线归触发通道独占，不得再调用 transfer。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -43,6 +46,22 @@ typedef struct {
     uint8_t  data_bits; /**< 每帧位数（1..32） */
     uint8_t  cs_index;  /**< 片选索引：0..3 -> CS0..CS3 */
 } intf_spi_cfg_t;
+
+/**
+ * @brief 硬件触发源（经触发矩阵转发的 DMA 请求号）
+ */
+typedef enum {
+    INTF_SPI_TRIG_DMA_REQ0 = 0, /**< 触发矩阵 DMA 请求 0（见 intf_trgm INTF_TRGM_DST_DMA_REQ0） */
+    INTF_SPI_TRIG_DMA_REQ1,     /**< 触发矩阵 DMA 请求 1（见 intf_trgm INTF_TRGM_DST_DMA_REQ1） */
+} intf_spi_trig_src_t;
+
+/**
+ * @brief 硬件触发单帧配置
+ */
+typedef struct {
+    intf_spi_trig_src_t src; /**< 触发源（每次触发启动一帧） */
+    uint32_t tx_word;        /**< 每帧发送字（预填 TX FIFO，保持 MOSI 电平确定） */
+} intf_spi_trig_cfg_t;
 
 /*
  * SPI 总线设备对象（风格 A：instance_id + 匿名结构体方法）
@@ -82,6 +101,28 @@ typedef struct {
          * @return SCLK 频率 [Hz]
          */
         uint32_t (*get_sclk_hz)(void);
+
+        /**
+         * @brief 启用硬件触发单帧（可选能力；NULL = 不支持）
+         * @param cfg 触发配置
+         * @return 0 = 成功；-1 = 不支持/未初始化/资源失败
+         * @note 调用前总线须空闲；arm 后 transfer 不可再用（单一所有者）
+         */
+        int (*trig_arm)(const intf_spi_trig_cfg_t *cfg);
+
+        /**
+         * @brief 取最近一次硬件触发帧的接收字（中断上下文，有界）
+         * @param rx_word 输出接收字（取 RX FIFO 中最新一帧，旧帧丢弃）
+         * @param wait_cycles 帧仍在传输时的最长等待 [CPU cycle]（0 = 不等待）
+         * @return 0 = 取到新帧；-1 = 无新帧（触发丢失/未 arm）；-2 = 等待超时（帧仍在传输）
+         * @note 每次调用同时补满 TX FIFO，保证后续触发不欠载
+         */
+        int (*trig_fetch)(uint32_t *rx_word, uint32_t wait_cycles);
+
+        /**
+         * @brief 关闭硬件触发（停止 DMA，清空 FIFO；之后 transfer 可用）
+         */
+        void (*trig_disarm)(void);
     };
 } intf_spi_t;
 

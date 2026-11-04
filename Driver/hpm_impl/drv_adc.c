@@ -83,6 +83,7 @@ typedef struct {
     /* Sequence */
     struct {
         bool hw_trig;                          /**< 是否硬件触发 */
+        uint32_t frame_cnt;                    /**< SEQ 完成帧计数（每帧递增，与回调无关） */
         uint8_t ch_count;                      /**< 序列通道数 */
         uint8_t ch_list[ADC_SEQ_MAX_LEN];      /**< 序列通道列表 */
         intf_adc_seq_cb_t cb;                  /**< 序列回调 */
@@ -265,9 +266,11 @@ static void adc_enable_instance_irq(uint8_t inst) {
     adc_inst_t* ai = &s_adc_instances[inst];
     uint32_t irq = ai->irq;
     if (irq != 0) {
-        /* PLIC: 数字越大优先级越高。ADC0 负责 IL 电流内环触发，优先级高于
-         * ADC1 的 VCAP/VOUT/IIN 缓存刷新。 */
-        uint32_t priority = (inst == 0U) ? 2U : 1U;
+        /* PLIC: 数字越大优先级越高。ADC0 负责 25kHz FOC 控制环路（PMT 完成中断），
+         * 优先级最高（3），高于 ADC1 的慢通道/故障 tick（1）与其它外设 ISR。
+         * 对齐 freertos-foc-fastlane 设计 §6 优先级契约：
+         * 硬件故障关断 > FOC 快车道(ADC0 PMT) > 其它外设 ISR > RTOS 任务。 */
+        uint32_t priority = (inst == 0U) ? 3U : 1U;
         intc_m_enable_irq_with_priority(irq, priority);
     }
 }
@@ -293,6 +296,26 @@ static void adc_generic_isr(uint8_t inst) {
     ADC16_Type* base = ai->base;
     uint32_t status = adc16_get_status_flags(base);
     adc16_clear_status_flags(base, status);
+
+    /* WDOG 状态评估**前移到 PMT/SEQ 分支之前**（2026-10-27）：否则同一帧内先跑完
+     * FOC 电流环、后处理 WDOG → 越限的停机动作要等下一拍（+33µs）才生效。
+     * 本块只读状态 + 调回调，命中由上层在本拍就地执行 TRIP。 */
+    /* Watchdog threshold violation */
+    uint32_t wdog_status = ADC16_INT_STS_WDOG_GET(status);
+    if (wdog_status) {
+        for (uint8_t ch = 0; ch < ADC_MAX_CHANNELS; ch++) {
+            if ((wdog_status & (1u << ch)) && ai->wdog.enabled[ch]) {
+                /* PRD_RESULTx 保存通道 x 最近一次转换结果（所有模式通用，PMT 已实测） */
+                uint16_t val = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(
+                    base->PRD_CFG[ch].PRD_RESULT);
+                if (ai->wdog.cb) {
+                    ai->wdog.cb(INTF_ADC_CH(inst, ch), val, ai->wdog.cb_user_data);
+                }
+                adc16_disable_interrupts(base, (uint32_t)(1u << ch));
+            }
+        }
+    }
+
 
     /* PMT trigger complete */
     if (ADC16_INT_STS_TRIG_CMPT_GET(status) && ai->mode == INTF_ADC_MODE_PMT) {
@@ -420,26 +443,18 @@ static void adc_generic_isr(uint8_t inst) {
 
     /* Sequence full queue complete（每帧一次；CVC 为末通道单次完成，不单独回调） */
     if (ADC16_INT_STS_SEQ_CMPT_GET(status) && ai->mode == INTF_ADC_MODE_SEQ) {
+        /* 帧计数在 ISR 内递增 —— **前提是 SEQ 完成中断使能**（即 cfg->seq_cb != NULL；
+         * 上层可在回调内部再分频，但中断本身必须开）。它与"回调是否每帧调用"无关。
+         * 用途：SEQ 与 PMT 同源触发时，另一实例的 ISR 借此判断结果寄存器是否为新帧
+         * （PRD_RESULTx 无 VALID/cycle-bit/序号，帧计数是唯一握手信号）。
+         * 耦合提醒：若把 seq_cb 置 NULL，本计数停止递增 → 依赖它的新鲜度判定会
+         * 恒判"陈旧"（app_adc 的 vbus 快通道会静默退回 1kHz 缓存值）。 */
+        ai->seq.frame_cnt++;
         if (ai->seq.cb) {
             ai->seq.cb(INTF_ADC_CH(inst, 0), ai->seq.cb_user_data);
         }
     }
 
-    /* Watchdog threshold violation */
-    uint32_t wdog_status = ADC16_INT_STS_WDOG_GET(status);
-    if (wdog_status) {
-        for (uint8_t ch = 0; ch < ADC_MAX_CHANNELS; ch++) {
-            if ((wdog_status & (1u << ch)) && ai->wdog.enabled[ch]) {
-                /* PRD_RESULTx 保存通道 x 最近一次转换结果（所有模式通用，PMT 已实测） */
-                uint16_t val = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(
-                    base->PRD_CFG[ch].PRD_RESULT);
-                if (ai->wdog.cb) {
-                    ai->wdog.cb(INTF_ADC_CH(inst, ch), val, ai->wdog.cb_user_data);
-                }
-                adc16_disable_interrupts(base, (uint32_t)(1u << ch));
-            }
-        }
-    }
 
     uint32_t elapsed = irq_prof_read_cycle() - t0;
     if (elapsed > s_adc_diag.isr_cycles_max[inst]) {
@@ -462,6 +477,97 @@ void isr_adc1(void) {
     s_adc_diag.irq_entry[1]++;
     adc_generic_isr(1);
     irq_prof_nest_exit(); /* [TEMP DIAG] */
+}
+
+/**
+ * @brief 读取实例 SEQ 帧完成计数
+ * @param inst 实例号
+ * @param frames 输出：累计帧数
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+int adc_clear_status(uint8_t inst) {
+    if (inst >= INTF_ADC_INSTANCE_COUNT) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    adc16_clear_status_flags(s_adc_instances[inst].base,
+                             adc16_get_status_flags(s_adc_instances[inst].base));
+    return 0;
+}
+
+/**
+ * @brief 读取实例状态标志（SEQ 完成位）
+ * @param inst 实例号
+ * @param flags 输出：INTF_ADC_STATUS_* 位或
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+int adc_get_status(uint8_t inst, uint32_t *flags) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (flags == NULL)) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    *flags = 0U;
+    if ((adc16_get_status_flags(s_adc_instances[inst].base) & ADC16_INT_STS_SEQ_CMPT_MASK) != 0U) {
+        *flags |= INTF_ADC_STATUS_SEQ_COMPLETE;
+    }
+    return 0;
+}
+
+ATTR_RAMFUNC /* ADC0 PMT ISR 每拍调用：vbus 快通道新鲜度证据 */
+int adc_get_seq_progress(uint8_t inst, uint32_t *wr_addr) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (wr_addr == NULL)) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    /* ADC16.SEQ_WR_ADDR：序列硬件写指针（RO）。ADC1 无周期中断后，本寄存器是
+     * "SEQ 仍在写入"的唯一硬件证据（帧计数只在完成中断内递增，已不适用）。 */
+    *wr_addr = s_adc_instances[inst].base->SEQ_WR_ADDR;
+    return 0;
+}
+
+ATTR_RAMFUNC
+int adc_get_seq_frames(uint8_t inst, uint32_t *frames) {
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (frames == NULL)) {
+        return -1;
+    }
+    if (!s_adc_instances[inst].initialized) {
+        return -1;
+    }
+    *frames = s_adc_instances[inst].seq.frame_cnt;
+    return 0;
+}
+
+/**
+ * @brief 直读通道结果寄存器 PRD_RESULTx（ISR 快速路径，ILM 常驻）
+ *
+ * 不经过 adc_read 的模式分支与 SDK adc16_get_prd_result 包装：该函数位于 ADC0 PMT
+ * ISR 调用链（每拍锁存同源触发的 vbus 结果），必须避免 XIP 取指延迟。
+ * 依据：手册 §53.2.4（任意转换模式都会更新 PRD_RESULTx，纯 RO 结果域）。
+ *
+ * @param inst 实例号
+ * @param hw_ch 硬件通道号
+ * @param raw 输出：最近一次转换结果
+ * @return 0 = 成功；-1 = 参数非法或未初始化
+ */
+ATTR_RAMFUNC
+int adc_get_prd_result(uint8_t inst, uint8_t hw_ch, uint16_t *raw) {
+    adc_inst_t* ai;
+
+    if ((inst >= INTF_ADC_INSTANCE_COUNT) || (hw_ch >= ADC_MAX_CHANNELS) || (raw == NULL)) {
+        return -1;
+    }
+    ai = &s_adc_instances[inst];
+    if (!ai->initialized || (ai->base == NULL)) {
+        return -1;
+    }
+    *raw = (uint16_t) ADC16_PRD_CFG_PRD_RESULT_CHAN_RESULT_GET(ai->base->PRD_CFG[hw_ch].PRD_RESULT);
+    return 0;
 }
 
 int adc_get_diag_snapshot(intf_adc_diag_snapshot_t *snapshot)
@@ -505,6 +611,7 @@ void adc_reset_diag_max(void)
  * WDOG re-enable helper (public for App manual re-arm)
  * ============================================================================ */
 
+ATTR_RAMFUNC
 void adc_wdog_reenable(uint8_t inst, uint8_t ch) {
     if (inst >= INTF_ADC_INSTANCE_COUNT || ch >= ADC_MAX_CHANNELS)
         return;
@@ -537,6 +644,8 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
     adc_inst_t* ai = &s_adc_instances[inst];
     uint32_t sample_cycle = (cfg->sample_cycle > 0) ? cfg->sample_cycle : ADC_DEFAULT_SAMPLE_CYCLE;
+    /* 运行期重配判定：必须在下面的全局 init 之前采样（首次 init 会把 initialized 置 true） */
+    bool seq_reinit = ai->initialized && (ai->mode == INTF_ADC_MODE_SEQ);
 
     /* --- global instance init (first call) --- */
     if (!ai->initialized) {
@@ -576,8 +685,12 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
         base->ANA_CTRL0 |= ADC16_ANA_CTRL0_ADC_CLK_ON_MASK;
 
-        /* 关闭全部抢占队列：防止复位残留的 QUEUE_EN 位造成误触发 */
-        for (uint8_t t = 0; t < ADC_PMT_MAX_TRIG; t++) {
+        /* 关闭全部抢占队列：防止复位残留的 QUEUE_EN 位造成误触发。
+         * 上界必须覆盖硬件全部 trigger 索引（ADC_SOC_MAX_TRIG_CH_NUM = 11 → 0..11）；
+         * 原循环 t < ADC_PMT_MAX_TRIG(=11) 漏掉索引 11：该队列驱动不会启用，但复位残留的
+         * QUEUE_EN 位若未清，仍会随共享 PTRGI 输入启动一次垃圾队列（"污染后续转换结果"
+         * 的已记录机理，见 PMT 分支注释）。 */
+        for (uint8_t t = 0; t <= ADC_SOC_MAX_TRIG_CH_NUM; t++) {
             adc16_disable_pmt_queue(base, t);
         }
 
@@ -656,7 +769,7 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
          * stale QUEUE_EN bits.  Without this, cross-triggering from shared
          * PTRGI inputs causes the PMT state machine to process garbage
          * channel lists, corrupting subsequent conversion results. */
-        for (uint8_t t = 0; t < ADC_PMT_MAX_TRIG; t++) {
+        for (uint8_t t = 0; t <= ADC_SOC_MAX_TRIG_CH_NUM; t++) {
             if (t != cfg->pmt_trig_ch) {
                 adc16_disable_pmt_queue(ai->base, t);
             }
@@ -701,6 +814,13 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
         if (cfg->dma_en && (cfg->dma_buff == NULL || cfg->dma_buff_len == 0))
             return -1;
 
+        /* 运行期重配（例如 app_adc_canid_release 5→4 槽）：先停硬件触发，避免
+         * 改写 SEQ_CFG0/SEQ_QUE 期间插入半帧；set_seq_config 会按 cfg 重新置
+         * HW_TRIG_EN，末尾再显式放行一次作为双保险。 */
+        if (seq_reinit) {
+            adc16_seq_disable_hw_trigger(ai->base);
+        }
+
         ai->seq.hw_trig = cfg->seq_hw_trig;
         ai->seq.ch_count = cfg->seq_ch_count;
         ai->seq.cb = cfg->seq_cb;
@@ -721,12 +841,20 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
             ai->channels[cfg->seq_ch_list[i]].configured = true;
         }
 
+        ai->seq.frame_cnt = 0U;
+
         adc16_seq_config_t seq_cfg;
         seq_cfg.seq_len = cfg->seq_ch_count;
         seq_cfg.restart_en = false;
         seq_cfg.cont_en = true;
         seq_cfg.hw_trig_en = cfg->seq_hw_trig;
         seq_cfg.sw_trig_en = !cfg->seq_hw_trig;
+        if (seq_reinit && cfg->seq_hw_trig) {
+            /* set_seq_config 会先写 SEQ_CFG0 再写队列：重配窗口内必须先禁止触发，
+             * 队列写完后由下面的 enable 放行，否则可能插入一个半新半旧的序列帧。 */
+            seq_cfg.hw_trig_en = false;
+            seq_cfg.sw_trig_en = false;
+        }
 
         for (uint8_t i = 0; i < cfg->seq_ch_count; i++) {
             seq_cfg.queue[i].seq_int_en = ((i + 1) == cfg->seq_ch_count);
@@ -735,6 +863,10 @@ static int adc_init(intf_adc_ch_t ch, const intf_adc_cfg_t* cfg) {
 
         if (adc16_set_seq_config(ai->base, &seq_cfg) != status_success)
             return -1;
+
+        if (seq_reinit && cfg->seq_hw_trig) {
+            adc16_seq_enable_hw_trigger(ai->base);
+        }
 
         if (cfg->dma_en) {
             ai->dma.active = true;

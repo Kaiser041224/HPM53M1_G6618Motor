@@ -27,7 +27,7 @@
 extern "C" {
 #endif
 
-/* process() 调用频率 = 主循环节拍（= inverter.pwm_freq_hz，config/hardware.yaml） */
+/* process() 调用频率 = app_io_step 1ms 节拍（1kHz），不是 PWM/电流拍 */
 
 /**
  * @brief 物理量快照（换算 + 滤波后）
@@ -59,11 +59,32 @@ void app_analog_signal_process(void);
 bool app_analog_signal_read_all(app_analog_values_t* values);
 
 /**
+ * @brief 原始码 → 物理量（单通道，无滤波；ISR 上下文可用）
+ * @param ch 通道
+ * @param raw 原始码
+ * @return 物理量（电流 [A] / 电压 [V] / 电阻 [Ω]）；通道非法返回 NAN
+ */
+float app_analog_signal_convert_raw(adc_channel_t ch, uint16_t raw);
+
+/**
  * @brief 读取单通道物理量（含滤波）
  * @param ch 逻辑通道
  * @return 物理量；数据未就绪返回 NAN
  */
 float app_analog_signal_read(adc_channel_t ch);
+
+/**
+ * @brief 快通道母线电压 [V]（30kHz 电流环同拍；raw → 换算 → 轻量 LPF）
+ *
+ * 数据源：app_adc 的 PMT ISR 锁存值（与三相电流同一触发沿）。
+ * 滤波：一阶 IIR，系数按**真实采样率 = hardware.inverter.pwm_freq_hz** 标定
+ *       （不得沿用 APP_ANALOG_PROCESS_RATE_HZ=1kHz，否则 α 差 3 倍以上）。
+ * 语义：仅在快通道出现**新序号**时推进一步（无新帧则保持上次输出，不重复灌同一
+ *       样本）；快通道尚无首帧时返回 NAN，调用方回退 1kHz 缓存值。
+ *
+ * @return 母线电压 [V]；NAN = 快通道不可用（未收到首帧或参数非法）
+ */
+float app_analog_signal_vbus_fast(void);
 
 /**
  * @brief 读取单通道原始码
@@ -72,6 +93,36 @@ float app_analog_signal_read(adc_channel_t ch);
  * @return true = 读取成功
  */
 bool app_analog_signal_read_raw(adc_channel_t ch, uint16_t* raw);
+
+/**
+ * @brief NTC 阻值 → 摄氏温度（B 参数法，纯换算）
+ *
+ * T[℃] = 1 / (1/298.15 + ln(R/R25) / B) - 273.15
+ *
+ * 有效区间：(100 Ω, 1 MΩ)，且 R25/B 必须 > 0；开路替代值（hardware.ntc.max_ohm
+ * = 1 MΩ）与短路（0 Ω）都会落在区间外。非有限输入按位模式判定，不依赖
+ * isnan/isfinite（-ffast-math 下会被常量折叠）。
+ *
+ * @param r_ohm      NTC 阻值 [Ω]
+ * @param r25_ohm    25 ℃ 阻值 [Ω]
+ * @param b_value_k  B 常数 [K]
+ * @param temp_c     输出温度 [℃]（可为 NULL，此时仅判有效）
+ * @return true = 输入有效且已换算
+ */
+bool app_analog_signal_ntc_temp_from_ohm(float r_ohm, float r25_ohm, float b_value_k,
+                                         float* temp_c);
+
+/**
+ * @brief 读取 NTC 通道温度（缓存值，约 100 Hz 换算一次）
+ *
+ * 温度属于低频观测量，换算节拍刻意低于 1 kHz 慢任务（当前每 10 ms 一次）：
+ * 回报帧允许发送相对陈旧的换算值（≤10 ms），不要为此提高 logf 调用频率。
+ *
+ * @param ch     仅 ADC_CH_NTC0 / ADC_CH_NTC1
+ * @param temp_c 输出温度 [℃]
+ * @return true = 有效；false = 非 NTC 通道 / 尚无换算 / 开路或短路
+ */
+bool app_analog_signal_ntc_temp_c(adc_channel_t ch, float* temp_c);
 
 /**
  * @brief 电流零点标定（阻塞包装：boot 初始化阶段使用）。
