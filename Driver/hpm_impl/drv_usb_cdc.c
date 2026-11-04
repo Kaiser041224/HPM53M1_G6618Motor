@@ -33,6 +33,8 @@
 #include "usbd_cdc_acm.h"
 
 #include "hpm_interrupt.h"
+#include "hpm_otp_drv.h"
+#include "hpm_soc_feature.h"
 #include "hpm_soc_irq.h"
 
 #include <string.h>
@@ -52,6 +54,13 @@
 #define USB_CDC_TX_BUF_SIZE  (512U)
 #define USB_CDC_RX_RING_SIZE (512U) /* 必须为 2 的幂 */
 #define USB_CDC_RX_RING_MASK (USB_CDC_RX_RING_SIZE - 1U)
+
+/* 字符串描述符索引（描述符表见文件后半） */
+#define USB_STRING_INDEX_LANGID  (0U)
+#define USB_STRING_INDEX_VENDOR  (1U)
+#define USB_STRING_INDEX_PRODUCT (2U)
+#define USB_STRING_INDEX_SERIAL  (3U)
+#define USB_STRING_INDEX_CONTROL (4U) /* interface 0 的 iInterface */
 
 /* ============================================================================
  * 描述符（参考 SDK 样例 cherryusb/demo/winusb2.0_cdc_template.c）
@@ -98,7 +107,7 @@ static const uint8_t s_config_descriptor_hs[] = {
     USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01, USB_CONFIG_BUS_POWERED,
                                USBD_MAX_POWER),
     /* Interface 0：vendor specific（WinUSB） */
-    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, USB_STRING_INDEX_CONTROL),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
@@ -107,7 +116,7 @@ static const uint8_t s_config_descriptor_hs[] = {
 static const uint8_t s_config_descriptor_fs[] = {
     USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01, USB_CONFIG_BUS_POWERED,
                                USBD_MAX_POWER),
-    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, USB_STRING_INDEX_CONTROL),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
@@ -120,7 +129,7 @@ static const uint8_t s_device_quality_descriptor[] = {
 static const uint8_t s_other_speed_config_descriptor_hs[] = {
     USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01,
                                            USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, USB_STRING_INDEX_CONTROL),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_FS, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_FS, 0x02),
@@ -129,18 +138,61 @@ static const uint8_t s_other_speed_config_descriptor_hs[] = {
 static const uint8_t s_other_speed_config_descriptor_fs[] = {
     USB_OTHER_SPEED_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, USB_CONFIG_INTF_NUM, 0x01,
                                            USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, USB_STRING_INDEX_CONTROL),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_OUT_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
     USB_ENDPOINT_DESCRIPTOR_INIT(USB_BULK_IN_EP, USB_ENDPOINT_TYPE_BULK, USB_BULK_MPS_HS, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, USB_CDC_INT_EP, USB_CDC_OUT_EP, USB_CDC_IN_EP, USB_BULK_EP_MPS_HS, 0x02),
 };
 
+/* USB 身份：上位机/OTA 以 (VID, PID, Serial) 定位设备，**不看 COM 口号**。
+ *   VID     = 0x34B7（HPMicro，沿用）
+ *   PID     = 0x6618（应用；DFU/bootloader 预留 0x6619）
+ *   Serial  = 芯片 OTP UUID 派生的 32 位十六进制串，逐板唯一
+ * Windows 的 "USB 串行设备 (COMxx)" 是 usbser 的通用名，由 CDC 子功能产生，
+ * 无法通过描述符改写；它只用于 Terminal，不承担设备识别。 */
+
+#define USB_SERIAL_HEX_LEN (32U) /* 128bit UUID → 32 hex */
+
+static char s_usb_serial[USB_SERIAL_HEX_LEN + 1U];
+
 static const char *s_string_descriptors[] = {
     (const char[]){ 0x09, 0x04 }, /* Langid */
-    "HPMicro",                    /* Manufacturer */
-    "HPM53M1_G6618Motor",         /* Product（与工程同名） */
-    "0002",                       /* Serial Number（变更以刷新 Windows 设备名缓存） */
+    "Alliance HardwareGroup",     /* Manufacturer */
+    "G6618 Motor Drive",          /* Product */
+    s_usb_serial,                 /* Serial Number（OTP UUID，init 时填充） */
+    "G6618 Control",              /* Interface 0（WinUSB/bulk）名称 */
 };
+
+/**
+ * @brief 由芯片 OTP UUID 生成 USB 序列号（32 hex，逐板唯一）
+ *
+ * UUID 区：OTP_SOC_UUID_IDX / OTP_SOC_UUID_LEN（hpm_soc_feature.h）。
+ * 全 0 或全 F 视为未编程，退化为固定串（仍可枚举，但不保证唯一）。
+ */
+static void usb_serial_from_otp(void) {
+    static const char hex_digits[] = "0123456789ABCDEF";
+    uint32_t uuid[OTP_SOC_UUID_LEN / sizeof(uint32_t)];
+    bool blank = true;
+
+    for (uint32_t i = 0U; i < (OTP_SOC_UUID_LEN / sizeof(uint32_t)); i++) {
+        uuid[i] = otp_read_from_shadow(OTP_SOC_UUID_IDX + i);
+        if ((uuid[i] != 0U) && (uuid[i] != 0xFFFFFFFFU)) {
+            blank = false;
+        }
+    }
+
+    if (blank) {
+        (void)strcpy(s_usb_serial, "G6618-UNPROGRAMMED");
+        return;
+    }
+
+    for (uint32_t i = 0U; i < 4U; i++) {
+        for (uint32_t j = 0U; j < 8U; j++) {
+            s_usb_serial[(i * 8U) + j] = hex_digits[(uuid[i] >> (28U - (4U * j))) & 0x0FU];
+        }
+    }
+    s_usb_serial[USB_SERIAL_HEX_LEN] = '\0';
+}
 
 /**
  * @brief 获取设备描述符
@@ -530,6 +582,9 @@ static int hpm_usb_cdc_init(void)
     /* USB 低于 ADC/控制类中断（ADC0/FOC=3、GPTMR1=2），避免枚举和
      * CDC ISR 抢占控制链路。 */
     intc_set_irq_priority(IRQn_USB0, 1);
+
+    /* USB 序列号必须在注册描述符之前填好（枚举时立即被读取） */
+    usb_serial_from_otp();
 
     /* 接口编号由 usbd_add_interface 顺序分配，必须与配置描述符顺序一致：
      * 0 = vendor(WinUSB)，1 = CDC 控制，2 = CDC 数据 */

@@ -1121,6 +1121,16 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   - Interface 1/2：CDC ACM，端点保持 `0x81/0x01/0x83` 不变（Terminal 代码零改动）。
   - Win10 1709+ 由 WCID 自动绑 WinUSB，**不需要 Zadig**；Linux/macOS 走 usbfs/IOKit。
   - **PID 变更会让 COM 口号变化**（Windows 按 VID/PID 建实例），属预期。
+- **设备身份（OTA/DFU 目标识别口径）**：
+  - VID `0x34B7`（HPMicro，沿用）；PID `0x6618` = 应用，`0x6619` = DFU/bootloader（预留）；
+  - Manufacturer `Alliance HardwareGroup`，Product `G6618 Motor Drive`，
+    interface 0 的 `iInterface` = `G6618 Control`；
+  - **Serial = 芯片 OTP UUID**（`OTP_SOC_UUID_IDX`/`OTP_SOC_UUID_LEN`，128bit → 32 hex），
+    `hpm_usb_cdc_init()` 内 `usb_serial_from_otp()` 填充，逐板唯一；
+    UUID 全 0/全 F 时退化为 `G6618-UNPROGRAMMED`（仍可枚举，但不保证唯一）；
+  - 上位机与 DFU 工具按 `(VID, PID, Serial)` 定位目标，**不得依赖 COM 口号**。
+    Windows 的 "USB 串行设备 (COMxx)" 由 usbser 的通用 INF 决定，无法用描述符改写；
+    `usbipd list` 每物理设备只打一行并取 CDC 子名，属展示层行为，不代表 bulk 功能缺失。
 - **分层**：`Interface/intf_usb_bulk.h`（契约）→ `Driver/hpm_impl/drv_usb_cdc.c`
   （同一台设备实现 CDC + bulk 两个设备对象）→ `App/Platform/app_usb_*`（封装）→
   `App/Comm/usb/app_usb_proto.c`（协议服务，1kHz 慢任务）。

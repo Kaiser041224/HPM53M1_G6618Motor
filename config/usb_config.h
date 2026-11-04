@@ -47,8 +47,10 @@
 
 /* descriptor common define */
 #define USBD_VID           0x34B7 /* HPMicro VID */
-/* 复合设备专用 PID（vendor/WinUSB + CDC）。不要沿用 0xFFFF：
- * Windows 按 VID/PID 缓存驱动绑定结果，改描述符后需要新的 PID 才会重新枚举。 */
+/* PID 规划（不要沿用 0xFFFF：Windows 按 VID/PID 缓存驱动绑定结果）：
+ *   0x6618 = 应用固件（WinUSB bulk + CDC 复合）
+ *   0x6619 = DFU/bootloader 模式（预留，未实现；与 0x6618 共用 OTP UUID 序列号）
+ * 上位机/OTA 用 (VID, PID, Serial) 定位目标，不依赖 COM 口号。 */
 #define USBD_PID           0x6618
 #define USBD_MAX_POWER     200
 

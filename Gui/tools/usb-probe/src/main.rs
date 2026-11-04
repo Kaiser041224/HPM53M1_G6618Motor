@@ -153,8 +153,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .find(|d| d.vendor_id() == VID && d.product_id() == PID)
         .ok_or("device not found (VID 34B7 / PID 6618)")?;
 
+    let manufacturer = info.manufacturer_string().unwrap_or("<no manufacturer>");
     let product = info.product_string().unwrap_or("<no product string>");
-    println!("device: {product}  VID={VID:04X} PID={PID:04X}");
+    let serial = info.serial_number().unwrap_or("<no serial>");
+    println!(
+        "device: {manufacturer} / {product}\n        VID={VID:04X} PID={PID:04X} serial={serial}"
+    );
 
     let device = info.open().wait()?;
     let interface = device.claim_interface(INTERFACE).wait()?;
