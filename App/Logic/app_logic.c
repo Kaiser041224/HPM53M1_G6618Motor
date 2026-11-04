@@ -58,6 +58,7 @@
 #include "app_software_params.h"
 #include "app_terminal.h"
 #include "app_usb.h"
+#include "app_usb_proto.h"
 #include "intf_adc.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
@@ -322,6 +323,7 @@ void app_init(void) {
      * 请求失败"，只能重插）。USB 初始化后只进入任务循环，不再有 ms 级阻塞操作。
      */
     app_usb_init();
+    app_usb_proto_init(); /* bulk 二进制协议服务（1kHz 轮询；不阻塞启动） */
     app_terminal_init();
 }
 
@@ -406,6 +408,7 @@ void app_io_step(void) {
     app_debug_uart_run_once();
     app_can_service_step();   /* CAN 协议：收帧/执行/看门狗/周期发送（每拍） */
     app_debug_can_run_once(); /* CAN 统计打印（1Hz） */
+    app_usb_proto_service();  /* bulk 二进制协议：解码/分发/应答（每拍有界） */
     app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
 }
 

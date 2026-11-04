@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "sim", "tests", "frb"]
+members = ["core", "sim", "tests", "frb", "tools/usb-probe"]
 
 [workspace.package]
 edition = "2021"

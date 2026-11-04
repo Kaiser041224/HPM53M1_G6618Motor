@@ -15,14 +15,18 @@
 
 /* Driver registration */
 extern void hpm_usb_cdc_driver_register(void);
+extern void hpm_usb_bulk_driver_register(void);
 
-/* USB CDC 设备对象（init 时解析并缓存） */
+/* USB 设备对象（init 时解析并缓存；CDC 与 bulk 共用同一次设备初始化） */
 static const intf_usb_cdc_t* s_usb;
+static const intf_usb_bulk_t* s_usb_bulk;
 
 void app_usb_init(void) {
     hpm_usb_cdc_driver_register();
+    hpm_usb_bulk_driver_register();
 
     s_usb = intf_usb_cdc_get();
+    s_usb_bulk = intf_usb_bulk_get();
     if (s_usb == NULL) {
         return;
     }
@@ -62,4 +66,32 @@ bool app_usb_is_dtr(void) {
         return false;
     }
     return s_usb->is_dtr();
+}
+
+int app_usb_bulk_write(const uint8_t* data, size_t len, uint32_t timeout_ms) {
+    if (s_usb_bulk == NULL) {
+        return -1;
+    }
+    return s_usb_bulk->write(data, len, timeout_ms);
+}
+
+int app_usb_bulk_read(uint8_t* data, size_t len) {
+    if (s_usb_bulk == NULL) {
+        return -1;
+    }
+    return s_usb_bulk->read(data, len);
+}
+
+bool app_usb_bulk_ready(void) {
+    if (s_usb_bulk == NULL) {
+        return false;
+    }
+    return s_usb_bulk->is_ready();
+}
+
+void app_usb_bulk_get_stats(intf_usb_bulk_stats_t* out) {
+    if ((s_usb_bulk == NULL) || (s_usb_bulk->get_stats == NULL)) {
+        return;
+    }
+    s_usb_bulk->get_stats(out);
 }

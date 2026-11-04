@@ -20,7 +20,7 @@
 #include "app_hardware_params.h"
 #include "app_motor_params.h"
 #include "app_software_params.h"
-#include "params_meta_generated.h"
+#include "app_param_meta.h"
 
 #include <math.h>
 #include <string.h>
@@ -52,49 +52,6 @@ static const char* param_storage_name(uint32_t storage) {
     }
 }
 
-/** @brief 按名称查找元数据（名称须为域限定全名） */
-static const param_meta_t* param_find(const char* name) {
-    for (uint32_t i = 0U; i < g_params_meta_count; i++) {
-        if (strcmp(g_params_meta[i].name, name) == 0) {
-            return &g_params_meta[i];
-        }
-    }
-    return NULL;
-}
-
-/** @brief 取参数当前值地址（可写单例 + 偏移） */
-static void* param_data(const param_meta_t* meta) {
-    uint8_t* base;
-
-    switch (meta->domain) {
-    case PARAM_META_DOMAIN_MOTOR: base = (uint8_t*)app_motor_params_mutable(); break;
-    case PARAM_META_DOMAIN_HARDWARE: base = (uint8_t*)app_hardware_params_mutable(); break;
-    default: base = (uint8_t*)app_software_params_mutable(); break;
-    }
-    return base + meta->offset;
-}
-
-/** @brief 取参数工厂值地址（只读常量 + 偏移） */
-static const void* param_factory_data(const param_meta_t* meta) {
-    const uint8_t* base;
-
-    switch (meta->domain) {
-    case PARAM_META_DOMAIN_MOTOR: base = (const uint8_t*)app_motor_params_default(); break;
-    case PARAM_META_DOMAIN_HARDWARE: base = (const uint8_t*)app_hardware_params_default(); break;
-    default: base = (const uint8_t*)app_software_params_default(); break;
-    }
-    return base + meta->offset;
-}
-
-/** @brief 参数类型字节数 */
-static uint32_t param_type_size(uint8_t type) {
-    switch (type) {
-    case PARAM_META_TYPE_U8: return 1U;
-    case PARAM_META_TYPE_U16: return 2U;
-    default: return 4U;
-    }
-}
-
 /** @brief 是否为安全相关参数 */
 static bool param_is_safety_related(const char* name) {
     for (size_t i = 0U; i < sizeof(s_safety_params) / sizeof(s_safety_params[0]); i++) {
@@ -109,7 +66,7 @@ static bool param_is_safety_related(const char* name) {
  * @brief 打印单个参数（名称 = 值 [单位] (apply)）
  */
 static void param_print(chry_shell_t* csh, const param_meta_t* meta) {
-    const void* value = param_data(meta);
+    const void* value = app_param_meta_data(meta);
     const char* unit = (meta->unit != NULL) ? meta->unit : "";
     const char* apply = param_apply_name(meta->apply);
 
@@ -166,7 +123,7 @@ static bool param_matches_domain(const param_meta_t* meta, const char* filter) {
 static int cmd_param_list(chry_shell_t* csh, const char* filter) {
     uint32_t count = 0U;
 
-    if ((filter != NULL) && (param_find(filter) == NULL) && (strcmp(filter, "motor") != 0)
+    if ((filter != NULL) && (app_param_meta_find(filter) == NULL) && (strcmp(filter, "motor") != 0)
         && (strcmp(filter, "hardware") != 0) && (strcmp(filter, "software") != 0)) {
         csh_printf(csh, "ERR: unknown domain '%s' (motor|hardware|software)\r\n", filter);
         return -1;
@@ -188,7 +145,7 @@ static int cmd_param_list(chry_shell_t* csh, const char* filter) {
  * @brief param get <name>
  */
 static int cmd_param_get(chry_shell_t* csh, const char* name) {
-    const param_meta_t* meta = param_find(name);
+    const param_meta_t* meta = app_param_meta_find(name);
 
     if (meta == NULL) {
         csh_printf(csh, "ERR: unknown parameter '%s' (try 'param list')\r\n", name);
@@ -203,7 +160,7 @@ static int cmd_param_get(chry_shell_t* csh, const char* name) {
  * @brief param set <name> <value>
  */
 static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) {
-    const param_meta_t* meta = param_find(name);
+    const param_meta_t* meta = app_param_meta_find(name);
     void* data;
 
     if (meta == NULL) {
@@ -219,7 +176,7 @@ static int cmd_param_set(chry_shell_t* csh, const char* name, const char* text) 
         return -1;
     }
 
-    data = param_data(meta);
+    data = app_param_meta_data(meta);
     switch (meta->type) {
     case PARAM_META_TYPE_U8: {
         uint32_t value;
@@ -339,13 +296,13 @@ static int cmd_param_reset(chry_shell_t* csh, const char* target) {
     }
 
     {
-        const param_meta_t* meta = param_find(target);
+        const param_meta_t* meta = app_param_meta_find(target);
 
         if (meta == NULL) {
             csh_printf(csh, "ERR: unknown parameter '%s' (try 'param list')\r\n", target);
             return -1;
         }
-        memcpy(param_data(meta), param_factory_data(meta), param_type_size(meta->type));
+        memcpy(app_param_meta_data(meta), app_param_meta_factory_data(meta), app_param_meta_type_size(meta->type));
         if ((strcmp(target, "motor.encoder.electrical_offset_rad") == 0)
             || (strcmp(target, "motor.encoder.direction") == 0)) {
             app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;

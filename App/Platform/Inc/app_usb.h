@@ -10,6 +10,7 @@
 #ifndef APP_USB_H
 #define APP_USB_H
 
+#include "intf_usb_bulk.h"
 #include "intf_usb_cdc.h"
 
 #include <stdbool.h>
@@ -70,6 +71,35 @@ bool app_usb_is_dtr(void);
  * @param out 统计输出
  */
 void app_usb_get_stats(intf_usb_cdc_stats_t* out);
+
+/**
+ * @brief 发送一帧到 bulk IN（任务上下文；阻塞至完成或超时）。
+ * @param data 待发送数据
+ * @param len 数据长度
+ * @param timeout_ms 0 = 不等待、UINT32_MAX = 无限、其他 = 毫秒
+ * @return 0 成功，-1 失败
+ */
+int app_usb_bulk_write(const uint8_t* data, size_t len, uint32_t timeout_ms);
+
+/**
+ * @brief 从 bulk 接收环读取数据（非阻塞）。
+ * @param data 接收缓冲
+ * @param len 期望长度
+ * @return 实际字节数（≥0），-1 = 参数/状态错误
+ */
+int app_usb_bulk_read(uint8_t* data, size_t len);
+
+/**
+ * @brief bulk 通道是否已枚举完成。
+ * @return true = 可收发
+ */
+bool app_usb_bulk_ready(void);
+
+/**
+ * @brief 读取 bulk 运行统计。
+ * @param out 统计输出
+ */
+void app_usb_bulk_get_stats(intf_usb_bulk_stats_t* out);
 
 #ifdef __cplusplus
 }

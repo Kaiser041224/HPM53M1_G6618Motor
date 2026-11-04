@@ -1113,3 +1113,34 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **台架**：USB-CAN 按 1 kHz 发四类帧，反馈随每帧返回；跨模式切换先释放再接受；
   TRIP 后按上述顺序恢复。拔线验证 `COMM_TIMEOUT` 需 `fault protect on` 或
   YAML `fault.actions_enable=true`（出厂仍为只告警）。
+
+### USB 复合链路：WinUSB bulk + CDC（2026-11-04）
+
+- **设备布局**（PID `0x6618`，bcdUSB 2.1，MS OS 2.0/WCID）：
+  - Interface 0：vendor（WinUSB）bulk IN `0x82` / OUT `0x02`，MPS 512(HS) / 64(FS)；
+  - Interface 1/2：CDC ACM，端点保持 `0x81/0x01/0x83` 不变（Terminal 代码零改动）。
+  - Win10 1709+ 由 WCID 自动绑 WinUSB，**不需要 Zadig**；Linux/macOS 走 usbfs/IOKit。
+  - **PID 变更会让 COM 口号变化**（Windows 按 VID/PID 建实例），属预期。
+- **分层**：`Interface/intf_usb_bulk.h`（契约）→ `Driver/hpm_impl/drv_usb_cdc.c`
+  （同一台设备实现 CDC + bulk 两个设备对象）→ `App/Platform/app_usb_*`（封装）→
+  `App/Comm/usb/app_usb_proto.c`（协议服务，1kHz 慢任务）。
+  参数查找/地址计算已下沉到 `App/Platform/app_param_meta.*`，Terminal 与二进制协议共用，
+  **不要再各自实现一份 `param_find`**。
+- **协议契约唯一事实源**：`Gui/protocol/motor_proto.h`（固件直接把 `Gui/protocol`
+  加入 include 路径，不复制）。帧/CRC/命令语义见 `protocol_spec.md`。
+- **P1a 现状（只读）**：`PROTO_INFO`、`PARAM_META_COUNT/GET`、`PARAM_READ`、
+  `STATUS_GET`、`FAULT_GET`、`FAULT_CLEAR`；`caps = 0`，写类命令一律
+  `UNSUPPORTED`。P1b 才接 `PARAM_WRITE/COMMIT/RESET` 与 `CTRL_CMD`。
+- **线格式映射（易错点）**：
+  - 固件 `U8/U16` 统一上报 `MP_TYPE_U32`（线格式没有 U8/U16）；`F32` 原样；
+  - **没有 BOOL 映射**：元数据不区分 YAML bool 与 0/1 整数，禁止按值域猜测；
+  - `PARAM_META_APPLY_FOC_OFF` 上报为 `MP_APPLY_REBOOT`（线格式只有 live/reboot）；
+  - `STATUS_GET` 的 `freq_hz = omega_e_rad_s / 2π`（电频率），
+    `mod_pct = voltage_utilization × 100`，温度取 NTC0，换算无效时上报 0。
+- **资源**：bulk 接收环 1KB + TX 缓冲 1KB + 端点缓冲 512B 全部在 DLM；
+  当前 DLM **91.94%**（余量约 10KB）。P2 遥测环不得再加进 DLM，优先 AHB。
+- **验证工具**：`Gui/tools/usb-probe`（`cargo run -p usb-probe`）按金向量自检并跑
+  PROTO_INFO / META / READ / FAULT / STATUS×20；失败时先看固件的
+  `s_stat_bulk_rx_drops/tx_drops/oversize` 与 `bulk->is_ready()`。
+- **上下文纪律**：USB ISR 只做环形缓冲搬运（按 MPS 分块 memcpy），解析/应答全部在
+  1kHz 慢任务；`app_usb_proto_service()` 每拍最多取 256 字节，禁止在 ISR 内组帧。

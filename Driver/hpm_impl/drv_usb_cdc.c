@@ -25,6 +25,7 @@
  */
 
 #include "intf_usb_cdc.h"
+#include "intf_usb_bulk.h"
 #include "intf_clock.h"
 #include "board.h"
 
@@ -244,15 +245,27 @@ static intf_usb_cdc_rx_cb_t s_rx_cb;
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_ep_out_buf[USB_CDC_EP_MPS];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_ep_in_buf[USB_CDC_TX_BUF_SIZE];
 
-/* ---- 厂商自定义接口（WinUSB bulk，P0 回环自检） ---- */
+/* ---- 厂商自定义接口（WinUSB bulk，二进制协议通道） ---- */
+#define USB_BULK_RX_RING_SIZE (1024U) /* 必须为 2 的幂 */
+#define USB_BULK_RX_RING_MASK (USB_BULK_RX_RING_SIZE - 1U)
+#define USB_BULK_TX_BUF_SIZE  (1024U) /* ≥ 单帧上限 9 + MP_MAX_PAYLOAD */
+
 static volatile bool s_bulk_tx_busy;
-static volatile uint32_t s_stat_bulk_rx_packets;  /**< 收到的 OUT 包数 */
-static volatile uint32_t s_stat_bulk_tx_packets;  /**< 成功排队的 IN 包数 */
-static volatile uint32_t s_stat_bulk_dropped;     /**< IN 忙或启动失败丢弃的包数 */
-static volatile uint32_t s_stat_bulk_oversize;    /**< 超 MPS 的异常包数 */
+static uint32_t s_bulk_tx_start_cycle; /**< 本次发送起始 cycle（卡死恢复判定） */
+
+static volatile uint32_t s_stat_bulk_rx_packets; /**< 收到的 OUT 包数 */
+static volatile uint32_t s_stat_bulk_tx_packets; /**< 成功排队的 IN 包数 */
+static volatile uint32_t s_stat_bulk_rx_drops;   /**< 接收环满丢弃的字节数 */
+static volatile uint32_t s_stat_bulk_tx_drops;   /**< IN 忙/失败丢弃的字节数 */
+static volatile uint32_t s_stat_bulk_oversize;   /**< 超 MPS 的异常包数 */
 
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_bulk_out_buf[USB_BULK_MPS_HS];
-USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_bulk_in_buf[USB_BULK_MPS_HS];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t s_bulk_tx_buf[USB_BULK_TX_BUF_SIZE];
+
+/* SPSC 环形缓冲：head 仅 USB ISR 写，tail 仅任务写（RV32 上 16bit 访问原子） */
+static uint8_t s_bulk_rx_ring[USB_BULK_RX_RING_SIZE];
+static volatile uint16_t s_bulk_rx_head;
+static volatile uint16_t s_bulk_rx_tail;
 
 /* SPSC 环形缓冲：head 仅 ISR 写，tail 仅主循环写（RV32 上 16bit 访问原子） */
 static uint8_t s_rx_ring[USB_CDC_RX_RING_SIZE];
@@ -337,6 +350,8 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
         s_dtr = false;
         s_tx_busy = false;
         s_bulk_tx_busy = false;
+        s_bulk_rx_head = 0U;
+        s_bulk_rx_tail = 0U;
         s_stat_bus_resets++;
         break;
     case USBD_EVENT_ERROR:
@@ -391,10 +406,42 @@ void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
     s_dtr = dtr;
 }
 
-/* ---- 厂商自定义接口（WinUSB bulk，P0 回环自检） ---- */
+/* ---- 厂商自定义接口（WinUSB bulk，二进制协议通道） ---- */
 
 /**
- * @brief bulk OUT 完成：P0 将收到的数据原样排队回 bulk IN
+ * @brief 向 bulk 接收环压入数据（USB 中断上下文；满则丢弃多余字节）
+ * @param data 数据
+ * @param len 长度 [byte]
+ */
+static void usb_bulk_ring_push(const uint8_t *data, uint32_t len)
+{
+    uint16_t head = s_bulk_rx_head;
+    uint16_t tail = s_bulk_rx_tail;
+    uint16_t used = (head >= tail) ? (uint16_t) (head - tail)
+                                   : (uint16_t) (USB_BULK_RX_RING_SIZE - tail + head);
+    uint32_t count = (uint32_t) (USB_BULK_RX_RING_SIZE - 1U - used);
+    uint32_t first;
+
+    if (count > len) {
+        count = len;
+    }
+    if (count < len) {
+        s_stat_bulk_rx_drops += (len - count);
+    }
+
+    first = (uint32_t) (USB_BULK_RX_RING_SIZE - head);
+    if (first > count) {
+        first = count;
+    }
+    memcpy(&s_bulk_rx_ring[head], data, first);
+    if (count > first) {
+        memcpy(&s_bulk_rx_ring[0], &data[first], count - first);
+    }
+    s_bulk_rx_head = (uint16_t) ((head + count) & USB_BULK_RX_RING_MASK);
+}
+
+/**
+ * @brief bulk OUT 完成：数据压入接收环后立即重臂
  * @param busid 总线 ID
  * @param ep 端点地址
  * @param nbytes 收到的字节数
@@ -403,21 +450,10 @@ static void usbd_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
     s_stat_bulk_rx_packets++;
 
-    if (nbytes == 0U) {
-        /* 主机的 ZLP，无需回环 */
-    } else if (nbytes > sizeof(s_bulk_in_buf)) {
+    if (nbytes > sizeof(s_bulk_out_buf)) {
         s_stat_bulk_oversize++;
-    } else if (s_bulk_tx_busy) {
-        s_stat_bulk_dropped++; /* 主机未取走上一包：丢弃本包，不阻塞 OUT 重臂 */
-    } else {
-        memcpy(s_bulk_in_buf, s_bulk_out_buf, nbytes);
-        s_bulk_tx_busy = true;
-        if (usbd_ep_start_write(busid, USB_BULK_IN_EP, s_bulk_in_buf, nbytes) == 0) {
-            s_stat_bulk_tx_packets++;
-        } else {
-            s_bulk_tx_busy = false;
-            s_stat_bulk_dropped++;
-        }
+    } else if (nbytes > 0U) {
+        usb_bulk_ring_push(s_bulk_out_buf, nbytes);
     }
 
     usbd_ep_start_read(busid, ep, s_bulk_out_buf, usbd_get_ep_mps(busid, ep));
@@ -485,6 +521,8 @@ static int hpm_usb_cdc_init(void)
     s_rx_tail = 0U;
     s_tx_busy = false;
     s_bulk_tx_busy = false;
+    s_bulk_rx_head = 0U;
+    s_bulk_rx_tail = 0U;
     s_configured = false;
     s_dtr = false;
     s_rx_cb = NULL;
@@ -635,6 +673,130 @@ static void hpm_usb_cdc_deinit(void)
     s_dtr = false;
     s_tx_busy = false;
     s_rx_cb = NULL;
+}
+
+/* ============================================================================
+ * USB bulk 接口实现（与 CDC 共用同一台设备）
+ * ============================================================================ */
+
+/**
+ * @brief 发送一帧到 bulk IN（任务上下文；阻塞至完成或超时）
+ * @param data 发送缓冲
+ * @param len 长度 [byte]
+ * @param timeout_ms 超时毫秒语义
+ * @return 0 = 成功；-1 = 参数非法、未就绪或超时
+ */
+static int hpm_usb_bulk_write(const uint8_t *data, size_t len, uint32_t timeout_ms)
+{
+    uint32_t start;
+    uint32_t timeout_cycles;
+
+    if ((data == NULL) || (len == 0U) || (len > USB_BULK_TX_BUF_SIZE)) {
+        return -1;
+    }
+    if (!s_initialized || !s_configured) {
+        return -1;
+    }
+
+    start = intf_clock_get_cycle();
+    timeout_cycles = usb_cdc_ms_to_cycles(timeout_ms);
+
+    /* 上一次发送卡死（控制器报错/主机长时间不取）：超时强制恢复，避免 TX 永久死锁 */
+    if (s_bulk_tx_busy
+        && ((uint32_t) (intf_clock_get_cycle() - s_bulk_tx_start_cycle)
+            >= usb_cdc_ms_to_cycles(USB_CDC_TX_STALL_TIMEOUT_MS))) {
+        s_bulk_tx_busy = false;
+        (void) usbd_ep_clear_stall(USB_CDC_BUSID, USB_BULK_IN_EP);
+    }
+
+    while (s_bulk_tx_busy) {
+        if (usb_cdc_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
+            s_stat_bulk_tx_drops += (uint32_t) len;
+            return -1;
+        }
+    }
+
+    memcpy(s_bulk_tx_buf, data, len);
+    s_bulk_tx_start_cycle = intf_clock_get_cycle();
+    s_bulk_tx_busy = true;
+    if (usbd_ep_start_write(USB_CDC_BUSID, USB_BULK_IN_EP, s_bulk_tx_buf, (uint32_t) len) != 0) {
+        s_bulk_tx_busy = false;
+        s_stat_bulk_tx_drops += (uint32_t) len;
+        return -1;
+    }
+    s_stat_bulk_tx_packets++;
+
+    if (timeout_ms == 0U) {
+        return 0;
+    }
+    while (s_bulk_tx_busy) {
+        if (usb_cdc_timeout_elapsed(start, timeout_cycles, timeout_ms)) {
+            s_stat_bulk_tx_drops += (uint32_t) len;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * @brief 从接收环读取数据（非阻塞）
+ * @param data 接收缓冲
+ * @param len 期望长度 [byte]
+ * @return 实际接收字节数；-1 = 参数非法
+ */
+static int hpm_usb_bulk_read(uint8_t *data, size_t len)
+{
+    size_t count = 0U;
+
+    if ((data == NULL) || (len == 0U)) {
+        return -1;
+    }
+    while ((count < len) && (s_bulk_rx_head != s_bulk_rx_tail)) {
+        data[count] = s_bulk_rx_ring[s_bulk_rx_tail];
+        s_bulk_rx_tail = (uint16_t) ((s_bulk_rx_tail + 1U) & USB_BULK_RX_RING_MASK);
+        count++;
+    }
+    return (int) count;
+}
+
+/**
+ * @brief bulk 通道是否可收发
+ * @return true = 已枚举完成
+ */
+static bool hpm_usb_bulk_is_ready(void)
+{
+    return s_initialized && s_configured;
+}
+
+/**
+ * @brief 读取 bulk 运行统计
+ * @param out 统计输出
+ */
+static void hpm_usb_bulk_get_stats(intf_usb_bulk_stats_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->rx_packets = s_stat_bulk_rx_packets;
+    out->tx_packets = s_stat_bulk_tx_packets;
+    out->rx_drops = s_stat_bulk_rx_drops;
+    out->tx_drops = s_stat_bulk_tx_drops;
+    out->oversize = s_stat_bulk_oversize;
+    out->bus_resets = s_stat_bus_resets;
+}
+
+static const intf_usb_bulk_t s_usb_bulk_dev = {
+    .instance_id = 0U,
+    .init = hpm_usb_cdc_init, /* 与 CDC 共用设备初始化（幂等） */
+    .write = hpm_usb_bulk_write,
+    .read = hpm_usb_bulk_read,
+    .is_ready = hpm_usb_bulk_is_ready,
+    .get_stats = hpm_usb_bulk_get_stats,
+};
+
+void hpm_usb_bulk_driver_register(void)
+{
+    (void) intf_usb_bulk_register(&s_usb_bulk_dev);
 }
 
 /* ============================================================================

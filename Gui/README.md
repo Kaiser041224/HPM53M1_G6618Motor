@@ -58,6 +58,19 @@ cargo build --workspace     # 编译 core / sim / tests
 cargo test  --workspace     # 全量回归：协议金向量 / codec / session / sim / TCP 集成
 ```
 
+## 真板联调（USB bulk，P1a）
+
+固件已把 USB0 改为复合设备：interface 0 = WinUSB bulk（`0x82` IN / `0x02` OUT），
+interface 1/2 = CDC 终端（COM 口）。Windows 10/11 由 WCID 自动绑定 WinUSB，无需 Zadig。
+
+```powershell
+cargo run -p usb-probe
+```
+
+探针会自检金向量，然后依次请求 `PROTO_INFO` / `PARAM_META_COUNT` / `PARAM_META_GET` /
+`PARAM_READ` / `FAULT_GET`，并以 5 Hz 拉 20 次 `STATUS_GET`。全部通过时退出码为 0。
+当前固件为只读子集（`caps=0`），写参数/控制命令返回 `UNSUPPORTED`。
+
 ## 运行设备模拟器
 
 模拟器在 `127.0.0.1` 上以 TCP 提供协议服务端，Gui 通过真实 `TcpTransport` 连接，

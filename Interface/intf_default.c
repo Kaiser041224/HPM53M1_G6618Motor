@@ -16,6 +16,7 @@
 #include "intf_trgm.h"
 #include "intf_uart.h"
 #include "intf_usb_cdc.h"
+#include "intf_usb_bulk.h"
 #include "intf_gpio.h"
 #include "intf_can.h"
 #include "intf_synt.h"
@@ -767,6 +768,24 @@ int intf_usb_cdc_register(const intf_usb_cdc_t *dev)
 const intf_usb_cdc_t *intf_usb_cdc_get(void)
 {
     return s_usb_cdc_dev;
+}
+
+/* ============================================================================
+ * USB bulk Interface（单实例设备对象，风格 A）
+ * ============================================================================ */
+
+static const intf_usb_bulk_t *s_usb_bulk_dev = NULL;
+
+int intf_usb_bulk_register(const intf_usb_bulk_t *dev)
+{
+    if (dev == NULL) return -1;
+    s_usb_bulk_dev = dev;
+    return 0;
+}
+
+const intf_usb_bulk_t *intf_usb_bulk_get(void)
+{
+    return s_usb_bulk_dev;
 }
 
 /* ============================================================================
