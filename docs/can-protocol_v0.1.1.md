@@ -1,4 +1,4 @@
-# G6618 电机控制协议 v0.1
+# G6618 电机控制协议 v0.1.1
 
 | 项目 | 内容 |
 | :--- | :--- |
@@ -295,7 +295,7 @@ torque_nm = T_raw/4095    × 400 − 200     // kt × 实测 iq × 减速比，�
 
 ## 8. 终端诊断
 
-> 终端命令的完整说明见 [usb-terminal_v0.1.md](usb-terminal_v0.1.md)。
+> 终端命令的完整说明见 [usb-terminal_v0.1.1.md](usb-terminal_v0.1.1.md)。
 
 ```text
 can            # node / wd / bus(tec,rec,ep) / dm rx,drop,bad,foreign,switch,rej,txf

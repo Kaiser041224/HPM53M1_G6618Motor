@@ -983,7 +983,7 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   **注意 flash FCUR 会覆盖 YAML**：改带宽后须 `cal current` 重标或清 FCUR
   （`storage: reset`），否则跑的仍是旧 kp/ki。
 
-### 标定流程修正：cal encoder verify / cal rl 阶跃与阶梯（2026-11-01，待台架复验）
+### 标定流程修正：cal encoder verify / cal rl 阶跃与阶梯（2026-11-01，2026-11-04 台架复验通过）
 
 - **cal encoder verify 的旧判据在自由轴上必然失败**：旧流程在试用零点 + 编码器角源下
   施加 2A i_d，并以"静止残差 ≤15°电角"判死。零点误差 δ 时 i_d 产生 **恒定** 转矩
@@ -1060,7 +1060,8 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **验证红线不变**：5→4 槽改动了冻结的 ADC1 序列 → 必须重跑 spec
   `2026-09-19-adc-sampling-design` §9.5.2 的 vbus 配对 A/B 与 `cal rl`，并确认
   `adc diag` 的 vbus 快通道 `stale` 无增长。首末槽仍是 VBUS，风险集中在整帧时长
-  （5 项 ≈5.8 µs → 4 项 ≈4.6 µs）。
+  （5 项 ≈5.8 µs → 4 项 ≈4.6 µs）。**2026-11-04 台架复验通过**（vbus 配对 A/B、
+  `cal rl`、`stale` 三项均通过）。
 - 终端：`can id` 打印上电 DIP 原始码/档位与 ADC 槽状态（released/kept）；
   `adc dump` 在释放后显示 `V_CANID no data (released; ID read once at boot)`。
 

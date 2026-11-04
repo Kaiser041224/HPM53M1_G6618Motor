@@ -28,7 +28,7 @@
 #include <string.h>
 
 /** 固件版本串 */
-#define APP_TERMINAL_FW_VERSION "0.1.0"
+#define APP_TERMINAL_FW_VERSION "0.1.1"
 
 /**
  * @brief 命令 ver：打印固件版本、构建时间与复位源状态。

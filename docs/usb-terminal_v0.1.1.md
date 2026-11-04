@@ -1,14 +1,18 @@
-# G6618 电机 USB 终端命令手册 v0.1
+# G6618 电机 USB 终端命令手册 v0.1.1
 
-| 项目 | 内容 |
-| :--- | :--- |
-| 适用对象 | HPM53M1 + G6618 电机（50:1 减速器） |
-| 适用固件 | `HPM53M1_G6618Motor`（2026-11-03 起） |
-| 物理通道 | USB0 CDC 虚拟串口（`PAxx` USB 口），CherrySH 命令层 |
-| 提示符 | `HPM53M1@G6618:/$` |
-| 角色 | 调试、标定、参数整定；**CAN 运行时控制见 [can-protocol_v0.1.md](can-protocol_v0.1.md)** |
+| 项目     | 内容                                                                                         |
+| :------- | :------------------------------------------------------------------------------------------- |
+| 适用对象 | HPM53M1 + G6618 电机（50:1 减速器）                                                          |
+| 适用固件 | `HPM53M1_G6618Motor`（2026-11-03 起）                                                      |
+| 物理通道 | USB0 CDC 虚拟串口（`PAxx` USB 口），CherrySH 命令层                                        |
+| 提示符   | `HPM53M1@G6618:/$`                                                                         |
+| 角色     | 调试、标定、参数整定；**CAN 运行时控制见 [can-protocol_v0.1.1.md](can-protocol_v0.1.1.md)** |
+
+![1793715482879](image/usb-terminal_v0.1.1/1793715482879.png)
 
 ---
+
+
 
 ## 1. 通用约定
 
@@ -23,14 +27,14 @@
 
 终端命令使用**输出轴**的工程单位，与 CAN 协议的 rad/rad/s 不同：
 
-| 量 | 终端 | CAN |
-| :--- | :--- | :--- |
-| 位置 | `deg`（`motion pos` 为 0~360 单圈；`pos_multi/pos_rel/mit` 为连续 deg） | `rad` |
-| 速度 | `rpm`（输出轴） | `rad/s` |
-| 转矩 | `Nm`（输出轴） | `Nm`（反馈 T 量程 ±200） |
-| MIT Kp | `Nm/rad`（轴端） | `Nm/rad` |
-| MIT Kd | `Nm/(rad/s)`（轴端） | `Nm/(rad/s)` |
-| 电流 | `A`（FOC q/d 轴物理电流） | `A`（i_des 标幺 ×24.3 A） |
+| 量     | 终端                                                                          | CAN                          |
+| :----- | :---------------------------------------------------------------------------- | :--------------------------- |
+| 位置   | `deg`（`motion pos` 为 0~360 单圈；`pos_multi/pos_rel/mit` 为连续 deg） | `rad`                      |
+| 速度   | `rpm`（输出轴）                                                             | `rad/s`                    |
+| 转矩   | `Nm`（输出轴）                                                              | `Nm`（反馈 T 量程 ±200）  |
+| MIT Kp | `Nm/rad`（轴端）                                                            | `Nm/rad`                   |
+| MIT Kd | `Nm/(rad/s)`（轴端）                                                        | `Nm/(rad/s)`               |
+| 电流   | `A`（FOC q/d 轴物理电流）                                                   | `A`（i_des 标幺 ×24.3 A） |
 
 ### 1.3 长操作与阻塞行为
 
@@ -44,27 +48,27 @@
 
 ## 2. 命令索引
 
-| 命令 | 作用 | 关键前置 |
-| :--- | :--- | :--- |
-| `ver` | 固件版本、构建时间、复位源 | — |
-| `status` | 故障/模拟量/编码器快照 | — |
-| `usb` | USB 链路与 Terminal 统计 | — |
-| `clear` | 清屏 | — |
-| `reboot confirm` | 软件复位 | 电机停止 |
-| `driver power [on\|off]` | +12V 栅极供电手动开关 | FOC OFF |
-| `can [id]` | CAN 节点/总线/协议统计；`id` 看 DIP 快照 | — |
-| `adc dump\|diag\|delay <ns>` | ADC 通道/速率/触发延时 | — |
-| `pwm dump` | HRPWM 比较值与频率 | — |
-| `enc info\|zero <rotor\|output>\|clear` | 编码器读数/置零/清零点 | 电机停止 |
-| `fault show\|clear\|protect\|policy\|inject` | 故障锁存与动作策略 | — |
-| `profiler dump` | 逐 ISR 频率/耗时/outliers | — |
-| `monitor [on\|off]` | 常驻状态区（2 Hz） | — |
-| `foc status\|on\|off\|vtest\|dutycap\|bench\|trace` | FOC 使能/电压测试/调制上限/台架/捕获 | 见 §5 |
-| `motor iq [A]\|motor id [A]` | 直接 q/d 轴电流 | FOC READY/RUN、DIRECT 源 |
-| `motion ...` | 运动模式、标定、MIT | 见 §7 |
-| `cal ...` | 编码器/RL/惯量/齿槽/电流零点标定 | 见 §8 |
-| `cogging ...` | 齿槽/传动角表开关与增益 | 见 §9 |
-| `param list\|get\|set\|reset\|save` | 参数访问与持久化 | `save/reset` 需 FOC OFF |
+| 命令                                            | 作用                                       | 关键前置                  |
+| :---------------------------------------------- | :----------------------------------------- | :------------------------ |
+| `ver`                                         | 固件版本、构建时间、复位源                 | —                        |
+| `status`                                      | 故障/模拟量/编码器快照                     | —                        |
+| `usb`                                         | USB 链路与 Terminal 统计                   | —                        |
+| `clear`                                       | 清屏                                       | —                        |
+| `reboot confirm`                              | 软件复位                                   | 电机停止                  |
+| `driver power [on\|off]`                       | +12V 栅极供电手动开关                      | FOC OFF                   |
+| `can [id]`                                    | CAN 节点/总线/协议统计；`id` 看 DIP 快照 | —                        |
+| `adc dump\|diag\|delay <ns>`                    | ADC 通道/速率/触发延时                     | —                        |
+| `pwm dump`                                    | HRPWM 比较值与频率                         | —                        |
+| `enc info\|zero <rotor\|output>\|clear`          | 编码器读数/置零/清零点                     | 电机停止                  |
+| `fault show\|clear\|protect\|policy\|inject`      | 故障锁存与动作策略                         | —                        |
+| `profiler dump`                               | 逐 ISR 频率/耗时/outliers                  | —                        |
+| `monitor [on\|off]`                            | 常驻状态区（2 Hz）                         | —                        |
+| `foc status\|on\|off\|vtest\|dutycap\|bench\|trace` | FOC 使能/电压测试/调制上限/台架/捕获       | 见 §5                    |
+| `motor iq [A]\|motor id [A]`                   | 直接 q/d 轴电流                            | FOC READY/RUN、DIRECT 源  |
+| `motion ...`                                  | 运动模式、标定、MIT                        | 见 §7                    |
+| `cal ...`                                     | 编码器/RL/惯量/齿槽/电流零点标定           | 见 §8                    |
+| `cogging ...`                                 | 齿槽/传动角表开关与增益                    | 见 §9                    |
+| `param list\|get\|set\|reset\|save`               | 参数访问与持久化                           | `save/reset` 需 FOC OFF |
 
 ---
 
@@ -444,11 +448,11 @@ param save
 
 ### 10.2 apply 语义
 
-| apply | 含义 |
-| :--- | :--- |
-| `live` | set 立即生效（消费者实时读取） |
+| apply       | 含义                                        |
+| :---------- | :------------------------------------------ |
+| `live`    | set 立即生效（消费者实时读取）              |
 | `foc_off` | set 仅 FOC OFF 接受，下一次 `foc on` 生效 |
-| `reboot` | set 只改 RAM，重启后生效 |
+| `reboot`  | set 只改 RAM，重启后生效                    |
 
 ### 10.3 持久化与 storage
 
