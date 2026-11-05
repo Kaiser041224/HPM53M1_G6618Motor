@@ -1181,5 +1181,8 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   （nusb 明确不缓存），必须用 `get_manufacturer_string()` 主动读。
   可选参数：`--p1b`（参数写回环 + 落盘）、`--ctrl <op> <value>`（单发控制）、
   `--reset all|name1,name2`（恢复出厂，破坏性，会立即落盘）。默认只读，不会启停电机。
+  **`--ctrl mode` 的 value 是模式整数，但线上编码是 `f32::from_bits(mode)`**
+  （v1.1 约定：f32 位型低字节承载模式；sim/frb 同口径）。发数值 `2.0` 会被设备判
+  `BAD_PARAM`，探针已在内部转换。
 - **上下文纪律**：USB ISR 只做环形缓冲搬运（按 MPS 分块 memcpy），解析/应答全部在
   1kHz 慢任务；`app_usb_proto_service()` 每拍最多取 256 字节，禁止在 ISR 内组帧。

@@ -296,9 +296,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("--ctrl needs <start|stop|mode|torque|speed|angle> [value]")?;
         let op = ctrl_opcode(op_name).ok_or_else(|| format!("unknown ctrl op: {op_name}"))?;
         let value: f32 = args.get(idx + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        /* SET_MODE 的 value 是 f32 位型低字节承载模式（motor_proto.h v1.1 约定），
+         * 不是数值 2.0；sim/frb 都用 f32::from_bits(mode)。 */
+        let wire_value = if op_name == "mode" {
+            let mode = value as u32;
+            if (value < 1.0) || (value > 3.0) || ((mode as f32) != value) {
+                println!("[FAIL] mode must be an integer 1..3");
+                std::process::exit(1);
+            }
+            println!("CTRL mode value={mode} (wire f32 bits=0x{mode:08X})");
+            f32::from_bits(mode)
+        } else {
+            println!("CTRL {op_name} value={value}");
+            value
+        };
         let mut payload = vec![op];
-        payload.extend_from_slice(&value.to_le_bytes());
-        println!("CTRL {op_name} value={value}");
+        payload.extend_from_slice(&wire_value.to_le_bytes());
         match link.transact(CMD_CTRL, &payload) {
             Ok(r) => {
                 println!(
