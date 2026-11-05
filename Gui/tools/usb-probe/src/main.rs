@@ -159,6 +159,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "device: {manufacturer} / {product}\n        VID={VID:04X} PID={PID:04X} serial={serial}"
     );
+    /* 直接读接口字符串描述符：与 Windows 缓存的 FriendlyName 无关，
+     * 用于判断固件是否真的改了 iInterface（改名字后必须以此为准）。 */
+    if let Some(intf) = info.interfaces().find(|i| i.interface_number() == INTERFACE) {
+        println!(
+            "        interface0=\"{}\"",
+            intf.interface_string().unwrap_or("<no interface string>")
+        );
+    }
 
     let device = info.open().wait()?;
     let interface = device.claim_interface(INTERFACE).wait()?;

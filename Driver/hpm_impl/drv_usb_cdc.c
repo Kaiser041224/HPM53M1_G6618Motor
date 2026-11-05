@@ -160,7 +160,7 @@ static const char *s_string_descriptors[] = {
     "Alliance HardwareGroup",     /* Manufacturer */
     "G6618 Motor Drive",          /* Product */
     s_usb_serial,                 /* Serial Number（OTP UUID，init 时填充） */
-    "G6618 Control",              /* Interface 0（WinUSB/bulk）名称 */
+    "G6618 Driver",              /* Interface 0（WinUSB/bulk）名称 */
 };
 
 /**
