@@ -1,4 +1,4 @@
-# Gui ↔ 电机控制板 通讯协议规范 v1.3
+# Gui ↔ 电机控制板 通讯协议规范 v1.4
 
 本文件是 `motor_proto.h` 的配套说明，两者共同构成 Gui 上位机与电机控制板之间的
 **线格式契约**。任何一端实现编解码、传输解析、会话状态机时，都以本规范为准；
@@ -393,7 +393,7 @@ CAN 经典帧单帧数据 ≤ 8 字节，无法容纳最大 521 字节的协议�
 | :--- | :--- | :--- |
 | 0 | `CAP_PARAM_WRITE` | 支持 `MP_CMD_PARAM_WRITE` |
 | 1 | `CAP_CONTROL` | 支持 `MP_CMD_CTRL_CMD` |
-| 2 | `CAP_STREAM` | 一级流订阅（**v1 预留，恒为 0**） |
+| 2 | `CAP_STREAM` | 一级流订阅（v1.4 起支持，见 §10） |
 | 3..31 | — | 保留，v1 恒 `0`；接收端忽略未知位 |
 
 金帧 `proto_info_resp_sim` 中 `caps = 0x00000003`，即 `CAP_PARAM_WRITE | CAP_CONTROL`。
@@ -668,6 +668,51 @@ CRC `0x1C86`，线序 `86 1C`。）
   `MP_STATUS_UNSUPPORTED (0x05)`；主机须同时容忍两者并据此降级隐藏对应 UI，不得视为
   协议违例或断连（同 §7.4）。
 - v1.3 不新增 `caps` 位。
+
+---
+
+## 10. v1.4 增量：遥测流（`MP_CMD_STREAM_SUB = 0x0B`）
+
+### 10.1 订阅 / 退订
+
+| 命令 | 请求载荷 | 响应 |
+| :--- | :--- | :--- |
+| `MP_CMD_STREAM_SUB = 0x0B` | `rate_hz u16 LE` + `batch u16 LE` | `status` |
+| `MP_CMD_STREAM_UNSUB = 0x0C` | 空 | `status` |
+
+- `rate_hz` 当前只支持 `1000`，其他值返回 `MP_STATUS_RANGE_ERR`；
+- `batch` = 每帧样本数：`0` = 默认 7，范围 `1..7`
+  （8B 头 + 7×72B = 512B = `MP_MAX_PAYLOAD` 上限）；
+- 订阅成功即生效；退订后不再发送；重复订阅等价于重新开始（`sample_index` 归零）。
+
+### 10.2 数据帧
+
+设备主动发送，**不是**请求的响应：
+
+| 字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `CMD` | u8 | `MP_CMD_STREAM_DATA = 0x8E` |
+| `SEQ` | u8 | 帧计数，u8 回绕（不参与请求/响应配对） |
+| `PAYLOAD` | bytes | `mp_stream_header_t` + `count × mp_telemetry_sample_t` |
+
+`mp_stream_header_t`（8B）：`sample_index u32 | count u16 | sample_size u8 | reserved u8`。
+
+`mp_telemetry_sample_t` 固定 **72 字节、无 padding、全小端**，字段顺序见
+`motor_proto.h`：`t_us, i_u/i_v/i_w, v_bus, ntc0/ntc1, r_ntc0/r_ntc1,
+enc_rotor_deg, enc_output_deg, i_d/i_q, speed_rad_s, torque_nm, pos_rad,
+fault_flags, enc_rotor_raw, enc_output_raw`。
+
+约束：
+
+- 采样在**设备 1kHz 回报任务**内完成，不新增 ISR 采样；
+- `t_us` 为 u32 微秒，回绕约 71.6 min，主机按差值展开；
+- 遥测**有损**：主机不读或 USB 忙时设备直接丢弃整批，不重传；
+- 应答（请求/响应）优先于流帧；两者共用同一 IN 端点，主机 IN 请求长度必须是
+  MPS(512) 的整数倍，建议 **1024**（单帧最大 9 + 512 = 521B，512 会把尾包留在端点里）。
+
+### 10.3 caps
+
+v1.4 起 `caps` bit2 = `CAP_STREAM` 置 1。
 
 ---
 

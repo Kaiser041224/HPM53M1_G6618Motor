@@ -34,6 +34,14 @@ const CMD_PARAM_META_GET: u8 = 0x03;
 const CMD_PARAM_READ: u8 = 0x04;
 const CMD_STATUS_GET: u8 = 0x07;
 const CMD_FAULT_GET: u8 = 0x09;
+const CMD_STREAM_SUB: u8 = 0x0B;
+const CMD_STREAM_UNSUB: u8 = 0x0C;
+const CMD_STREAM_DATA: u8 = 0x8E;
+
+/// IN 传输请求长度：必须是 MPS(512) 的整数倍；流帧最大 9 + 512 = 521，
+/// 只用 512 会把尾包留在端点里，后续帧全部错位。
+const MAX_TRANSFER: usize = 1024;
+const SAMPLE_SIZE: usize = 72;
 
 const ST_OK: u8 = 0x00;
 const STATUS_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -136,7 +144,7 @@ impl Link {
 
         let completion = self
             .ep_in
-            .transfer_blocking(Buffer::new(MAX_PAYLOAD), STATUS_TIMEOUT);
+            .transfer_blocking(Buffer::new(MAX_TRANSFER), STATUS_TIMEOUT);
         completion
             .status
             .map_err(|e| format!("IN transfer failed: {e:?}"))?;
@@ -331,6 +339,122 @@ iu={:.2}A iv={:.2}A iw={:.2}A vbus={:.2}V ntc={:.1}C rotor={:.1}deg output={:.1}
             }
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // 7. 遥测流：STREAM_SUB(1kHz, batch=7)，采集 3 秒
+    println!("-- STREAM_SUB rate=1000Hz batch=7 (3s) --");
+    let mut subscribed = false;
+    {
+        let mut req = Vec::new();
+        req.extend_from_slice(&1000u16.to_le_bytes());
+        req.extend_from_slice(&7u16.to_le_bytes());
+        match link.transact(CMD_STREAM_SUB, &req) {
+            Ok(r) if r[0] == ST_OK => {
+                subscribed = true;
+                println!("[OK] STREAM_SUB");
+            }
+            Ok(r) => {
+                failures += 1;
+                println!("[FAIL] STREAM_SUB: status={}", r[0]);
+            }
+            Err(e) => {
+                failures += 1;
+                println!("[FAIL] STREAM_SUB: {e}");
+            }
+        }
+    }
+
+    if subscribed {
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_secs(3);
+        let mut frames = 0u64;
+        let mut samples = 0u64;
+        let mut parse_errors = 0u64;
+        let mut printed = false;
+
+        while std::time::Instant::now() < deadline {
+            let completion = link
+                .ep_in
+                .transfer_blocking(Buffer::new(MAX_TRANSFER), Duration::from_millis(500));
+            if completion.status.is_err() {
+                break;
+            }
+            let raw = &completion.buffer[..completion.actual_len];
+            if raw.len() < 9 || raw[0] != SOF0 || raw[1] != SOF1 || raw[2] != VER {
+                parse_errors += 1;
+                continue;
+            }
+            if raw[3] != CMD_STREAM_DATA {
+                continue; /* SUB 的应答残余 */
+            }
+            let len = u16::from_le_bytes([raw[5], raw[6]]) as usize;
+            if len > MAX_PAYLOAD || raw.len() < 7 + len + 2 {
+                parse_errors += 1;
+                continue;
+            }
+            let mut crc = 0xFFFFu16;
+            for &b in &raw[2..7 + len] {
+                crc = crc16_update(crc, b);
+            }
+            let got = u16::from_le_bytes([raw[7 + len], raw[8 + len]]);
+            if crc != got {
+                parse_errors += 1;
+                continue;
+            }
+            let payload = &raw[7..7 + len];
+            if payload.len() < 8 {
+                parse_errors += 1;
+                continue;
+            }
+            let count = u16::from_le_bytes([payload[4], payload[5]]) as usize;
+            let size = payload[6] as usize;
+            if size != SAMPLE_SIZE || payload.len() != 8 + count * size || count == 0 {
+                parse_errors += 1;
+                continue;
+            }
+            frames += 1;
+            samples += count as u64;
+
+            if !printed {
+                printed = true;
+                let s = &payload[8..8 + size];
+                println!(
+                    "  sample: t={}us iu={:.2} iv={:.2} iw={:.2} vbus={:.2} ntc0={:.1} \
+ntc1={:.1} rotor_raw={} rotor_deg={:.1} output_raw={} output_deg={:.1} id={:.2} \
+iq={:.2} speed={:.3} torque={:.3} pos={:.3} fault=0x{:08X}",
+                    u32_at(s, 0),
+                    f32_at(s, 4),
+                    f32_at(s, 8),
+                    f32_at(s, 12),
+                    f32_at(s, 16),
+                    f32_at(s, 20),
+                    f32_at(s, 24),
+                    u16_at(s, 68),
+                    f32_at(s, 36),
+                    u16_at(s, 70),
+                    f32_at(s, 40),
+                    f32_at(s, 44),
+                    f32_at(s, 48),
+                    f32_at(s, 52),
+                    f32_at(s, 56),
+                    f32_at(s, 60),
+                    u32_at(s, 64)
+                );
+            }
+        }
+
+        let elapsed = started.elapsed().as_secs_f64();
+        let rate = if elapsed > 0.0 { samples as f64 / elapsed } else { 0.0 };
+        println!(
+            "[{}] stream: {frames} frames / {samples} samples in {elapsed:.2}s \
+(~{rate:.0} sample/s), parse_errors={parse_errors}",
+            if samples > 0 && parse_errors == 0 { "OK" } else { "FAIL" }
+        );
+        if samples == 0 || parse_errors != 0 {
+            failures += 1;
+        }
+
+        let _ = link.transact(CMD_STREAM_UNSUB, &[]);
     }
 
     if failures == 0 {

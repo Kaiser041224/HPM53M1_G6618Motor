@@ -39,10 +39,18 @@ typedef enum {
     MP_CMD_CTRL_CMD         = 0x08, /* 电机控制（联锁同固件 terminal） */
     MP_CMD_FAULT_GET        = 0x09, /* 故障与锁存 */
     MP_CMD_FAULT_CLEAR      = 0x0A, /* 清除故障锁存 */
-    MP_CMD_STREAM_SUB       = 0x0B, /* 订阅一级流（v1 预留，返回 UNSUPPORTED） */
-    MP_CMD_STREAM_UNSUB     = 0x0C, /* 取消订阅（v1 预留） */
+    MP_CMD_STREAM_SUB       = 0x0B, /* 订阅一级流（v1.4 起支持，1kHz） */
+    MP_CMD_STREAM_UNSUB     = 0x0C, /* 取消订阅 */
     MP_CMD_PARAM_RESET      = 0x0D  /* v1.3：按名单/全部恢复出厂默认值（独立命令字） */
 } mp_cmd_t;
+
+/* v1.4：设备→主机遥测数据帧（非响应，SEQ 为帧计数，主机按 CMD 识别） */
+#define MP_CMD_STREAM_DATA (0x8Eu)
+
+/* caps 位（protocol_spec §6.2） */
+#define MP_CAP_PARAM_WRITE (1UL << 0)
+#define MP_CAP_CONTROL     (1UL << 1)
+#define MP_CAP_STREAM      (1UL << 2)
 
 /* 响应状态码（响应 payload 首字节） */
 typedef enum {
@@ -127,6 +135,42 @@ typedef struct {
 /* motor_state 取值 */
 #define MP_MOTOR_STOP (0x00u)
 #define MP_MOTOR_RUN  (0x01u)
+
+/* ---- v1.4 遥测流（STREAM_SUB）----
+ *
+ * 订阅请求：rate_hz u16 | batch u16（rate 必须 1000；batch 0 = 默认 7，范围 1..7）
+ * 数据帧：CMD = MP_CMD_STREAM_DATA，SEQ = 帧计数（u8 回绕），payload =
+ *         mp_stream_header_t + count × mp_telemetry_sample_t
+ * 样本固定 72 字节、无 padding、全小端；主机必须按 sample_size 校验。
+ */
+typedef struct {
+    uint32_t sample_index; /**< 本帧首样本序号（1kHz 递增，u32 回绕 ~49 天） */
+    uint16_t count;        /**< 本帧样本数 1..7 */
+    uint8_t  sample_size;  /**< sizeof(mp_telemetry_sample_t) = 72 */
+    uint8_t  reserved;     /**< 0 */
+} mp_stream_header_t;      /* 8 字节 */
+
+typedef struct {
+    uint32_t t_us;          /**< 采样时刻 [µs]（u32 回绕 ~71.6 min，主机按差值展开） */
+    float i_u_a;            /**< U 相电流 [A] */
+    float i_v_a;            /**< V 相电流 [A] */
+    float i_w_a;            /**< W 相电流 [A] */
+    float v_bus_v;          /**< 母线电压 [V] */
+    float ntc0_c;           /**< NTC0 温度 [℃]（无效 = 0） */
+    float ntc1_c;           /**< NTC1 温度 [℃]（无效 = 0） */
+    float r_ntc0_ohm;       /**< NTC0 原始电阻 [Ω] */
+    float r_ntc1_ohm;       /**< NTC1 原始电阻 [Ω] */
+    float enc_rotor_deg;    /**< 转子机械角 [°]（已应用软件零点；读失败 = 0） */
+    float enc_output_deg;   /**< 输出轴角 [°]（已应用零点/方向；读失败 = 0） */
+    float i_d_a;            /**< d 轴反馈 [A] */
+    float i_q_a;            /**< q 轴反馈 [A] */
+    float speed_rad_s;      /**< 轴端速度 [rad/s]（observer） */
+    float torque_nm;        /**< motion 转矩请求 [Nm] */
+    float pos_rad;          /**< 输出轴位置 [rad]（motion 内部坐标） */
+    uint32_t fault_flags;   /**< 实时故障位 */
+    uint16_t enc_rotor_raw; /**< 转子原始码（16bit） */
+    uint16_t enc_output_raw;/**< 游标原始码（16bit） */
+} mp_telemetry_sample_t;    /* 72 字节 */
 
 #ifdef __cplusplus
 }

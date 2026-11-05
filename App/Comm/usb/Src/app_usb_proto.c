@@ -26,8 +26,10 @@
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
+#include "app_motion.h"
 #include "app_param_meta.h"
-#include "intf_usb_bulk.h"
+#include "app_usb.h"
+#include "intf_clock.h"
 #include "motor_proto.h"
 
 #include <string.h>
@@ -42,12 +44,18 @@
 /** 参数名最大长度（含结尾 NUL 的缓冲为 64） */
 #define PROTO_NAME_MAX (63U)
 
-/* 能力位（protocol_spec §6.2）：bit0=PARAM_WRITE，bit1=CONTROL。
- * P1a 只读，两位均为 0；P1b 接入写/控制后在此置位。 */
-#define PROTO_CAPS (0UL)
+/* 能力位（protocol_spec §6.2）：bit0=PARAM_WRITE，bit1=CONTROL，bit2=STREAM。
+ * P1b 接入写/控制后再置 bit0/bit1。 */
+#define PROTO_CAPS (MP_CAP_STREAM)
 
-/** 应答写超时 [ms] */
-#define PROTO_TX_TIMEOUT_MS (50U)
+/* bulk 写一律非阻塞：本服务跑在 1kHz io 任务内，任何毫秒级阻塞都会推迟
+ * 同任务的故障 tick / 终端处理。忙则丢帧（应答进 pending 重试，流直接丢）。 */
+#define PROTO_TX_TIMEOUT_MS (0U)
+
+/* 遥测：1kHz 抽点，batch 上限 7（8B 头 + 7×72B = 512B = MP_MAX_PAYLOAD） */
+#define PROTO_STREAM_MAX_BATCH   (7U)
+#define PROTO_STREAM_DEFAULT_BATCH (7U)
+#define PROTO_STREAM_RATE_HZ     (1000U)
 
 /* ============================================================================
  * 接收状态机
@@ -82,6 +90,31 @@ static char s_name[64];
 #define PROTO_RESP_PAYLOAD_MAX (1U + MP_MAX_PAYLOAD)
 static uint8_t s_resp_payload[PROTO_RESP_PAYLOAD_MAX];
 static uint8_t s_tx_frame[2U + 5U + PROTO_RESP_PAYLOAD_MAX + 2U];
+
+/* 应答重试槽：端点忙时暂存一帧，下一拍重发；新应答覆盖旧帧（主机已超时） */
+static uint8_t s_pending_frame[2U + 5U + PROTO_RESP_PAYLOAD_MAX + 2U];
+static uint16_t s_pending_len;
+
+/* 遥测批缓冲（1kHz io 任务独占，生产与消费同线程，无并发） */
+static struct {
+    bool active;          /**< 是否已订阅 */
+    uint16_t batch;       /**< 每帧样本数 1..7 */
+    uint8_t count;        /**< 当前批已积累样本数 */
+    uint32_t next_index;  /**< 下一帧首样本序号 */
+    uint32_t drops;       /**< 端点忙/未就绪丢弃的批数（诊断） */
+    mp_telemetry_sample_t samples[PROTO_STREAM_MAX_BATCH];
+} s_stream;
+
+/* 32bit cycle → 64bit 扩展（1kHz 调用；8.94s 回绕远大于采样间隔） */
+static uint32_t s_cycle_last;
+static uint64_t s_cycle_hi;
+
+_Static_assert(sizeof(mp_telemetry_sample_t) == 72U, "telemetry sample layout changed");
+_Static_assert(sizeof(mp_stream_header_t) == 8U, "stream header layout changed");
+
+/* 前向声明：遥测组帧先于通用组帧定义使用 */
+static uint16_t proto_build_frame(uint8_t cmd_byte, uint8_t seq, const uint8_t *payload,
+                                  uint16_t len);
 
 /* ============================================================================
  * 字节序 / CRC 工具
@@ -263,6 +296,124 @@ static uint16_t proto_encode_status(uint8_t *out) {
 }
 
 /* ============================================================================
+ * 遥测流（1kHz；数据全部取自已有生产者，不在 ISR 内新增采样）
+ * ============================================================================ */
+
+/**
+ * @brief 读取并扩展 32bit cycle 计数（每 1ms 调用一次，可跨 8.94s 回绕）
+ * @return 64bit cycle
+ */
+static uint64_t proto_now_cycles(void) {
+    uint32_t cycles = intf_clock_get_cycle();
+
+    if (cycles < s_cycle_last) {
+        s_cycle_hi += (1ULL << 32);
+    }
+    s_cycle_last = cycles;
+    return s_cycle_hi | (uint64_t) cycles;
+}
+
+/**
+ * @brief 单调微秒时间戳
+ * @return [µs]（u32，回绕约 71.6 min，主机按差值展开）
+ */
+static uint32_t proto_now_us(void) {
+    uint32_t freq = intf_clock_get_cpu_freq();
+
+    if (freq == 0U) {
+        return 0U;
+    }
+    return (uint32_t) ((proto_now_cycles() * 1000000ULL) / freq);
+}
+
+/**
+ * @brief 采集一个遥测样本（1kHz io 任务；未订阅时不产生任何读取）
+ */
+static void proto_telemetry_sample(void) {
+    mp_telemetry_sample_t *sample;
+    app_analog_values_t analog;
+    app_encoder_rotor_snapshot_t pair;
+    app_foc_current_snapshot_t foc;
+    app_motion_snapshot_t motion;
+    uint16_t output_raw = 0U;
+    float rotor_deg = 0.0f;
+    float output_deg = 0.0f;
+    float ntc0_c = 0.0f;
+    float ntc1_c = 0.0f;
+
+    if (!s_stream.active) {
+        return;
+    }
+    if (!app_usb_bulk_ready()) {
+        s_stream.count = 0U; /* 主机不在：丢弃未满批 */
+        return;
+    }
+
+    (void) app_analog_signal_read_all(&analog);
+    (void) app_encoder_output_sample(&pair, &output_raw);
+    (void) app_encoder_read_deg(APP_ENCODER_ROTOR, &rotor_deg);
+    (void) app_encoder_read_deg(APP_ENCODER_OUTPUT, &output_deg);
+    (void) app_analog_signal_ntc_temp_c(ADC_CH_NTC0, &ntc0_c);
+    (void) app_analog_signal_ntc_temp_c(ADC_CH_NTC1, &ntc1_c);
+    app_foc_current_get_snapshot(&foc);
+    app_motion_get_snapshot(&motion);
+
+    sample = &s_stream.samples[s_stream.count];
+    sample->t_us = proto_now_us();
+    sample->i_u_a = analog.i_u_a;
+    sample->i_v_a = analog.i_v_a;
+    sample->i_w_a = analog.i_w_a;
+    sample->v_bus_v = analog.v_bus_v;
+    sample->ntc0_c = ntc0_c;
+    sample->ntc1_c = ntc1_c;
+    sample->r_ntc0_ohm = analog.r_ntc0_ohm;
+    sample->r_ntc1_ohm = analog.r_ntc1_ohm;
+    sample->enc_rotor_deg = rotor_deg;
+    sample->enc_output_deg = output_deg;
+    sample->i_d_a = foc.i_d_a;
+    sample->i_q_a = foc.i_q_a;
+    sample->speed_rad_s = foc.speed_out_rad_s;
+    sample->torque_nm = motion.torque_nm;
+    sample->pos_rad = motion.shaft_rad;
+    sample->fault_flags = app_fault_get_codes();
+    sample->enc_rotor_raw = pair.raw;
+    sample->enc_output_raw = output_raw;
+
+    s_stream.count++;
+}
+
+/**
+ * @brief 满批则组帧发送（非阻塞；失败只计丢弃，不重试遥测）
+ */
+static void proto_stream_flush(void) {
+    uint16_t payload_len;
+    uint16_t frame_len;
+
+    if (!s_stream.active || (s_stream.count == 0U) || (s_stream.count < s_stream.batch)) {
+        return;
+    }
+
+    payload_len = (uint16_t) (sizeof(mp_stream_header_t)
+                              + ((uint32_t) s_stream.count * sizeof(mp_telemetry_sample_t)));
+
+    put_u32(&s_resp_payload[0], s_stream.next_index);
+    put_u16(&s_resp_payload[4], s_stream.count);
+    s_resp_payload[6] = (uint8_t) sizeof(mp_telemetry_sample_t);
+    s_resp_payload[7] = 0U;
+    memcpy(&s_resp_payload[sizeof(mp_stream_header_t)], s_stream.samples,
+           (size_t) s_stream.count * sizeof(mp_telemetry_sample_t));
+
+    frame_len = proto_build_frame(MP_CMD_STREAM_DATA, (uint8_t) (s_stream.next_index & 0xFFU),
+                                  s_resp_payload, payload_len);
+    if (app_usb_bulk_write(s_tx_frame, frame_len, PROTO_TX_TIMEOUT_MS) != 0) {
+        s_stream.drops++;
+    }
+
+    s_stream.next_index += s_stream.count;
+    s_stream.count = 0U;
+}
+
+/* ============================================================================
  * 命令分发
  * ============================================================================ */
 
@@ -338,13 +489,42 @@ static uint16_t proto_dispatch(uint8_t cmd, const uint8_t *payload, uint16_t len
     case MP_CMD_FAULT_CLEAR:
         return proto_status_only(out, (app_fault_clear() == 0) ? MP_STATUS_OK : MP_STATUS_LOCKED);
 
-    /* P1a 未实现：caps 对应位为 0，按 spec §6.1 返回 UNSUPPORTED */
+    /* v1.4：遥测流订阅（只支持 1kHz；batch 0 = 默认 7） */
+    case MP_CMD_STREAM_SUB: {
+        uint16_t rate;
+        uint16_t batch;
+
+        if (len < 4U) {
+            return proto_status_only(out, MP_STATUS_BAD_PARAM);
+        }
+        rate = (uint16_t) (payload[0] | ((uint16_t) payload[1] << 8));
+        batch = (uint16_t) (payload[2] | ((uint16_t) payload[3] << 8));
+        if (rate != PROTO_STREAM_RATE_HZ) {
+            return proto_status_only(out, MP_STATUS_RANGE_ERR);
+        }
+        if (batch == 0U) {
+            batch = PROTO_STREAM_DEFAULT_BATCH;
+        }
+        if (batch > PROTO_STREAM_MAX_BATCH) {
+            return proto_status_only(out, MP_STATUS_RANGE_ERR);
+        }
+        s_stream.active = true;
+        s_stream.batch = batch;
+        s_stream.count = 0U;
+        s_stream.next_index = 0U;
+        return proto_status_only(out, MP_STATUS_OK);
+    }
+
+    case MP_CMD_STREAM_UNSUB:
+        s_stream.active = false;
+        s_stream.count = 0U;
+        return proto_status_only(out, MP_STATUS_OK);
+
+    /* 未实现：caps 对应位为 0，按 spec §6.1 返回 UNSUPPORTED */
     case MP_CMD_PARAM_WRITE:
     case MP_CMD_PARAM_COMMIT:
     case MP_CMD_PARAM_RESET:
     case MP_CMD_CTRL_CMD:
-    case MP_CMD_STREAM_SUB:
-    case MP_CMD_STREAM_UNSUB:
         return proto_status_only(out, MP_STATUS_UNSUPPORTED);
 
     default:
@@ -356,7 +536,7 @@ static uint16_t proto_dispatch(uint8_t cmd, const uint8_t *payload, uint16_t len
  * @brief 组帧（SOF + 5 字节头 + payload + CRC）
  * @return 帧总长度
  */
-static uint16_t proto_build_frame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
+static uint16_t proto_build_frame(uint8_t cmd_byte, uint8_t seq, const uint8_t *payload,
                                   uint16_t len) {
     uint16_t crc = 0xFFFFU;
     uint16_t pos = 0U;
@@ -366,7 +546,7 @@ static uint16_t proto_build_frame(uint8_t cmd, uint8_t seq, const uint8_t *paylo
 
     s_tx_frame[pos] = MP_VERSION;
     crc = crc16_update(crc, s_tx_frame[pos++]);
-    s_tx_frame[pos] = (uint8_t) (cmd | MP_RESPONSE_BIT);
+    s_tx_frame[pos] = cmd_byte;
     crc = crc16_update(crc, s_tx_frame[pos++]);
     s_tx_frame[pos] = seq;
     crc = crc16_update(crc, s_tx_frame[pos++]);
@@ -391,13 +571,15 @@ static uint16_t proto_build_frame(uint8_t cmd, uint8_t seq, const uint8_t *paylo
 static void proto_handle_frame(void) {
     uint16_t payload_len;
     uint16_t frame_len;
-    const intf_usb_bulk_t *bulk = intf_usb_bulk_get();
 
     payload_len = proto_dispatch(s_rx_cmd, s_rx_payload, s_rx_len, s_resp_payload);
-    frame_len = proto_build_frame(s_rx_cmd, s_rx_seq, s_resp_payload, payload_len);
+    frame_len = proto_build_frame((uint8_t) (s_rx_cmd | MP_RESPONSE_BIT), s_rx_seq,
+                                  s_resp_payload, payload_len);
 
-    if ((bulk != NULL) && bulk->write) {
-        (void) bulk->write(s_tx_frame, frame_len, PROTO_TX_TIMEOUT_MS);
+    if (app_usb_bulk_write(s_tx_frame, frame_len, PROTO_TX_TIMEOUT_MS) != 0) {
+        /* 端点忙：暂存一帧，下一拍重发（遥测流优先级低于应答） */
+        memcpy(s_pending_frame, s_tx_frame, frame_len);
+        s_pending_len = frame_len;
     }
 }
 
@@ -507,23 +689,41 @@ void app_usb_proto_init(void) {
     s_rx_cmd = 0U;
     s_rx_seq = 0U;
     s_name[0] = '\0';
+
+    s_pending_len = 0U;
+    s_stream.active = false;
+    s_stream.batch = PROTO_STREAM_DEFAULT_BATCH;
+    s_stream.count = 0U;
+    s_stream.next_index = 0U;
+    s_stream.drops = 0U;
+
+    s_cycle_hi = 0U;
+    s_cycle_last = intf_clock_get_cycle();
 }
 
 void app_usb_proto_service(void) {
-    const intf_usb_bulk_t *bulk = intf_usb_bulk_get();
     uint8_t chunk[PROTO_SERVICE_READ_MAX];
     int count;
+    int i;
 
-    if ((bulk == NULL) || (bulk->read == NULL)) {
-        return;
+    /* 0. 保持 32bit cycle 扩展跟踪（流未订阅时也要跨回绕） */
+    (void) proto_now_cycles();
+
+    /* 1. 重发上一拍因端点忙暂存的应答 */
+    if ((s_pending_len != 0U)
+        && (app_usb_bulk_write(s_pending_frame, s_pending_len, PROTO_TX_TIMEOUT_MS) == 0)) {
+        s_pending_len = 0U;
     }
 
-    count = bulk->read(chunk, sizeof(chunk));
-    if (count <= 0) {
-        return;
+    /* 2. 处理命令请求（每拍最多 PROTO_SERVICE_READ_MAX 字节） */
+    count = app_usb_bulk_read(chunk, sizeof(chunk));
+    if (count > 0) {
+        for (i = 0; i < count; i++) {
+            proto_rx_byte(chunk[i]);
+        }
     }
 
-    for (int i = 0; i < count; i++) {
-        proto_rx_byte(chunk[i]);
-    }
+    /* 3. 遥测：抽点 + 满批发送 */
+    proto_telemetry_sample();
+    proto_stream_flush();
 }

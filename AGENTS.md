@@ -1145,8 +1145,16 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **协议契约唯一事实源**：`Gui/protocol/motor_proto.h`（固件直接把 `Gui/protocol`
   加入 include 路径，不复制）。帧/CRC/命令语义见 `protocol_spec.md`。
 - **P1a 现状（只读）**：`PROTO_INFO`、`PARAM_META_COUNT/GET`、`PARAM_READ`、
-  `STATUS_GET`、`FAULT_GET`、`FAULT_CLEAR`；`caps = 0`，写类命令一律
-  `UNSUPPORTED`。P1b 才接 `PARAM_WRITE/COMMIT/RESET` 与 `CTRL_CMD`。
+  `STATUS_GET`、`FAULT_GET`、`FAULT_CLEAR`；写类命令一律 `UNSUPPORTED`。
+  P1b 才接 `PARAM_WRITE/COMMIT/RESET` 与 `CTRL_CMD`。
+- **P2 遥测流（v1.4）**：`STREAM_SUB` 只支持 `rate_hz=1000`、`batch 1..7`；
+  样本固定 72B（`mp_telemetry_sample_t`），帧 = 8B 头 + count×72，最大 512B payload。
+  **采样在 1kHz io 任务内**（`app_usb_proto_service`），不新增任何 ISR 采样；
+  数据全部取自已有生产者（analog / encoder / FOC snapshot / motion snapshot / fault）。
+  流是**有损**的：端点忙或主机不读时整批丢弃，不重传；应答优先，忙时进 pending 槽
+  下一拍重发。bulk 写一律 `timeout=0`，避免阻塞 1kHz 任务。
+  **主机 IN 请求必须 ≥1024B**（MPS 整数倍）：单帧最大 521B，512B 请求会把尾包留在端点。
+  `caps` bit2 = `CAP_STREAM` 已置位。
 - **线格式映射（易错点）**：
   - 固件 `U8/U16` 统一上报 `MP_TYPE_U32`（线格式没有 U8/U16）；`F32` 原样；
   - **没有 BOOL 映射**：元数据不区分 YAML bool 与 0/1 整数，禁止按值域猜测；
