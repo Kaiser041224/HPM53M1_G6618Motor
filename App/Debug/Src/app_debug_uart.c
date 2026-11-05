@@ -17,12 +17,22 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* 1Hz 状态行在 115200 下是一条约 40B 的阻塞写（≈3ms），会把同任务内的
+ * 1kHz 遥测采样拉出一个 3ms 空洞（台架 dt max 3190µs 即由此产生）。
+ * 默认关闭；需要心跳时置 1，并接受该抖动（或改到低优先级任务/非阻塞 TX）。 */
+#ifndef UART_TEST_TX_HEARTBEAT
+#define UART_TEST_TX_HEARTBEAT (0)
+#endif
+
 #define UART_TEST_TX_PERIOD_MS (1000U)
 #define UART_TEST_RX_BUF_SIZE  (64U)
 
-static uint32_t s_tick;
 static uint32_t s_rx_total;
+
+#if UART_TEST_TX_HEARTBEAT
+static uint32_t s_tick;
 static uint32_t s_last_tx_cycle;
+#endif
 
 void app_debug_uart_init(void) {
     int ret;
@@ -37,8 +47,6 @@ void app_debug_uart_init(void) {
 
 void app_debug_uart_run_once(void) {
     uint8_t buf[UART_TEST_RX_BUF_SIZE];
-    uint32_t now;
-    uint32_t period_cycles;
     int rx_len;
 
     /* 1) RX：排空环形缓冲 -> 原样回显 + RTT 记录 */
@@ -55,22 +63,27 @@ void app_debug_uart_run_once(void) {
         app_debug_cmd_handle(buf, (size_t)rx_len);
     }
 
-    /* 2) TX：每秒发送一行状态 */
-    now = intf_clock_get_cycle();
-    period_cycles = (intf_clock_get_cpu_freq() / 1000U) * UART_TEST_TX_PERIOD_MS;
-    if ((uint32_t)(now - s_last_tx_cycle) >= period_cycles) {
-        char line[96];
-        int len;
+#if UART_TEST_TX_HEARTBEAT
+    /* 2) TX：每秒发送一行状态（默认关闭，见文件头说明） */
+    {
+        uint32_t now = intf_clock_get_cycle();
+        uint32_t period_cycles = (intf_clock_get_cpu_freq() / 1000U) * UART_TEST_TX_PERIOD_MS;
 
-        s_last_tx_cycle = now;
-        s_tick++;
-        len = snprintf(
-            line, sizeof(line), "uart: tick=%u rx_total=%u\r\n", (unsigned)s_tick,
-            (unsigned)s_rx_total);
-        if (len > 0) {
-            if (app_uart_write((const uint8_t*)line, (size_t)len) != 0) {
-                app_debug_printf("[UART] tx FAILED (tick=%u)\r\n", (unsigned)s_tick);
+        if ((uint32_t)(now - s_last_tx_cycle) >= period_cycles) {
+            char line[96];
+            int len;
+
+            s_last_tx_cycle = now;
+            s_tick++;
+            len = snprintf(
+                line, sizeof(line), "uart: tick=%u rx_total=%u\r\n", (unsigned)s_tick,
+                (unsigned)s_rx_total);
+            if (len > 0) {
+                if (app_uart_write((const uint8_t*)line, (size_t)len) != 0) {
+                    app_debug_printf("[UART] tx FAILED (tick=%u)\r\n", (unsigned)s_tick);
+                }
             }
         }
     }
+#endif
 }
