@@ -22,6 +22,7 @@
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_debug_rtt.h"
 #include "app_encoder.h"
 #include "app_fault.h"
 #include "app_foc.h"
@@ -664,9 +665,16 @@ static uint16_t proto_ctrl(const uint8_t *payload, uint16_t len, uint8_t *out) {
     value = bits.f;
 
     switch (op) {
-    case MP_CTRL_START:
-        return proto_status_only(out,
-                                 (app_foc_enable() == 0) ? MP_STATUS_OK : MP_STATUS_LOCKED);
+    case MP_CTRL_START: {
+        int rc = app_foc_enable();
+
+        if (rc != 0) {
+            /* -1 通用/-2 动作码锁存/-3 ADC 无效/-4 编码器无效/-5 参数非法 */
+            app_debug_printf("[USB] CTRL START rejected rc=%d\r\n", rc);
+            return proto_status_only(out, MP_STATUS_LOCKED);
+        }
+        return proto_status_only(out, MP_STATUS_OK);
+    }
 
     case MP_CTRL_STOP:
         return proto_status_only(out,

@@ -312,31 +312,43 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         let mut payload = vec![op];
         payload.extend_from_slice(&wire_value.to_le_bytes());
-        match link.transact(CMD_CTRL, &payload) {
-            Ok(r) => {
-                println!(
-                    "[{}] CTRL status={} ({})",
-                    if r[0] == ST_OK { "OK" } else { "FAIL" },
-                    r[0],
-                    match r[0] {
-                        ST_OK => "accepted",
-                        0x01 => "BAD_CMD",
-                        0x02 => "BAD_PARAM",
-                        0x03 => "BUSY",
-                        0x04 => "LOCKED",
-                        0x05 => "UNSUPPORTED",
-                        0x06 => "RANGE_ERR",
-                        _ => "?",
+
+        /* START 在软停未完成时会返回 LOCKED（s_stop_pending）：最多重试 3s，
+         * 模拟上位机"使能后等待就绪"的正常行为。 */
+        let mut attempt = 0u32;
+        loop {
+            match link.transact(CMD_CTRL, &payload) {
+                Ok(r) => {
+                    if r[0] == ST_OK {
+                        println!("[OK] CTRL status=0 (accepted)");
+                        return Ok(());
                     }
-                );
-                if r[0] != ST_OK {
+                    if (op_name == "start") && (r[0] == 0x04) && (attempt < 15) {
+                        attempt += 1;
+                        println!("[..] START LOCKED（可能在软停中），重试 {attempt}/15");
+                        std::thread::sleep(Duration::from_millis(200));
+                        continue;
+                    }
+                    println!(
+                        "[FAIL] CTRL status={} ({})",
+                        r[0],
+                        match r[0] {
+                            ST_OK => "accepted",
+                            0x01 => "BAD_CMD",
+                            0x02 => "BAD_PARAM",
+                            0x03 => "BUSY",
+                            0x04 => "LOCKED",
+                            0x05 => "UNSUPPORTED",
+                            0x06 => "RANGE_ERR",
+                            _ => "?",
+                        }
+                    );
                     std::process::exit(1);
                 }
-                return Ok(());
-            }
-            Err(e) => {
-                println!("[FAIL] CTRL: {e}");
-                std::process::exit(2);
+                Err(e) => {
+                    println!("[FAIL] CTRL: {e}");
+                    std::process::exit(2);
+                }
             }
         }
     }

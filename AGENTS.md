@@ -1151,7 +1151,9 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   - CTRL：`START/STOP/SET_MODE/SET_TORQUE/SET_SPEED/SET_ANGLE`；
     `SET_FREQ/SET_MOD` 与两个零点 opcode → `UNSUPPORTED`（零点仍在终端）；
   - **联锁**：设定值允许运行中改；`LOCKED` 只用于 FOC 状态不允许与 flash 类操作；
-  - `START` 含约 10ms 栅极稳定阻塞，1kHz 流会出现一次 ~10ms 空洞（一次性命令）。
+  - `START` 含约 10ms 栅极稳定阻塞，1kHz 流会出现一次 ~10ms 空洞（一次性命令）；
+    软停未完成时 `START` 返回 `LOCKED`（`s_stop_pending`），上位机需等待重试；
+    失败原因（rc=-1..-5）经 RTT 打印 `[USB] CTRL START rejected rc=…`。
 - **P2 遥测流（v1.4）**：`STREAM_SUB` 只支持 `rate_hz=1000`、`batch 1..7`；
   样本固定 72B（`mp_telemetry_sample_t`），帧 = 8B 头 + count×72，最大 512B payload。
   **采样在 1kHz io 任务内**（`app_usb_proto_service`），不新增任何 ISR 采样；

@@ -760,6 +760,8 @@ FOC 状态不允许（未标定/反馈失效/模式冲突/故障）与 flash 类
 motion 返回码映射：`BAD_PARAM → BAD_PARAM`、`TARGET_LIMIT → RANGE_ERR`、其余非零 → `LOCKED`。
 
 `START` 的 10ms 阻塞会让 1kHz 遥测流出现一次约 10ms 空洞（一次性命令，桥此时未使能）。
+`START` 在软停未完成（`s_stop_pending`）时返回 `LOCKED`，上位机应等待后重试
+（探针 `--ctrl start` 自动重试 3s）。
 
 ### 11.5 caps
 
