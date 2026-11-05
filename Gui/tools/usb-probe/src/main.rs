@@ -153,7 +153,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .find(|d| d.vendor_id() == VID && d.product_id() == PID)
         .ok_or("device not found (VID 34B7 / PID 6618)")?;
 
-    let manufacturer = info.manufacturer_string().unwrap_or("<no manufacturer>");
+    /* Windows 不缓存 manufacturer 字符串：manufacturer_string() 恒 None，
+     * 必须用 get_manufacturer_string() 主动读描述符。 */
+    let manufacturer = info
+        .get_manufacturer_string()
+        .wait()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "<no manufacturer>".to_string());
     let product = info.product_string().unwrap_or("<no product string>");
     let serial = info.serial_number().unwrap_or("<no serial>");
     println!(

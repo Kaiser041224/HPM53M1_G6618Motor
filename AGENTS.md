@@ -1160,5 +1160,8 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **验证工具**：`Gui/tools/usb-probe`（`cargo run -p usb-probe`）按金向量自检并跑
   PROTO_INFO / META / READ / FAULT / STATUS×20；失败时先看固件的
   `s_stat_bulk_rx_drops/tx_drops/oversize` 与 `bulk->is_ready()`。
+  它会打印 `interface0="..."`（直接读描述符，绕过 Windows 友好名缓存）与
+  manufacturer/product/serial；**Windows 上 `manufacturer_string()` 恒为 None**
+  （nusb 明确不缓存），必须用 `get_manufacturer_string()` 主动读。
 - **上下文纪律**：USB ISR 只做环形缓冲搬运（按 MPS 分块 memcpy），解析/应答全部在
   1kHz 慢任务；`app_usb_proto_service()` 每拍最多取 256 字节，禁止在 ISR 内组帧。
