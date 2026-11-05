@@ -1,4 +1,4 @@
-# Gui ↔ 电机控制板 通讯协议规范 v1.4
+# Gui ↔ 电机控制板 通讯协议规范 v1.5
 
 本文件是 `motor_proto.h` 的配套说明，两者共同构成 Gui 上位机与电机控制板之间的
 **线格式契约**。任何一端实现编解码、传输解析、会话状态机时，都以本规范为准；
@@ -713,6 +713,57 @@ fault_flags, enc_rotor_raw, enc_output_raw`。
 ### 10.3 caps
 
 v1.4 起 `caps` bit2 = `CAP_STREAM` 置 1。
+
+---
+
+## 11. v1.5 增量：参数写 / 落盘 / 恢复与控制落地
+
+### 11.1 参数写（`MP_CMD_PARAM_WRITE = 0x05`）
+
+- 线格式类型必须与设备元数据一致（固件 `U8/U16/U32 → U32`、`F32 → F32`），否则 `BAD_PARAM`；
+- 范围按元数据 `min/max` 校验，越界 `RANGE_ERR`；`F32` 非有限值同样 `RANGE_ERR`；
+- `apply = foc_off` 且 FOC 非 OFF → `LOCKED`；
+- 写 `motor.encoder.electrical_offset_rad` / `direction` 会清 `electrical_offset_valid`
+  （与终端一致，仅告警）；
+- **只改 RAM**；落盘用 `PARAM_COMMIT`。
+
+### 11.2 落盘（`MP_CMD_PARAM_COMMIT = 0x06`）
+
+- FOC 非 OFF 或停机中 → `LOCKED`；
+- 持久化 motor + software 两域；hardware 不持久化（板级事实）；
+- 任一存储失败 → `BUSY`。
+
+### 11.3 恢复出厂（`MP_CMD_PARAM_RESET = 0x0D`）
+
+- `count = 0` 或空载荷 = 恢复全部三个域；否则按名单逐项恢复；
+- 先整体校验名单，任一未知名 → `BAD_PARAM`，**不做部分恢复**；
+- FOC 非 OFF → `LOCKED`；
+- **与终端的差异**：本命令恢复后**立即落盘**；终端 `param reset` 只改 RAM。
+
+### 11.4 控制（`MP_CMD_CTRL_CMD = 0x08`）
+
+| opcode | 设备行为 |
+| :--- | :--- |
+| `START` | `app_foc_enable()`；失败 → `LOCKED`。含约 10ms 栅极供电稳定阻塞（桥未使能） |
+| `STOP` | `app_foc_request_stop()`（非阻塞；FAULT 态的 disable 分支除外） |
+| `SET_MODE` | 1=力矩 / 2=速度 / 3=角度；跨模式先 `release_output`，下一设定值进入新模式 |
+| `SET_TORQUE` | `app_motion_torque(Nm)` |
+| `SET_SPEED` | `app_motion_speed(rpm × 2π/60)`；`\|rpm\| > 20000` → `RANGE_ERR` |
+| `SET_ANGLE` | `app_motion_position(deg × π/180, 0, 0)` |
+| `SET_FREQ` / `SET_MOD` | `UNSUPPORTED`（本机为 FOC 伺服，无 V/F） |
+| `SET_OUTPUT_ZERO_NOW` / `_ABS` | `UNSUPPORTED`（零点写入需停机 + flash job，仍在终端执行） |
+
+**联锁（与 v1.1–v1.3 的差异）**：设定值允许**运行中**修改；`LOCKED` 只用于
+FOC 状态不允许（未标定/反馈失效/模式冲突/故障）与 flash 类操作。
+旧版"运行中一律 LOCKED"是 gui-sim 的演示规则，真机按本表执行。
+
+motion 返回码映射：`BAD_PARAM → BAD_PARAM`、`TARGET_LIMIT → RANGE_ERR`、其余非零 → `LOCKED`。
+
+`START` 的 10ms 阻塞会让 1kHz 遥测流出现一次约 10ms 空洞（一次性命令，桥此时未使能）。
+
+### 11.5 caps
+
+v1.5 起 `caps = PARAM_WRITE | CONTROL | STREAM = 0x00000007`。
 
 ---
 

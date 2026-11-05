@@ -1144,9 +1144,14 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   **不要再各自实现一份 `param_find`**。
 - **协议契约唯一事实源**：`Gui/protocol/motor_proto.h`（固件直接把 `Gui/protocol`
   加入 include 路径，不复制）。帧/CRC/命令语义见 `protocol_spec.md`。
-- **P1a 现状（只读）**：`PROTO_INFO`、`PARAM_META_COUNT/GET`、`PARAM_READ`、
-  `STATUS_GET`、`FAULT_GET`、`FAULT_CLEAR`；写类命令一律 `UNSUPPORTED`。
-  P1b 才接 `PARAM_WRITE/COMMIT/RESET` 与 `CTRL_CMD`。
+- **P1b 现状（v1.5，caps=0x7）**：在 P1a 只读基础上接入
+  `PARAM_WRITE/COMMIT/RESET` 与 `CTRL_CMD`。
+  - 写参数只改 RAM；`COMMIT` 在 FOC OFF 落盘 motor+software；`RESET` 恢复后
+    **立即落盘**（与终端 `param reset` 只改 RAM 不同）；
+  - CTRL：`START/STOP/SET_MODE/SET_TORQUE/SET_SPEED/SET_ANGLE`；
+    `SET_FREQ/SET_MOD` 与两个零点 opcode → `UNSUPPORTED`（零点仍在终端）；
+  - **联锁**：设定值允许运行中改；`LOCKED` 只用于 FOC 状态不允许与 flash 类操作；
+  - `START` 含约 10ms 栅极稳定阻塞，1kHz 流会出现一次 ~10ms 空洞（一次性命令）。
 - **P2 遥测流（v1.4）**：`STREAM_SUB` 只支持 `rate_hz=1000`、`batch 1..7`；
   样本固定 72B（`mp_telemetry_sample_t`），帧 = 8B 头 + count×72，最大 512B payload。
   **采样在 1kHz io 任务内**（`app_usb_proto_service`），不新增任何 ISR 采样；
@@ -1174,5 +1179,7 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   它会打印 `interface0="..."`（直接读描述符，绕过 Windows 友好名缓存）与
   manufacturer/product/serial；**Windows 上 `manufacturer_string()` 恒为 None**
   （nusb 明确不缓存），必须用 `get_manufacturer_string()` 主动读。
+  可选参数：`--p1b`（参数写回环 + 落盘）、`--ctrl <op> <value>`（单发控制）、
+  `--reset all|name1,name2`（恢复出厂，破坏性，会立即落盘）。默认只读，不会启停电机。
 - **上下文纪律**：USB ISR 只做环形缓冲搬运（按 MPS 分块 memcpy），解析/应答全部在
   1kHz 慢任务；`app_usb_proto_service()` 每拍最多取 256 字节，禁止在 ISR 内组帧。

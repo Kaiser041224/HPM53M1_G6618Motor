@@ -32,8 +32,12 @@ const CMD_PROTO_INFO: u8 = 0x01;
 const CMD_PARAM_META_COUNT: u8 = 0x02;
 const CMD_PARAM_META_GET: u8 = 0x03;
 const CMD_PARAM_READ: u8 = 0x04;
+const CMD_PARAM_WRITE: u8 = 0x05;
+const CMD_PARAM_COMMIT: u8 = 0x06;
 const CMD_STATUS_GET: u8 = 0x07;
+const CMD_CTRL: u8 = 0x08;
 const CMD_FAULT_GET: u8 = 0x09;
+const CMD_PARAM_RESET: u8 = 0x0D;
 const CMD_STREAM_SUB: u8 = 0x0B;
 const CMD_STREAM_UNSUB: u8 = 0x0C;
 const CMD_STREAM_DATA: u8 = 0x8E;
@@ -155,7 +159,100 @@ impl Link {
     }
 }
 
+/// 控制 opcode 名称 → 线格式 opcode（与 motor_proto.h 一致）。
+fn ctrl_opcode(name: &str) -> Option<u8> {
+    match name {
+        "start" => Some(0x01),
+        "stop" => Some(0x02),
+        "mode" => Some(0x07),
+        "torque" => Some(0x08),
+        "speed" => Some(0x09),
+        "angle" => Some(0x0A),
+        _ => None,
+    }
+}
+
+/// 读取参数值，返回 (type, raw)。
+fn read_param(link: &mut Link, name: &str) -> Result<(u8, u32), String> {
+    let mut req = Vec::new();
+    req.push(name.len() as u8);
+    req.extend_from_slice(name.as_bytes());
+    let r = link.transact(CMD_PARAM_READ, &req)?;
+    if r[0] != ST_OK || r.len() < 6 {
+        return Err(format!("status={}", r[0]));
+    }
+    Ok((r[1], u32_at(&r, 2)))
+}
+
+/// --p1b：参数写回环 + 落盘（只写回原值，不改配置）。
+fn run_p1b(link: &mut Link, failures: &mut u32) {
+    let name = "software.fault.actions_enable";
+    println!("-- P1b: PARAM_WRITE roundtrip ({name}) --");
+
+    let (ty, raw) = match read_param(link, name) {
+        Ok(v) => v,
+        Err(e) => {
+            *failures += 1;
+            println!("[FAIL] PARAM_READ {name}: {e}");
+            return;
+        }
+    };
+
+    let mut req = Vec::new();
+    req.push(name.len() as u8);
+    req.extend_from_slice(name.as_bytes());
+    req.push(ty);
+    req.extend_from_slice(&raw.to_le_bytes());
+    match link.transact(CMD_PARAM_WRITE, &req) {
+        Ok(r) if r[0] == ST_OK => println!("[OK] PARAM_WRITE {name} = {raw} (写回原值)"),
+        Ok(r) => {
+            *failures += 1;
+            println!("[FAIL] PARAM_WRITE: status={}", r[0]);
+            return;
+        }
+        Err(e) => {
+            *failures += 1;
+            println!("[FAIL] PARAM_WRITE: {e}");
+            return;
+        }
+    }
+
+    match read_param(link, name) {
+        Ok((ty2, raw2)) if (ty2 == ty) && (raw2 == raw) => println!("[OK] PARAM_READ 回读一致"),
+        Ok((ty2, raw2)) => {
+            *failures += 1;
+            println!("[FAIL] 回读不一致: type {ty}->{ty2}, raw {raw}->{raw2}");
+        }
+        Err(e) => {
+            *failures += 1;
+            println!("[FAIL] PARAM_READ: {e}");
+        }
+    }
+
+    match link.transact(CMD_PARAM_COMMIT, &[]) {
+        Ok(r) if r[0] == ST_OK => println!("[OK] PARAM_COMMIT: 已落盘"),
+        Ok(r) if r[0] == 0x04 => {
+            println!("[OK] PARAM_COMMIT: LOCKED（FOC 非 OFF，停机窗口才允许落盘，符合预期）")
+        }
+        Ok(r) => {
+            *failures += 1;
+            println!("[FAIL] PARAM_COMMIT: status={}", r[0]);
+        }
+        Err(e) => {
+            *failures += 1;
+            println!("[FAIL] PARAM_COMMIT: {e}");
+        }
+    }
+
+    println!("-- P1b 参数回环完成；PARAM_RESET 与 CTRL 请按需手工执行 --");
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let p1b = args.iter().any(|a| a == "--p1b");
+    let ctrl = args.iter().position(|a| a == "--ctrl");
+    let reset = args.iter().position(|a| a == "--reset");
+
     let info = list_devices()
         .wait()?
         .find(|d| d.vendor_id() == VID && d.product_id() == PID)
@@ -190,6 +287,84 @@ fn main() -> Result<(), Box<dyn Error>> {
         ep_in: interface.endpoint::<Bulk, In>(EP_IN)?,
         seq: 0,
     };
+
+    /* --ctrl <start|stop|mode|torque|speed|angle> <value>：只发一条控制命令后退出。
+     * 不会自动启停电机之外的任何操作；由操作者显式执行。 */
+    if let Some(idx) = ctrl {
+        let op_name = args
+            .get(idx + 1)
+            .ok_or("--ctrl needs <start|stop|mode|torque|speed|angle> [value]")?;
+        let op = ctrl_opcode(op_name).ok_or_else(|| format!("unknown ctrl op: {op_name}"))?;
+        let value: f32 = args.get(idx + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let mut payload = vec![op];
+        payload.extend_from_slice(&value.to_le_bytes());
+        println!("CTRL {op_name} value={value}");
+        match link.transact(CMD_CTRL, &payload) {
+            Ok(r) => {
+                println!(
+                    "[{}] CTRL status={} ({})",
+                    if r[0] == ST_OK { "OK" } else { "FAIL" },
+                    r[0],
+                    match r[0] {
+                        ST_OK => "accepted",
+                        0x01 => "BAD_CMD",
+                        0x02 => "BAD_PARAM",
+                        0x03 => "BUSY",
+                        0x04 => "LOCKED",
+                        0x05 => "UNSUPPORTED",
+                        0x06 => "RANGE_ERR",
+                        _ => "?",
+                    }
+                );
+                if r[0] != ST_OK {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                println!("[FAIL] CTRL: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    /* --reset all | --reset name1,name2：恢复出厂（会立即落盘，破坏性，显式执行）。 */
+    if let Some(idx) = reset {
+        let list = args.get(idx + 1).map(|s| s.as_str()).unwrap_or("all");
+        let mut payload = Vec::new();
+        if list.is_empty() || list == "all" || list.starts_with("--") {
+            payload.push(0u8);
+            println!("PARAM_RESET all");
+        } else {
+            let names: Vec<&str> = list.split(',').filter(|s| !s.is_empty()).collect();
+            if names.is_empty() || names.len() > 255 {
+                return Err("--reset needs 'all' or a comma-separated name list".into());
+            }
+            payload.push(names.len() as u8);
+            for n in &names {
+                payload.push(n.len() as u8);
+                payload.extend_from_slice(n.as_bytes());
+            }
+            println!("PARAM_RESET {}", names.join(","));
+        }
+        match link.transact(CMD_PARAM_RESET, &payload) {
+            Ok(r) => {
+                println!(
+                    "[{}] PARAM_RESET status={}",
+                    if r[0] == ST_OK { "OK" } else { "FAIL" },
+                    r[0]
+                );
+                if r[0] != ST_OK {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                println!("[FAIL] PARAM_RESET: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
 
     let mut failures = 0u32;
 
@@ -303,6 +478,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             failures += 1;
             println!("[FAIL] FAULT_GET: {e}");
         }
+    }
+
+    // 5b. 可选 P1b 参数回环
+    if p1b {
+        run_p1b(&mut link, &mut failures);
     }
 
     // 6. STATUS_GET × 20（约 5 Hz，验证持续收发）

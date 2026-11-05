@@ -26,9 +26,13 @@
 #include "app_fault.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
+#include "app_hardware_params.h"
 #include "app_motion.h"
+#include "app_motor_params.h"
 #include "app_param_meta.h"
+#include "app_software_params.h"
 #include "app_usb.h"
+#include "foc_math.h"
 #include "intf_clock.h"
 #include "motor_proto.h"
 
@@ -44,9 +48,8 @@
 /** 参数名最大长度（含结尾 NUL 的缓冲为 64） */
 #define PROTO_NAME_MAX (63U)
 
-/* 能力位（protocol_spec §6.2）：bit0=PARAM_WRITE，bit1=CONTROL，bit2=STREAM。
- * P1b 接入写/控制后再置 bit0/bit1。 */
-#define PROTO_CAPS (MP_CAP_STREAM)
+/* 能力位（protocol_spec §6.2）：bit0=PARAM_WRITE，bit1=CONTROL，bit2=STREAM */
+#define PROTO_CAPS (MP_CAP_PARAM_WRITE | MP_CAP_CONTROL | MP_CAP_STREAM)
 
 /* bulk 写一律非阻塞：本服务跑在 1kHz io 任务内，任何毫秒级阻塞都会推迟
  * 同任务的故障 tick / 终端处理。忙则丢帧（应答进 pending 重试，流直接丢）。 */
@@ -414,6 +417,302 @@ static void proto_stream_flush(void) {
 }
 
 /* ============================================================================
+ * P1b：参数写 / 落盘 / 恢复出厂 / 控制
+ * ============================================================================ */
+
+/**
+ * @brief 线格式 u32 → 用于范围比较的 float
+ */
+static float proto_value_as_float(uint8_t meta_type, uint32_t raw) {
+    union {
+        float f;
+        uint32_t u;
+    } bits;
+
+    switch (meta_type) {
+    case PARAM_META_TYPE_U8: return (float) (uint8_t) raw;
+    case PARAM_META_TYPE_U16: return (float) (uint16_t) raw;
+    case PARAM_META_TYPE_U32: return (float) raw;
+    default:
+        bits.u = raw;
+        return bits.f;
+    }
+}
+
+/**
+ * @brief 线格式 u32 → 参数存储（按元数据类型截断/位型重解释）
+ */
+static void proto_store_raw(uint8_t meta_type, void *data, uint32_t raw) {
+    union {
+        float f;
+        uint32_t u;
+    } bits;
+
+    switch (meta_type) {
+    case PARAM_META_TYPE_U8: *(uint8_t *) data = (uint8_t) raw; break;
+    case PARAM_META_TYPE_U16: *(uint16_t *) data = (uint16_t) raw; break;
+    case PARAM_META_TYPE_U32: *(uint32_t *) data = raw; break;
+    default:
+        bits.u = raw;
+        *(float *) data = bits.f;
+        break;
+    }
+}
+
+/**
+ * @brief 是否为编码器零点/方向参数（改动需清「已标定」标志，同终端）
+ */
+static bool proto_is_encoder_calib_param(const char *name) {
+    return (strcmp(name, "motor.encoder.electrical_offset_rad") == 0)
+           || (strcmp(name, "motor.encoder.direction") == 0);
+}
+
+/**
+ * @brief 从 payload 解出 len-prefixed 名称（写入 s_name）
+ * @return true = 成功
+ */
+static bool proto_read_name(const uint8_t *payload, uint16_t len, uint16_t *pos) {
+    uint8_t name_len;
+
+    if (*pos >= len) {
+        return false;
+    }
+    name_len = payload[*pos];
+    if ((name_len == 0U) || (name_len > PROTO_NAME_MAX)
+        || ((uint16_t) (*pos + 1U + name_len) > len)) {
+        return false;
+    }
+    memcpy(s_name, &payload[*pos + 1U], name_len);
+    s_name[name_len] = '\0';
+    *pos = (uint16_t) (*pos + 1U + name_len);
+    return true;
+}
+
+/**
+ * @brief PARAM_WRITE：name_len | name | type u8 | value u32
+ */
+static uint16_t proto_param_write(const uint8_t *payload, uint16_t len, uint8_t *out) {
+    const param_meta_t *meta;
+    void *data;
+    uint16_t pos;
+    uint8_t wire_type;
+    uint32_t raw;
+    float value;
+
+    if (len < 1U) {
+        return proto_status_only(out, MP_STATUS_BAD_PARAM);
+    }
+    pos = 0U;
+    if (!proto_read_name(payload, len, &pos)) {
+        return proto_status_only(out, MP_STATUS_BAD_PARAM);
+    }
+    if ((uint16_t) (pos + 5U) > len) {
+        return proto_status_only(out, MP_STATUS_BAD_PARAM);
+    }
+    wire_type = payload[pos];
+    raw = (uint32_t) payload[pos + 1U] | ((uint32_t) payload[pos + 2U] << 8)
+          | ((uint32_t) payload[pos + 3U] << 16) | ((uint32_t) payload[pos + 4U] << 24);
+
+    meta = app_param_meta_find(s_name);
+    if (meta == NULL) {
+        return proto_status_only(out, MP_STATUS_BAD_PARAM);
+    }
+    if (wire_type != proto_type(meta->type)) {
+        return proto_status_only(out, MP_STATUS_BAD_PARAM);
+    }
+    if ((meta->apply == PARAM_META_APPLY_FOC_OFF)
+        && (app_foc_get_state() != APP_FOC_STATE_OFF)) {
+        return proto_status_only(out, MP_STATUS_LOCKED);
+    }
+
+    value = proto_value_as_float(meta->type, raw);
+    if ((meta->type == PARAM_META_TYPE_F32) && !foc_finite(value)) {
+        return proto_status_only(out, MP_STATUS_RANGE_ERR);
+    }
+    if ((meta->min <= meta->max) && ((value < meta->min) || (value > meta->max))) {
+        return proto_status_only(out, MP_STATUS_RANGE_ERR);
+    }
+
+    data = app_param_meta_data(meta);
+    if (data == NULL) {
+        return proto_status_only(out, MP_STATUS_BUSY);
+    }
+    proto_store_raw(meta->type, data, raw);
+
+    if (proto_is_encoder_calib_param(s_name)) {
+        app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+    }
+    return proto_status_only(out, MP_STATUS_OK);
+}
+
+/**
+ * @brief PARAM_COMMIT：镜像终端 param save（FOC OFF + 非停机中；hardware 不持久化）
+ */
+static uint16_t proto_param_commit(uint8_t *out) {
+    if (app_foc_stop_pending() || (app_foc_get_state() != APP_FOC_STATE_OFF)) {
+        return proto_status_only(out, MP_STATUS_LOCKED);
+    }
+    if ((app_motor_params_store() != 0) || (app_software_params_store() != 0)) {
+        return proto_status_only(out, MP_STATUS_BUSY);
+    }
+    return proto_status_only(out, MP_STATUS_OK);
+}
+
+/**
+ * @brief PARAM_RESET：count u8 | [name_len | name]×count；count=0 = 全部
+ *
+ * 与终端的差异（协议 spec 约定）：本命令恢复后立即落盘；终端 reset 只改 RAM。
+ */
+static uint16_t proto_param_reset(const uint8_t *payload, uint16_t len, uint8_t *out) {
+    uint8_t count = 0U;
+    uint16_t pos = 1U;
+
+    if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+        return proto_status_only(out, MP_STATUS_LOCKED);
+    }
+    if (len > 0U) {
+        count = payload[0];
+    }
+
+    if (count == 0U) {
+        *app_motor_params_mutable() = *app_motor_params_default();
+        *app_hardware_params_mutable() = *app_hardware_params_default();
+        *app_software_params_mutable() = *app_software_params_default();
+        app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+    } else {
+        uint16_t scan = pos;
+
+        /* 先整体校验，避免未知名导致部分恢复 */
+        for (uint8_t i = 0U; i < count; i++) {
+            if (!proto_read_name(payload, len, &scan)
+                || (app_param_meta_find(s_name) == NULL)) {
+                return proto_status_only(out, MP_STATUS_BAD_PARAM);
+            }
+        }
+
+        scan = pos;
+        for (uint8_t i = 0U; i < count; i++) {
+            const param_meta_t *meta;
+            void *data;
+
+            if (!proto_read_name(payload, len, &scan)) {
+                return proto_status_only(out, MP_STATUS_BAD_PARAM);
+            }
+            meta = app_param_meta_find(s_name);
+            data = app_param_meta_data(meta);
+            if ((meta == NULL) || (data == NULL)) {
+                return proto_status_only(out, MP_STATUS_BAD_PARAM);
+            }
+            memcpy(data, app_param_meta_factory_data(meta),
+                   app_param_meta_type_size(meta->type));
+            if (proto_is_encoder_calib_param(s_name)) {
+                app_motor_params_mutable()->encoder.electrical_offset_valid = 0U;
+            }
+        }
+    }
+
+    if ((app_motor_params_store() != 0) || (app_software_params_store() != 0)) {
+        return proto_status_only(out, MP_STATUS_BUSY);
+    }
+    return proto_status_only(out, MP_STATUS_OK);
+}
+
+/**
+ * @brief motion 返回码 → 协议状态
+ */
+static uint8_t proto_motion_status(int rc) {
+    if (rc == APP_MOTION_CMD_OK) {
+        return MP_STATUS_OK;
+    }
+    if (rc == APP_MOTION_CMD_BAD_PARAM) {
+        return MP_STATUS_BAD_PARAM;
+    }
+    if (rc == APP_MOTION_CMD_TARGET_LIMIT) {
+        return MP_STATUS_RANGE_ERR;
+    }
+    return MP_STATUS_LOCKED;
+}
+
+/**
+ * @brief CTRL_CMD：opcode u8 | value f32
+ *
+ * 映射（v1.5）：
+ *   START      → app_foc_enable()（含约 10ms 栅极供电稳定阻塞）
+ *   STOP       → app_foc_request_stop()（非阻塞；FAULT 态的 disable 分支除外）
+ *   SET_MODE   → 1=力矩/2=速度/3=角度；跨模式先 release_output，下一设定值进入新模式
+ *   SET_SPEED  → app_motion_speed(rpm × 2π/60)     [轴端 rad/s，同终端 motion speed]
+ *   SET_TORQUE → app_motion_torque(Nm)
+ *   SET_ANGLE  → app_motion_position(deg × π/180, 0, 0)
+ *   SET_FREQ/SET_MOD/SET_OUTPUT_ZERO_* → UNSUPPORTED（本机无 V/F；零点写入需停机 job）
+ *
+ * 联锁：设定值允许运行中改；FOC OFF 限制只作用于参数 apply=foc_off 与 flash 类操作。
+ */
+static uint16_t proto_ctrl(const uint8_t *payload, uint16_t len, uint8_t *out) {
+    union {
+        float f;
+        uint32_t u;
+    } bits;
+    uint8_t op;
+    float value;
+
+    if (len < 5U) {
+        return proto_status_only(out, MP_STATUS_BAD_PARAM);
+    }
+    op = payload[0];
+    bits.u = (uint32_t) payload[1] | ((uint32_t) payload[2] << 8)
+             | ((uint32_t) payload[3] << 16) | ((uint32_t) payload[4] << 24);
+    value = bits.f;
+
+    switch (op) {
+    case MP_CTRL_START:
+        return proto_status_only(out,
+                                 (app_foc_enable() == 0) ? MP_STATUS_OK : MP_STATUS_LOCKED);
+
+    case MP_CTRL_STOP:
+        return proto_status_only(out,
+                                 (app_foc_request_stop() == 0) ? MP_STATUS_OK : MP_STATUS_LOCKED);
+
+    case MP_CTRL_SET_MODE: {
+        uint8_t mode = (uint8_t) (bits.u & 0xFFU);
+        app_motion_snapshot_t snap;
+
+        if ((mode < 1U) || (mode > 3U)) {
+            return proto_status_only(out, MP_STATUS_BAD_PARAM);
+        }
+        app_motion_get_snapshot(&snap);
+        if (snap.mode != (app_motion_mode_t) (mode - 1U)) {
+            (void) app_motion_release_output();
+        }
+        return proto_status_only(out, MP_STATUS_OK);
+    }
+
+    case MP_CTRL_SET_TORQUE:
+        if (!foc_finite(value)) {
+            return proto_status_only(out, MP_STATUS_RANGE_ERR);
+        }
+        return proto_status_only(out, proto_motion_status(app_motion_torque(value)));
+
+    case MP_CTRL_SET_SPEED:
+        if (!foc_finite(value) || (value > 20000.0f) || (value < -20000.0f)) {
+            return proto_status_only(out, MP_STATUS_RANGE_ERR);
+        }
+        return proto_status_only(
+            out, proto_motion_status(app_motion_speed(value * 0.10471975512f)));
+
+    case MP_CTRL_SET_ANGLE:
+        if (!foc_finite(value)) {
+            return proto_status_only(out, MP_STATUS_RANGE_ERR);
+        }
+        return proto_status_only(
+            out, proto_motion_status(app_motion_position(value * 0.01745329252f, 0.0f, 0.0f)));
+
+    default:
+        /* SET_FREQ / SET_MOD / SET_OUTPUT_ZERO_NOW / SET_OUTPUT_ZERO_ABS */
+        return proto_status_only(out, MP_STATUS_UNSUPPORTED);
+    }
+}
+
+/* ============================================================================
  * 命令分发
  * ============================================================================ */
 
@@ -520,12 +819,17 @@ static uint16_t proto_dispatch(uint8_t cmd, const uint8_t *payload, uint16_t len
         s_stream.count = 0U;
         return proto_status_only(out, MP_STATUS_OK);
 
-    /* 未实现：caps 对应位为 0，按 spec §6.1 返回 UNSUPPORTED */
     case MP_CMD_PARAM_WRITE:
+        return proto_param_write(payload, len, out);
+
     case MP_CMD_PARAM_COMMIT:
+        return proto_param_commit(out);
+
     case MP_CMD_PARAM_RESET:
+        return proto_param_reset(payload, len, out);
+
     case MP_CMD_CTRL_CMD:
-        return proto_status_only(out, MP_STATUS_UNSUPPORTED);
+        return proto_ctrl(payload, len, out);
 
     default:
         return proto_status_only(out, MP_STATUS_BAD_CMD);
