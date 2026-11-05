@@ -1155,6 +1155,9 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   下一拍重发。bulk 写一律 `timeout=0`，避免阻塞 1kHz 任务。
   **主机 IN 请求必须 ≥1024B**（MPS 整数倍）：单帧最大 521B，512B 请求会把尾包留在端点。
   `caps` bit2 = `CAP_STREAM` 已置位。
+  **台架 2026-11-05（裸板，无电机/编码器/NTC）**：3s 收到 428 帧 / 2996 样本
+  （~998 sample/s），`parse_errors=0`；`freq=0`（停机语义修正生效）；
+  `fault=0x200 ENC_ERR` 为编码器未接的预期锁存；`ntc1=0` 为开路无效值。
 - **线格式映射（易错点）**：
   - 固件 `U8/U16` 统一上报 `MP_TYPE_U32`（线格式没有 U8/U16）；`F32` 原样；
   - **没有 BOOL 映射**：元数据不区分 YAML bool 与 0/1 整数，禁止按值域猜测；

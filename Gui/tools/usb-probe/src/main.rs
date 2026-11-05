@@ -371,6 +371,14 @@ iu={:.2}A iv={:.2}A iw={:.2}A vbus={:.2}V ntc={:.1}C rotor={:.1}deg output={:.1}
         let mut samples = 0u64;
         let mut parse_errors = 0u64;
         let mut printed = false;
+        let mut expected_index = 0u32;
+        let mut expected_index_set = false;
+        let mut index_gaps = 0u64;
+        let mut last_t: Option<u32> = None;
+        let mut min_dt = u32::MAX;
+        let mut max_dt = 0u32;
+        let mut sum_dt = 0u64;
+        let mut n_dt = 0u64;
 
         while std::time::Instant::now() < deadline {
             let completion = link
@@ -412,6 +420,31 @@ iu={:.2}A iv={:.2}A iw={:.2}A vbus={:.2}V ntc={:.1}C rotor={:.1}deg output={:.1}
                 parse_errors += 1;
                 continue;
             }
+            let sample_index = u32_at(payload, 0);
+            if expected_index_set {
+                if sample_index != expected_index {
+                    index_gaps += 1;
+                }
+            } else {
+                expected_index_set = true;
+            }
+            expected_index = sample_index.wrapping_add(count as u32);
+
+            for i in 0..count {
+                let s = &payload[8 + i * size..8 + (i + 1) * size];
+                let t = u32_at(s, 0);
+                if let Some(prev) = last_t {
+                    let dt = t.wrapping_sub(prev);
+                    if dt < 1_000_000 {
+                        min_dt = min_dt.min(dt);
+                        max_dt = max_dt.max(dt);
+                        sum_dt += dt as u64;
+                        n_dt += 1;
+                    }
+                }
+                last_t = Some(t);
+            }
+
             frames += 1;
             samples += count as u64;
 
@@ -445,12 +478,16 @@ iq={:.2} speed={:.3} torque={:.3} pos={:.3} fault=0x{:08X}",
 
         let elapsed = started.elapsed().as_secs_f64();
         let rate = if elapsed > 0.0 { samples as f64 / elapsed } else { 0.0 };
+        let avg_dt = if n_dt > 0 { sum_dt as f64 / n_dt as f64 } else { 0.0 };
+        let (min_dt, max_dt) = if n_dt > 0 { (min_dt, max_dt) } else { (0, 0) };
+        let ok = samples > 0 && parse_errors == 0 && index_gaps == 0;
         println!(
             "[{}] stream: {frames} frames / {samples} samples in {elapsed:.2}s \
-(~{rate:.0} sample/s), parse_errors={parse_errors}",
-            if samples > 0 && parse_errors == 0 { "OK" } else { "FAIL" }
+(~{rate:.0} sample/s), parse_errors={parse_errors}, index_gaps={index_gaps}",
+            if ok { "OK" } else { "FAIL" }
         );
-        if samples == 0 || parse_errors != 0 {
+        println!("  timing: dt min/avg/max = {min_dt}/{avg_dt:.1}/{max_dt} us (n={n_dt})");
+        if !ok {
             failures += 1;
         }
 
