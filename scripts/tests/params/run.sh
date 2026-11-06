@@ -28,6 +28,7 @@ SRC=(
     "$HERE/test_param_terminal_guard.c"
     "$HERE/mock_flash.c"
     "$ROOT/App/Platform/Src/app_param_record.c"
+    "$ROOT/App/Platform/Src/app_param_meta.c"
     "$ROOT/App/Platform/Src/app_software_params.c"
     "$ROOT/App/Platform/Src/app_hardware_params.c"
     "$ROOT/App/Control/Src/app_motor_params.c"

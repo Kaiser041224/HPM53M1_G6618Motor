@@ -10,7 +10,11 @@
  */
 #include "app_param.h"
 
+#include <stdbool.h>
 #include <string.h>
+
+/* 供 USB 协议自测注入存储失败（默认 false，不影响 params 套件） */
+bool g_mock_flash_fail_store = false;
 
 #define MOCK_FLASH_SLOTS (4U)
 
@@ -28,7 +32,7 @@ void mock_flash_reset(void) { memset(s_slots, 0, sizeof(s_slots)); }
 bool app_param_is_ready(void) { return true; }
 
 int app_param_store(uint32_t key, const void* buf, size_t len) {
-    if (buf == NULL || len > APP_PARAM_DATA_MAX)
+    if (g_mock_flash_fail_store || buf == NULL || len > APP_PARAM_DATA_MAX)
         return -1;
     mock_flash_slot_t* slot = NULL;
     for (unsigned i = 0; i < MOCK_FLASH_SLOTS; ++i) {
