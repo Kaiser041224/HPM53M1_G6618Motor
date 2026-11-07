@@ -57,12 +57,16 @@
 #include "app_param.h"
 #include "app_ramfunc.h"
 #include "app_software_params.h"
+#include "app_status_led.h"
 #include "app_terminal.h"
 #include "app_usb.h"
 #include "app_usb_proto.h"
 #include "intf_adc.h"
 #include "intf_clock.h"
 #include "intf_sys.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
 
 /* 前向声明：hook 注册于 app_init 末尾（覆盖 app_foc_init 的自注册），定义在后 */
 static void app_fast_step_hook(void);
@@ -141,6 +145,9 @@ void app_init(void) {
 
     /* 2. GPIO 驱动注册 + PA09（DRV_+12V_EN，默认输出低=关闭） */
     app_gpio_init();
+
+    /* 2b. 状态 LED（PB01）：灯语在 io 任务内推进，ISR 不碰 */
+    app_status_led_init();
 
     /* 3. 频率自检（寄存器读数） */
     app_debug_printf(
@@ -434,11 +441,13 @@ void app_io_step(void) {
             s_boot_confirm_ticks = APP_BOOT_CONFIRM_TICKS - 1000U; /* 1s 后重试 */
         }
     }
+
+    /* 状态 LED 灯语：1kHz 任务内推进（不进入 ISR，不阻塞控制环） */
+    app_status_led_step((uint32_t) xTaskGetTickCount());
 }
 
 void app_diag_step(void) {
     /* RTOS 后台诊断单步（1s，由 app_diag 任务调用）：纯回报，不改控制状态。 */
-    app_gpio_toggle(PIN_LED_STATUS);
     app_debug_encoder_print_stats();
     app_isr_stats_print();
     app_motion_timer_snapshot_t motion_timer;
