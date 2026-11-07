@@ -28,9 +28,30 @@ set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/gcc/user_linker.l
 set(CUSTOM_SES_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/segger/user_linker.icf)
 set(CUSTOM_IAR_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/iar/user_linker.icf)
 
+# ============================================================================
+# A/B 槽构建（可选）：cmake -DAPP_SLOT_ID=0|1
+#   0 = Slot A（0x80020000），1 = Slot B（0x8008F000），440KB/槽（4KB 对齐）
+#   未定义 = 旧的整体镜像（0x80003000，ROM 直接启动）
+# ============================================================================
+if(DEFINED APP_SLOT_ID)
+    if(APP_SLOT_ID EQUAL 0)
+        set(APP_SLOT_BASE 0x80020000)
+    elseif(APP_SLOT_ID EQUAL 1)
+        set(APP_SLOT_BASE 0x8008F000)
+    else()
+        message(FATAL_ERROR "APP_SLOT_ID must be 0 or 1 (got ${APP_SLOT_ID})")
+    endif()
+    set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linkers/gcc/slot_app.ld)
+endif()
+
 find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 
 project(user_app)
+
+if(DEFINED APP_SLOT_ID)
+    sdk_compile_definitions(-DAPP_SLOT_ID=${APP_SLOT_ID})
+    sdk_linker_global_symbols("_slot_base=${APP_SLOT_BASE}" "_slot_size=0x6E000")
+endif()
 
 # ============================================================================
 # FreeRTOS 中断模式（对齐 HPM SDK 官方 FreeRTOS 示例惯例，57/57 示例全部如此）
@@ -197,6 +218,10 @@ sdk_app_src(App/Platform/Src/app_encoder.c)
 sdk_app_src(App/Platform/Src/app_3phase_inverter.c)
 sdk_app_src(App/Platform/Src/app_param.c)
 sdk_app_src(App/Platform/Src/app_param_record.c)
+sdk_app_src(App/Platform/Src/app_boot.c)
+sdk_app_src(App/Platform/Src/boot_meta.c)
+sdk_app_src(App/Platform/Src/boot_mailbox.c)
+sdk_app_src(App/Platform/Src/boot_image.c)
 sdk_app_src(App/Platform/Src/app_hrpwm.c)
 sdk_app_src(App/Platform/Src/app_gptmr.c)
 sdk_app_src(App/Platform/Src/app_motion_timer.c)

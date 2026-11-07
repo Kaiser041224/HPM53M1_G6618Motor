@@ -27,6 +27,7 @@
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_boot.h"
 #include "app_can_id.h"
 #include "app_current_identify.h"
 #include "app_debug_adc.h"
@@ -79,6 +80,13 @@ static uint32_t s_step_min_cy = 0xFFFFFFFFU;
 static uint32_t s_step_max_cy;
 static uint32_t s_step_sum_cy;
 static uint32_t s_step_cnt;
+
+/** OTA 启动确认延迟（1kHz io 拍数；约 2s）与失败重试次数 */
+#define APP_BOOT_CONFIRM_TICKS   (2000U)
+#define APP_BOOT_CONFIRM_RETRIES (3U)
+static uint32_t s_boot_confirm_ticks;
+static uint32_t s_boot_confirm_retries;
+static bool s_boot_confirmed;
 
 void app_init(void) {
     /*
@@ -410,6 +418,22 @@ void app_io_step(void) {
     app_debug_can_run_once(); /* CAN 统计打印（1Hz） */
     app_usb_proto_service();  /* bulk 二进制协议：解码/分发/应答（每拍有界） */
     app_terminal_run_once(); /* USB Terminal（命令执行 + 输入 + job tick + TX flush） */
+
+    /* OTA 启动确认（仅槽构建）：调度器运行约 2s 且 app_init 已完成时写一次
+     * active/pending=NONE。放在本任务末尾：与参数/齿槽写入同一任务上下文，
+     * 避免 diag 任务与 io 任务并发进入 flash 驱动（驱动无锁）。
+     * 失败时每秒重试，最多 3 次（瞬时 flash 失败不应触发回滚）。 */
+    if (!s_boot_confirmed) {
+        if (s_boot_confirm_ticks < APP_BOOT_CONFIRM_TICKS) {
+            s_boot_confirm_ticks++;
+        } else if (app_boot_confirm() == 0) {
+            s_boot_confirmed = true;
+        } else if (++s_boot_confirm_retries >= APP_BOOT_CONFIRM_RETRIES) {
+            s_boot_confirmed = true; /* 放弃重试；真正坏镜像由 bootloader 3 次回滚兜底 */
+        } else {
+            s_boot_confirm_ticks = APP_BOOT_CONFIRM_TICKS - 1000U; /* 1s 后重试 */
+        }
+    }
 }
 
 void app_diag_step(void) {

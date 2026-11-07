@@ -1,6 +1,6 @@
 /**
  * @file    app_terminal_cmd_sys.c
- * @brief   Terminal 系统命令（ver / status / usb / reboot）
+ * @brief   Terminal 系统命令（ver / status / usb / reboot / driver / dfu）
  * @author  Kaiser
  *
  * 命令：
@@ -8,6 +8,8 @@
  *   status 单次系统快照（故障 / 电流 / 母线 / NTC / 编码器 / 主循环迟到）
  *   usb    USB 枚举与 Terminal 输出统计
  *   reboot 软件复位（需 `confirm` 二次确认 + 电机停止联锁）
+ *   driver +12V 栅极供电手动开关（FOC OFF）
+ *   dfu    查看 A/B 槽状态；`dfu confirm` 写启动邮箱并复位进 DFU
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -17,6 +19,7 @@
 
 #include "app_3phase_inverter.h"
 #include "app_analog_signal.h"
+#include "app_boot.h"
 #include "app_debug_encoder.h"
 #include "app_encoder.h"
 #include "app_fault.h"
@@ -203,8 +206,103 @@ static int cmd_driver(int argc, char** argv) {
     return 0;
 }
 
+/**
+ * @brief 命令 dfu：查看 A/B 槽状态；`dfu confirm` 写启动邮箱并复位进 DFU
+ *
+ * 联锁：FOC 必须 OFF（桥已断开）+ 无停机挂起。进入 DFU 后设备重新枚举为
+ * 0x34B7:0x6619，用 dfu-util 下载非活动槽镜像。
+ */
+static int cmd_dfu(int argc, char** argv) {
+    chry_shell_t* csh = app_terminal_cmd_ctx(argc, argv);
+    app_boot_status_t st;
+
+    if ((argc >= 2) && (strcmp(argv[1], "confirm") == 0)) {
+        if (!app_terminal_cmd_require_motor_stopped(csh)) {
+            return -1;
+        }
+        if (app_foc_stop_pending()) {
+            csh_printf(csh, "ERR: FOC stop pending; wait for state=OFF\r\n");
+            return -1;
+        }
+        if (app_foc_get_state() != APP_FOC_STATE_OFF) {
+            csh_printf(csh, "ERR: DFU requires FOC OFF ('foc off' first)\r\n");
+            return -1;
+        }
+        if (app_boot_get_status(&st) != 0) {
+            csh_printf(csh, "ERR: boot metadata unavailable\r\n");
+            return -1;
+        }
+        csh_printf(csh, "entering DFU: target=slot %c, reset...\r\n",
+                   (char) ('A' + st.upgrade_target_slot));
+        app_boot_request_dfu();
+    }
+
+    if ((argc >= 3) && (strcmp(argv[1], "slot") == 0)) {
+        uint8_t slot;
+
+        if ((strcmp(argv[2], "a") == 0) || (strcmp(argv[2], "A") == 0)) {
+            slot = 0U;
+        } else if ((strcmp(argv[2], "b") == 0) || (strcmp(argv[2], "B") == 0)) {
+            slot = 1U;
+        } else {
+            return app_terminal_cmd_usage(csh, "dfu slot a|b");
+        }
+        if (!app_terminal_cmd_require_motor_stopped(csh)) {
+            return -1;
+        }
+        if (app_foc_stop_pending() || (app_foc_get_state() != APP_FOC_STATE_OFF)) {
+            csh_printf(csh, "ERR: dfu slot requires FOC OFF\r\n");
+            return -1;
+        }
+        if (app_boot_set_active(slot) != 0) {
+            csh_printf(csh, "ERR: slot selection failed (legacy build or flash error)\r\n");
+            return -1;
+        }
+        csh_printf(csh, "boot: active slot set to %c; reboot to apply\r\n", (char) ('A' + slot));
+        return 0;
+    }
+
+    if ((argc >= 2) && (strcmp(argv[1], "show") != 0)) {
+        return app_terminal_cmd_usage(csh, "dfu [show|confirm|slot a|b]");
+    }
+
+    if (!app_boot_is_slot_build()) {
+        csh_printf(csh, "boot: legacy image (no A/B slot; flash-ota not installed)\r\n");
+        return 0;
+    }
+    if (app_boot_get_status(&st) != 0) {
+        csh_printf(csh, "ERR: boot metadata unavailable\r\n");
+        return -1;
+    }
+
+    csh_printf(csh, "boot: running=%c active=%c pending=%c attempts=%u confirmed=%u\r\n",
+               (st.running_slot < 2U) ? (char) ('A' + st.running_slot) : '-',
+               (char) ('A' + st.active_slot),
+               (st.pending_slot < 2U) ? (char) ('A' + st.pending_slot) : '-',
+               (unsigned)st.attempts, (unsigned)st.confirmed);
+    {
+        /* 自检要读整个槽 payload（约 25–30ms），只在 FOC OFF 时执行 */
+        bool can_verify = (app_foc_get_state() == APP_FOC_STATE_OFF) && !app_foc_stop_pending();
+        int self = can_verify ? app_boot_self_verify() : -3;
+        const char *self_text = (self == 0)    ? "OK"
+                                : (self == -2) ? "BAD(crc)"
+                                : (self == -1) ? "n/a"
+                                               : "skip(FOC on)";
+
+        csh_printf(csh, "boot: image version=%u crc=0x%08X self=%s\r\n",
+                   (unsigned)app_boot_image_version(), (unsigned)app_boot_image_crc(), self_text);
+    }
+    csh_printf(csh, "boot: DFU target=%c (%s)\r\n", (char) ('A' + st.upgrade_target_slot),
+               st.upgrade_target_valid ? "valid image present" : "empty");
+    csh_printf(csh, "usage: dfu confirm  (FOC OFF; then dfu-util -a 0 -D slot_%c.bin)\r\n",
+               (char) ('a' + st.upgrade_target_slot));
+    csh_printf(csh, "       dfu slot a|b  (force next boot slot)\r\n");
+    return 0;
+}
+
 CSH_CMD_EXPORT_ALIAS(cmd_ver, ver, );
 CSH_CMD_EXPORT_ALIAS(cmd_status, status, );
 CSH_CMD_EXPORT_ALIAS(cmd_usb, usb, );
 CSH_CMD_EXPORT_ALIAS(cmd_reboot, reboot, );
 CSH_CMD_EXPORT_ALIAS(cmd_driver, driver, );
+CSH_CMD_EXPORT_ALIAS(cmd_dfu, dfu, );

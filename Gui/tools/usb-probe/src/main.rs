@@ -40,6 +40,7 @@ const CMD_FAULT_GET: u8 = 0x09;
 const CMD_PARAM_RESET: u8 = 0x0D;
 const CMD_STREAM_SUB: u8 = 0x0B;
 const CMD_STREAM_UNSUB: u8 = 0x0C;
+const CMD_BOOT_INFO: u8 = 0x0E;
 const CMD_STREAM_DATA: u8 = 0x8E;
 
 /// IN 传输请求长度：必须是 MPS(512) 的整数倍；流帧最大 9 + 512 = 521，
@@ -168,6 +169,7 @@ fn ctrl_opcode(name: &str) -> Option<u8> {
         "torque" => Some(0x08),
         "speed" => Some(0x09),
         "angle" => Some(0x0A),
+        "dfu" => Some(0x0B),
         _ => None,
     }
 }
@@ -288,12 +290,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         seq: 0,
     };
 
-    /* --ctrl <start|stop|mode|torque|speed|angle> <value>：只发一条控制命令后退出。
+    /* --ctrl <start|stop|mode|torque|speed|angle|dfu> <value>：只发一条控制命令后退出。
      * 不会自动启停电机之外的任何操作；由操作者显式执行。 */
     if let Some(idx) = ctrl {
         let op_name = args
             .get(idx + 1)
-            .ok_or("--ctrl needs <start|stop|mode|torque|speed|angle> [value]")?;
+            .ok_or("--ctrl needs <start|stop|mode|torque|speed|angle|dfu> [value]")?;
         let op = ctrl_opcode(op_name).ok_or_else(|| format!("unknown ctrl op: {op_name}"))?;
         let value: f32 = args.get(idx + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
         /* SET_MODE 的 value 是 f32 位型低字节承载模式（motor_proto.h v1.1 约定），
@@ -312,6 +314,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         let mut payload = vec![op];
         payload.extend_from_slice(&wire_value.to_le_bytes());
+
+        /* ENTER_DFU：设备在 ~50ms 后复位进 bootloader，应答可能丢失 —— 视为成功。 */
+        if op_name == "dfu" {
+            match link.transact(CMD_CTRL, &payload) {
+                Ok(r) => println!("[OK] CTRL dfu accepted (status={})；设备即将复位进 DFU", r[0]),
+                Err(_) => println!("[OK] CTRL dfu sent；设备已复位（应答丢失属预期）"),
+            }
+            return Ok(());
+        }
 
         /* START 在软停未完成时会返回 LOCKED（s_stop_pending）：最多重试 3s，
          * 模拟上位机"使能后等待就绪"的正常行为。 */
@@ -411,6 +422,30 @@ fn main() -> Result<(), Box<dyn Error>> {
             failures += 1;
             println!("[FAIL] PROTO_INFO: {e}");
         }
+    }
+
+    // 1b. BOOT_INFO（A/B 槽与启动控制；旧固件返回 BAD_CMD，不算失败）
+    match link.transact(CMD_BOOT_INFO, &[]) {
+        Ok(r) if r[0] == ST_OK && r.len() >= 12 => {
+            let slot = |s: u8| match s {
+                0 => "A",
+                1 => "B",
+                _ => "-",
+            };
+            println!(
+                "[OK] BOOT_INFO: running={} active={} pending={} attempts={} confirmed={} target={} (valid={}) version={}",
+                slot(r[1]),
+                slot(r[2]),
+                slot(r[3]),
+                r[4],
+                r[5],
+                slot(r[6]),
+                r[7],
+                u32_at(&r, 8)
+            );
+        }
+        Ok(r) => println!("[..] BOOT_INFO unsupported: status={} len={}", r[0], r.len()),
+        Err(e) => println!("[..] BOOT_INFO unsupported: {e}"),
     }
 
     // 2. PARAM_META_COUNT

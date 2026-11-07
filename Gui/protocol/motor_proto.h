@@ -41,7 +41,8 @@ typedef enum {
     MP_CMD_FAULT_CLEAR      = 0x0A, /* 清除故障锁存 */
     MP_CMD_STREAM_SUB       = 0x0B, /* 订阅一级流（v1.4 起支持，1kHz） */
     MP_CMD_STREAM_UNSUB     = 0x0C, /* 取消订阅 */
-    MP_CMD_PARAM_RESET      = 0x0D  /* v1.3：按名单/全部恢复出厂默认值（独立命令字） */
+    MP_CMD_PARAM_RESET      = 0x0D, /* v1.3：按名单/全部恢复出厂默认值（独立命令字） */
+    MP_CMD_BOOT_INFO        = 0x0E  /* v1.6：A/B 槽与启动控制状态 */
 } mp_cmd_t;
 
 /* v1.4：设备→主机遥测数据帧（非响应，SEQ 为帧计数，主机按 CMD 识别） */
@@ -51,6 +52,7 @@ typedef enum {
 #define MP_CAP_PARAM_WRITE (1UL << 0)
 #define MP_CAP_CONTROL     (1UL << 1)
 #define MP_CAP_STREAM      (1UL << 2)
+#define MP_CAP_DFU         (1UL << 3) /* v1.6：支持 CTRL_ENTER_DFU / BOOT_INFO */
 
 /* 响应状态码（响应 payload 首字节） */
 typedef enum {
@@ -103,7 +105,9 @@ typedef enum {
     /* ---- v1.2 增量：设定值写入（联锁同 v1.1，停机窗口） ---- */
     MP_CTRL_SET_TORQUE           = 0x08, /* 力矩设定（N·m；负值允许） */
     MP_CTRL_SET_SPEED            = 0x09, /* 转速设定（rpm；|v|>20000 越界；负值允许） */
-    MP_CTRL_SET_ANGLE            = 0x0A  /* 角度设定（°；负值允许） */
+    MP_CTRL_SET_ANGLE            = 0x0A, /* 角度设定（°；负值允许） */
+    /* ---- v1.6 增量：进入 DFU ---- */
+    MP_CTRL_ENTER_DFU            = 0x0B  /* 要求 FOC OFF；设备复位进 DFU（响应可能丢失） */
 } mp_ctrl_opcode_t;
 
 /* 帧头布局（CRC 覆盖 VER..PAYLOAD，即 5 字节头 + PAYLOAD） */
@@ -128,6 +132,11 @@ typedef struct {
 /* CTRL_CMD req: opcode u8 | value f32; resp: status */
 /* FAULT_GET resp: status | fault_flags u32 | latched_flags u32 */
 /* FAULT_CLEAR req: 空; resp: status */
+/* BOOT_INFO req: 空
+ * resp: status | running_slot u8 | active_slot u8 | pending_slot u8 | attempts u8
+ *              | confirmed u8 | target_slot u8 | target_valid u8 | image_version u32
+ *   slot: 0=A, 1=B, 0xFF=无（非槽构建/无记录）；target = active ^ 1（DFU 目标槽）
+ *   target_valid = 目标槽镜像头合法（可被覆盖） */
 /* PARAM_RESET req: count u8 | [name_len u8 | name]×count（count=0 或空 payload = 全部恢复）
  * resp: status；名单含未知名 → BAD_PARAM；运行中或故障锁存 → LOCKED（flash 类联锁同 COMMIT）；
  *       落盘失败 → BUSY。恢复后值立即生效且持久化（RAM 与落盘语义等同「恢复+写入」）。 */

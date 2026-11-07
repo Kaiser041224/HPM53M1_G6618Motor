@@ -6,13 +6,13 @@
 # 本脚本把该约束变成可自动检查的测试，防止回归。
 #
 # 用法：scripts/tests/layout/check_layout.sh [elf]
-#   默认 output/HPM53M1_G6618Motor.elf（需先 make artifacts）
+#   默认 build/output/HPM53M1_G6618Motor.elf（需先 make artifacts）
 # 退出码：0 = 全部在 ILM（0x0000xxxx）；非 0 = 有符号落在 XIP（0x8xxxxxxx）
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-ELF="${1:-$ROOT/output/HPM53M1_G6618Motor.elf}"
+ELF="${1:-$ROOT/build/output/HPM53M1_G6618Motor.elf}"
 
 NM="${GNURISCV_TOOLCHAIN_PATH:-/opt/riscv32-gnu-toolchain-elf-bin}/bin/riscv32-unknown-elf-nm"
 

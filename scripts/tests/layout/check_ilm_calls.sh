@@ -19,7 +19,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-ELF="${1:-$ROOT/output/HPM53M1_G6618Motor.elf}"
+ELF="${1:-$ROOT/build/output/HPM53M1_G6618Motor.elf}"
 
 TOOLCHAIN="${GNURISCV_TOOLCHAIN_PATH:-/opt/riscv32-gnu-toolchain-elf-bin}"
 OBJDUMP="$TOOLCHAIN/bin/riscv32-unknown-elf-objdump"

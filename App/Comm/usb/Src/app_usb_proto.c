@@ -1,6 +1,6 @@
 /**
  * @file    app_usb_proto.c
- * @brief   USB bulk 二进制协议服务（motor_proto v1.3，P1a 只读子集）
+ * @brief   USB bulk 二进制协议服务（motor_proto v1.6）
  * @author  Kaiser
  *
  * 帧格式与命令语义以 Gui/protocol/motor_proto.h + protocol_spec.md 为准，
@@ -11,8 +11,9 @@
  *   - 每拍最多从接收环取 PROTO_SERVICE_READ_MAX 字节，超出留到下一拍；
  *   - 应答写为任务上下文阻塞调用（超时 50ms），失败只丢帧不回滚。
  *
- * P1a 只读：PROTO_INFO / PARAM_META_* / PARAM_READ / STATUS_GET /
- *           FAULT_GET / FAULT_CLEAR；写类命令返回 UNSUPPORTED（caps 相应位为 0）。
+ * 命令集（v1.6）：PROTO_INFO / PARAM_META_* / PARAM_READ/WRITE/COMMIT/RESET /
+ * STATUS_GET / FAULT_GET/CLEAR / CTRL_CMD / STREAM_SUB/UNSUB / BOOT_INFO；
+ * CTRL 内 ENTER_DFU 写启动邮箱后软复位（见 app_boot.c）。
  *
  * Copyright (c) 2026 Alliance HardwareGroup
  * SPDX-License-Identifier: BSD-3-Clause
@@ -22,6 +23,7 @@
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_boot.h"
 #include "app_debug_rtt.h"
 #include "app_encoder.h"
 #include "app_fault.h"
@@ -49,8 +51,8 @@
 /** 参数名最大长度（含结尾 NUL 的缓冲为 64） */
 #define PROTO_NAME_MAX (63U)
 
-/* 能力位（protocol_spec §6.2）：bit0=PARAM_WRITE，bit1=CONTROL，bit2=STREAM */
-#define PROTO_CAPS (MP_CAP_PARAM_WRITE | MP_CAP_CONTROL | MP_CAP_STREAM)
+/* 能力位（protocol_spec §6.2）：bit0=PARAM_WRITE，bit1=CONTROL，bit2=STREAM，bit3=DFU */
+#define PROTO_CAPS (MP_CAP_PARAM_WRITE | MP_CAP_CONTROL | MP_CAP_STREAM | MP_CAP_DFU)
 
 /* bulk 写一律非阻塞：本服务跑在 1kHz io 任务内，任何毫秒级阻塞都会推迟
  * 同任务的故障 tick / 终端处理。忙则丢帧（应答进 pending 重试，流直接丢）。 */
@@ -112,6 +114,9 @@ static struct {
 /* 32bit cycle → 64bit 扩展（1kHz 调用；8.94s 回绕远大于采样间隔） */
 static uint32_t s_cycle_last;
 static uint64_t s_cycle_hi;
+
+/* ENTER_DFU 延迟计数：先让应答出队，再写邮箱复位（1kHz 递减） */
+static uint8_t s_dfu_countdown;
 
 _Static_assert(sizeof(mp_telemetry_sample_t) == 72U, "telemetry sample layout changed");
 _Static_assert(sizeof(mp_stream_header_t) == 8U, "stream header layout changed");
@@ -714,6 +719,15 @@ static uint16_t proto_ctrl(const uint8_t *payload, uint16_t len, uint8_t *out) {
         return proto_status_only(
             out, proto_motion_status(app_motion_position(value * 0.01745329252f, 0.0f, 0.0f)));
 
+    case MP_CTRL_ENTER_DFU:
+        /* 联锁：FOC OFF 且无停机挂起（桥必须已断开）。
+         * 应答先出队，约 50ms 后写启动邮箱并软复位（见 service 的延迟段）。 */
+        if (app_foc_stop_pending() || (app_foc_get_state() != APP_FOC_STATE_OFF)) {
+            return proto_status_only(out, MP_STATUS_LOCKED);
+        }
+        s_dfu_countdown = 50U;
+        return proto_status_only(out, MP_STATUS_OK);
+
     default:
         /* SET_FREQ / SET_MOD / SET_OUTPUT_ZERO_NOW / SET_OUTPUT_ZERO_ABS */
         return proto_status_only(out, MP_STATUS_UNSUPPORTED);
@@ -826,6 +840,27 @@ static uint16_t proto_dispatch(uint8_t cmd, const uint8_t *payload, uint16_t len
         s_stream.active = false;
         s_stream.count = 0U;
         return proto_status_only(out, MP_STATUS_OK);
+
+    /* v1.6：A/B 槽与启动控制状态 */
+    case MP_CMD_BOOT_INFO: {
+        app_boot_status_t st;
+        uint16_t pos = 0U;
+
+        if (app_boot_get_status(&st) != 0) {
+            return proto_status_only(out, MP_STATUS_BUSY);
+        }
+        out[pos++] = MP_STATUS_OK;
+        out[pos++] = st.running_slot;
+        out[pos++] = st.active_slot;
+        out[pos++] = st.pending_slot;
+        out[pos++] = st.attempts;
+        out[pos++] = st.confirmed;
+        out[pos++] = st.upgrade_target_slot;
+        out[pos++] = st.upgrade_target_valid ? 1U : 0U;
+        put_u32(&out[pos], st.running_version);
+        pos = (uint16_t) (pos + 4U);
+        return pos;
+    }
 
     case MP_CMD_PARAM_WRITE:
         return proto_param_write(payload, len, out);
@@ -1011,6 +1046,7 @@ void app_usb_proto_init(void) {
 
     s_cycle_hi = 0U;
     s_cycle_last = intf_clock_get_cycle();
+    s_dfu_countdown = 0U;
 }
 
 void app_usb_proto_service(void) {
@@ -1038,4 +1074,12 @@ void app_usb_proto_service(void) {
     /* 3. 遥测：抽点 + 满批发送 */
     proto_telemetry_sample();
     proto_stream_flush();
+
+    /* 4. ENTER_DFU：应答已排队，约 50ms 后写启动邮箱并软复位（不返回） */
+    if (s_dfu_countdown != 0U) {
+        s_dfu_countdown--;
+        if (s_dfu_countdown == 0U) {
+            app_boot_request_dfu();
+        }
+    }
 }

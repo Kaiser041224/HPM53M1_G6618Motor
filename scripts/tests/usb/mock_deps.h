@@ -12,6 +12,7 @@
 
 #include "app_adc.h"
 #include "app_analog_signal.h"
+#include "app_boot.h"
 #include "app_encoder.h"
 #include "app_foc.h"
 #include "app_foc_current.h"
@@ -64,6 +65,10 @@ typedef struct {
     uint32_t fault_codes;
     uint32_t fault_latched;
     int fault_clear_rc;
+
+    /* OTA / DFU */
+    bool boot_status_ok;      /**< app_boot_get_status() 返回 0 还是 -1 */
+    app_boot_status_t boot_status;
 
     /* 时钟 */
     uint32_t cycles;

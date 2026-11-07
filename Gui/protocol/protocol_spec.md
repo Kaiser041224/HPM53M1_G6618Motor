@@ -1,4 +1,4 @@
-# Gui ↔ 电机控制板 通讯协议规范 v1.5
+# Gui ↔ 电机控制板 通讯协议规范 v1.6
 
 本文件是 `motor_proto.h` 的配套说明，两者共同构成 Gui 上位机与电机控制板之间的
 **线格式契约**。任何一端实现编解码、传输解析、会话状态机时，都以本规范为准；
@@ -15,6 +15,10 @@
 > **v1.3 为增量（additive，叠加在 v1.2 之上）**：不改变帧格式、`VER`、状态码与金
 > 向量，新增**独立命令字** `MP_CMD_PARAM_RESET = 0x0D`（非 `CTRL_CMD` 内 opcode）——
 > 按名单/全部恢复出厂默认值（见 §9）。固件侧实现待 M2；sim / 主机已实现。
+>
+> **v1.6 为增量（additive，叠加在 v1.5 之上）**：不改变帧格式、`VER` 与状态码，
+> 新增独立命令字 `MP_CMD_BOOT_INFO = 0x0E`、`CTRL_CMD` opcode
+> `MP_CTRL_ENTER_DFU = 0x0B`，`caps` 增加 `CAP_DFU`（见 §12）。
 
 - 传输层字节序：**全部小端（little-endian）**。
 - 版本：`MP_VERSION = 0x01`（v1.1 复用，线格式不变）。
@@ -316,7 +320,6 @@ v1.2 增量 `MP_CTRL_SET_TORQUE=0x08`、`MP_CTRL_SET_SPEED=0x09`、
 请求载荷：空。响应载荷：`status = MP_STATUS_UNSUPPORTED`。v1 不实现一级流。
 
 ### 3.12 `MP_CMD_PARAM_RESET = 0x0D`（v1.3：按名单/全部恢复出厂默认）
-
 **请求载荷**：
 
 | 序号 | 字段 | 类型 | 说明 |
@@ -394,7 +397,8 @@ CAN 经典帧单帧数据 ≤ 8 字节，无法容纳最大 521 字节的协议�
 | 0 | `CAP_PARAM_WRITE` | 支持 `MP_CMD_PARAM_WRITE` |
 | 1 | `CAP_CONTROL` | 支持 `MP_CMD_CTRL_CMD` |
 | 2 | `CAP_STREAM` | 一级流订阅（v1.4 起支持，见 §10） |
-| 3..31 | — | 保留，v1 恒 `0`；接收端忽略未知位 |
+| 3 | `CAP_DFU` | `MP_CMD_BOOT_INFO` 与 `MP_CTRL_ENTER_DFU`（v1.6，见 §12） |
+| 4..31 | — | 保留，v1 恒 `0`；接收端忽略未知位 |
 
 金帧 `proto_info_resp_sim` 中 `caps = 0x00000003`，即 `CAP_PARAM_WRITE | CAP_CONTROL`。
 
@@ -766,6 +770,50 @@ motion 返回码映射：`BAD_PARAM → BAD_PARAM`、`TARGET_LIMIT → RANGE_ERR
 ### 11.5 caps
 
 v1.5 起 `caps = PARAM_WRITE | CONTROL | STREAM = 0x00000007`。
+
+---
+
+## 12. v1.6 增量：A/B 槽与 DFU（`BOOT_INFO` / `ENTER_DFU`）
+
+### 12.1 `MP_CMD_BOOT_INFO = 0x0E`（A/B 槽与启动控制状态）
+
+**请求载荷**：空。
+
+**响应载荷**（12 字节）：
+
+| 序号 | 字段 | 类型 | 说明 |
+| :--- | :--- | :--- | :--- |
+| 0 | `status` | u8 | `MP_STATUS_OK` / `BUSY`（flash 未就绪） |
+| 1 | `running_slot` | u8 | 运行槽：0=A，1=B，`0xFF`=非槽构建 |
+| 2 | `active_slot` | u8 | 启动控制记录中的 active 槽（无记录时 0） |
+| 3 | `pending_slot` | u8 | 待验证槽：0/1，`0xFF`=无 |
+| 4 | `attempts` | u8 | pending 已尝试启动次数（0..3） |
+| 5 | `confirmed` | u8 | active 是否已被应用确认 |
+| 6 | `target_slot` | u8 | 下一次 DFU 的目标槽（= `running_slot ^ 1`；进入 DFU 前应用会先确认运行槽） |
+| 7 | `target_valid` | u8 | 目标槽镜像头合法（0/1，仅头+槽号，不含 payload CRC） |
+| 8..11 | `image_version` | u32 | 运行槽镜像头 `image_version`；无效/非槽构建为 0 |
+
+**语义**：
+
+- 主机在发起升级前读取本命令，用 `target_slot` 决定发送 `slot_a.bin` 还是 `slot_b.bin`；
+  bootloader 在 DFU manifest 阶段会再次校验镜像头的 `slot_id`，发错文件会被拒绝（`
+  DFU_STATUS_ERR_FIRMWARE`），旧镜像不受影响。
+- 旧固件对 `0x0E` 返回 `BAD_CMD`；主机应据此认为设备不支持 OTA。
+
+### 12.2 `MP_CTRL_ENTER_DFU = 0x0B`（`MP_CMD_CTRL_CMD` 内）
+
+- **联锁**：FOC 必须 `OFF` 且无停机挂起，否则 `LOCKED`；`value` 忽略。
+- 设备先返回 `status = OK`，约 50ms 后写 SYSCTL GPR 邮箱（`"G661"` + `"DFU0"`）并
+  软复位；**应答可能因复位丢失，主机应把超时视为成功**。
+- 复位后 bootloader 以 **PID `0x6619`** 枚举 DFU（VID `0x34B7`，序列号不变）；
+  用 `dfu-util -a 0 -D slot_x.bin` 下载到 `target_slot`。
+- manifest 校验通过后，bootloader 写 `pending = target` 并复位；应用启动 2s 内确认
+  `active`。连续 3 次未确认自动回滚到旧槽。
+
+### 12.3 caps
+
+v1.6 起 `caps = PARAM_WRITE | CONTROL | STREAM | DFU = 0x0000000F`。
+`CAP_DFU` 表示设备支持 `BOOT_INFO` 与 `ENTER_DFU`（不表示当前一定有可回滚的镜像）。
 
 ---
 

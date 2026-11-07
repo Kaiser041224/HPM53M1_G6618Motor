@@ -8,9 +8,21 @@ APP_DIR := $(ROOT_DIR)
 BOARDS_DIR := $(ROOT_DIR)/Board
 BOARD_CONFIG_DIR := $(ROOT_DIR)/Board/hpm_board_config
 DRIVER_DIR := $(ROOT_DIR)/Driver/hpm_impl
-BUILD_DIR := $(ROOT_DIR)/build
-OUTPUT_DIR := $(ROOT_DIR)/output
+BUILD_ROOT := $(ROOT_DIR)/build
+APP_BUILD_DIR := $(BUILD_ROOT)/app
+BOOTLOADER_BUILD_DIR := $(BUILD_ROOT)/bootloader
+SLOT_A_BUILD_DIR := $(BUILD_ROOT)/slot-a
+SLOT_B_BUILD_DIR := $(BUILD_ROOT)/slot-b
+OUTPUT_DIR := $(BUILD_ROOT)/output
+OTA_OUTPUT_DIR := $(OUTPUT_DIR)/ota
+# 主程序（旧整体镜像）CMake 构建树；保留 BUILD_DIR 名称供既有目标复用
+BUILD_DIR := $(APP_BUILD_DIR)
 PROJECT_NAME ?= $(notdir $(ROOT_DIR))
+
+# 槽镜像版本号（写入镜像头，供上位机展示/防回退参考）
+IMAGE_VERSION ?= $(shell git -C $(ROOT_DIR) rev-list --count HEAD 2>/dev/null || echo 0)
+PYTHON ?= python3
+GEN_IMAGE_HEADER := $(ROOT_DIR)/scripts/gen_image_header.py
 
 # ============================================================================
 # Environment repository layout (see <env-repo>/.envrc)
@@ -75,7 +87,7 @@ JLINK_IF ?= JTAG
 JLINK_SPEED ?= 1000
 # 镜像最低加载地址 = .nor_cfg_option 的 LMA（= flash base + 0x400）。
 # 修改 linker script 的 flash 布局后需同步更新（可用
-# `riscv32-unknown-elf-objdump -h build/output/demo.elf | sort` 复核）。
+# `riscv32-unknown-elf-objdump -h build/app/output/demo.elf | sort` 复核）。
 JLINK_FLASH_ADDR ?= 0x8000400
 
 # ============================================================================
@@ -112,7 +124,7 @@ CMAKE_ARGS := \
 # ============================================================================
 # Phony Targets
 # ============================================================================
-.PHONY: all configure build build-core artifacts artifacts-core flash flash-openocd flash-jlink clean distclean rebuild help list-boards banner
+.PHONY: all configure build build-core artifacts artifacts-core flash flash-openocd flash-jlink clean distclean rebuild help list-boards banner bootloader slot-a slot-b ota-package flash-ota flash-info
 
 all: artifacts
 
@@ -145,10 +157,10 @@ build:
 	$(MAKE) --no-print-directory banner BUILD_STATUS=$$status BUILD_ACTION=build BUILD_LOG="$(LAST_BUILD_LOG)"; \
 	exit $$status
 
-artifacts-core: build-core
+artifacts-core: build-core flash-info
 	@echo ""
 	@echo "============================================================"
-	@echo "[ARTIFACTS] Copying to output/"
+	@echo "[ARTIFACTS] Copying to build/output/"
 	@echo "============================================================"
 	@mkdir -p $(OUTPUT_DIR)
 	@for f in $(BUILD_DIR)/output/demo.*; do \
@@ -193,10 +205,83 @@ flash-jlink: artifacts
 	JLinkExe /tmp/jlink_flash.jlink
 
 # ============================================================================
+# OTA Targets（A/B 槽 + DFU bootloader）
+# ============================================================================
+# build/output 内的烧录索引（随时可重新生成）
+flash-info:
+	@mkdir -p $(OUTPUT_DIR)
+	@printf '%s\n' \
+		'G6618 flash artifacts (build/output)' \
+		'' \
+		'  legacy full image : HPM53M1_G6618Motor.elf/.bin  @ 0x8000400' \
+		'  bootloader        : bootloader.elf/.bin          @ 0x8000400' \
+		'  slot A            : slot_a.elf/.bin              @ 0x80020000' \
+		'  slot B            : slot_b.elf/.bin              @ 0x8008F000' \
+		'  OTA package       : ota/{bootloader,slot_a,slot_b,manifest.json}' \
+		'' \
+		'  slot_x.elf 已写入 64B 镜像头，Ozone/J-Link 可直接加载；' \
+		'  只用 .bin 时按上面的地址烧录。' \
+		> $(OUTPUT_DIR)/FLASHING.txt
+
+# 槽构建：$(1)=slot id，$(2)=build dir，$(3)=槽名（a/b）
+define build_slot
+	@echo "[SLOT $(3)] configure + build (APP_SLOT_ID=$(1))"
+	cmake -S $(APP_DIR) -B $(2) $(CMAKE_ARGS) -DAPP_SLOT_ID=$(1)
+	cmake --build $(2) -j
+	cp $(2)/output/demo.elf $(OUTPUT_DIR)/slot_$(3).elf
+	$(PYTHON) $(GEN_IMAGE_HEADER) --input $(2)/output/demo.bin \
+		--output $(OUTPUT_DIR)/slot_$(3).bin --slot $(1) --version $(IMAGE_VERSION) \
+		--elf $(OUTPUT_DIR)/slot_$(3).elf
+endef
+
+bootloader:
+	@mkdir -p $(OUTPUT_DIR) $(OTA_OUTPUT_DIR)
+	@echo "[BOOTLOADER] configure + build"
+	cmake -S $(ROOT_DIR)/bootloader -B $(BOOTLOADER_BUILD_DIR) $(CMAKE_ARGS)
+	cmake --build $(BOOTLOADER_BUILD_DIR) -j
+	cp $(BOOTLOADER_BUILD_DIR)/output/demo.bin $(OUTPUT_DIR)/bootloader.bin
+	cp $(BOOTLOADER_BUILD_DIR)/output/demo.elf $(OUTPUT_DIR)/bootloader.elf
+	@ls -l $(OUTPUT_DIR)/bootloader.elf $(OUTPUT_DIR)/bootloader.bin
+
+slot-a:
+	@mkdir -p $(OUTPUT_DIR) $(OTA_OUTPUT_DIR)
+	$(call build_slot,0,$(SLOT_A_BUILD_DIR),a)
+
+slot-b:
+	@mkdir -p $(OUTPUT_DIR) $(OTA_OUTPUT_DIR)
+	$(call build_slot,1,$(SLOT_B_BUILD_DIR),b)
+
+# 发布包：bootloader + 两个槽镜像 + manifest（清空后按顺序重建 manifest）
+ota-package: bootloader slot-a slot-b flash-info
+	@rm -f $(OTA_OUTPUT_DIR)/manifest.json
+	$(PYTHON) $(GEN_IMAGE_HEADER) --verify-existing --input $(OUTPUT_DIR)/slot_a.bin \
+		--slot 0 --manifest $(OTA_OUTPUT_DIR)/manifest.json
+	$(PYTHON) $(GEN_IMAGE_HEADER) --verify-existing --input $(OUTPUT_DIR)/slot_b.bin \
+		--slot 1 --manifest $(OTA_OUTPUT_DIR)/manifest.json
+	@cp $(OUTPUT_DIR)/bootloader.bin $(OUTPUT_DIR)/slot_a.bin $(OUTPUT_DIR)/slot_b.bin $(OTA_OUTPUT_DIR)/
+	@echo ""
+	@echo "[OTA] package ready: $(OTA_OUTPUT_DIR)"
+	@ls -l $(OTA_OUTPUT_DIR)
+
+# 首次落地：J-Link 整片擦除后烧 bootloader + Slot A（参数/齿槽表一并清空）
+flash-ota: ota-package
+	@echo "[FLASH-OTA] J-Link: erase + bootloader@0x8000400 + slot A@0x80020000"
+	@echo "WARN: 整片擦除会清空参数区与齿槽表（需重新 cal / param 配置）"
+	@echo "device $(JLINK_DEVICE)" > /tmp/jlink_flash_ota.jlink
+	@echo "if $(JLINK_IF)" >> /tmp/jlink_flash_ota.jlink
+	@echo "speed $(JLINK_SPEED)" >> /tmp/jlink_flash_ota.jlink
+	@echo "erase" >> /tmp/jlink_flash_ota.jlink
+	@echo "loadfile $(OUTPUT_DIR)/bootloader.bin 0x8000400" >> /tmp/jlink_flash_ota.jlink
+	@echo "loadfile $(OUTPUT_DIR)/slot_a.bin 0x80020000" >> /tmp/jlink_flash_ota.jlink
+	@echo "r" >> /tmp/jlink_flash_ota.jlink
+	@echo "q" >> /tmp/jlink_flash_ota.jlink
+	JLinkExe /tmp/jlink_flash_ota.jlink
+
+# ============================================================================
 # Clean Targets
 # ============================================================================
 clean:
-	rm -rf $(BUILD_DIR) $(OUTPUT_DIR) $(ROOT_DIR)/.cache
+	rm -rf $(BUILD_ROOT) $(ROOT_DIR)/output $(ROOT_DIR)/.cache
 
 distclean: clean
 	@echo "Deep clean complete."
@@ -226,7 +311,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  build         Configure and compile (default)"
-	@echo "  artifacts     Build and copy outputs to output/"
+	@echo "  artifacts     Build and copy outputs to build/output/"
 	@echo "  flash         Flash firmware (default: openocd)"
 	@echo "  flash-openocd Flash using OpenOCD"
 	@echo "  flash-jlink   Flash using J-Link"
@@ -235,6 +320,13 @@ help:
 	@echo "  rebuild       Clean and rebuild"
 	@echo "  list-boards   Show available boards"
 	@echo "  help          Show this help"
+	@echo ""
+	@echo "OTA Targets:"
+	@echo "  bootloader    Build DFU bootloader (build/output/bootloader.bin)"
+	@echo "  slot-a        Build Slot A image (build/output/slot_a.bin)"
+	@echo "  slot-b        Build Slot B image (build/output/slot_b.bin)"
+	@echo "  ota-package   Build all + build/output/ota/manifest.json"
+	@echo "  flash-ota     J-Link erase + bootloader + Slot A (wipes params)"
 	@echo ""
 	@echo "Options:"
 	@echo "  BOARD=<name>             Board name (default: hpm5301evklite_board)"

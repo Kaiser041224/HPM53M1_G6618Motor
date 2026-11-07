@@ -11,6 +11,7 @@
 
 #include "mock_deps.h"
 
+#include "app_boot.h"
 #include "app_debug_rtt.h"
 #include "app_fault.h"
 #include "app_usb.h"
@@ -50,6 +51,15 @@ void mock_reset(void) {
     g_mock.enc_output_raw = 5678U;
     g_mock.rotor_deg = 90.0f;
     g_mock.output_deg = 270.0f;
+
+    g_mock.boot_status_ok = true;
+    g_mock.boot_status.control_valid = true;
+    g_mock.boot_status.active_slot = 0U;
+    g_mock.boot_status.pending_slot = BOOT_SLOT_NONE;
+    g_mock.boot_status.running_slot = 0U;
+    g_mock.boot_status.upgrade_target_slot = 1U;
+    g_mock.boot_status.upgrade_target_valid = false;
+    g_mock.boot_status.running_version = 7U;
 }
 
 /* ---- bulk 通道 ---- */
@@ -139,6 +149,21 @@ int app_foc_request_stop(void) { return g_mock.stop_rc; }
 bool app_foc_stop_pending(void) { return g_mock.stop_pending; }
 
 void app_foc_current_get_snapshot(app_foc_current_snapshot_t *out) { *out = g_mock.foc_snap; }
+
+/* ---- OTA/DFU ---- */
+
+int app_boot_get_status(app_boot_status_t *out) {
+    if (!g_mock.boot_status_ok || (out == NULL)) {
+        return -1;
+    }
+    *out = g_mock.boot_status;
+    return 0;
+}
+
+void app_boot_request_dfu(void) {
+    /* 真机为 noreturn；主机自测若走到这里说明 50ms 延迟未被清零，直接失败 */
+    __builtin_trap();
+}
 
 /* ---- motion ---- */
 

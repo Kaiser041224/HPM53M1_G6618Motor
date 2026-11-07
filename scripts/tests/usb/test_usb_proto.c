@@ -232,7 +232,8 @@ static void test_info_golden(void) {
     CHECK(resp[0] == MP_STATUS_OK);
     CHECK(resp[1] == 1U);
     CHECK(resp[2] == 0U);
-    CHECK(u32_at(resp, 3) == (uint32_t) (MP_CAP_PARAM_WRITE | MP_CAP_CONTROL | MP_CAP_STREAM));
+    CHECK(u32_at(resp, 3)
+          == (uint32_t) (MP_CAP_PARAM_WRITE | MP_CAP_CONTROL | MP_CAP_STREAM | MP_CAP_DFU));
     CHECK(resp[7] == 7U);
     CHECK(memcmp(&resp[8], "HPM53M1", 7U) == 0);
 }
@@ -608,6 +609,80 @@ static void test_ctrl_unsupported(void) {
 }
 
 /* ============================================================================
+ * v1.6：BOOT_INFO / ENTER_DFU
+ * ============================================================================ */
+
+static void test_boot_info(void) {
+    uint8_t req[16];
+    uint16_t n;
+    const uint8_t *resp;
+    uint16_t len;
+
+    reset_all();
+    n = build_req(MP_CMD_BOOT_INFO, 60U, NULL, 0U, req);
+    feed(req, n);
+    run_service();
+
+    resp = last_payload(MP_CMD_BOOT_INFO, 60U, &len);
+    CHECK(len == 12U);
+    CHECK(resp[0] == MP_STATUS_OK);
+    CHECK(resp[1] == 0U); /* running A */
+    CHECK(resp[2] == 0U); /* active A */
+    CHECK(resp[3] == BOOT_SLOT_NONE);
+    CHECK(resp[4] == 0U);
+    CHECK(resp[5] == 0U);
+    CHECK(resp[6] == 1U); /* DFU target = B */
+    CHECK(resp[7] == 0U);
+    CHECK(u32_at(resp, 8) == 7U);
+
+    /* 非槽构建/读失败 → BUSY */
+    g_mock.boot_status_ok = false;
+    n = build_req(MP_CMD_BOOT_INFO, 61U, NULL, 0U, req);
+    feed(req, n);
+    run_service();
+    resp = last_payload(MP_CMD_BOOT_INFO, 61U, &len);
+    CHECK(len == 1U);
+    CHECK(resp[0] == MP_STATUS_BUSY);
+}
+
+static void test_ctrl_enter_dfu(void) {
+    uint8_t req[16];
+    uint8_t payload[8];
+    uint16_t n;
+    const uint8_t *resp;
+    uint16_t len;
+
+    reset_all();
+
+    /* FOC 非 OFF → LOCKED */
+    g_mock.foc_state = APP_FOC_STATE_RUN;
+    n = build_req(MP_CMD_CTRL_CMD, 62U, payload, ctrl_req(MP_CTRL_ENTER_DFU, 0.0f, payload), req);
+    feed(req, n);
+    run_service();
+    resp = last_payload(MP_CMD_CTRL_CMD, 62U, &len);
+    CHECK(len == 1U);
+    CHECK(resp[0] == MP_STATUS_LOCKED);
+
+    /* 停机挂起 → LOCKED */
+    g_mock.foc_state = APP_FOC_STATE_OFF;
+    g_mock.stop_pending = true;
+    n = build_req(MP_CMD_CTRL_CMD, 63U, payload, ctrl_req(MP_CTRL_ENTER_DFU, 0.0f, payload), req);
+    feed(req, n);
+    run_service();
+    resp = last_payload(MP_CMD_CTRL_CMD, 63U, &len);
+    CHECK(resp[0] == MP_STATUS_LOCKED);
+
+    /* OFF 且无挂起 → OK；随后清掉 50ms 延迟计数，避免本用例后误触发复位 */
+    g_mock.stop_pending = false;
+    n = build_req(MP_CMD_CTRL_CMD, 64U, payload, ctrl_req(MP_CTRL_ENTER_DFU, 0.0f, payload), req);
+    feed(req, n);
+    run_service();
+    resp = last_payload(MP_CMD_CTRL_CMD, 64U, &len);
+    CHECK(resp[0] == MP_STATUS_OK);
+    app_usb_proto_init();
+}
+
+/* ============================================================================
  * 遥测流
  * ============================================================================ */
 
@@ -779,6 +854,8 @@ void test_usb_proto(void) {
     test_ctrl_mode();
     test_ctrl_setpoints();
     test_ctrl_unsupported();
+    test_boot_info();
+    test_ctrl_enter_dfu();
     test_stream_basic();
     test_stream_ranges_and_drop();
     test_tx_pending();

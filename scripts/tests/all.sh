@@ -27,7 +27,7 @@ if [[ "${SKIP_LAYOUT:-0}" != "1" ]]; then
     run layout bash scripts/tests/layout/check_layout.sh
     run ilm-call bash scripts/tests/layout/check_ilm_calls.sh
 fi
-for t in adc analog can control fault foc encoder identify params usb; do
+for t in adc analog can control fault foc encoder identify params usb ota; do
     run "$t" bash "scripts/tests/$t/run.sh"
 done
 run gen python3 scripts/test_gen_params.py

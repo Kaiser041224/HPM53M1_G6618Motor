@@ -1,4 +1,4 @@
-# Build artifacts
+# Build artifacts（统一 build/：app / bootloader / slot-a / slot-b / output）
 build/
 output/
 .cache/
