@@ -197,10 +197,10 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             str = s_serial;
         } else if (index == 4U) {
             /* 接口名带目标槽，dfu-util -l 可直接看出该发哪个 bin */
-            static char s_interface[] = "G6618 DFU (x)";
-            const size_t slot_char = sizeof(s_interface) - 3U;
+            static char s_interface[] = "G6618 DFU (BACKUP)";
+            const char* slot_name = ((dfu_target_slot() & 1U) != 0U) ? "BACKUP" : "ACTIVE";
 
-            s_interface[slot_char] = (char) ('A' + (dfu_target_slot() & 1U));
+            memcpy(&s_interface[11], slot_name, 6U);
             str = s_interface;
         } else {
             str = strings[index - 1U];

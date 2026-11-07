@@ -3,15 +3,15 @@
  * @brief   Bootloader / 应用共享的升级契约（分区、镜像头、元数据日志、邮箱）
  * @author  Kaiser
  *
- * 布局（HPM53M1，1MB NOR，A/B 双槽）：
+ * 布局（HPM53M1，1MB NOR，active/backup 双槽）：
  *   0x80000000 - 0x80003000   12KB  nor cfg option + ROM boot header
  *   0x80003000 - 0x8001D000  104KB  bootloader（TinyUSB DFU）
- *   0x8001D000 - 0x8001E000    4KB  Slot A 镜像日志（追加写）
- *   0x8001E000 - 0x8001F000    4KB  Slot B 镜像日志（追加写）
+ *   0x8001D000 - 0x8001E000    4KB  ACTIVE 槽镜像日志（追加写）
+ *   0x8001E000 - 0x8001F000    4KB  BACKUP 槽镜像日志（追加写）
  *   0x8001F000 - 0x80020000    4KB  启动控制日志（追加写）
- *   0x80020000 - 0x8008E000  440KB  Slot A
+ *   0x80020000 - 0x8008E000  440KB  ACTIVE 槽
  *   0x8008E000 - 0x8008F000    4KB  保留（槽间对齐间隙）
- *   0x8008F000 - 0x800FD000  440KB  Slot B
+ *   0x8008F000 - 0x800FD000  440KB  BACKUP 槽
  *   0x800FD000 - 0x800FFFFF   12KB  保留区（齿槽/参数/自检，两槽共用）
  *
  * 镜像头 64B 位于槽基址，入口固定在 槽基址 + 0x40。
@@ -41,11 +41,11 @@ extern "C" {
 #define BOOT_FLASH_BASE           (0x80000000UL)
 #define BOOT_FLASH_SIZE           (0x00100000UL)
 #define BOOT_BOOTLOADER_END       (0x8001D000UL) /* bootloader 链接上限（不含） */
-#define BOOT_META_A_ADDR          (0x8001D000UL)
-#define BOOT_META_B_ADDR          (0x8001E000UL)
+#define BOOT_META_ACTIVE_ADDR          (0x8001D000UL)
+#define BOOT_META_BACKUP_ADDR          (0x8001E000UL)
 #define BOOT_CONTROL_ADDR         (0x8001F000UL)
-#define BOOT_SLOT_A_ADDR          (0x80020000UL)
-#define BOOT_SLOT_B_ADDR          (0x8008F000UL)
+#define BOOT_SLOT_ACTIVE_ADDR          (0x80020000UL)
+#define BOOT_SLOT_BACKUP_ADDR          (0x8008F000UL)
 #define BOOT_SLOT_SIZE            (0x0006E000UL) /* 440KB，4KB 对齐 */
 #define BOOT_SLOT_GAP_ADDR        (0x8008E000UL) /* 两槽之间的 4KB 对齐间隙（保留） */
 #define BOOT_META_SECTOR_SIZE     (0x00001000UL)
@@ -65,7 +65,7 @@ typedef struct {
     uint32_t signature;      /**< BOOT_IMAGE_SIGNATURE */
     uint32_t magic;          /**< BOOT_IMAGE_MAGIC */
     uint16_t header_version; /**< BOOT_IMAGE_HEADER_VERSION */
-    uint16_t slot_id;        /**< 0=A, 1=B */
+    uint16_t slot_id;        /**< 0=ACTIVE, 1=BACKUP */
     uint32_t image_version;  /**< 应用版本号（展示/防回退参考） */
     uint32_t image_size;     /**< payload 字节数（不含头） */
     uint32_t image_crc32;    /**< 覆盖 [槽基址+0x40, +image_size) */
@@ -106,8 +106,8 @@ _Static_assert(sizeof(boot_image_record_t) == 32U, "boot_image_record_t must be 
 typedef struct {
     uint32_t magic;    /**< BOOT_CONTROL_MAGIC */
     uint16_t seq;      /**< 单调递增；取最大有效（16 位回绕比较） */
-    uint8_t active;    /**< 0=A, 1=B */
-    uint8_t pending;   /**< 0=A, 1=B, 0xFF=无 */
+    uint8_t active;    /**< 0=ACTIVE, 1=BACKUP */
+    uint8_t pending;   /**< 0=ACTIVE, 1=BACKUP, 0xFF=无 */
     uint8_t attempts;  /**< pending 已尝试启动次数 */
     uint8_t confirmed; /**< 当前 active 是否被应用确认过 */
     uint16_t reserved;

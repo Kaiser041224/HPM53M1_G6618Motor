@@ -1,4 +1,4 @@
-# OTA / DFU 设计（A/B 双槽 + 极简 bootloader）
+# OTA / DFU 设计（active/backup 双槽 + 极简 bootloader）
 
 > 状态：P0–P4 已实现（2026-11-07），待台架验证。
 > 相关代码：`Interface/intf_boot.h`、`App/Platform/Src/boot_meta.c`、
@@ -8,7 +8,7 @@
 ## 1. 目标与约束
 
 - 现场升级走标准 **DFU 1.1**（`dfu-util`），不引入私有 OTA 协议；
-- **A/B 双槽**：升级写非活动槽，校验通过后切换；应用启动 2s 内确认，连续 3 次
+- **active/backup 双槽**：升级写非活动槽，校验通过后切换；应用启动 2s 内确认，连续 3 次
   未确认自动回滚；
 - bootloader 极简：只做槽选择/CRC 校验/跳转 + DFU；**不跑 FreeRTOS、不跑电机控制**；
 - 校验用 IEEE CRC32（头 + payload）；**不做加密/运行时解密**（性能优先）；
@@ -19,12 +19,12 @@
 ```text
 0x80000000 - 0x80003000   12KB  nor cfg option + ROM boot header
 0x80003000 - 0x8001D000  104KB  bootloader（TinyUSB DFU）
-0x8001D000 - 0x8001E000    4KB  Slot A 镜像日志（追加写，诊断用）
-0x8001E000 - 0x8001F000    4KB  Slot B 镜像日志（追加写，诊断用）
+0x8001D000 - 0x8001E000    4KB  ACTIVE 槽 镜像日志（追加写，诊断用）
+0x8001E000 - 0x8001F000    4KB  BACKUP 槽 镜像日志（追加写，诊断用）
 0x8001F000 - 0x80020000    4KB  启动控制日志（active/pending/attempts）
-0x80020000 - 0x8008E000  440KB  Slot A
+0x80020000 - 0x8008E000  440KB  ACTIVE 槽
 0x8008E000 - 0x8008F000    4KB  保留（槽间对齐间隙）
-0x8008F000 - 0x800FD000  440KB  Slot B
+0x8008F000 - 0x800FD000  440KB  BACKUP 槽
 0x800FD000 - 0x800FFFFF   12KB  保留区（齿槽表 / 参数 / 自检，两槽共用）
 ```
 
@@ -94,8 +94,8 @@ main:
    写邮箱 → **hot reset**（冷复位会清 SYSCTL GPR，邮箱丢失）；
 2. bootloader：消费邮箱 → 选目标槽：`active` 有效 → 另一槽；`active` 无效
    （只烧了 bootloader）→ `active` 本身（首次安装落到 A）。枚举 `34B7:6619`，
-   接口名显示 `G6618 DFU (A)` / `(B)`，`dfu-util -l` 可直接看出该发哪个 bin；
-3. `dfu-util -a 0 -D slot_b.bin`：TinyUSB DFU 1.1，块 0 起顺序写入，
+   接口名显示 `G6618 DFU (ACTIVE)` / `(BACKUP)`，`dfu-util -l` 可直接看出该发哪个 bin；
+3. `dfu-util -a 0 -D slot_backup.bin`：TinyUSB DFU 1.1，块 0 起顺序写入，
    4KB 扇区缓冲，擦/写期间关全局中断；
 4. manifest：读回镜像头 → 槽号/长度/CRC 校验 → 追加 `READY` → 启动控制写
    `pending=目标槽, attempts=0` → 1.2s 后软复位；
@@ -111,10 +111,10 @@ DFU 空闲 60s（且存在可回退的 active）→ 自动复位回应用。
 
 ```bash
 make bootloader     # output/bootloader.bin（0x8000400 起）
-make slot-a         # output/slot_a.bin（0x80020000）
-make slot-b         # output/slot_b.bin（0x8008F000）
-make ota-package    # output/ota/{bootloader,slot_a,slot_b,manifest.json}
-make flash-ota      # J-Link 整片擦除 + bootloader + Slot A
+make slot-active         # output/slot_active.bin（0x80020000）
+make slot-backup         # output/slot_backup.bin（0x8008F000）
+make ota-package    # output/ota/{bootloader,slot_active,slot_backup,manifest.json}
+make flash-ota      # J-Link 整片擦除 + bootloader + ACTIVE 槽
 make build          # 旧的整体镜像（0x80003000，ROM 直接启动），过渡期保留
 ```
 
@@ -123,22 +123,22 @@ make build          # 旧的整体镜像（0x80003000，ROM 直接启动），�
 `.nor_cfg_option/.boot_header`，`.image_header` 占 0x40）。
 
 **烧录纪律**：`make build` 只更新 `build/output/demo.*`；`output/*.bin` 只有
-`make artifacts`/`make slot-a` 等目标才更新。`flash-ota` 会清空参数区与齿槽表。
+`make artifacts`/`make slot-active` 等目标才更新。`flash-ota` 会清空参数区与齿槽表。
 
 ## 8. 应用侧改动
 
 - `App/Platform/Src/app_boot.c`：槽状态查询、启动确认、进入 DFU；
 - `App/Logic/app_logic.c`：`app_io_step` 第 2000 拍（约 2s）在任务末尾调用一次
   `app_boot_confirm()`（与参数写入同一任务上下文，避免并发进入 flash 驱动）；
-- 终端 `dfu [show|confirm|slot a|b]`（`slot` 强制下次启动槽，台架 A/B 切换用）；
+- 终端 `dfu [show|confirm|slot active|backup]`（`slot` 强制下次启动槽，台架 active/backup 切换用）；
 - 协议 `MP_CMD_BOOT_INFO = 0x0E`、`MP_CTRL_ENTER_DFU = 0x0B`、`CAP_DFU`（v1.6）。
 
 ## 9. 台架验证清单
 
-1. `make flash-ota` → 上电：bootloader 启动 Slot A，`dfu show` 显示 `running=A active=A`；
+1. `make flash-ota` → 上电：bootloader 启动 ACTIVE 槽，`dfu show` 显示 `running=ACTIVE boot=ACTIVE`；
 2. 终端 `dfu confirm`：设备枚举为 `34B7:6619`，`dfu-util -l` 可见；
-3. `dfu-util -a 0 -D output/ota/slot_b.bin` → 复位后 `running=B active=B`；
-4. 反向：`dfu confirm` → 下载 `slot_a.bin` → 回到 A；
+3. `dfu-util -a 0 -D output/ota/slot_backup.bin` → 复位后 `running=BACKUP boot=BACKUP`；
+4. 反向：`dfu confirm` → 下载 `slot_active.bin` → 回到 ACTIVE；
 5. 坏镜像：改一个字节再下载 → manifest 拒绝，设备仍跑旧槽；
 6. 回滚：下载一个"启动即挂起"的镜像（或用调试器在 `main` 打断点/不确认）→
    3 次后自动回滚到旧槽；

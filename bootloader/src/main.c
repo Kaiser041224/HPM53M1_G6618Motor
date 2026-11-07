@@ -44,7 +44,7 @@ int main(void) {
 
     /* 目标槽：active 可用 → 写另一槽（保留可回退镜像）；
      * active 本身无效（例如只烧了 bootloader）→ 直接写 active，首次安装落到 A。
-     * 这样空片首次 DFU 应发送 slot_a.bin，而不是 slot_b.bin。 */
+     * 这样空片首次 DFU 应发送 slot_active.bin，而不是 slot_backup.bin。 */
     target_slot = active_valid ? (uint8_t) (control.active ^ 1U) : control.active;
 
     dfu_run(target_slot, active_valid);

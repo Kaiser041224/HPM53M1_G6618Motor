@@ -841,7 +841,7 @@ static uint16_t proto_dispatch(uint8_t cmd, const uint8_t *payload, uint16_t len
         s_stream.count = 0U;
         return proto_status_only(out, MP_STATUS_OK);
 
-    /* v1.6：A/B 槽与启动控制状态 */
+    /* v1.6：active/backup 槽与启动控制状态 */
     case MP_CMD_BOOT_INFO: {
         app_boot_status_t st;
         uint16_t pos = 0U;

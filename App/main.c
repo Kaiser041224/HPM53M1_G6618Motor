@@ -7,7 +7,7 @@
  *   main → board_init → intf_clock_init → app_application_start（不返回）
  *   app_io (prio 3, 1ms)  ：app_init → 创建 fast/diag → 慢通道采样 + 调试 + 通讯
  *   app_fast(prio 2, 25kHz)：FOC 快车道（采样 / 换算 / 保护 / 控制输出）
- *   app_diag(prio 3, 1s)   ：回报（LED / 统计）
+ *   app_diag(prio 3, 1s)   ：回报（统计；LED 灯语在 io 任务）
  *   rtt_log (prio 4)       ：日志队列 → SEGGER RTT
  *
  * 时钟：intf_clock_init() 在调度器启动前完成（对齐 SDK 惯例 board_init 含

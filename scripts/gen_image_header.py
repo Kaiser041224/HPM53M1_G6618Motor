@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""A/B 槽镜像头生成 / 校验（G6618 OTA）。
+"""active/backup 槽镜像头生成 / 校验（G6618 OTA）。
 
 输入：槽链接 + objcopy 产出的 ``demo.bin``（前 64B 为占位头，全 0）。
-输出：``slot_x.bin`` = 64B 镜像头 + payload；可选 JSON manifest 供上位机使用。
+输出：``slot_<active|backup>.bin`` = 64B 镜像头 + payload；可选 JSON manifest 供上位机使用。
 
 镜像头布局（小端，64B）：
     0x00 u32 signature     0x0A4D5048
     0x04 u32 magic         0x47494D47 "GIMG"
     0x08 u16 header_version = 1
-    0x0A u16 slot_id       0=A 1=B
+    0x0A u16 slot_id       0=ACTIVE 1=BACKUP
     0x0C u32 image_version
     0x10 u32 image_size    payload 字节数（不含头）
     0x14 u32 image_crc32   覆盖 payload（IEEE CRC32）
@@ -18,8 +18,8 @@
     0x24 28B reserved      全 0
 
 用法：
-    python3 scripts/gen_image_header.py --input build-slot-a/output/demo.bin \\
-        --output output/slot_a.bin --slot 0 --version 42 \\
+    python3 scripts/gen_image_header.py --input build-slot-active/output/demo.bin \\
+        --output output/slot_active.bin --slot 0 --version 42 \\
         --manifest output/ota/manifest.json
 """
 
@@ -41,7 +41,7 @@ HEADER_CRC_LEN = 32
 
 SLOT_BASE = {0: 0x80020000, 1: 0x8008F000}
 SLOT_SIZE = 0x0006E000
-SLOT_NAMES = {0: "a", 1: "b"}
+SLOT_NAMES = {0: "active", 1: "backup"}
 
 # <IIHHIIIII> = signature, magic, header_version, slot_id, image_version,
 #               image_size, image_crc32, load_addr, entry_offset  （共 32B）

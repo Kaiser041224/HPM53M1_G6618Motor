@@ -138,10 +138,10 @@ def main() -> int:
     check(info["slot"] == 0 and info["version"] == 42, "verify info")
     check(info["entry"] == g.SLOT_BASE[0] + g.ENTRY_OFFSET, "entry address")
 
-    # 槽 B
+    # BACKUP 槽
     image_b = g.build_image(make_raw(payload), slot=1, version=43)
     info_b = g.verify_image(image_b, expected_slot=1)
-    check(info_b["load_addr"] == g.SLOT_BASE[1], "slot b load addr")
+    check(info_b["load_addr"] == g.SLOT_BASE[1], "slot backup load addr")
 
     # 槽号不匹配 / 长度不符 / payload 损坏
     expect_error(lambda: g.verify_image(image_b, expected_slot=0), "slot mismatch")
@@ -173,9 +173,9 @@ def main() -> int:
         g.update_manifest(path, g.verify_image(image_b, 1))
         with open(path, encoding="utf-8") as fp:
             manifest = json.load(fp)
-        check(set(manifest["slots"].keys()) == {"a", "b"}, "manifest slots")
+        check(set(manifest["slots"].keys()) == {"active", "backup"}, "manifest slots")
         check(manifest["version"] == 43, "manifest version = max")
-        check(manifest["slots"]["a"]["image_crc32"].startswith("0x"), "manifest crc format")
+        check(manifest["slots"]["active"]["image_crc32"].startswith("0x"), "manifest crc format")
 
     test_patch_elf()
 

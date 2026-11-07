@@ -1,6 +1,6 @@
 /**
  * @file    boot_image.c
- * @brief   A/B 槽镜像头占位（仅槽构建）
+ * @brief   active/backup 槽镜像头占位（仅槽构建）
  * @author  Kaiser
  *
  * 槽链接脚本把 .image_header 放在槽基址，入口固定为 基址 + 0x40。

@@ -44,11 +44,11 @@ uint32_t boot_crc32(const void *data, size_t len) {
  * 槽地址
  * ============================================================================ */
 uint32_t boot_slot_address(uint8_t slot_id) {
-    return (slot_id == 0U) ? BOOT_SLOT_A_ADDR : BOOT_SLOT_B_ADDR;
+    return (slot_id == 0U) ? BOOT_SLOT_ACTIVE_ADDR : BOOT_SLOT_BACKUP_ADDR;
 }
 
 uint32_t boot_slot_meta_address(uint8_t slot_id) {
-    return (slot_id == 0U) ? BOOT_META_A_ADDR : BOOT_META_B_ADDR;
+    return (slot_id == 0U) ? BOOT_META_ACTIVE_ADDR : BOOT_META_BACKUP_ADDR;
 }
 
 /* ============================================================================

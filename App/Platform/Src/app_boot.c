@@ -120,7 +120,7 @@ int app_boot_get_status(app_boot_status_t *out) {
     out->attempts = 0U;
     out->confirmed = 0U;
     out->running_slot = app_boot_slot_id();
-    out->upgrade_target_slot = 1U; /* active 默认 A → 目标 B */
+    out->upgrade_target_slot = 1U; /* 默认启动 ACTIVE → 升级目标 BACKUP */
     out->upgrade_target_valid = false;
     out->running_version = app_boot_image_version();
 

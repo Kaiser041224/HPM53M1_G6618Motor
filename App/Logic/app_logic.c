@@ -10,7 +10,7 @@
  *                            （编码器同步采样 + 角度链 + 电流环；整条链在 ILM）
  *                            硬约束：无 RTOS API、无 printf、无动态分配、无等待
  *   - app_io_step()        ：RTOS 后台 IO（1ms）——模拟量/故障/状态机编排 + 通讯轮询
- *   - app_diag_step()      ：RTOS 后台诊断（1s）——回报（LED / 统计），不改控制状态
+ *   - app_diag_step()      ：RTOS 后台诊断（1s）——回报（统计；LED 灯语在 io 任务），不改控制状态
  *
  * 时钟：intf_clock_init() 在 main()、调度器启动前完成（对齐 SDK 惯例，
  *      保证 MCHTMR tick 基频正确）。设计文档：

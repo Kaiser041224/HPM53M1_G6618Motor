@@ -22,7 +22,7 @@
  */
 void dfu_run(uint8_t target_slot, bool allow_timeout) __attribute__((noreturn));
 
-/** @brief 本次 DFU 的目标槽（0=A, 1=B）；用于描述符里的接口名 */
+/** @brief 本次 DFU 的目标槽（0=ACTIVE, 1=BACKUP）；用于描述符里的接口名 */
 uint8_t dfu_target_slot(void);
 
 #endif /* BOOT_DFU_H */

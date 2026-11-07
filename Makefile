@@ -11,8 +11,8 @@ DRIVER_DIR := $(ROOT_DIR)/Driver/hpm_impl
 BUILD_ROOT := $(ROOT_DIR)/build
 APP_BUILD_DIR := $(BUILD_ROOT)/app
 BOOTLOADER_BUILD_DIR := $(BUILD_ROOT)/bootloader
-SLOT_A_BUILD_DIR := $(BUILD_ROOT)/slot-a
-SLOT_B_BUILD_DIR := $(BUILD_ROOT)/slot-b
+SLOT_ACTIVE_BUILD_DIR := $(BUILD_ROOT)/slot-active
+SLOT_BACKUP_BUILD_DIR := $(BUILD_ROOT)/slot-backup
 OUTPUT_DIR := $(BUILD_ROOT)/output
 OTA_OUTPUT_DIR := $(OUTPUT_DIR)/ota
 # 主程序（旧整体镜像）CMake 构建树；保留 BUILD_DIR 名称供既有目标复用
@@ -124,7 +124,7 @@ CMAKE_ARGS := \
 # ============================================================================
 # Phony Targets
 # ============================================================================
-.PHONY: all configure build build-core artifacts artifacts-core flash flash-openocd flash-jlink clean distclean rebuild help list-boards banner bootloader slot-a slot-b ota-package flash-ota flash-info
+.PHONY: all configure build build-core artifacts artifacts-core flash flash-openocd flash-jlink clean distclean rebuild help list-boards banner bootloader slot-active slot-backup slot-a slot-b ota-package flash-ota flash-info
 
 all: artifacts
 
@@ -215,15 +215,15 @@ flash-info:
 		'' \
 		'  legacy full image : HPM53M1_G6618Motor.elf/.bin  @ 0x8000400' \
 		'  bootloader        : bootloader.elf/.bin          @ 0x8000400' \
-		'  slot A            : slot_a.elf/.bin              @ 0x80020000' \
-		'  slot B            : slot_b.elf/.bin              @ 0x8008F000' \
-		'  OTA package       : ota/{bootloader,slot_a,slot_b,manifest.json}' \
+		'  slot ACTIVE       : slot_active.elf/.bin         @ 0x80020000' \
+		'  slot BACKUP       : slot_backup.elf/.bin         @ 0x8008F000' \
+		'  OTA package       : ota/{bootloader,slot_active,slot_backup,manifest.json}' \
 		'' \
 		'  slot_x.elf 已写入 64B 镜像头，Ozone/J-Link 可直接加载；' \
 		'  只用 .bin 时按上面的地址烧录。' \
 		> $(OUTPUT_DIR)/FLASHING.txt
 
-# 槽构建：$(1)=slot id，$(2)=build dir，$(3)=槽名（a/b）
+# 槽构建：$(1)=slot id，$(2)=build dir，$(3)=槽名（active/backup）
 define build_slot
 	@echo "[SLOT $(3)] configure + build (APP_SLOT_ID=$(1))"
 	cmake -S $(APP_DIR) -B $(2) $(CMAKE_ARGS) -DAPP_SLOT_ID=$(1)
@@ -243,36 +243,43 @@ bootloader:
 	cp $(BOOTLOADER_BUILD_DIR)/output/demo.elf $(OUTPUT_DIR)/bootloader.elf
 	@ls -l $(OUTPUT_DIR)/bootloader.elf $(OUTPUT_DIR)/bootloader.bin
 
-slot-a:
+slot-active:
 	@mkdir -p $(OUTPUT_DIR) $(OTA_OUTPUT_DIR)
-	$(call build_slot,0,$(SLOT_A_BUILD_DIR),a)
+	$(call build_slot,0,$(SLOT_ACTIVE_BUILD_DIR),active)
 
-slot-b:
+slot-backup:
 	@mkdir -p $(OUTPUT_DIR) $(OTA_OUTPUT_DIR)
-	$(call build_slot,1,$(SLOT_B_BUILD_DIR),b)
+	$(call build_slot,1,$(SLOT_BACKUP_BUILD_DIR),backup)
+
+# 旧目标名兼容（deprecated）：等价于 slot-active / slot-backup
+slot-a: slot-active
+slot-b: slot-backup
 
 # 发布包：bootloader + 两个槽镜像 + manifest（清空后按顺序重建 manifest）
-ota-package: bootloader slot-a slot-b flash-info
+ota-package: bootloader slot-active slot-backup flash-info
 	@rm -f $(OTA_OUTPUT_DIR)/manifest.json
-	$(PYTHON) $(GEN_IMAGE_HEADER) --verify-existing --input $(OUTPUT_DIR)/slot_a.bin \
+	@rm -f $(OUTPUT_DIR)/slot_a.bin $(OUTPUT_DIR)/slot_b.bin \
+		$(OUTPUT_DIR)/slot_a.elf $(OUTPUT_DIR)/slot_b.elf \
+		$(OTA_OUTPUT_DIR)/slot_a.bin $(OTA_OUTPUT_DIR)/slot_b.bin
+	$(PYTHON) $(GEN_IMAGE_HEADER) --verify-existing --input $(OUTPUT_DIR)/slot_active.bin \
 		--slot 0 --manifest $(OTA_OUTPUT_DIR)/manifest.json
-	$(PYTHON) $(GEN_IMAGE_HEADER) --verify-existing --input $(OUTPUT_DIR)/slot_b.bin \
+	$(PYTHON) $(GEN_IMAGE_HEADER) --verify-existing --input $(OUTPUT_DIR)/slot_backup.bin \
 		--slot 1 --manifest $(OTA_OUTPUT_DIR)/manifest.json
-	@cp $(OUTPUT_DIR)/bootloader.bin $(OUTPUT_DIR)/slot_a.bin $(OUTPUT_DIR)/slot_b.bin $(OTA_OUTPUT_DIR)/
+	@cp $(OUTPUT_DIR)/bootloader.bin $(OUTPUT_DIR)/slot_active.bin $(OUTPUT_DIR)/slot_backup.bin $(OTA_OUTPUT_DIR)/
 	@echo ""
 	@echo "[OTA] package ready: $(OTA_OUTPUT_DIR)"
 	@ls -l $(OTA_OUTPUT_DIR)
 
-# 首次落地：J-Link 整片擦除后烧 bootloader + Slot A（参数/齿槽表一并清空）
+# 首次落地：J-Link 整片擦除后烧 bootloader + slot ACTIVE（参数/齿槽表一并清空）
 flash-ota: ota-package
-	@echo "[FLASH-OTA] J-Link: erase + bootloader@0x8000400 + slot A@0x80020000"
+	@echo "[FLASH-OTA] J-Link: erase + bootloader@0x8000400 + slot ACTIVE@0x80020000"
 	@echo "WARN: 整片擦除会清空参数区与齿槽表（需重新 cal / param 配置）"
 	@echo "device $(JLINK_DEVICE)" > /tmp/jlink_flash_ota.jlink
 	@echo "if $(JLINK_IF)" >> /tmp/jlink_flash_ota.jlink
 	@echo "speed $(JLINK_SPEED)" >> /tmp/jlink_flash_ota.jlink
 	@echo "erase" >> /tmp/jlink_flash_ota.jlink
 	@echo "loadfile $(OUTPUT_DIR)/bootloader.bin 0x8000400" >> /tmp/jlink_flash_ota.jlink
-	@echo "loadfile $(OUTPUT_DIR)/slot_a.bin 0x80020000" >> /tmp/jlink_flash_ota.jlink
+	@echo "loadfile $(OUTPUT_DIR)/slot_active.bin 0x80020000" >> /tmp/jlink_flash_ota.jlink
 	@echo "r" >> /tmp/jlink_flash_ota.jlink
 	@echo "q" >> /tmp/jlink_flash_ota.jlink
 	JLinkExe /tmp/jlink_flash_ota.jlink
@@ -323,10 +330,10 @@ help:
 	@echo ""
 	@echo "OTA Targets:"
 	@echo "  bootloader    Build DFU bootloader (build/output/bootloader.bin)"
-	@echo "  slot-a        Build Slot A image (build/output/slot_a.bin)"
-	@echo "  slot-b        Build Slot B image (build/output/slot_b.bin)"
+	@echo "  slot-active   Build ACTIVE slot image (build/output/slot_active.bin)"
+	@echo "  slot-backup   Build BACKUP slot image (build/output/slot_backup.bin)"
 	@echo "  ota-package   Build all + build/output/ota/manifest.json"
-	@echo "  flash-ota     J-Link erase + bootloader + Slot A (wipes params)"
+	@echo "  flash-ota     J-Link erase + bootloader + ACTIVE slot (wipes params)"
 	@echo ""
 	@echo "Options:"
 	@echo "  BOARD=<name>             Board name (default: hpm5301evklite_board)"

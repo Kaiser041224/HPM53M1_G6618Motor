@@ -19,10 +19,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/** 本固件是否运行在 A/B 槽构建下（= 定义了 APP_SLOT_ID） */
+/** 本固件是否运行在 active/backup 槽构建下（= 定义了 APP_SLOT_ID） */
 bool app_boot_is_slot_build(void);
 
-/** 运行槽号（0=A, 1=B）；非槽构建返回 0xFF */
+/** 运行槽号（0=ACTIVE, 1=BACKUP）；非槽构建返回 0xFF */
 uint8_t app_boot_slot_id(void);
 
 /** 运行槽镜像版本号（镜像头 image_version）；非槽构建或无有效头返回 0 */
@@ -40,11 +40,11 @@ int app_boot_self_verify(void);
 
 typedef struct {
     bool control_valid;   /**< flash 中存在有效启动控制记录 */
-    uint8_t active_slot;  /**< 0=A, 1=B */
-    uint8_t pending_slot; /**< 0=A, 1=B, 0xFF=无 */
+    uint8_t active_slot;  /**< 0=ACTIVE, 1=BACKUP */
+    uint8_t pending_slot; /**< 0=ACTIVE, 1=BACKUP, 0xFF=无 */
     uint8_t attempts;     /**< pending 已尝试启动次数 */
     uint8_t confirmed;    /**< active 已由应用确认 */
-    uint8_t running_slot; /**< 0=A, 1=B, 0xFF=非槽构建 */
+    uint8_t running_slot; /**< 0=ACTIVE, 1=BACKUP, 0xFF=非槽构建 */
     uint8_t upgrade_target_slot; /**< bootloader 的 DFU 目标槽（= active ^ 1） */
     bool upgrade_target_valid;   /**< 目标槽存在有效镜像头 */
     uint32_t running_version;    /**< 运行槽 image_version */
@@ -65,7 +65,7 @@ int app_boot_confirm(void);
 
 /**
  * @brief 强制指定下次启动的 active 槽（调试/台架用；不改镜像内容）
- * @param slot 0=A, 1=B
+ * @param slot 0=ACTIVE, 1=BACKUP
  * @return 0 = 成功；-1 = 非槽构建/非法槽/flash 写失败
  * @note 写入 active=slot、pending=NONE、attempts=0、confirmed=0；需重启生效
  */

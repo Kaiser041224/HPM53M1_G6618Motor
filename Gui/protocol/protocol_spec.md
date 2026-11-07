@@ -773,9 +773,9 @@ v1.5 起 `caps = PARAM_WRITE | CONTROL | STREAM = 0x00000007`。
 
 ---
 
-## 12. v1.6 增量：A/B 槽与 DFU（`BOOT_INFO` / `ENTER_DFU`）
+## 12. v1.6 增量：active/backup 槽与 DFU（`BOOT_INFO` / `ENTER_DFU`）
 
-### 12.1 `MP_CMD_BOOT_INFO = 0x0E`（A/B 槽与启动控制状态）
+### 12.1 `MP_CMD_BOOT_INFO = 0x0E`（active/backup 槽与启动控制状态）
 
 **请求载荷**：空。
 
@@ -784,7 +784,7 @@ v1.5 起 `caps = PARAM_WRITE | CONTROL | STREAM = 0x00000007`。
 | 序号 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- | :--- |
 | 0 | `status` | u8 | `MP_STATUS_OK` / `BUSY`（flash 未就绪） |
-| 1 | `running_slot` | u8 | 运行槽：0=A，1=B，`0xFF`=非槽构建 |
+| 1 | `running_slot` | u8 | 运行槽：0=ACTIVE，1=BACKUP，`0xFF`=非槽构建 |
 | 2 | `active_slot` | u8 | 启动控制记录中的 active 槽（无记录时 0） |
 | 3 | `pending_slot` | u8 | 待验证槽：0/1，`0xFF`=无 |
 | 4 | `attempts` | u8 | pending 已尝试启动次数（0..3） |
@@ -795,7 +795,7 @@ v1.5 起 `caps = PARAM_WRITE | CONTROL | STREAM = 0x00000007`。
 
 **语义**：
 
-- 主机在发起升级前读取本命令，用 `target_slot` 决定发送 `slot_a.bin` 还是 `slot_b.bin`；
+- 主机在发起升级前读取本命令，用 `target_slot` 决定发送 `slot_active.bin` 还是 `slot_backup.bin`；
   bootloader 在 DFU manifest 阶段会再次校验镜像头的 `slot_id`，发错文件会被拒绝（`
   DFU_STATUS_ERR_FIRMWARE`），旧镜像不受影响。
 - 旧固件对 `0x0E` 返回 `BAD_CMD`；主机应据此认为设备不支持 OTA。
@@ -806,7 +806,7 @@ v1.5 起 `caps = PARAM_WRITE | CONTROL | STREAM = 0x00000007`。
 - 设备先返回 `status = OK`，约 50ms 后写 SYSCTL GPR 邮箱（`"G661"` + `"DFU0"`）并
   软复位；**应答可能因复位丢失，主机应把超时视为成功**。
 - 复位后 bootloader 以 **PID `0x6619`** 枚举 DFU（VID `0x34B7`，序列号不变）；
-  用 `dfu-util -a 0 -D slot_x.bin` 下载到 `target_slot`。
+  用 `dfu-util -a 0 -D slot_<active|backup>.bin` 下载到 `target_slot`。
 - manifest 校验通过后，bootloader 写 `pending = target` 并复位；应用启动 2s 内确认
   `active`。连续 3 次未确认自动回滚到旧槽。
 

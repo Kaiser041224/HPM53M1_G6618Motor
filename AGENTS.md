@@ -1189,18 +1189,18 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
 - **上下文纪律**：USB ISR 只做环形缓冲搬运（按 MPS 分块 memcpy），解析/应答全部在
   1kHz 慢任务；`app_usb_proto_service()` 每拍最多取 256 字节，禁止在 ISR 内组帧。
 
-### OTA / DFU（A/B 双槽，2026-11-07 实现落地，待台架验证）
+### OTA / DFU（active/backup 双槽，2026-11-07 实现落地，待台架验证）
 
 - **构建目录（2026-11-07 统一）**：所有 CMake 树集中在 `build/`：
-  `build/app/`（旧整体镜像）、`build/bootloader/`、`build/slot-a/`、`build/slot-b/`；
+  `build/app/`（旧整体镜像）、`build/bootloader/`、`build/slot-active/`、`build/slot-backup/`；
   最终产物复制到 **`build/output/`**（`HPM53M1_G6618Motor.elf`、`bootloader.elf`、
-  `slot_a.elf`、`slot_b.elf`、`ota/`、`FLASHING.txt` 烧录地址索引）。
+  `slot_active.elf`、`slot_backup.elf`、`ota/`、`FLASHING.txt` 烧录地址索引）。
   调试器/烧录器只认 `build/output/`，不要指向各 CMake 树内部的 `demo.elf`。
   `slot_x.elf` 的 `.image_header` 已被生成器写回真实镜像头（`--elf`），
   **Ozone/J-Link 可直接加载 ELF**；只用 bin 时按 `FLASHING.txt` 的地址烧录。
 
 - **分区（1MB）**：bootloader `0x80003000-0x8001D000`（104KB）；三个元数据扇区
-  `0x8001D000/0x8001E000/0x8001F000`；Slot A `0x80020000`、Slot B `0x8008F000`
+  `0x8001D000/0x8001E000/0x8001F000`；ACTIVE 槽 `0x80020000`、BACKUP 槽 `0x8008F000`
   各 440KB（4KB 对齐；两槽间留 4KB 间隙）；末尾 12KB 保留区（参数/齿槽/自检）**两槽共用**。
   唯一事实源：`Interface/intf_boot.h` + `docs/superpowers/specs/2026-11-07-ota-dfu-design.md`。
 - **槽镜像 = 64B 头 + payload**：头在槽基址，入口固定 `槽基址 + 0x40`
@@ -1223,22 +1223,22 @@ make build BOARD=<board_name> CMAKE_BUILD_TYPE=Release HPM_BUILD_TYPE=flash_xip
   `tusb_time_millis_api()` 用 mcycle，USB ISR 在 `dfu.c` 里 `SDK_DECLARE_EXT_ISR_M`。
 - **跳转**：`tud_deinit`（若跑过 DFU）→ `l1c_ic_invalidate(槽基址, 头+payload)`
   → `fence.i` → 关 MIE → 跳 `基址+0x40`。**I-cache 必须清**：同一上电周期内
-  A→B→A 连续升级时，目标槽可能残留旧指令行。
+  ACTIVE→BACKUP→ACTIVE 连续升级时，目标槽可能残留旧指令行。
 - **DFU 身份**：VID `0x34B7` / PID `0x6619` / Serial = OTP UUID；BOS + MS OS 2.0
   （compatible ID `WINUSB`）→ Win10+ 免驱，`dfu-util` 直接可用。
   `bcdUSB=0x0210`；DFU 传输块 1024B；`manifest` 失败返回 `ERR_VERIFY/ERR_FIRMWARE`，
-  旧镜像不受影响。接口名动态显示 `G6618 DFU (A|B)`，`dfu-util -l` 即知目标槽。
+  旧镜像不受影响。接口名动态显示 `G6618 DFU (ACTIVE|BACKUP)`，`dfu-util -l` 即知目标槽。
   **目标槽规则**：active 有效 → active^1；active 无效（只烧了 bootloader）→ active
-  本身（首次安装默认 A，应发 `slot_a.bin`）。
+  本身（首次安装默认 ACTIVE，应发 `slot_active.bin`）。
 - **写入纪律**：沿用 `drv_flash` 的“ILM + 关中断”规则；4KB 扇区缓冲，
   `program` 尾部按字补 0xFF；`cache_invalidate` 必须 32B 对齐。
-- **构建/烧录**：`make bootloader / slot-a / slot-b / ota-package / flash-ota`。
-  `flash-ota` 是首次迁移工具（J-Link 整片擦除 + bootloader + Slot A），
-  **会清空参数区与齿槽表**。`make slot-a` 只更新 `build/output/`，不会自动烧录。
+- **构建/烧录**：`make bootloader / slot-active / slot-backup / ota-package / flash-ota`。
+  `flash-ota` 是首次迁移工具（J-Link 整片擦除 + bootloader + ACTIVE 槽），
+  **会清空参数区与齿槽表**。`make slot-active` 只更新 `build/output/`，不会自动烧录。
 - **协议（v1.6）**：`MP_CMD_BOOT_INFO = 0x0E`、`MP_CTRL_ENTER_DFU = 0x0B`、
   `CAP_DFU (1<<3)`；`ENTER_DFU` 的应答可能因复位丢失，主机按超时视为成功。
 - **回归**：`scripts/tests/ota/`（boot_meta 主机自测 359 checks + 镜像头/ELF 头生成器 30 checks），
   已接入 `scripts/tests/all.sh`；`scripts/tests/usb/` 增至 670 checks（BOOT_INFO/ENTER_DFU 联锁）。
-- **台架**：终端 `dfu show` 查看槽状态，`dfu confirm` 进 DFU，`dfu slot a|b` 强制
+- **台架**：终端 `dfu show` 查看槽状态，`dfu confirm` 进 DFU，`dfu slot active|backup` 强制
   下次启动槽（FOC OFF；配合 Ozone 直接烧某个槽 ELF 时切换）。`dfu show` 的 `pending/attempts` 只在升级后非零；`active` 与
   `running` 在确认后的 2s 窗口内可能不同（pending 启动）。`storage: reset` 不动启动元数据。

@@ -626,7 +626,7 @@ static void test_boot_info(void) {
     resp = last_payload(MP_CMD_BOOT_INFO, 60U, &len);
     CHECK(len == 12U);
     CHECK(resp[0] == MP_STATUS_OK);
-    CHECK(resp[1] == 0U); /* running A */
+    CHECK(resp[1] == 0U); /* running ACTIVE */
     CHECK(resp[2] == 0U); /* active A */
     CHECK(resp[3] == BOOT_SLOT_NONE);
     CHECK(resp[4] == 0U);
